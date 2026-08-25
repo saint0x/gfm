@@ -338,6 +338,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
    - Opened, previewed, moved, copied, renamed, searched, selected.
    - Stored locally and privately.
    - Boosts expected results without hiding exact matches.
+   - Includes explicit intent boosts for Applications, Recents, Downloads, Desktop, screenshots, and project folders so common Finder-style searches land on the object the user meant.
 
 ### Compression Strategy
 
