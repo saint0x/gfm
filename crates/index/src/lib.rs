@@ -587,6 +587,38 @@ mod tests {
     }
 
     #[test]
+    fn durable_content_positions_support_phrase_search_after_reload() {
+        let root = unique_temp_dir("gfm-durable-phrase-root");
+        let records = unique_temp_path("gfm-durable-phrase-records", "gfmidx");
+        let content = unique_temp_path("gfm-durable-phrase-content", "gfmcontent");
+        fs::write(
+            root.join("keep.md"),
+            "the exact durable phrase appears here",
+        )
+        .unwrap();
+        fs::write(
+            root.join("skip.md"),
+            "the durable exact phrase appears in a different order",
+        )
+        .unwrap();
+
+        let indexer = Indexer::default();
+        let snapshot = indexer.build(&root).unwrap();
+        snapshot
+            .save_with_content(&records, &content, &Extractor::default())
+            .unwrap();
+        let reloaded = indexer.load_live_with_content(&records, &content).unwrap();
+        let hits = reloaded.search(r#""exact durable phrase""#, 10);
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.name, "keep.md");
+
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_file(records).unwrap();
+        fs::remove_file(content).unwrap();
+    }
+
+    #[test]
     fn snapshot_can_write_content_segment_for_compaction() {
         let root = unique_temp_dir("gfm-content-segment-root");
         let segment = unique_temp_path("gfm-content-segment-index", "gfmseg");
@@ -609,6 +641,33 @@ mod tests {
         assert!(terms > 0);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].record.name, "segment.md");
+
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_file(segment).unwrap();
+        fs::remove_file(content).unwrap();
+    }
+
+    #[test]
+    fn compacted_content_segments_preserve_phrase_positions() {
+        let root = unique_temp_dir("gfm-content-phrase-segment-root");
+        let segment = unique_temp_path("gfm-content-phrase-segment", "gfmseg");
+        let content = unique_temp_path("gfm-content-phrase-compact", "gfmcontent");
+        fs::write(root.join("phrase.md"), "segment phrase marker survives").unwrap();
+
+        let indexer = Indexer::default();
+        let snapshot = indexer.build(&root).unwrap();
+        snapshot
+            .save_content_segment(&segment, &Extractor::default(), Vec::new())
+            .unwrap();
+        indexer
+            .compact_content_segments(&content, &[&segment])
+            .unwrap();
+        let mut live = snapshot.into_live();
+        live.load_content_postings(&content).unwrap();
+        let hits = live.search(r#""segment phrase marker""#, 5);
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.name, "phrase.md");
 
         fs::remove_dir_all(root).unwrap();
         fs::remove_file(segment).unwrap();

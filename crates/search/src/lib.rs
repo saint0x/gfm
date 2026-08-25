@@ -6,7 +6,7 @@ pub use query::{
     SizeComparison,
 };
 
-use gfm_types::{ContentPosting, FileId, FileRecord, MatchReason, SearchHit};
+use gfm_types::{ContentPositions, ContentPosting, FileId, FileRecord, MatchReason, SearchHit};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Debug, Clone, Default)]
@@ -18,7 +18,7 @@ pub struct SearchIndex {
     path_terms: BTreeMap<String, BTreeSet<FileId>>,
     extension: BTreeMap<String, BTreeSet<FileId>>,
     tags: BTreeMap<String, BTreeSet<FileId>>,
-    content_terms: BTreeMap<String, BTreeSet<FileId>>,
+    content_terms: BTreeMap<String, BTreeMap<FileId, Vec<u32>>>,
 }
 
 impl SearchIndex {
@@ -88,8 +88,13 @@ impl SearchIndex {
         if !self.records.contains_key(&id) {
             return;
         }
-        for token in tokenize(&normalize(text)) {
-            self.content_terms.entry(token).or_default().insert(id);
+        for (position, token) in tokenize(&normalize(text)).into_iter().enumerate() {
+            self.content_terms
+                .entry(token)
+                .or_default()
+                .entry(id)
+                .or_default()
+                .push(position as u32);
         }
     }
 
@@ -100,7 +105,11 @@ impl SearchIndex {
         for term in terms {
             let term = normalize(&term);
             if !term.is_empty() {
-                self.content_terms.entry(term).or_default().insert(id);
+                self.content_terms
+                    .entry(term)
+                    .or_default()
+                    .entry(id)
+                    .or_default();
             }
         }
     }
@@ -116,7 +125,16 @@ impl SearchIndex {
                     self.content_terms
                         .entry(term.clone())
                         .or_default()
-                        .insert(*id);
+                        .entry(*id)
+                        .or_default();
+                }
+            }
+            for positions in &posting.positions {
+                if self.records.contains_key(&positions.id) {
+                    self.content_terms
+                        .entry(term.clone())
+                        .or_default()
+                        .insert(positions.id, positions.positions.clone());
                 }
             }
         }
@@ -125,9 +143,17 @@ impl SearchIndex {
     pub fn content_postings(&self) -> Vec<ContentPosting> {
         self.content_terms
             .iter()
-            .map(|(term, ids)| ContentPosting {
+            .map(|(term, positions)| ContentPosting {
                 term: term.clone(),
-                ids: ids.iter().copied().collect(),
+                ids: positions.keys().copied().collect(),
+                positions: positions
+                    .iter()
+                    .filter(|(_, positions)| !positions.is_empty())
+                    .map(|(id, positions)| ContentPositions {
+                        id: *id,
+                        positions: positions.clone(),
+                    })
+                    .collect(),
             })
             .collect()
     }
@@ -172,21 +198,26 @@ impl SearchIndex {
             if let Some(ids) = self.tags.get(term) {
                 add_scores(&mut scores, ids, 325, MatchReason::Tag);
             }
-            if let Some(ids) = self.content_terms.get(term) {
-                add_scores(&mut scores, ids, 150, MatchReason::Content);
+            if let Some(ids) = self.content_ids(term) {
+                add_scores(&mut scores, &ids, 150, MatchReason::Content);
             }
         }
 
         for phrase in &query.phrases {
-            for record in self
-                .records
-                .values()
-                .filter(|record| record_matches_phrase(record, phrase))
-            {
+            for record in self.records.values().filter(|record| {
+                record_matches_phrase(record, phrase)
+                    || self.content_matches_phrase(record.id, phrase)
+            }) {
                 scores
                     .entry(record.id)
                     .and_modify(|(score, _)| *score += 450)
-                    .or_insert((450, MatchReason::PathComponent));
+                    .or_insert_with(|| {
+                        if self.content_matches_phrase(record.id, phrase) {
+                            (450, MatchReason::Content)
+                        } else {
+                            (450, MatchReason::PathComponent)
+                        }
+                    });
             }
         }
 
@@ -257,11 +288,9 @@ impl SearchIndex {
         {
             return false;
         }
-        if !query
-            .phrases
-            .iter()
-            .all(|phrase| record_matches_phrase(record, phrase))
-        {
+        if !query.phrases.iter().all(|phrase| {
+            record_matches_phrase(record, phrase) || self.content_matches_phrase(record.id, phrase)
+        }) {
             return false;
         }
         query.filters.iter().all(|filter| filter.matches(record))
@@ -272,7 +301,10 @@ impl SearchIndex {
             QueryExpr::Term(term) => {
                 record_contains_term(record, term) || self.content_has(record.id, term)
             }
-            QueryExpr::Phrase(phrase) => record_matches_phrase(record, phrase),
+            QueryExpr::Phrase(phrase) => {
+                record_matches_phrase(record, phrase)
+                    || self.content_matches_phrase(record.id, phrase)
+            }
             QueryExpr::Filter(filter) => filter.matches(record),
             QueryExpr::Not(expression) => !self.record_matches_expression(record, expression),
             QueryExpr::And(expressions) => expressions
@@ -287,7 +319,56 @@ impl SearchIndex {
     fn content_has(&self, id: FileId, term: &str) -> bool {
         self.content_terms
             .get(term)
-            .is_some_and(|ids| ids.contains(&id))
+            .is_some_and(|positions| positions.contains_key(&id))
+    }
+
+    fn content_ids(&self, term: &str) -> Option<BTreeSet<FileId>> {
+        self.content_terms
+            .get(term)
+            .map(|positions| positions.keys().copied().collect())
+    }
+
+    fn content_matches_phrase(&self, id: FileId, phrase: &str) -> bool {
+        let terms = tokenize(&normalize(phrase));
+        if terms.is_empty() {
+            return false;
+        }
+        if terms.len() == 1 {
+            return self.content_has(id, &terms[0]);
+        }
+
+        let Some(first_positions) = self
+            .content_terms
+            .get(&terms[0])
+            .and_then(|positions| positions.get(&id))
+        else {
+            return false;
+        };
+        if first_positions.is_empty() {
+            return false;
+        }
+
+        let later: Option<Vec<BTreeSet<u32>>> = terms
+            .iter()
+            .skip(1)
+            .map(|term| {
+                self.content_terms
+                    .get(term)
+                    .and_then(|positions| positions.get(&id))
+                    .filter(|positions| !positions.is_empty())
+                    .map(|positions| positions.iter().copied().collect())
+            })
+            .collect();
+        let Some(later) = later else {
+            return false;
+        };
+
+        first_positions.iter().any(|start| {
+            later
+                .iter()
+                .enumerate()
+                .all(|(offset, positions)| positions.contains(&(*start + offset as u32 + 1)))
+        })
     }
 
     fn add_terms(&mut self, record: &FileRecord) {
@@ -341,10 +422,11 @@ impl SearchIndex {
         for tag in &record.tags {
             remove_id(&mut self.tags, &normalize(tag), record.id);
         }
-        for ids in self.content_terms.values_mut() {
-            ids.remove(&record.id);
+        for positions in self.content_terms.values_mut() {
+            positions.remove(&record.id);
         }
-        self.content_terms.retain(|_, ids| !ids.is_empty());
+        self.content_terms
+            .retain(|_, positions| !positions.is_empty());
     }
 }
 
@@ -497,6 +579,38 @@ mod tests {
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].reason, MatchReason::Content);
+    }
+
+    #[test]
+    fn matches_content_phrases_by_token_position() {
+        let mut index = SearchIndex::new();
+        let keep = record(1, "/tmp/keep.txt", "keep.txt");
+        let skip = record(2, "/tmp/skip.txt", "skip.txt");
+        index.insert(keep.clone());
+        index.insert(skip.clone());
+        index.insert_content(keep.id, "an instant content search result");
+        index.insert_content(skip.id, "instant search content result");
+
+        let hits = index.query(r#""instant content search""#, 10);
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.name, "keep.txt");
+        assert_eq!(hits[0].reason, MatchReason::Content);
+    }
+
+    #[test]
+    fn supports_boolean_content_phrase_queries() {
+        let mut index = SearchIndex::new();
+        let first = record(1, "/tmp/first.txt", "first.txt");
+        let second = record(2, "/tmp/second.txt", "second.txt");
+        index.insert(first.clone());
+        index.insert(second.clone());
+        index.insert_content(first.id, "client alpha phrase");
+        index.insert_content(second.id, "client beta phrase");
+
+        let hits = index.query(r#""client alpha" OR "client beta""#, 10);
+
+        assert_eq!(hits.len(), 2);
     }
 
     #[test]

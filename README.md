@@ -154,6 +154,7 @@ cargo run -p gfm -- search . '(PLAN OR README) NOT draft kind:file'
 cargo run -p gfm -- search . 'tag:Important kind:file'
 cargo run -p gfm -- search . 'README @desktop'
 cargo run -p gfm -- search-content . "Finder parity"
+cargo run -p gfm -- search-content . '"Finder parity"'
 ```
 
 Build and query record indexes:
@@ -168,6 +169,7 @@ Build and query content indexes:
 ```sh
 cargo run -p gfm -- index-content . /tmp/gfm.gfmidx /tmp/gfm.gfmcontent
 cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent "performance-critical"
+cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent '"performance-critical systems"'
 cargo run -p gfm -- content-ids /tmp/gfm.gfmcontent "performance-critical"
 ```
 

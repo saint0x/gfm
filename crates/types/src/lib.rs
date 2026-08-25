@@ -74,6 +74,13 @@ pub struct SearchHit {
 pub struct ContentPosting {
     pub term: String,
     pub ids: Vec<FileId>,
+    pub positions: Vec<ContentPositions>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentPositions {
+    pub id: FileId,
+    pub positions: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
