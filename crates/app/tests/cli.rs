@@ -1034,6 +1034,40 @@ fn reports_extraction_cache_hits_from_binary() {
 }
 
 #[test]
+fn reports_extraction_quarantine_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-quarantine-root");
+    let path = root.join("Slow.pdf");
+    let store = root.join("quarantine.gfmquarantine");
+    fs::write(&path, minimal_pdf("slow worker")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "extract-quarantine",
+            path.to_str().unwrap(),
+            store.to_str().unwrap(),
+            "timeout",
+            "2",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert!(lines[0].starts_with("quarantine\tblocked\t"), "{stdout}");
+    assert!(lines[1].starts_with("quarantine\tblocked\t"), "{stdout}");
+    assert!(stdout.contains("\treason=worker-timeout\t"), "{stdout}");
+    assert!(store.is_file());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_persisted_text_content_from_binary() {
     let root = unique_temp_dir("gfm-cli-durable-content-root");
     let records = unique_temp_path("gfm-cli-durable-records", "gfmidx");

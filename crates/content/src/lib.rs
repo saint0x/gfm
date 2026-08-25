@@ -14,7 +14,10 @@ pub use cache::{
 use gfm_types::{FileKind, FileRecord, GfmError, Result, SearchSnippet, SnippetHighlight};
 use ooxml::{extract_ooxml, OoxmlExtractStatus, OoxmlKind};
 use pdf::{extract_pdf, PdfExtractStatus};
-pub use quarantine::{ExtractionQuarantine, QuarantineDecision, QuarantineEntry};
+pub use quarantine::{
+    ExtractionQuarantine, QuarantineDecision, QuarantineEntry, QuarantineFailureKind,
+    EXTRACTION_QUARANTINE_SCHEMA_VERSION,
+};
 use rich::{extract_rich, RichKind};
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -137,6 +140,11 @@ impl ExtractionFingerprint {
             len: metadata.len(),
             modified_ns,
         }
+    }
+
+    pub fn for_path(path: &Path) -> Result<Self> {
+        let metadata = std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?;
+        Ok(Self::from_metadata(&metadata))
     }
 
     pub fn cache_key(&self, path: &Path) -> String {
@@ -1137,6 +1145,69 @@ endobj",
         assert_eq!(first.status, ExtractionCacheStatus::Miss);
         assert_eq!(second.status, ExtractionCacheStatus::Miss);
         assert_ne!(first.key.metadata_epoch, second.key.metadata_epoch);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quarantine_blocks_repeated_timeout_failures() {
+        let root = unique_temp_dir("gfm-content-timeout-quarantine");
+        let path = root.join("slow.pdf");
+        fs::write(&path, minimal_pdf("slow")).unwrap();
+        let fingerprint = ExtractionFingerprint::for_path(&path).unwrap();
+        let mut quarantine = ExtractionQuarantine::new(2);
+
+        assert_eq!(
+            quarantine.record_failure(
+                &path,
+                &fingerprint,
+                QuarantineFailureKind::Timeout,
+                "worker-timeout"
+            ),
+            QuarantineDecision::Allow
+        );
+        let blocked = quarantine.record_failure(
+            &path,
+            &fingerprint,
+            QuarantineFailureKind::Timeout,
+            "worker-timeout",
+        );
+
+        assert!(matches!(blocked, QuarantineDecision::Quarantined(_)));
+        assert!(blocked.as_tsv().contains("\treason=worker-timeout\t"));
+        assert!(matches!(
+            quarantine.before_extract(&path, &fingerprint),
+            QuarantineDecision::Quarantined(_)
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quarantine_persists_crash_failures_across_restart() {
+        let root = unique_temp_dir("gfm-content-crash-quarantine");
+        let path = root.join("crash.docx");
+        let store = root.join("quarantine.gfmquarantine");
+        fs::write(
+            &path,
+            ooxml_package(&[("word/document.xml", "<w:t>crash</w:t>")]),
+        )
+        .unwrap();
+        let fingerprint = ExtractionFingerprint::for_path(&path).unwrap();
+        let mut quarantine = ExtractionQuarantine::new(1);
+        let blocked = quarantine.record_failure(
+            &path,
+            &fingerprint,
+            QuarantineFailureKind::Crash,
+            "worker-crash",
+        );
+
+        assert!(matches!(blocked, QuarantineDecision::Quarantined(_)));
+        quarantine.write(&store).unwrap();
+        let reloaded = ExtractionQuarantine::read(&store).unwrap();
+
+        assert!(matches!(
+            reloaded.before_extract(&path, &fingerprint),
+            QuarantineDecision::Quarantined(_)
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 

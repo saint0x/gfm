@@ -286,6 +286,7 @@ cargo run -p gfm -- scan-progress-inspect /tmp/gfm.gfmprogress
 cargo run -p gfm -- fair-scan . 8 ~/Desktop ~/Documents
 cargo run -p gfm -- extract-report ~/Desktop/Report.pdf
 cargo run -p gfm -- extract-cache ~/Desktop/Report.pdf
+cargo run -p gfm -- extract-quarantine ~/Desktop/Report.pdf /tmp/gfm.gfmquarantine timeout 2
 cargo run -p gfm -- rename-correlation /tmp/OldName.md /tmp/NewName.md
 cargo run -p gfm -- metadata-update /tmp/Report.md ' appended bytes'
 cargo run -p gfm -- event-backpressure 4096 8 250000 32

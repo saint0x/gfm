@@ -1,5 +1,7 @@
 use gfm_config::ConfigStore;
-use gfm_content::{CachedExtractor, ExtractionQuarantine, Extractor};
+use gfm_content::{
+    CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor, QuarantineFailureKind,
+};
 use gfm_diagnostics::{
     export_operator_trace, inspect_storage, rebuild_index, select_parity_baseline, RebuildSpec,
     StorageInspection,
@@ -640,6 +642,37 @@ fn run() -> Result<()> {
             let mut cached = CachedExtractor::default();
             println!("{}", cached.extract_record_report(&record)?.as_tsv());
             println!("{}", cached.extract_record_report(&record)?.as_tsv());
+        }
+        Some("extract-quarantine") => {
+            let path = required_path(args.next(), "extract-quarantine requires a path")?;
+            let store = required_path(
+                args.next(),
+                "extract-quarantine requires a quarantine store path",
+            )?;
+            let kind = parse_quarantine_failure_kind(
+                args.next().as_deref().unwrap_or("timeout"),
+                "failure kind",
+            )?;
+            let attempts = args
+                .next()
+                .map(|value| parse_u32(&value, "attempts"))
+                .transpose()?
+                .unwrap_or(2);
+            let fingerprint = ExtractionFingerprint::for_path(&path)?;
+            let mut quarantine = ExtractionQuarantine::new(2);
+            let mut decision = quarantine.before_extract(&path, &fingerprint);
+            for _ in 0..attempts {
+                decision = quarantine.record_failure(
+                    &path,
+                    &fingerprint,
+                    kind,
+                    format!("worker-{}", kind.as_str()),
+                );
+            }
+            quarantine.write(&store)?;
+            let reloaded = ExtractionQuarantine::read(&store)?;
+            println!("{}", decision.as_tsv());
+            println!("{}", reloaded.before_extract(&path, &fingerprint).as_tsv());
         }
         Some("index-content-segment") => {
             let root = required_path(args.next(), "index-content-segment requires a root path")?;
@@ -1409,6 +1442,11 @@ fn index_mount_state(state: MountState) -> IndexMountState {
     }
 }
 
+fn parse_quarantine_failure_kind(value: &str, name: &str) -> Result<QuarantineFailureKind> {
+    QuarantineFailureKind::parse(value)
+        .ok_or_else(|| GfmError::Format(format!("invalid {name}: {value}")))
+}
+
 fn parse_u16(value: &str, name: &str) -> Result<u16> {
     value
         .parse()
@@ -1866,6 +1904,7 @@ fn print_usage() {
   gfm index-content <root> <records.gfmidx> <content.gfmcontent>
   gfm extract-report <path>
   gfm extract-cache <path>
+  gfm extract-quarantine <path> <store.gfmquarantine> [corrupt|encrypted|crash|timeout] [attempts]
   gfm index-content-segment <root> <output.gfmseg>
   gfm compact-content <output.gfmcontent> <segments.gfmseg...>
   gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent>
