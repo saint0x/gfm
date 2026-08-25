@@ -1,7 +1,7 @@
 use gfm_types::{
     DirectoryPage, FileId, FileKind, FileRecord, GfmError, Result, ScanIssue, VolumeId,
 };
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::fs::{self, Metadata};
 use std::io::Cursor;
 use std::path::Path;
@@ -9,12 +9,13 @@ use std::path::Path;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanOptions {
     pub max_depth: usize,
     pub follow_symlinks: bool,
     pub include_hidden: bool,
     pub exclude_generated: bool,
+    pub package_policy: PackagePolicy,
 }
 
 impl Default for ScanOptions {
@@ -24,8 +25,180 @@ impl Default for ScanOptions {
             follow_symlinks: false,
             include_hidden: true,
             exclude_generated: true,
+            package_policy: PackagePolicy::default(),
         }
     }
+}
+
+impl ScanOptions {
+    pub fn with_package_traversal(mut self, traversal: PackageTraversalMode) -> Self {
+        self.package_policy.traversal = traversal;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageTraversalMode {
+    Opaque,
+    Traverse,
+}
+
+impl PackageTraversalMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Opaque => "opaque",
+            Self::Traverse => "traverse",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageKind {
+    Application,
+    Bundle,
+    Framework,
+    KernelExtension,
+    XcodeProject,
+    Playground,
+    PhotosLibrary,
+    MediaLibrary,
+    DocumentPackage,
+    GenericPackage,
+}
+
+impl PackageKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Application => "application",
+            Self::Bundle => "bundle",
+            Self::Framework => "framework",
+            Self::KernelExtension => "kernel-extension",
+            Self::XcodeProject => "xcode-project",
+            Self::Playground => "playground",
+            Self::PhotosLibrary => "photos-library",
+            Self::MediaLibrary => "media-library",
+            Self::DocumentPackage => "document-package",
+            Self::GenericPackage => "generic-package",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackagePolicy {
+    pub traversal: PackageTraversalMode,
+    package_extensions: BTreeSet<String>,
+}
+
+impl PackagePolicy {
+    pub fn new(traversal: PackageTraversalMode) -> Self {
+        Self {
+            traversal,
+            package_extensions: default_package_extensions(),
+        }
+    }
+
+    pub fn with_extension(mut self, extension: impl Into<String>) -> Self {
+        self.package_extensions.insert(
+            extension
+                .into()
+                .trim_start_matches('.')
+                .to_ascii_lowercase(),
+        );
+        self
+    }
+
+    pub fn classify(&self, path: &Path, kind: FileKind) -> Option<PackageKind> {
+        if kind != FileKind::Directory {
+            return None;
+        }
+        let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+        if !self.package_extensions.contains(&extension) {
+            return None;
+        }
+        Some(match extension.as_str() {
+            "app" => PackageKind::Application,
+            "framework" => PackageKind::Framework,
+            "kext" => PackageKind::KernelExtension,
+            "xcodeproj" | "xcworkspace" => PackageKind::XcodeProject,
+            "playground" => PackageKind::Playground,
+            "photoslibrary" => PackageKind::PhotosLibrary,
+            "imovielibrary" | "theater" | "band" | "logicx" => PackageKind::MediaLibrary,
+            "pages" | "numbers" | "key" | "rtfd" => PackageKind::DocumentPackage,
+            "bundle" | "plugin" | "appex" => PackageKind::Bundle,
+            _ => PackageKind::GenericPackage,
+        })
+    }
+
+    pub fn should_descend(&self, path: &Path, kind: FileKind) -> bool {
+        self.traversal == PackageTraversalMode::Traverse || self.classify(path, kind).is_none()
+    }
+}
+
+impl Default for PackagePolicy {
+    fn default() -> Self {
+        Self::new(PackageTraversalMode::Opaque)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageTraversalReport {
+    pub root: std::path::PathBuf,
+    pub mode: PackageTraversalMode,
+    pub total_entries: usize,
+    pub package_entries: Vec<PackageEntrySpec>,
+}
+
+impl PackageTraversalReport {
+    pub fn from_page(page: &DirectoryPage, policy: &PackagePolicy) -> Self {
+        let package_entries = page
+            .entries
+            .iter()
+            .filter_map(|record| {
+                policy
+                    .classify(&record.path, record.kind)
+                    .map(|package_kind| PackageEntrySpec {
+                        path: record.path.clone(),
+                        name: record.name.clone(),
+                        package_kind,
+                        traversed: policy.traversal == PackageTraversalMode::Traverse,
+                    })
+            })
+            .collect();
+
+        Self {
+            root: page.root.clone(),
+            mode: policy.traversal,
+            total_entries: page.entries.len(),
+            package_entries,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let mut lines = vec![format!(
+            "package-traversal\tmode={}\ttotal_entries={}\tpackage_entries={}",
+            self.mode.as_str(),
+            self.total_entries,
+            self.package_entries.len()
+        )];
+        for entry in &self.package_entries {
+            lines.push(format!(
+                "package\t{}\t{}\t{}\t{}",
+                entry.package_kind.as_str(),
+                entry.traversed,
+                entry.name,
+                entry.path.display()
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageEntrySpec {
+    pub path: std::path::PathBuf,
+    pub name: String,
+    pub package_kind: PackageKind,
+    pub traversed: bool,
 }
 
 pub fn read_directory(path: impl AsRef<Path>) -> Result<DirectoryPage> {
@@ -81,7 +254,8 @@ pub fn scan_tree(root: impl AsRef<Path>, options: ScanOptions) -> Result<Directo
         let record_id = record.id;
         let should_descend = record.is_dir()
             && depth < options.max_depth
-            && !(options.exclude_generated && depth > 0 && is_generated_directory(&record.name));
+            && !(options.exclude_generated && depth > 0 && is_generated_directory(&record.name))
+            && options.package_policy.should_descend(&path, record.kind);
         let should_include = options.include_hidden || !record.hidden || depth == 0;
         if should_include {
             entries.push(record);
@@ -225,6 +399,32 @@ fn is_generated_directory(name: &str) -> bool {
     )
 }
 
+fn default_package_extensions() -> BTreeSet<String> {
+    [
+        "app",
+        "appex",
+        "band",
+        "bundle",
+        "framework",
+        "imovielibrary",
+        "key",
+        "kext",
+        "logicx",
+        "numbers",
+        "pages",
+        "photoslibrary",
+        "playground",
+        "plugin",
+        "rtfd",
+        "theater",
+        "xcodeproj",
+        "xcworkspace",
+    ]
+    .into_iter()
+    .map(ToOwned::to_owned)
+    .collect()
+}
+
 #[cfg(unix)]
 fn file_id(metadata: &Metadata) -> FileId {
     FileId::new(VolumeId(metadata.dev()), metadata.ino())
@@ -280,6 +480,7 @@ mod tests {
                 follow_symlinks: false,
                 include_hidden: true,
                 exclude_generated: true,
+                package_policy: PackagePolicy::default(),
             },
         )
         .unwrap();
@@ -309,6 +510,79 @@ mod tests {
         assert!(!paths
             .iter()
             .any(|path| path == Path::new("target/artifact.txt")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn treats_packages_as_opaque_by_default() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(root.join("Demo.app").join("Contents")).unwrap();
+        fs::write(
+            root.join("Demo.app").join("Contents").join("Info.plist"),
+            "plist",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("PlainFolder")).unwrap();
+        fs::write(root.join("PlainFolder").join("note.txt"), "note").unwrap();
+
+        let page = scan_tree(&root, ScanOptions::default()).unwrap();
+        let paths: Vec<_> = page
+            .entries
+            .iter()
+            .map(|record| record.path.strip_prefix(&root).unwrap().to_path_buf())
+            .collect();
+
+        assert!(paths.iter().any(|path| path == Path::new("Demo.app")));
+        assert!(!paths
+            .iter()
+            .any(|path| path == Path::new("Demo.app/Contents/Info.plist")));
+        assert!(paths
+            .iter()
+            .any(|path| path == Path::new("PlainFolder/note.txt")));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn traverses_packages_when_policy_allows_it() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(root.join("Doc.pages").join("Data")).unwrap();
+        fs::write(root.join("Doc.pages").join("Data").join("Index.zip"), "zip").unwrap();
+
+        let page = scan_tree(
+            &root,
+            ScanOptions::default().with_package_traversal(PackageTraversalMode::Traverse),
+        )
+        .unwrap();
+        let paths: Vec<_> = page
+            .entries
+            .iter()
+            .map(|record| record.path.strip_prefix(&root).unwrap().to_path_buf())
+            .collect();
+
+        assert!(paths.iter().any(|path| path == Path::new("Doc.pages")));
+        assert!(paths
+            .iter()
+            .any(|path| path == Path::new("Doc.pages/Data/Index.zip")));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reports_package_traversal_contract() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(root.join("Demo.app")).unwrap();
+        fs::create_dir_all(root.join("Slides.key")).unwrap();
+
+        let options = ScanOptions::default();
+        let page = scan_tree(&root, options.clone()).unwrap();
+        let report = PackageTraversalReport::from_page(&page, &options.package_policy);
+        let tsv = report.as_tsv();
+
+        assert!(tsv.contains("package-traversal\tmode=opaque"));
+        assert!(tsv.contains("package\tapplication\tfalse\tDemo.app"));
+        assert!(tsv.contains("package\tdocument-package\tfalse\tSlides.key"));
+
         fs::remove_dir_all(root).unwrap();
     }
 

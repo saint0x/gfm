@@ -465,7 +465,7 @@ impl Default for BackgroundContentIndexer {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Indexer {
     options: ScanOptions,
 }
@@ -476,7 +476,7 @@ impl Indexer {
     }
 
     pub fn build(&self, root: impl AsRef<Path>) -> Result<IndexSnapshot> {
-        scan_tree(root, self.options).map(IndexSnapshot::from_page)
+        scan_tree(root, self.options.clone()).map(IndexSnapshot::from_page)
     }
 
     pub fn load(&self, path: impl AsRef<Path>) -> Result<IndexSnapshot> {

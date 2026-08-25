@@ -4,7 +4,9 @@ use gfm_diagnostics::{
     export_operator_trace, inspect_storage, rebuild_index, select_parity_baseline, RebuildSpec,
     StorageInspection,
 };
-use gfm_fs::read_directory;
+use gfm_fs::{
+    read_directory, scan_tree, PackageTraversalMode, PackageTraversalReport, ScanOptions,
+};
 use gfm_index::{
     BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, Indexer, SearchStreamStage,
 };
@@ -339,6 +341,14 @@ fn run() -> Result<()> {
                 "{}",
                 TrashViewContract::from_records(&page.entries, options).as_tsv()
             );
+        }
+        Some("package-traversal") => {
+            let root = required_path(args.next(), "package-traversal requires a root path")?;
+            let mode = parse_package_traversal_mode(args.next().as_deref())?;
+            let options = ScanOptions::default().with_package_traversal(mode);
+            let page = scan_tree(&root, options.clone())?;
+            let report = PackageTraversalReport::from_page(&page, &options.package_policy);
+            println!("{}", report.as_tsv());
         }
         Some("list") => {
             let path = args
@@ -1026,6 +1036,16 @@ fn parse_bool(value: &str, name: &str) -> Result<bool> {
     }
 }
 
+fn parse_package_traversal_mode(value: Option<&str>) -> Result<PackageTraversalMode> {
+    match value.unwrap_or(PackageTraversalMode::Opaque.as_str()) {
+        "opaque" => Ok(PackageTraversalMode::Opaque),
+        "traverse" => Ok(PackageTraversalMode::Traverse),
+        other => Err(GfmError::Format(format!(
+            "package traversal mode must be opaque or traverse; got `{other}`"
+        ))),
+    }
+}
+
 fn read_trash_restore_metadata(path: &PathBuf) -> Result<BTreeMap<String, TrashEntryMetadata>> {
     let text = std::fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
     let mut metadata = BTreeMap::new();
@@ -1372,6 +1392,7 @@ fn print_usage() {
   gfm ui-toolbar-contract [path]
   gfm ui-sidebar-contract [path]
   gfm ui-icon-view-contract <path> [columns] [viewport-rows] [scroll-row]
+  gfm package-traversal <root> [opaque|traverse]
   gfm list [path]
   gfm index <root> <output.gfmidx>
   gfm index-content <root> <records.gfmidx> <content.gfmcontent>

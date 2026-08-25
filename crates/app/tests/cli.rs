@@ -183,6 +183,69 @@ fn streams_hot_then_deep_search_batches_from_binary() {
 }
 
 #[test]
+fn reports_package_traversal_policy_from_binary() {
+    let root = unique_temp_dir("gfm-cli-package-root");
+    fs::create_dir_all(root.join("GFMFixture.app").join("Contents")).unwrap();
+    fs::write(
+        root.join("GFMFixture.app")
+            .join("Contents")
+            .join("Info.plist"),
+        "plist",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("Proposal.pages").join("Data")).unwrap();
+    fs::write(
+        root.join("Proposal.pages").join("Data").join("Index.zip"),
+        "zip",
+    )
+    .unwrap();
+
+    let opaque = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["package-traversal", root.to_str().unwrap(), "opaque"])
+        .output()
+        .unwrap();
+    assert!(
+        opaque.status.success(),
+        "{}",
+        String::from_utf8_lossy(&opaque.stderr)
+    );
+    let opaque_stdout = String::from_utf8(opaque.stdout).unwrap();
+    assert!(
+        opaque_stdout.contains("package-traversal\tmode=opaque"),
+        "{opaque_stdout}"
+    );
+    assert!(
+        opaque_stdout.contains("package\tapplication\tfalse\tGFMFixture.app"),
+        "{opaque_stdout}"
+    );
+    assert!(
+        opaque_stdout.contains("package\tdocument-package\tfalse\tProposal.pages"),
+        "{opaque_stdout}"
+    );
+
+    let traverse = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["package-traversal", root.to_str().unwrap(), "traverse"])
+        .output()
+        .unwrap();
+    assert!(
+        traverse.status.success(),
+        "{}",
+        String::from_utf8_lossy(&traverse.stderr)
+    );
+    let traverse_stdout = String::from_utf8(traverse.stdout).unwrap();
+    assert!(
+        traverse_stdout.contains("package-traversal\tmode=traverse"),
+        "{traverse_stdout}"
+    );
+    assert!(
+        traverse_stdout.contains("package\tapplication\ttrue\tGFMFixture.app"),
+        "{traverse_stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_persisted_tags_from_binary() {
     let index = unique_temp_path("gfm-cli-tags", "gfmidx");
     fs::write(
