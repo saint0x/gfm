@@ -5,8 +5,11 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
+
+mod isolated;
+use isolated::{IsolatedRetriableTaskQueue, IsolatedTaskQueue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JobId(u64);
@@ -542,45 +545,7 @@ impl WorkerPool {
                         break;
                     };
 
-                    let mut final_status = TaskStatus::Failed("task did not run".to_string());
-                    for attempt in 1..=attempts {
-                        let started = JournalEntry {
-                            id: task.job.id,
-                            label: task.job.label.clone(),
-                            attempt,
-                            status: TaskStatus::Started,
-                        };
-                        if let Err(err) = journal.append(&started) {
-                            final_status = TaskStatus::Failed(err.to_string());
-                            break;
-                        }
-
-                        let status = match (task.work)(task.job.cancellation()) {
-                            Ok(()) => TaskStatus::Completed,
-                            Err(GfmError::Cancelled) => TaskStatus::Cancelled,
-                            Err(err) => TaskStatus::Failed(err.to_string()),
-                        };
-                        let finished = JournalEntry {
-                            id: task.job.id,
-                            label: task.job.label.clone(),
-                            attempt,
-                            status: status.clone(),
-                        };
-                        if let Err(err) = journal.append(&finished) {
-                            final_status = TaskStatus::Failed(err.to_string());
-                            break;
-                        }
-
-                        final_status = status;
-                        if final_status != TaskStatus::Cancelled
-                            && !matches!(final_status, TaskStatus::Failed(_))
-                        {
-                            break;
-                        }
-                        if final_status == TaskStatus::Cancelled {
-                            break;
-                        }
-                    }
+                    let final_status = execute_retriable_task(&task, &journal, attempts);
 
                     outcomes
                         .lock()
@@ -601,117 +566,101 @@ impl WorkerPool {
         outcomes.sort_by_key(|outcome| outcome.id.value());
         WorkerReport { outcomes }
     }
-}
 
-struct IsolatedTaskQueue {
-    state: Mutex<IsolatedTaskQueueState>,
-    wake: Condvar,
-    policy: VolumeConcurrencyPolicy,
-}
-
-impl IsolatedTaskQueue {
-    fn new(tasks: Vec<Task>, policy: VolumeConcurrencyPolicy) -> Self {
-        Self {
-            state: Mutex::new(IsolatedTaskQueueState {
-                pending: VecDeque::from(tasks),
-                active_by_volume: HashMap::new(),
-            }),
-            wake: Condvar::new(),
-            policy,
+    pub fn run_retriable_isolated(
+        &self,
+        tasks: Vec<RetriableTask>,
+        journal: &JobJournal,
+        retry_policy: RetryPolicy,
+        volume_policy: VolumeConcurrencyPolicy,
+    ) -> WorkerReport {
+        if tasks.is_empty() {
+            return WorkerReport {
+                outcomes: Vec::new(),
+            };
         }
-    }
 
-    fn next(self: &Arc<Self>) -> Option<TaskLease> {
-        let mut state = self.state.lock().expect("isolated task queue poisoned");
-        loop {
-            if let Some((index, volume)) = state.next_admissible(&self.policy) {
-                let task = state
-                    .pending
-                    .remove(index)
-                    .expect("admissible task vanished");
-                if let Some(volume) = volume {
-                    *state.active_by_volume.entry(volume).or_insert(0) += 1;
-                }
-                return Some(TaskLease {
-                    queue: Arc::clone(self),
-                    task,
-                    volume,
-                    finished: false,
+        let task_count = tasks.len();
+        let queue = Arc::new(IsolatedRetriableTaskQueue::new(tasks, volume_policy));
+        let outcomes = Arc::new(Mutex::new(Vec::with_capacity(task_count)));
+        let threads = self.threads.min(task_count);
+        let attempts = retry_policy.max_attempts.max(1);
+
+        thread::scope(|scope| {
+            for _ in 0..threads {
+                let queue = Arc::clone(&queue);
+                let outcomes = Arc::clone(&outcomes);
+                let journal = journal.clone();
+                scope.spawn(move || loop {
+                    let Some(lease) = queue.next() else {
+                        break;
+                    };
+                    let final_status = execute_retriable_task(&lease.task, &journal, attempts);
+                    let job = lease.finish();
+                    outcomes
+                        .lock()
+                        .expect("worker outcome list poisoned")
+                        .push(TaskOutcome {
+                            id: job.id,
+                            label: job.label,
+                            status: final_status,
+                        });
                 });
             }
-            if state.pending.is_empty() {
-                return None;
-            }
-            state = self
-                .wake
-                .wait(state)
-                .expect("isolated task queue poisoned while waiting");
+        });
+
+        let mut outcomes = Arc::try_unwrap(outcomes)
+            .expect("worker outcomes still shared")
+            .into_inner()
+            .expect("worker outcome list poisoned");
+        outcomes.sort_by_key(|outcome| outcome.id.value());
+        WorkerReport { outcomes }
+    }
+}
+
+fn execute_retriable_task(
+    task: &RetriableTask,
+    journal: &JobJournal,
+    attempts: usize,
+) -> TaskStatus {
+    let mut final_status = TaskStatus::Failed("task did not run".to_string());
+    for attempt in 1..=attempts {
+        let started = JournalEntry {
+            id: task.job.id,
+            label: task.job.label.clone(),
+            attempt,
+            status: TaskStatus::Started,
+        };
+        if let Err(err) = journal.append(&started) {
+            final_status = TaskStatus::Failed(err.to_string());
+            break;
+        }
+
+        let status = match (task.work)(task.job.cancellation()) {
+            Ok(()) => TaskStatus::Completed,
+            Err(GfmError::Cancelled) => TaskStatus::Cancelled,
+            Err(err) => TaskStatus::Failed(err.to_string()),
+        };
+        let finished = JournalEntry {
+            id: task.job.id,
+            label: task.job.label.clone(),
+            attempt,
+            status: status.clone(),
+        };
+        if let Err(err) = journal.append(&finished) {
+            final_status = TaskStatus::Failed(err.to_string());
+            break;
+        }
+
+        final_status = status;
+        if final_status != TaskStatus::Cancelled && !matches!(final_status, TaskStatus::Failed(_)) {
+            break;
+        }
+        if final_status == TaskStatus::Cancelled {
+            break;
         }
     }
-
-    fn release(&self, volume: Option<VolumeId>) {
-        let mut state = self.state.lock().expect("isolated task queue poisoned");
-        if let Some(volume) = volume {
-            let active = state
-                .active_by_volume
-                .get_mut(&volume)
-                .expect("volume lease released without active count");
-            *active -= 1;
-            if *active == 0 {
-                state.active_by_volume.remove(&volume);
-            }
-        }
-        self.wake.notify_all();
-    }
-}
-
-struct IsolatedTaskQueueState {
-    pending: VecDeque<Task>,
-    active_by_volume: HashMap<VolumeId, usize>,
-}
-
-impl IsolatedTaskQueueState {
-    fn next_admissible(
-        &self,
-        policy: &VolumeConcurrencyPolicy,
-    ) -> Option<(usize, Option<VolumeId>)> {
-        self.pending
-            .iter()
-            .enumerate()
-            .find_map(|(index, task)| match task.job.volume {
-                Some(volume)
-                    if self.active_by_volume.get(&volume).copied().unwrap_or(0)
-                        < policy.limit_for(volume) =>
-                {
-                    Some((index, Some(volume)))
-                }
-                Some(_) => None,
-                None => Some((index, None)),
-            })
-    }
-}
-
-struct TaskLease {
-    queue: Arc<IsolatedTaskQueue>,
-    task: Task,
-    volume: Option<VolumeId>,
-    finished: bool,
-}
-
-impl TaskLease {
-    fn finish(mut self) -> Job {
-        self.finished = true;
-        self.queue.release(self.volume);
-        self.task.job.clone()
-    }
-}
-
-impl Drop for TaskLease {
-    fn drop(&mut self) {
-        if !self.finished {
-            self.queue.release(self.volume);
-        }
-    }
+    final_status
 }
 
 impl Default for WorkerPool {

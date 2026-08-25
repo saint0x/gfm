@@ -3309,6 +3309,7 @@ fn runs_background_content_indexer_from_binary() {
     assert!(fs::read_to_string(&spec)
         .unwrap()
         .contains("gfm-content-job-v1"));
+    assert!(fs::read_to_string(&spec).unwrap().contains("volume_id\t"));
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(segments).unwrap();

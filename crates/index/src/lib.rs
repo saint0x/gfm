@@ -20,7 +20,7 @@ pub use gfm_store::{
 };
 use gfm_types::{
     ContentPosting, ContentSegment, DirectoryPage, FileEvent, FileEventKind, FileId, FileRecord,
-    GfmError, Result, ScanIssue, SearchHit,
+    GfmError, Result, ScanIssue, SearchHit, VolumeId,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -1005,6 +1005,7 @@ pub struct ContentIndexJobSpec {
     pub segment_dir: PathBuf,
     pub records_path: PathBuf,
     pub content_path: PathBuf,
+    pub volume: Option<VolumeId>,
     pub batch_size: usize,
 }
 
@@ -1020,8 +1021,14 @@ impl ContentIndexJobSpec {
             segment_dir: segment_dir.into(),
             records_path: records_path.into(),
             content_path: content_path.into(),
+            volume: None,
             batch_size: ContentIndexOptions::default().batch_size,
         }
+    }
+
+    pub fn with_volume(mut self, volume: VolumeId) -> Self {
+        self.volume = Some(volume);
+        self
     }
 
     pub fn options(&self) -> ContentIndexOptions {
@@ -1044,6 +1051,9 @@ impl ContentIndexJobSpec {
             .map_err(|err| GfmError::io(path, err))?;
         writeln!(writer, "content_path\t{}", escape_path(&self.content_path))
             .map_err(|err| GfmError::io(path, err))?;
+        if let Some(volume) = self.volume {
+            writeln!(writer, "volume_id\t{}", volume.0).map_err(|err| GfmError::io(path, err))?;
+        }
         writeln!(writer, "batch_size\t{}", self.batch_size)
             .map_err(|err| GfmError::io(path, err))?;
         writer.flush().map_err(|err| GfmError::io(path, err))
@@ -1074,6 +1084,7 @@ impl ContentIndexJobSpec {
         let mut segment_dir = None;
         let mut records_path = None;
         let mut content_path = None;
+        let mut volume = None;
         let mut batch_size = None;
         for (line_index, line) in lines.enumerate() {
             let line = line.map_err(|err| GfmError::io(path, err))?;
@@ -1089,6 +1100,11 @@ impl ContentIndexJobSpec {
                 "segment_dir" => segment_dir = Some(PathBuf::from(unescape(value)?)),
                 "records_path" => records_path = Some(PathBuf::from(unescape(value)?)),
                 "content_path" => content_path = Some(PathBuf::from(unescape(value)?)),
+                "volume_id" => {
+                    volume = Some(VolumeId(value.parse().map_err(|err| {
+                        GfmError::Format(format!("invalid content job volume id `{value}`: {err}"))
+                    })?))
+                }
                 "batch_size" => {
                     batch_size = Some(value.parse().map_err(|err| {
                         GfmError::Format(format!("invalid content job batch size `{value}`: {err}"))
@@ -1108,6 +1124,7 @@ impl ContentIndexJobSpec {
             segment_dir: required_field(segment_dir, "segment_dir", path)?,
             records_path: required_field(records_path, "records_path", path)?,
             content_path: required_field(content_path, "content_path", path)?,
+            volume,
             batch_size: required_field(batch_size, "batch_size", path)?,
         })
     }

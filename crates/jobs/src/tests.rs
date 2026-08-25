@@ -104,6 +104,47 @@ fn worker_pool_runs_independent_volumes_concurrently() {
 }
 
 #[test]
+fn isolated_retriable_worker_enforces_per_volume_limit() {
+    let path = temp_path("gfm-isolated-job-journal", "journal");
+    let journal = JobJournal::new(&path);
+    let mut scheduler = Scheduler::new();
+    let volume = VolumeId(17);
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let tasks: Vec<_> = (0..3)
+        .map(|index| {
+            let job = scheduler.schedule_on_volume(
+                Priority::Background,
+                format!("content-{index}"),
+                volume,
+            );
+            let active = Arc::clone(&active);
+            let peak = Arc::clone(&peak);
+            RetriableTask::new(job, move |_| {
+                let current = active.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                peak.fetch_max(current, AtomicOrdering::SeqCst);
+                std::thread::sleep(Duration::from_millis(5));
+                active.fetch_sub(1, AtomicOrdering::SeqCst);
+                Ok(())
+            })
+        })
+        .collect();
+
+    let report = WorkerPool::new(3).run_retriable_isolated(
+        tasks,
+        &journal,
+        RetryPolicy { max_attempts: 2 },
+        VolumeConcurrencyPolicy::new(1),
+    );
+
+    assert_eq!(report.completed(), 3);
+    assert_eq!(peak.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(journal.read().unwrap().len(), 6);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn retriable_worker_journals_attempts_until_success() {
     let path = temp_path("gfm-job-journal", "journal");
     let journal = JobJournal::new(&path);

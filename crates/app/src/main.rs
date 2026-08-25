@@ -22,7 +22,7 @@ use gfm_index::{
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
-    WorkerPool,
+    VolumeConcurrencyPolicy, WorkerPool,
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, parse_spotlight_fixture, AccessIntent,
@@ -78,7 +78,7 @@ use gfm_ui::{
 use std::collections::BTreeMap;
 use std::env;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 mod packaging;
@@ -1011,7 +1011,8 @@ fn run() -> Result<()> {
                 "index-content-background requires a content path",
             )?;
             let journal = JobJournal::new(default_job_journal_path());
-            let spec = ContentIndexJobSpec::new(root, segment_dir, records, content);
+            let spec = ContentIndexJobSpec::new(&root, segment_dir, records, content)
+                .with_volume(detect_volume_id(&root)?);
             spec.write(default_content_job_path())?;
             let (report, inaccessible) = run_content_job(&spec, &journal)?;
             eprintln!(
@@ -3147,12 +3148,23 @@ fn run_content_job(
 ) -> Result<(ContentIndexReport, usize)> {
     let snapshot = Indexer::default().build(&spec.root)?;
     let inaccessible = snapshot.inaccessible.len();
+    let volume = spec
+        .volume
+        .or_else(|| snapshot.records.first().map(|record| record.id.volume))
+        .or_else(|| detect_volume_id(&spec.root).ok())
+        .ok_or_else(|| {
+            gfm_types::GfmError::Format(format!(
+                "could not determine content index volume for {}",
+                spec.root.display()
+            ))
+        })?;
     snapshot.save(&spec.records_path)?;
     let worker = BackgroundContentIndexer::new(Extractor::default(), spec.options());
     let content_report = Arc::new(Mutex::new(None));
     let content_report_task = Arc::clone(&content_report);
     let mut scheduler = Scheduler::new();
-    let job = scheduler.schedule(Priority::Background, "background content index");
+    let job =
+        scheduler.schedule_on_volume(Priority::Background, "background content index", volume);
     let tasks: Vec<_> = scheduler
         .drain_ready()
         .into_iter()
@@ -3176,8 +3188,12 @@ fn run_content_job(
             })
         })
         .collect();
-    let worker_report =
-        WorkerPool::new(1).run_retriable(tasks, journal, RetryPolicy { max_attempts: 2 });
+    let worker_report = WorkerPool::new(1).run_retriable_isolated(
+        tasks,
+        journal,
+        RetryPolicy { max_attempts: 2 },
+        VolumeConcurrencyPolicy::new(1),
+    );
     let outcome = worker_report
         .outcomes
         .iter()
@@ -3209,6 +3225,22 @@ fn run_content_job(
             )
         })?;
     Ok((report, inaccessible))
+}
+
+fn detect_volume_id(path: &Path) -> Result<VolumeId> {
+    volume_id_from_metadata(&std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?)
+}
+
+#[cfg(unix)]
+fn volume_id_from_metadata(metadata: &std::fs::Metadata) -> Result<VolumeId> {
+    use std::os::unix::fs::MetadataExt;
+
+    Ok(VolumeId(metadata.dev()))
+}
+
+#[cfg(not(unix))]
+fn volume_id_from_metadata(_metadata: &std::fs::Metadata) -> Result<VolumeId> {
+    Ok(VolumeId(0))
 }
 
 fn default_journal_path() -> PathBuf {

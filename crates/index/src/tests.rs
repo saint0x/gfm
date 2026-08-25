@@ -1122,6 +1122,7 @@ fn content_index_job_spec_round_trips() {
         segment_dir: PathBuf::from("/tmp/segments"),
         records_path: PathBuf::from("/tmp/records.gfmidx"),
         content_path: PathBuf::from("/tmp/content.gfmcontent"),
+        volume: Some(VolumeId(42)),
         batch_size: 17,
     };
 
@@ -1129,6 +1130,23 @@ fn content_index_job_spec_round_trips() {
     let read = ContentIndexJobSpec::read(&path).unwrap();
 
     assert_eq!(read, spec);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn content_index_job_spec_reads_legacy_without_volume() {
+    let path = unique_temp_path("gfm-content-job-legacy", "job");
+    fs::write(
+        &path,
+        "gfm-content-job-v1\nroot\t/tmp/root\nsegment_dir\t/tmp/segments\nrecords_path\t/tmp/records.gfmidx\ncontent_path\t/tmp/content.gfmcontent\nbatch_size\t8\n",
+    )
+    .unwrap();
+
+    let read = ContentIndexJobSpec::read(&path).unwrap();
+
+    assert_eq!(read.root, PathBuf::from("/tmp/root"));
+    assert_eq!(read.volume, None);
+    assert_eq!(read.batch_size, 8);
     fs::remove_file(path).unwrap();
 }
 
