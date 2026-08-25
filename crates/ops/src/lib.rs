@@ -243,7 +243,7 @@ impl OperationVolumeCopyPolicy {
         self
     }
 
-    fn class_for(&self, path: &Path) -> OperationVolumeClass {
+    pub fn class_for_path(&self, path: &Path) -> OperationVolumeClass {
         self.root_classes
             .iter()
             .filter(|(root, _)| path.starts_with(root))
@@ -252,9 +252,9 @@ impl OperationVolumeCopyPolicy {
             .unwrap_or(self.default_class)
     }
 
-    fn copy_buffer_bytes_for(&self, from: &Path, to: &Path) -> usize {
-        let source = self.class_for(from);
-        let destination = self.class_for(to);
+    pub fn copy_buffer_bytes_for_paths(&self, from: &Path, to: &Path) -> usize {
+        let source = self.class_for_path(from);
+        let destination = self.class_for_path(to);
         source
             .copy_buffer_bytes()
             .min(destination.copy_buffer_bytes())
@@ -1617,7 +1617,7 @@ fn copy_file_bytes_tracked(
         .create_new(true)
         .open(to)
         .map_err(|err| GfmError::io(to, err))?;
-    let mut buffer = vec![0; volume_copy_policy.copy_buffer_bytes_for(from, to)];
+    let mut buffer = vec![0; volume_copy_policy.copy_buffer_bytes_for_paths(from, to)];
     let mut written = 0_u64;
 
     let result = loop {

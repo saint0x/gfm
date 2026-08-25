@@ -39,7 +39,8 @@ use gfm_mac::{
 };
 use gfm_ops::{
     read_trash_metadata, ConflictPolicy, Operation, OperationAccessDecision, OperationAccessGate,
-    OperationAccessRole, OperationContext, OperationRecoveryPolicy, Operator,
+    OperationAccessRole, OperationContext, OperationRecoveryPolicy, OperationVolumeClass,
+    OperationVolumeCopyPolicy, Operator,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path,
@@ -3757,6 +3758,7 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     let journal = default_journal_path();
     let trash_metadata = default_trash_metadata_path();
     let access_gate = operation_access_gate(&operation);
+    let volume_copy_policy = operation_volume_copy_policy(&operation);
     let entry_slot = Arc::new(Mutex::new(None));
     let entry_slot_task = Arc::clone(&entry_slot);
     let mut scheduler = Scheduler::new();
@@ -3780,7 +3782,8 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
             OperationContext::new(journal)
                 .with_conflict(conflict)
                 .with_trash_metadata_path(trash_metadata)
-                .with_access_gate(access_gate),
+                .with_access_gate(access_gate)
+                .with_volume_copy_policy(volume_copy_policy),
         );
         let entry = operator.execute(operation)?;
         *entry_slot_task
@@ -3862,6 +3865,61 @@ fn operation_access_probe_path(path: &Path, role: OperationAccessRole) -> PathBu
         candidate = parent.to_path_buf();
     }
     candidate
+}
+
+fn operation_volume_copy_policy(operation: &Operation) -> OperationVolumeCopyPolicy {
+    operation_volume_copy_policy_from_report(operation, &VolumeDiscoveryReport::discover())
+}
+
+fn operation_volume_copy_policy_from_report(
+    operation: &Operation,
+    report: &VolumeDiscoveryReport,
+) -> OperationVolumeCopyPolicy {
+    let mut policy = OperationVolumeCopyPolicy::default();
+    for volume in &report.volumes {
+        if operation_touches_volume(operation, &volume.path) {
+            policy = policy.with_root(
+                volume.path.clone(),
+                operation_volume_class_for_kind(volume.kind),
+            );
+        }
+    }
+    policy
+}
+
+fn operation_touches_volume(operation: &Operation, root: &Path) -> bool {
+    operation_paths(operation)
+        .into_iter()
+        .any(|path| path.starts_with(root))
+}
+
+fn operation_paths(operation: &Operation) -> Vec<&Path> {
+    let mut paths = Vec::new();
+    match operation {
+        Operation::Copy { from, to }
+        | Operation::Move { from, to }
+        | Operation::Rename { from, to }
+        | Operation::Restore { from, to } => {
+            paths.push(from.as_path());
+            paths.push(to.as_path());
+        }
+        Operation::Delete { path } | Operation::Trash { path } => {
+            paths.push(path.as_path());
+        }
+    }
+    paths
+}
+
+fn operation_volume_class_for_kind(kind: VolumeKind) -> OperationVolumeClass {
+    match kind {
+        VolumeKind::System | VolumeKind::Internal | VolumeKind::Unknown => {
+            OperationVolumeClass::Local
+        }
+        VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage => {
+            OperationVolumeClass::External
+        }
+        VolumeKind::Network => OperationVolumeClass::Network,
+    }
 }
 
 fn operation_volume(operation: &Operation) -> Option<VolumeId> {
@@ -5338,4 +5396,83 @@ fn print_usage() {
   gfm trash <path>
   gfm restore <trash-entry> [original-path] [--replace|--keep-both|--merge|--skip]"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn operation_volume_policy_maps_discovered_network_and_external_roots() {
+        let root = unique_temp_dir("gfm-app-op-volume-policy");
+        let network = root.join("TeamShare");
+        let external = root.join("Backup");
+        fs::create_dir_all(&network).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::write(network.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+        fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+        let source = network.join("source.bin");
+        let destination = external.join("destination.bin");
+        let report = VolumeDiscoveryReport::from_paths(vec![network.clone(), external.clone()]);
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert_eq!(
+            policy.class_for_path(&source),
+            OperationVolumeClass::Network
+        );
+        assert_eq!(
+            policy.class_for_path(&destination),
+            OperationVolumeClass::External
+        );
+        assert!(policy.copy_buffer_bytes_for_paths(&source, &destination) < 256 * 1024);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_policy_ignores_unrelated_discovered_roots() {
+        let root = unique_temp_dir("gfm-app-op-volume-unrelated");
+        let unrelated = root.join("UnrelatedShare");
+        let local = root.join("LocalWork");
+        fs::create_dir_all(&unrelated).unwrap();
+        fs::create_dir_all(&local).unwrap();
+        fs::write(unrelated.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+        let source = local.join("source.bin");
+        let destination = local.join("destination.bin");
+        let report = VolumeDiscoveryReport::from_paths(vec![unrelated.clone()]);
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert_eq!(policy.class_for_path(&source), OperationVolumeClass::Local);
+        assert_eq!(
+            policy.copy_buffer_bytes_for_paths(&source, &destination),
+            256 * 1024
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "{}-{}-{}",
+            prefix,
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
 }
