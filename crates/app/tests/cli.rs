@@ -1,3 +1,5 @@
+use gfm_store::write_content_postings;
+use gfm_types::{ContentPosting, FileId, VolumeId};
 use std::fs;
 use std::io::{Cursor, Write};
 use std::process::Command;
@@ -777,6 +779,7 @@ fn searches_persisted_tags_from_binary() {
     let columns = unique_temp_path("gfm-cli-tags", "gfmcols");
     let prefixes = unique_temp_path("gfm-cli-tags", "gfmprefix");
     let fuzzy = unique_temp_path("gfm-cli-tags", "gfmfuzzy");
+    let content = unique_temp_path("gfm-cli-tags", "gfmcontent");
     fs::write(
         &index,
         "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\tImportant,Client\t/tmp/tagged.md\n2\t2\t0\tf\t5\t0\t0\t0\t0\tLater\t/tmp/other.md\n",
@@ -1050,6 +1053,15 @@ fn searches_persisted_tags_from_binary() {
         columns_lookup_stdout.contains("\ttags=client,important\t"),
         "{columns_lookup_stdout}"
     );
+    write_content_postings(
+        &content,
+        &[ContentPosting {
+            term: "bodymarker".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: Vec::new(),
+        }],
+    )
+    .unwrap();
 
     let column_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -1083,6 +1095,7 @@ fn searches_persisted_tags_from_binary() {
             metadata.to_str().unwrap(),
             prefixes.to_str().unwrap(),
             fuzzy.to_str().unwrap(),
+            content.to_str().unwrap(),
             "tag:Important",
         ])
         .output()
@@ -1100,7 +1113,8 @@ fn searches_persisted_tags_from_binary() {
     let sidecar_search_stderr = String::from_utf8(sidecar_search.stderr).unwrap();
     assert!(
         sidecar_search_stderr.contains("metadata-keys ")
-            && sidecar_search_stderr.contains("prefix-keys "),
+            && sidecar_search_stderr.contains("prefix-keys ")
+            && sidecar_search_stderr.contains("content-keys "),
         "{sidecar_search_stderr}"
     );
 
@@ -1112,6 +1126,7 @@ fn searches_persisted_tags_from_binary() {
             metadata.to_str().unwrap(),
             prefixes.to_str().unwrap(),
             fuzzy.to_str().unwrap(),
+            content.to_str().unwrap(),
             "tag",
         ])
         .output()
@@ -1126,6 +1141,29 @@ fn searches_persisted_tags_from_binary() {
         sidecar_prefix_stdout.contains("tagged.md"),
         "{sidecar_prefix_stdout}"
     );
+    let sidecar_content_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-index-sidecars",
+            index.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "bodymarker",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        sidecar_content_search.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sidecar_content_search.stderr)
+    );
+    let sidecar_content_stdout = String::from_utf8(sidecar_content_search.stdout).unwrap();
+    assert!(
+        sidecar_content_stdout.contains("tagged.md"),
+        "{sidecar_content_stdout}"
+    );
 
     fs::remove_file(index).unwrap();
     fs::remove_file(metadata).unwrap();
@@ -1133,6 +1171,7 @@ fn searches_persisted_tags_from_binary() {
     fs::remove_file(columns).unwrap();
     fs::remove_file(prefixes).unwrap();
     fs::remove_file(fuzzy).unwrap();
+    fs::remove_file(content).unwrap();
 }
 
 #[test]

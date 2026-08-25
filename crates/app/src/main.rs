@@ -867,6 +867,8 @@ fn run() -> Result<()> {
                 "search-index-sidecars requires a prefixes path",
             )?;
             let fuzzy = required_path(args.next(), "search-index-sidecars requires a fuzzy path")?;
+            let content =
+                required_path(args.next(), "search-index-sidecars requires a content path")?;
             let query = args.next().ok_or_else(|| {
                 gfm_types::GfmError::Format(
                     "search-index-sidecars requires a query string".to_string(),
@@ -877,6 +879,7 @@ fn run() -> Result<()> {
             let metadata = MmapMetadataArchive::open(metadata)?;
             let prefixes = MmapPrefixArchive::open(prefixes)?;
             let fuzzy = MmapFuzzyArchive::open(fuzzy)?;
+            let content = MmapContentArchive::open(content)?;
             let mut search_columns = Vec::with_capacity(columns.len());
             for index in 0..columns.len() {
                 let column = columns.column(index)?;
@@ -917,16 +920,18 @@ fn run() -> Result<()> {
                     ids: posting.ids,
                 })
                 .collect();
-            let (live, applied, metadata_keys, prefix_keys, fuzzy_keys) =
+            let search_content = content.postings()?;
+            let (live, applied, metadata_keys, prefix_keys, fuzzy_keys, content_keys) =
                 LiveIndex::from_records_with_sidecars(
                     records.records()?,
                     search_columns,
                     search_metadata,
                     search_prefixes,
                     search_fuzzy,
+                    search_content,
                 );
             eprintln!(
-                "columns-indexed {applied} metadata-keys {metadata_keys} prefix-keys {prefix_keys} fuzzy-keys {fuzzy_keys}"
+                "columns-indexed {applied} metadata-keys {metadata_keys} prefix-keys {prefix_keys} fuzzy-keys {fuzzy_keys} content-keys {content_keys}"
             );
             for hit in live.search(&query, 50) {
                 print_hit(&hit);
@@ -2330,7 +2335,7 @@ fn print_usage() {
   gfm search-index <index.gfmidx> <query>
   gfm search-index-mmap <index.gfmidx> <query>
   gfm search-index-columns <index.gfmidx> <columns.gfmcols> <query>
-  gfm search-index-sidecars <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <fuzzy.gfmfuzzy> <query>
+  gfm search-index-sidecars <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <fuzzy.gfmfuzzy> <content.gfmcontent> <query>
   gfm records-verify <index.gfmidx>
   gfm index-columns <records.gfmidx> <columns.gfmcols>
   gfm columns-verify <columns.gfmcols>

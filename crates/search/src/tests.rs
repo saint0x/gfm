@@ -1,5 +1,7 @@
 use super::*;
-use gfm_types::{FileId, FileKind, FileRecord, GfmError, VolumeId};
+use gfm_types::{
+    ContentPositions, ContentPosting, FileId, FileKind, FileRecord, GfmError, VolumeId,
+};
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -1086,6 +1088,49 @@ fn sharded_metadata_sidecar_import_partitions_ids_by_volume() {
         vec![
             PathBuf::from("/Volumes/A/original.md"),
             PathBuf::from("/Volumes/B/original.md")
+        ]
+    );
+}
+
+#[test]
+fn sharded_content_sidecar_import_partitions_ids_and_positions_by_volume() {
+    let mut index = ShardedSearchIndex::new();
+    index.insert(volume_record(1, 1, "/Volumes/A/alpha.md", "alpha.md"));
+    index.insert(volume_record(2, 2, "/Volumes/B/beta.md", "beta.md"));
+
+    index.import_content_postings(&[ContentPosting {
+        term: "bodymarker".to_string(),
+        ids: vec![
+            FileId::new(VolumeId(1), 1),
+            FileId::new(VolumeId(2), 2),
+            FileId::new(VolumeId(9), 9),
+        ],
+        positions: vec![
+            ContentPositions {
+                id: FileId::new(VolumeId(1), 1),
+                positions: vec![0],
+            },
+            ContentPositions {
+                id: FileId::new(VolumeId(2), 2),
+                positions: vec![0],
+            },
+            ContentPositions {
+                id: FileId::new(VolumeId(9), 9),
+                positions: vec![0],
+            },
+        ],
+    }]);
+    let paths = index
+        .query("bodymarker", 10)
+        .into_iter()
+        .map(|hit| hit.record.path)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/Volumes/A/alpha.md"),
+            PathBuf::from("/Volumes/B/beta.md")
         ]
     );
 }

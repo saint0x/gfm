@@ -128,7 +128,7 @@ fn live_index_imports_metadata_prefix_and_fuzzy_sidecars_after_column_build() {
         xattrs_digest: 0,
     };
 
-    let (live, applied, metadata_keys, prefix_keys, fuzzy_keys) =
+    let (live, applied, metadata_keys, prefix_keys, fuzzy_keys, content_keys) =
         LiveIndex::from_records_with_sidecars(
             vec![record.clone()],
             vec![SearchRecordColumns {
@@ -159,16 +159,23 @@ fn live_index_imports_metadata_prefix_and_fuzzy_sidecars_after_column_build() {
                 key: "needl".to_string(),
                 terms: vec!["needl".to_string()],
             }],
+            vec![ContentPosting {
+                term: "bodymarker".to_string(),
+                ids: vec![record.id],
+                positions: Vec::new(),
+            }],
         );
 
     assert_eq!(applied, 1);
     assert_eq!(metadata_keys, 2);
     assert_eq!(prefix_keys, 1);
     assert_eq!(fuzzy_keys, 1);
+    assert_eq!(content_keys, 1);
     assert_eq!(live.search("tag:Important", 5).len(), 1);
     assert_eq!(live.search("launch", 5).len(), 1);
     assert_eq!(live.search("proj", 5).len(), 1);
     assert_eq!(live.search("needle", 5).len(), 1);
+    assert_eq!(live.search("bodymarker", 5).len(), 1);
 }
 
 #[test]

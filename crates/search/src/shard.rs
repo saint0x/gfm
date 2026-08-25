@@ -195,8 +195,32 @@ impl ShardedSearchIndex {
     }
 
     pub fn import_content_postings(&mut self, postings: &[gfm_types::ContentPosting]) {
-        for shard in self.shards.values_mut() {
-            shard.import_content_postings(postings);
+        for (volume, shard) in &mut self.shards {
+            let volume_postings = postings
+                .iter()
+                .filter_map(|posting| {
+                    let ids = posting
+                        .ids
+                        .iter()
+                        .copied()
+                        .filter(|id| id.volume == *volume)
+                        .collect::<Vec<_>>();
+                    let positions = posting
+                        .positions
+                        .iter()
+                        .filter(|positions| positions.id.volume == *volume)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    (!ids.is_empty() || !positions.is_empty()).then(|| gfm_types::ContentPosting {
+                        term: posting.term.clone(),
+                        ids,
+                        positions,
+                    })
+                })
+                .collect::<Vec<_>>();
+            if !volume_postings.is_empty() {
+                shard.import_content_postings(&volume_postings);
+            }
         }
     }
 

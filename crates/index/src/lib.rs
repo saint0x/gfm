@@ -11,8 +11,8 @@ use gfm_store::{
     write_content_segment, write_records,
 };
 use gfm_types::{
-    ContentSegment, DirectoryPage, FileEvent, FileEventKind, FileId, FileRecord, GfmError, Result,
-    ScanIssue, SearchHit,
+    ContentPosting, ContentSegment, DirectoryPage, FileEvent, FileEventKind, FileId, FileRecord,
+    GfmError, Result, ScanIssue, SearchHit,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -239,7 +239,8 @@ impl LiveIndex {
         metadata: Vec<SearchMetadataPosting>,
         prefixes: Vec<SearchPrefixPosting>,
         fuzzy: Vec<SearchFuzzyPosting>,
-    ) -> (Self, usize, usize, usize, usize) {
+        content: Vec<ContentPosting>,
+    ) -> (Self, usize, usize, usize, usize, usize) {
         let mut live = Self::new();
         let mut columns_by_id = columns
             .into_iter()
@@ -261,7 +262,16 @@ impl LiveIndex {
         let metadata_keys = live.index.import_metadata_postings(&metadata);
         let prefix_keys = live.index.import_prefix_postings(&prefixes);
         let fuzzy_keys = live.index.import_fuzzy_postings(&fuzzy);
-        (live, applied, metadata_keys, prefix_keys, fuzzy_keys)
+        let content_keys = content.len();
+        live.index.import_content_postings(&content);
+        (
+            live,
+            applied,
+            metadata_keys,
+            prefix_keys,
+            fuzzy_keys,
+            content_keys,
+        )
     }
 
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {

@@ -294,6 +294,16 @@ impl MmapContentArchive {
         }
     }
 
+    pub fn postings(&self) -> Result<Vec<ContentPosting>> {
+        self.directory
+            .iter()
+            .map(|entry| {
+                let bytes = self.posting_bytes(entry)?;
+                read_content_posting(Cursor::new(bytes), &self.path, self.version)
+            })
+            .collect()
+    }
+
     pub fn indexed_terms(&self) -> usize {
         self.directory.len()
     }
@@ -986,8 +996,10 @@ mod tests {
 
         write_content_postings(&path, &postings).unwrap();
         let read = read_content_postings(&path).unwrap();
+        let archive = MmapContentArchive::open(&path).unwrap();
 
         assert_eq!(read, postings);
+        assert_eq!(archive.postings().unwrap(), postings);
         std::fs::remove_file(path).unwrap();
     }
 
