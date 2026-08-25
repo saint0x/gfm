@@ -1031,6 +1031,58 @@ fn item_bytes(metadata: &fs::Metadata) -> u64 {
     }
 }
 
+#[derive(Debug, Default)]
+struct CopySession {
+    hard_links: BTreeMap<FileIdentity, PathBuf>,
+}
+
+impl CopySession {
+    fn copied_hard_link_destination(&self, metadata: &fs::Metadata) -> Option<&Path> {
+        hard_link_identity(metadata)
+            .and_then(|identity| self.hard_links.get(&identity))
+            .map(PathBuf::as_path)
+    }
+
+    fn remember_hard_link_destination(&mut self, metadata: &fs::Metadata, destination: &Path) {
+        if let Some(identity) = hard_link_identity(metadata) {
+            self.hard_links
+                .entry(identity)
+                .or_insert_with(|| destination.to_path_buf());
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CopyExecution<'a> {
+    verification: VerificationPolicy,
+    volume_copy_policy: &'a OperationVolumeCopyPolicy,
+}
+
+#[cfg(unix)]
+fn hard_link_identity(metadata: &fs::Metadata) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+
+    if metadata.is_file() && metadata.nlink() > 1 {
+        Some(FileIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    } else {
+        None
+    }
+}
+
+#[cfg(not(unix))]
+fn hard_link_identity(_metadata: &fs::Metadata) -> Option<FileIdentity> {
+    None
+}
+
 fn copy_path(
     from: &Path,
     to: &Path,
@@ -1040,6 +1092,31 @@ fn copy_path(
     resuming: bool,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
+    let mut session = CopySession::default();
+    let execution = CopyExecution {
+        verification,
+        volume_copy_policy,
+    };
+    copy_path_with_session(
+        from,
+        to,
+        conflict,
+        execution,
+        resuming,
+        progress,
+        &mut session,
+    )
+}
+
+fn copy_path_with_session(
+    from: &Path,
+    to: &Path,
+    conflict: ConflictPolicy,
+    execution: CopyExecution<'_>,
+    resuming: bool,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+    session: &mut CopySession,
+) -> Result<()> {
     progress.check_cancelled()?;
     ensure_source_exists(from)?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
@@ -1048,10 +1125,10 @@ fn copy_path(
             from,
             to,
             &metadata,
-            verification,
-            volume_copy_policy,
+            execution,
             CopyExistingMode::Resume,
             progress,
+            session,
         );
     }
     if conflict == ConflictPolicy::Merge && metadata.is_dir() && path_exists_or_symlink(to) {
@@ -1059,10 +1136,10 @@ fn copy_path(
             from,
             to,
             &metadata,
-            verification,
-            volume_copy_policy,
+            execution,
             CopyExistingMode::Merge,
             progress,
+            session,
         );
     }
     prepare_destination(to, conflict)?;
@@ -1072,13 +1149,13 @@ fn copy_path(
         copy_directory(
             from,
             to,
-            verification,
-            volume_copy_policy,
+            execution,
             CopyExistingMode::Fresh,
             progress,
+            session,
         )
     } else {
-        copy_file_tracked(from, to, verification, volume_copy_policy, progress)?;
+        copy_file_with_session(from, to, &metadata, execution, progress, session)?;
         Ok(())
     }
 }
@@ -1096,28 +1173,36 @@ fn move_path(
     ensure_source_exists(from)?;
     if resuming && path_exists_or_symlink(to) {
         let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+        let execution = CopyExecution {
+            verification,
+            volume_copy_policy,
+        };
         copy_path_existing(
             from,
             to,
             &metadata,
-            verification,
-            volume_copy_policy,
+            execution,
             CopyExistingMode::Resume,
             progress,
+            &mut CopySession::default(),
         )?;
         delete_path_untracked(from)?;
         return Ok(());
     }
     if conflict == ConflictPolicy::Merge && path_exists_or_symlink(to) {
         let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+        let execution = CopyExecution {
+            verification,
+            volume_copy_policy,
+        };
         copy_path_existing(
             from,
             to,
             &metadata,
-            verification,
-            volume_copy_policy,
+            execution,
             CopyExistingMode::Merge,
             progress,
+            &mut CopySession::default(),
         )?;
         delete_path_untracked(from)?;
         return Ok(());
@@ -1373,10 +1458,10 @@ fn parse_bool_field(value: &str, name: &str, path: &Path, line: usize) -> Result
 fn copy_directory(
     from: &Path,
     to: &Path,
-    verification: VerificationPolicy,
-    volume_copy_policy: &OperationVolumeCopyPolicy,
+    execution: CopyExecution<'_>,
     mode: CopyExistingMode,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+    session: &mut CopySession,
 ) -> Result<()> {
     progress.check_cancelled()?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
@@ -1415,60 +1500,54 @@ fn copy_directory(
                         &source,
                         &destination,
                         &child_metadata,
-                        verification,
-                        volume_copy_policy,
+                        execution,
                         CopyExistingMode::Resume,
                         progress,
+                        session,
                     )?;
                 } else if mode == CopyExistingMode::Merge && path_exists_or_symlink(&destination) {
                     copy_path_existing(
                         &source,
                         &destination,
                         &child_metadata,
-                        verification,
-                        volume_copy_policy,
+                        execution,
                         CopyExistingMode::Merge,
                         progress,
+                        session,
                     )?;
                 } else {
                     copy_symlink(&source, &destination, progress)?;
                 }
             } else if child_metadata.is_dir() {
-                copy_directory(
-                    &source,
-                    &destination,
-                    verification,
-                    volume_copy_policy,
-                    mode,
-                    progress,
-                )?;
+                copy_directory(&source, &destination, execution, mode, progress, session)?;
             } else if mode == CopyExistingMode::Resume && path_exists_or_symlink(&destination) {
                 copy_path_existing(
                     &source,
                     &destination,
                     &child_metadata,
-                    verification,
-                    volume_copy_policy,
+                    execution,
                     CopyExistingMode::Resume,
                     progress,
+                    session,
                 )?;
             } else if mode == CopyExistingMode::Merge && path_exists_or_symlink(&destination) {
                 copy_path_existing(
                     &source,
                     &destination,
                     &child_metadata,
-                    verification,
-                    volume_copy_policy,
+                    execution,
                     CopyExistingMode::Merge,
                     progress,
+                    session,
                 )?;
             } else {
-                let _ = copy_file_tracked(
+                copy_file_with_session(
                     &source,
                     &destination,
-                    verification,
-                    volume_copy_policy,
+                    &child_metadata,
+                    execution,
                     progress,
+                    session,
                 )?;
             }
         }
@@ -1490,10 +1569,10 @@ fn copy_path_existing(
     from: &Path,
     to: &Path,
     metadata: &fs::Metadata,
-    verification: VerificationPolicy,
-    volume_copy_policy: &OperationVolumeCopyPolicy,
+    execution: CopyExecution<'_>,
     mode: CopyExistingMode,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+    session: &mut CopySession,
 ) -> Result<()> {
     progress.check_cancelled()?;
     if metadata.file_type().is_symlink() {
@@ -1508,14 +1587,14 @@ fn copy_path_existing(
                 message: "merge destination package already exists".to_string(),
             });
         }
-        copy_directory(from, to, verification, volume_copy_policy, mode, progress)
+        copy_directory(from, to, execution, mode, progress, session)
     } else if mode == CopyExistingMode::Merge {
         Err(GfmError::Conflict {
             path: to.to_path_buf(),
             message: "merge destination file already exists".to_string(),
         })
     } else {
-        verify_copy(from, to, verification)?;
+        verify_copy(from, to, execution.verification)?;
         preserve_metadata(from, to, metadata)?;
         progress.advance(metadata)
     }
@@ -1645,6 +1724,47 @@ fn copy_file_tracked(
         }
         Err(err) => Err(GfmError::io(from, err)),
     }
+}
+
+fn copy_file_with_session(
+    from: &Path,
+    to: &Path,
+    metadata: &fs::Metadata,
+    execution: CopyExecution<'_>,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+    session: &mut CopySession,
+) -> Result<()> {
+    if let Some(existing) = session
+        .copied_hard_link_destination(metadata)
+        .map(Path::to_path_buf)
+    {
+        link_existing_hard_link(&existing, to, metadata, progress)?;
+        return Ok(());
+    }
+
+    copy_file_tracked(
+        from,
+        to,
+        execution.verification,
+        execution.volume_copy_policy,
+        progress,
+    )?;
+    session.remember_hard_link_destination(metadata, to);
+    Ok(())
+}
+
+fn link_existing_hard_link(
+    existing: &Path,
+    to: &Path,
+    metadata: &fs::Metadata,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    progress.check_cancelled()?;
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
+    fs::hard_link(existing, to).map_err(|err| GfmError::io(to, err))?;
+    progress.advance(metadata)
 }
 
 #[cfg(test)]
@@ -3090,6 +3210,52 @@ mod tests {
             ),
             mtime
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_copy_preserves_hard_link_topology() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = unique_temp_dir("gfm-ops-hard-links");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        let original = source.join("original.txt");
+        let alias = source.join("nested").join("alias.txt");
+        fs::write(&original, "shared inode").unwrap();
+        match fs::hard_link(&original, &alias) {
+            Ok(()) => {}
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::Unsupported | io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            Err(err) => panic!("unexpected hard-link setup failure: {err}"),
+        }
+
+        Operator::new(OperationContext::new(&journal))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        let copied_original = destination.join("original.txt");
+        let copied_alias = destination.join("nested").join("alias.txt");
+        assert_eq!(fs::read_to_string(&copied_alias).unwrap(), "shared inode");
+        let original_metadata = fs::metadata(&copied_original).unwrap();
+        let alias_metadata = fs::metadata(&copied_alias).unwrap();
+        assert_eq!(original_metadata.dev(), alias_metadata.dev());
+        assert_eq!(original_metadata.ino(), alias_metadata.ino());
+        assert!(original_metadata.nlink() >= 2);
 
         fs::remove_dir_all(root).unwrap();
     }
