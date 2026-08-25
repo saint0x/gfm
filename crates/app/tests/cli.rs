@@ -2103,6 +2103,42 @@ fn copy_keep_both_from_binary_uses_actual_journal_destination() {
 }
 
 #[test]
+fn copy_merge_from_binary_combines_directories_without_overwrite() {
+    let root = unique_temp_dir("gfm-cli-ops-merge-root");
+    let journal = root.join("ops.journal");
+    let source = root.join("source");
+    let destination = root.join("destination");
+    fs::create_dir_all(source.join("nested")).unwrap();
+    fs::create_dir_all(destination.join("nested")).unwrap();
+    fs::write(source.join("nested").join("new.txt"), "new").unwrap();
+    fs::write(destination.join("nested").join("old.txt"), "old").unwrap();
+
+    run_gfm(
+        &journal,
+        [
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            "--merge",
+        ],
+    );
+
+    assert_eq!(
+        fs::read_to_string(destination.join("nested").join("new.txt")).unwrap(),
+        "new"
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join("nested").join("old.txt")).unwrap(),
+        "old"
+    );
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(journal_text.contains("completed"), "{journal_text}");
+    assert!(!journal_text.contains("failed"), "{journal_text}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn recovers_interrupted_operation_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-recover-root");
     let journal = root.join("ops.journal");

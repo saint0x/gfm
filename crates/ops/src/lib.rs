@@ -12,6 +12,7 @@ pub enum ConflictPolicy {
     Fail,
     Replace,
     KeepBoth,
+    Merge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +46,13 @@ pub enum OperationStatus {
 pub enum CopyMethod {
     ApfsClone,
     ByteCopy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CopyExistingMode {
+    Fresh,
+    Resume,
+    Merge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -608,13 +616,30 @@ fn copy_path(
     ensure_source_exists(from)?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     if resuming && path_exists_or_symlink(to) {
-        return resume_copy_path(from, to, &metadata, verification, progress);
+        return copy_path_existing(
+            from,
+            to,
+            &metadata,
+            verification,
+            CopyExistingMode::Resume,
+            progress,
+        );
+    }
+    if conflict == ConflictPolicy::Merge && metadata.is_dir() && path_exists_or_symlink(to) {
+        return copy_path_existing(
+            from,
+            to,
+            &metadata,
+            verification,
+            CopyExistingMode::Merge,
+            progress,
+        );
     }
     prepare_destination(to, conflict)?;
     if metadata.file_type().is_symlink() {
         copy_symlink(from, to, progress)
     } else if metadata.is_dir() {
-        copy_directory(from, to, verification, false, progress)
+        copy_directory(from, to, verification, CopyExistingMode::Fresh, progress)
     } else {
         copy_file(from, to, verification)?;
         progress.advance(&metadata)
@@ -633,7 +658,27 @@ fn move_path(
     ensure_source_exists(from)?;
     if resuming && path_exists_or_symlink(to) {
         let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
-        resume_copy_path(from, to, &metadata, verification, progress)?;
+        copy_path_existing(
+            from,
+            to,
+            &metadata,
+            verification,
+            CopyExistingMode::Resume,
+            progress,
+        )?;
+        delete_path_untracked(from)?;
+        return Ok(());
+    }
+    if conflict == ConflictPolicy::Merge && path_exists_or_symlink(to) {
+        let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+        copy_path_existing(
+            from,
+            to,
+            &metadata,
+            verification,
+            CopyExistingMode::Merge,
+            progress,
+        )?;
         delete_path_untracked(from)?;
         return Ok(());
     }
@@ -703,21 +748,24 @@ fn copy_directory(
     from: &Path,
     to: &Path,
     verification: VerificationPolicy,
-    resuming: bool,
+    mode: CopyExistingMode,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
-    if resuming && path_exists_or_symlink(to) {
+    if mode != CopyExistingMode::Fresh && path_exists_or_symlink(to) {
         let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
         if !destination_metadata.is_dir() {
             return Err(GfmError::Conflict {
                 path: to.to_path_buf(),
-                message: "resume destination exists but is not a directory".to_string(),
+                message: format!(
+                    "{} destination exists but is not a directory",
+                    copy_mode_label(mode)
+                ),
             });
         }
     } else {
-        fs::create_dir_all(to).map_err(|err| GfmError::io(to, err))?;
+        create_new_directory(to)?;
     }
     preserve_metadata(from, to, &metadata)?;
     progress.advance(&metadata)?;
@@ -730,25 +778,45 @@ fn copy_directory(
         let child_metadata =
             fs::symlink_metadata(&source).map_err(|err| GfmError::io(&source, err))?;
         if child_metadata.file_type().is_symlink() {
-            if resuming && path_exists_or_symlink(&destination) {
-                resume_copy_path(
+            if mode == CopyExistingMode::Resume && path_exists_or_symlink(&destination) {
+                copy_path_existing(
                     &source,
                     &destination,
                     &child_metadata,
                     verification,
+                    CopyExistingMode::Resume,
+                    progress,
+                )?;
+            } else if mode == CopyExistingMode::Merge && path_exists_or_symlink(&destination) {
+                copy_path_existing(
+                    &source,
+                    &destination,
+                    &child_metadata,
+                    verification,
+                    CopyExistingMode::Merge,
                     progress,
                 )?;
             } else {
                 copy_symlink(&source, &destination, progress)?;
             }
         } else if child_metadata.is_dir() {
-            copy_directory(&source, &destination, verification, resuming, progress)?;
-        } else if resuming && path_exists_or_symlink(&destination) {
-            resume_copy_path(
+            copy_directory(&source, &destination, verification, mode, progress)?;
+        } else if mode == CopyExistingMode::Resume && path_exists_or_symlink(&destination) {
+            copy_path_existing(
                 &source,
                 &destination,
                 &child_metadata,
                 verification,
+                CopyExistingMode::Resume,
+                progress,
+            )?;
+        } else if mode == CopyExistingMode::Merge && path_exists_or_symlink(&destination) {
+            copy_path_existing(
+                &source,
+                &destination,
+                &child_metadata,
+                verification,
+                CopyExistingMode::Merge,
                 progress,
             )?;
         } else {
@@ -759,19 +827,25 @@ fn copy_directory(
     Ok(())
 }
 
-fn resume_copy_path(
+fn copy_path_existing(
     from: &Path,
     to: &Path,
     metadata: &fs::Metadata,
     verification: VerificationPolicy,
+    mode: CopyExistingMode,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
     if metadata.file_type().is_symlink() {
-        verify_existing_symlink_copy(from, to)?;
+        verify_existing_symlink_copy(from, to, mode)?;
         progress.advance(metadata)
     } else if metadata.is_dir() {
-        copy_directory(from, to, verification, true, progress)
+        copy_directory(from, to, verification, mode, progress)
+    } else if mode == CopyExistingMode::Merge {
+        Err(GfmError::Conflict {
+            path: to.to_path_buf(),
+            message: "merge destination file already exists".to_string(),
+        })
     } else {
         verify_copy(from, to, verification)?;
         preserve_metadata(from, to, metadata)?;
@@ -779,7 +853,13 @@ fn resume_copy_path(
     }
 }
 
-fn verify_existing_symlink_copy(from: &Path, to: &Path) -> Result<()> {
+fn verify_existing_symlink_copy(from: &Path, to: &Path, mode: CopyExistingMode) -> Result<()> {
+    if mode == CopyExistingMode::Merge {
+        return Err(GfmError::Conflict {
+            path: to.to_path_buf(),
+            message: "merge destination symlink already exists".to_string(),
+        });
+    }
     let source_target = fs::read_link(from).map_err(|err| GfmError::io(from, err))?;
     let destination_target = fs::read_link(to).map_err(|err| GfmError::io(to, err))?;
     if source_target == destination_target {
@@ -793,6 +873,25 @@ fn verify_existing_symlink_copy(from: &Path, to: &Path) -> Result<()> {
                 destination_target.display()
             ),
         })
+    }
+}
+
+fn create_new_directory(path: &Path) -> Result<()> {
+    match fs::create_dir(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Err(GfmError::Conflict {
+            path: path.to_path_buf(),
+            message: "destination directory already exists".to_string(),
+        }),
+        Err(err) => Err(GfmError::io(path, err)),
+    }
+}
+
+fn copy_mode_label(mode: CopyExistingMode) -> &'static str {
+    match mode {
+        CopyExistingMode::Fresh => "fresh",
+        CopyExistingMode::Resume => "resume",
+        CopyExistingMode::Merge => "merge",
     }
 }
 
@@ -1144,6 +1243,10 @@ fn prepare_destination(path: &Path, conflict: ConflictPolicy) -> Result<()> {
         ConflictPolicy::KeepBoth => Err(GfmError::Conflict {
             path: path.to_path_buf(),
             message: "keep-both destination still exists".to_string(),
+        }),
+        ConflictPolicy::Merge => Err(GfmError::Conflict {
+            path: path.to_path_buf(),
+            message: "merge requires source and destination directories".to_string(),
         }),
     }
 }
@@ -1928,6 +2031,105 @@ mod tests {
                 from: source,
                 to: second_copy
             }
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_merge_combines_directories_without_overwriting_existing_files() {
+        let root = unique_temp_dir("gfm-ops-merge-copy");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::create_dir_all(destination.join("nested")).unwrap();
+        fs::write(source.join("nested").join("new.txt"), "new").unwrap();
+        fs::write(destination.join("nested").join("old.txt"), "old").unwrap();
+
+        let entry =
+            Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::Merge))
+                .execute(Operation::Copy {
+                    from: source.clone(),
+                    to: destination.clone(),
+                })
+                .unwrap();
+
+        assert_eq!(entry.status, OperationStatus::Completed);
+        assert_eq!(
+            fs::read_to_string(destination.join("nested").join("new.txt")).unwrap(),
+            "new"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("nested").join("old.txt")).unwrap(),
+            "old"
+        );
+        assert_eq!(
+            fs::read_to_string(source.join("nested").join("new.txt")).unwrap(),
+            "new"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_merge_rejects_existing_file_conflict_without_overwrite() {
+        let root = unique_temp_dir("gfm-ops-merge-conflict");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(source.join("same.txt"), "source").unwrap();
+        fs::write(destination.join("same.txt"), "destination").unwrap();
+
+        let err =
+            Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::Merge))
+                .execute(Operation::Copy {
+                    from: source,
+                    to: destination.clone(),
+                })
+                .unwrap_err();
+
+        assert!(matches!(err, GfmError::Conflict { .. }));
+        assert_eq!(
+            fs::read_to_string(destination.join("same.txt")).unwrap(),
+            "destination"
+        );
+        let entries = read_journal(&journal).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].status, OperationStatus::Started);
+        assert_eq!(entries[1].status, OperationStatus::Failed);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn move_merge_combines_directories_and_removes_source_after_success() {
+        let root = unique_temp_dir("gfm-ops-merge-move");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::create_dir_all(destination.join("nested")).unwrap();
+        fs::write(source.join("nested").join("new.txt"), "new").unwrap();
+        fs::write(destination.join("nested").join("old.txt"), "old").unwrap();
+
+        Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::Merge))
+            .execute(Operation::Move {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(
+            fs::read_to_string(destination.join("nested").join("new.txt")).unwrap(),
+            "new"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("nested").join("old.txt")).unwrap(),
+            "old"
         );
 
         fs::remove_dir_all(root).unwrap();

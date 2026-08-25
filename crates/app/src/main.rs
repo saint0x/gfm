@@ -3261,6 +3261,7 @@ fn parse_operation_conflict_args(
         match arg.as_str() {
             "--replace" => conflict = ConflictPolicy::Replace,
             "--keep-both" => conflict = ConflictPolicy::KeepBoth,
+            "--merge" => conflict = ConflictPolicy::Merge,
             other => {
                 return Err(GfmError::Format(format!(
                     "unknown {command} conflict option `{other}`"
@@ -5222,9 +5223,9 @@ fn print_usage() {
   gfm jobs-runtime-retry-probe <attempt-state> [<nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>]
   gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
   gfm watch-once <root>
-  gfm copy <source> <destination> [--replace|--keep-both]
-  gfm move <source> <destination> [--replace|--keep-both]
-  gfm rename <source> <destination> [--replace|--keep-both]
+  gfm copy <source> <destination> [--replace|--keep-both|--merge]
+  gfm move <source> <destination> [--replace|--keep-both|--merge]
+  gfm rename <source> <destination> [--replace|--keep-both|--merge]
   gfm delete <path>
   gfm trash <path>"
     );
