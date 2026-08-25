@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub enum ConflictPolicy {
     Fail,
     Replace,
+    KeepBoth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,6 +179,7 @@ impl Operator {
         operation: Operation,
         mut on_progress: impl FnMut(OperationProgressEvent),
     ) -> Result<JournalEntry> {
+        let operation = resolve_operation_conflicts(operation, self.context.conflict)?;
         let id = now_nanos();
         self.append(JournalEntry::started(id, operation.clone()))?;
         self.execute_started(id, operation, &mut on_progress)
@@ -901,8 +903,77 @@ fn ensure_source_exists(path: &Path) -> Result<()> {
     }
 }
 
+fn resolve_operation_conflicts(
+    operation: Operation,
+    conflict: ConflictPolicy,
+) -> Result<Operation> {
+    if conflict != ConflictPolicy::KeepBoth {
+        return Ok(operation);
+    }
+    match operation {
+        Operation::Copy { from, to } => Ok(Operation::Copy {
+            from,
+            to: keep_both_path(&to)?,
+        }),
+        Operation::Move { from, to } => Ok(Operation::Move {
+            from,
+            to: keep_both_path(&to)?,
+        }),
+        Operation::Rename { from, to } => Ok(Operation::Rename {
+            from,
+            to: keep_both_path(&to)?,
+        }),
+        Operation::Delete { path } => Ok(Operation::Delete { path }),
+        Operation::Trash { path } => Ok(Operation::Trash { path }),
+    }
+}
+
+fn keep_both_path(path: &Path) -> Result<PathBuf> {
+    if !path_exists_or_symlink(path) {
+        return Ok(path.to_path_buf());
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .or_else(|| path.file_name().and_then(|name| name.to_str()))
+        .ok_or_else(|| {
+            GfmError::Format(format!(
+                "could not derive keep-both destination name for {}",
+                path.display()
+            ))
+        })?;
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    for index in 1..=10_000 {
+        let suffix = if index == 1 {
+            " copy".to_string()
+        } else {
+            format!(" copy {index}")
+        };
+        let candidate_name = match extension {
+            Some(extension) if path.file_stem().is_some() => {
+                format!("{stem}{suffix}.{extension}")
+            }
+            _ => format!("{stem}{suffix}"),
+        };
+        let candidate = parent.join(candidate_name);
+        if !path_exists_or_symlink(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(GfmError::Conflict {
+        path: path.to_path_buf(),
+        message: "could not allocate a keep-both destination name".to_string(),
+    })
+}
+
+fn path_exists_or_symlink(path: &Path) -> bool {
+    path.exists() || fs::symlink_metadata(path).is_ok()
+}
+
 fn prepare_destination(path: &Path, conflict: ConflictPolicy) -> Result<()> {
-    if !path.exists() {
+    if !path_exists_or_symlink(path) {
         return Ok(());
     }
 
@@ -912,6 +983,10 @@ fn prepare_destination(path: &Path, conflict: ConflictPolicy) -> Result<()> {
             message: "destination already exists".to_string(),
         }),
         ConflictPolicy::Replace => delete_path_untracked(path),
+        ConflictPolicy::KeepBoth => Err(GfmError::Conflict {
+            path: path.to_path_buf(),
+            message: "keep-both destination still exists".to_string(),
+        }),
     }
 }
 
@@ -1540,6 +1615,73 @@ mod tests {
         let journal_entries = operator.journal().unwrap();
         assert_eq!(journal_entries.len(), 2);
         assert_eq!(journal_entries[1].status, OperationStatus::Failed);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_keep_both_allocates_finder_style_destination() {
+        let root = unique_temp_dir("gfm-ops-keep-both-copy");
+        let journal = root.join("journal.log");
+        let source = root.join("report.md");
+        let destination = root.join("destination.md");
+        let copy_destination = root.join("destination copy.md");
+        fs::write(&source, "source").unwrap();
+        fs::write(&destination, "destination").unwrap();
+
+        let entry =
+            Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::KeepBoth))
+                .execute(Operation::Copy {
+                    from: source.clone(),
+                    to: destination.clone(),
+                })
+                .unwrap();
+
+        assert_eq!(fs::read_to_string(&source).unwrap(), "source");
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "destination");
+        assert_eq!(fs::read_to_string(&copy_destination).unwrap(), "source");
+        assert_eq!(
+            entry.operation,
+            Operation::Copy {
+                from: source,
+                to: copy_destination
+            }
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn move_keep_both_allocates_next_available_destination() {
+        let root = unique_temp_dir("gfm-ops-keep-both-move");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        let first_copy = root.join("destination copy.txt");
+        let second_copy = root.join("destination copy 2.txt");
+        fs::write(&source, "new").unwrap();
+        fs::write(&destination, "old").unwrap();
+        fs::write(&first_copy, "older").unwrap();
+
+        let entry =
+            Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::KeepBoth))
+                .execute(Operation::Move {
+                    from: source.clone(),
+                    to: destination.clone(),
+                })
+                .unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "old");
+        assert_eq!(fs::read_to_string(&first_copy).unwrap(), "older");
+        assert_eq!(fs::read_to_string(&second_copy).unwrap(), "new");
+        assert_eq!(
+            entry.operation,
+            Operation::Move {
+                from: source,
+                to: second_copy
+            }
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

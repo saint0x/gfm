@@ -2070,6 +2070,39 @@ fn failed_operation_from_binary_still_journals_failure() {
 }
 
 #[test]
+fn copy_keep_both_from_binary_uses_actual_journal_destination() {
+    let root = unique_temp_dir("gfm-cli-ops-keep-both-root");
+    let journal = root.join("ops.journal");
+    let source = root.join("report.md");
+    let destination = root.join("destination.md");
+    let copied = root.join("destination copy.md");
+    fs::write(&source, "new report").unwrap();
+    fs::write(&destination, "old report").unwrap();
+
+    run_gfm(
+        &journal,
+        [
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            "--keep-both",
+        ],
+    );
+
+    assert_eq!(fs::read_to_string(&source).unwrap(), "new report");
+    assert_eq!(fs::read_to_string(&destination).unwrap(), "old report");
+    assert_eq!(fs::read_to_string(&copied).unwrap(), "new report");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("destination copy.md"),
+        "{journal_text}"
+    );
+    assert!(!journal_text.contains("failed"), "{journal_text}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn recovers_interrupted_operation_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-recover-root");
     let journal = root.join("ops.journal");

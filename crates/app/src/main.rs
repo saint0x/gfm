@@ -3174,17 +3174,20 @@ fn run() -> Result<()> {
         Some("copy") => {
             let from = required_path(args.next(), "copy requires a source path")?;
             let to = required_path(args.next(), "copy requires a destination path")?;
-            execute_operation(Operation::Copy { from, to }, ConflictPolicy::Fail)?;
+            let conflict = parse_operation_conflict_args(&mut args, "copy")?;
+            execute_operation(Operation::Copy { from, to }, conflict)?;
         }
         Some("move") => {
             let from = required_path(args.next(), "move requires a source path")?;
             let to = required_path(args.next(), "move requires a destination path")?;
-            execute_operation(Operation::Move { from, to }, ConflictPolicy::Fail)?;
+            let conflict = parse_operation_conflict_args(&mut args, "move")?;
+            execute_operation(Operation::Move { from, to }, conflict)?;
         }
         Some("rename") => {
             let from = required_path(args.next(), "rename requires a source path")?;
             let to = required_path(args.next(), "rename requires a destination path")?;
-            execute_operation(Operation::Rename { from, to }, ConflictPolicy::Fail)?;
+            let conflict = parse_operation_conflict_args(&mut args, "rename")?;
+            execute_operation(Operation::Rename { from, to }, conflict)?;
         }
         Some("delete") => {
             let path = required_path(args.next(), "delete requires a path")?;
@@ -3247,6 +3250,25 @@ fn parse_ops_recover_args(
             max_attempts,
         },
     ))
+}
+
+fn parse_operation_conflict_args(
+    args: &mut impl Iterator<Item = String>,
+    command: &str,
+) -> Result<ConflictPolicy> {
+    let mut conflict = ConflictPolicy::Fail;
+    for arg in args {
+        match arg.as_str() {
+            "--replace" => conflict = ConflictPolicy::Replace,
+            "--keep-both" => conflict = ConflictPolicy::KeepBoth,
+            other => {
+                return Err(GfmError::Format(format!(
+                    "unknown {command} conflict option `{other}`"
+                )));
+            }
+        }
+    }
+    Ok(conflict)
 }
 
 fn parse_sidecar_paths(
@@ -5199,9 +5221,9 @@ fn print_usage() {
   gfm jobs-runtime-retry-probe <attempt-state> [<nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>]
   gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
   gfm watch-once <root>
-  gfm copy <source> <destination>
-  gfm move <source> <destination>
-  gfm rename <source> <destination>
+  gfm copy <source> <destination> [--replace|--keep-both]
+  gfm move <source> <destination> [--replace|--keep-both]
+  gfm rename <source> <destination> [--replace|--keep-both]
   gfm delete <path>
   gfm trash <path>"
     );
