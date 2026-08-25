@@ -685,7 +685,15 @@ fn run() -> Result<()> {
         Some("extract-worker-adaptive") => {
             let path = required_path(args.next(), "extract-worker-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(&mut args, "extract worker")?;
-            let report = run_adaptive_extraction_worker(&path, pressure)?;
+            let volume = detect_volume_id(&path)
+                .ok()
+                .or_else(|| parent_volume(&path));
+            let report = run_volume_task(
+                volume,
+                Priority::Background,
+                "adaptive extraction",
+                move || run_adaptive_extraction_worker(&path, pressure),
+            )?;
             print!("{}", report);
         }
         Some("extract-worker-cancel-adaptive") => {
@@ -730,8 +738,18 @@ fn run() -> Result<()> {
                 .map(|value| parse_u32(&value, "failure threshold"))
                 .transpose()?
                 .unwrap_or(2);
-            let output = run_quarantined_adaptive_extraction_worker(
-                &path, &store, pressure, timeout, threshold,
+            let volume = detect_volume_id(&path)
+                .ok()
+                .or_else(|| parent_volume(&path));
+            let output = run_volume_task(
+                volume,
+                Priority::Background,
+                "quarantined adaptive extraction",
+                move || {
+                    run_quarantined_adaptive_extraction_worker(
+                        &path, &store, pressure, timeout, threshold,
+                    )
+                },
             )?;
             print!("{output}");
         }

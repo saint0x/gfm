@@ -2352,9 +2352,13 @@ fn reports_compressed_pdf_extraction_from_binary() {
 fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-worker-budget-root");
     let path = root.join("large.txt");
+    let catalog = unique_temp_path("gfm-cli-extract-worker-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-extract-worker-runtime", "gfmprogress");
     fs::write(&path, "x".repeat(1024 * 1024 + 1)).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "extract-worker-adaptive",
             path.to_str().unwrap(),
@@ -2376,7 +2380,28 @@ fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
     assert!(stdout.contains("\tstatus=skipped\t"), "{stdout}");
     assert!(stdout.contains("\treason=too-large\t"), "{stdout}");
     assert!(stdout.contains("\tbytes-read=0\t"), "{stdout}");
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(catalog_text.contains("\textraction\t"), "{catalog_text}");
+    assert!(
+        catalog_text.contains("adaptive extraction"),
+        "{catalog_text}"
+    );
+    assert!(
+        catalog_text.contains("runtime/extraction/adaptive-extraction.gfmjob"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tbackground\tbackground\tadaptive extraction"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tcompleted\t1\t1\tcompleted\t"),
+        "{progress_text}"
+    );
 
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 
