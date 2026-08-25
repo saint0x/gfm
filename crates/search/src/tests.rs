@@ -210,6 +210,69 @@ fn imported_fuzzy_postings_preserve_fallback_fuzzy_terms() {
 }
 
 #[test]
+fn imported_prefix_postings_drive_deferred_prefix_search() {
+    let mut index = SearchIndex::new();
+    assert!(index.insert_with_columns_deferred_sidecars(
+        record(1, "/tmp/original.txt", "original.txt"),
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(1), 1),
+            name: "project-alpha.md".to_string(),
+            path: "/tmp/project-alpha.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: Vec::new(),
+            comment: None,
+        },
+    ));
+    let fallback_hits = index.query("proj", 10);
+    assert_eq!(fallback_hits.len(), 1);
+    assert_eq!(fallback_hits[0].reason, MatchReason::SubstringName);
+
+    assert_eq!(
+        index.import_prefix_postings(&[SearchPrefixPosting {
+            prefix: "proj".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+        }]),
+        1
+    );
+    let hits = index.query("proj", 10);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.name, "original.txt");
+    assert_eq!(hits[0].reason, MatchReason::PrefixName);
+}
+
+#[test]
+fn imported_prefix_postings_preserve_fallback_prefix_terms() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/profile.md", "profile.md"));
+    assert!(index.insert_with_columns_deferred_sidecars(
+        record(2, "/tmp/original.txt", "original.txt"),
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(1), 2),
+            name: "project-alpha.md".to_string(),
+            path: "/tmp/project-alpha.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: Vec::new(),
+            comment: None,
+        },
+    ));
+
+    assert_eq!(index.query("prof", 10).len(), 1);
+    let fallback_hits = index.query("proj", 10);
+    assert_eq!(fallback_hits.len(), 1);
+    assert_eq!(fallback_hits[0].reason, MatchReason::SubstringName);
+    assert!(
+        index.import_prefix_postings(&[SearchPrefixPosting {
+            prefix: "proj".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 2), FileId::new(VolumeId(9), 9)],
+        }]) >= 2
+    );
+
+    assert_eq!(index.query("prof", 10)[0].reason, MatchReason::PrefixName);
+    assert_eq!(index.query("proj", 10)[0].reason, MatchReason::PrefixName);
+}
+
+#[test]
 fn name_prefix_postings_drive_interactive_prefix_search() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/project-plan.md", "project-plan.md"));
@@ -851,6 +914,58 @@ fn sharded_search_merges_volume_results_deterministically() {
 
     assert_eq!(index.shard_count(), 2);
     assert_eq!(paths, vec!["/Volumes/A/report.md", "/Volumes/B/report.md"]);
+}
+
+#[test]
+fn sharded_prefix_sidecar_import_partitions_ids_by_volume() {
+    let mut index = ShardedSearchIndex::new();
+    index.insert_with_columns_deferred_sidecars(
+        volume_record(1, 1, "/Volumes/A/original.md", "original.md"),
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(1), 1),
+            name: "project-alpha.md".to_string(),
+            path: "/Volumes/A/project-alpha.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: Vec::new(),
+            comment: None,
+        },
+    );
+    index.insert_with_columns_deferred_sidecars(
+        volume_record(2, 2, "/Volumes/B/original.md", "original.md"),
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(2), 2),
+            name: "project-beta.md".to_string(),
+            path: "/Volumes/B/project-beta.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: Vec::new(),
+            comment: None,
+        },
+    );
+
+    assert!(
+        index.import_prefix_postings(&[SearchPrefixPosting {
+            prefix: "proj".to_string(),
+            ids: vec![
+                FileId::new(VolumeId(1), 1),
+                FileId::new(VolumeId(2), 2),
+                FileId::new(VolumeId(9), 9),
+            ],
+        }]) >= 2
+    );
+    let paths = index
+        .query("proj", 10)
+        .into_iter()
+        .filter(|hit| hit.reason == MatchReason::PrefixName)
+        .map(|hit| hit.record.path)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/Volumes/A/original.md"),
+            PathBuf::from("/Volumes/B/original.md")
+        ]
+    );
 }
 
 #[test]

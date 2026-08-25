@@ -14,8 +14,8 @@ use gfm_index::{
     parse_volume_indexing_policy, BackgroundContentIndexer, ContentIndexJobSpec,
     ContentIndexReport, EventBackpressureQueue, EventPriority, FseventsCursor,
     FseventsCursorHealth, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor,
-    IndexVolumeState, Indexer, LiveIndex, SearchFuzzyPosting, SearchRecordColumns,
-    SearchStreamStage, VolumeIndexPolicy,
+    IndexVolumeState, Indexer, LiveIndex, SearchFuzzyPosting, SearchPrefixPosting,
+    SearchRecordColumns, SearchStreamStage, VolumeIndexPolicy,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -857,6 +857,10 @@ fn run() -> Result<()> {
                 required_path(args.next(), "search-index-sidecars requires a records path")?;
             let columns =
                 required_path(args.next(), "search-index-sidecars requires a columns path")?;
+            let prefixes = required_path(
+                args.next(),
+                "search-index-sidecars requires a prefixes path",
+            )?;
             let fuzzy = required_path(args.next(), "search-index-sidecars requires a fuzzy path")?;
             let query = args.next().ok_or_else(|| {
                 gfm_types::GfmError::Format(
@@ -865,6 +869,7 @@ fn run() -> Result<()> {
             })?;
             let records = MmapRecordArchive::open(records)?;
             let columns = MmapRecordColumns::open(columns)?;
+            let prefixes = MmapPrefixArchive::open(prefixes)?;
             let fuzzy = MmapFuzzyArchive::open(fuzzy)?;
             let mut search_columns = Vec::with_capacity(columns.len());
             for index in 0..columns.len() {
@@ -886,12 +891,23 @@ fn run() -> Result<()> {
                     terms: posting.terms,
                 })
                 .collect();
-            let (live, applied, fuzzy_keys) = LiveIndex::from_records_with_columns_and_fuzzy(
+            let search_prefixes = prefixes
+                .postings()?
+                .into_iter()
+                .map(|posting| SearchPrefixPosting {
+                    prefix: posting.prefix,
+                    ids: posting.ids,
+                })
+                .collect();
+            let (live, applied, prefix_keys, fuzzy_keys) = LiveIndex::from_records_with_sidecars(
                 records.records()?,
                 search_columns,
+                search_prefixes,
                 search_fuzzy,
             );
-            eprintln!("columns-indexed {applied} fuzzy-keys {fuzzy_keys}");
+            eprintln!(
+                "columns-indexed {applied} prefix-keys {prefix_keys} fuzzy-keys {fuzzy_keys}"
+            );
             for hit in live.search(&query, 50) {
                 print_hit(&hit);
             }
@@ -2294,7 +2310,7 @@ fn print_usage() {
   gfm search-index <index.gfmidx> <query>
   gfm search-index-mmap <index.gfmidx> <query>
   gfm search-index-columns <index.gfmidx> <columns.gfmcols> <query>
-  gfm search-index-sidecars <index.gfmidx> <columns.gfmcols> <fuzzy.gfmfuzzy> <query>
+  gfm search-index-sidecars <index.gfmidx> <columns.gfmcols> <prefixes.gfmprefix> <fuzzy.gfmfuzzy> <query>
   gfm records-verify <index.gfmidx>
   gfm index-columns <records.gfmidx> <columns.gfmcols>
   gfm columns-verify <columns.gfmcols>

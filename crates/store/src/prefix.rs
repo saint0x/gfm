@@ -137,6 +137,16 @@ impl MmapPrefixArchive {
             .unwrap_or_default())
     }
 
+    pub fn postings(&self) -> Result<Vec<PrefixPosting>> {
+        self.directory
+            .iter()
+            .map(|entry| {
+                let bytes = self.posting_bytes(entry)?;
+                read_prefix_posting(Cursor::new(bytes), &self.path)
+            })
+            .collect()
+    }
+
     pub fn posting_for(&self, prefix: &str) -> Result<Option<PrefixPosting>> {
         let prefix = normalize(prefix);
         if prefix.is_empty() {
@@ -438,6 +448,27 @@ mod tests {
         assert_eq!(ids, posting.ids);
         assert_eq!(block.len(), 128);
         assert_eq!(block[0], FileId::new(VolumeId(5), 10_128));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_prefix_archive_reads_all_postings_for_startup_import() {
+        let path = temp_path("gfm-prefix-postings", "gfmprefix");
+        let postings = vec![
+            PrefixPosting {
+                prefix: "pro".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 1), FileId::new(VolumeId(2), 2)],
+            },
+            PrefixPosting {
+                prefix: "proj".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 1)],
+            },
+        ];
+
+        write_prefix_postings(&path, &postings).unwrap();
+        let archive = MmapPrefixArchive::open(&path).unwrap();
+
+        assert_eq!(archive.postings().unwrap(), postings);
         std::fs::remove_file(path).unwrap();
     }
 

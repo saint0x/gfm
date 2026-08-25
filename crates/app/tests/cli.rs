@@ -1080,8 +1080,9 @@ fn searches_persisted_tags_from_binary() {
             "search-index-sidecars",
             index.to_str().unwrap(),
             columns.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
             fuzzy.to_str().unwrap(),
-            "tagge",
+            "tag",
         ])
         .output()
         .unwrap();
@@ -1094,6 +1095,11 @@ fn searches_persisted_tags_from_binary() {
     assert!(
         sidecar_search_stdout.contains("tagged.md"),
         "{sidecar_search_stdout}"
+    );
+    let sidecar_search_stderr = String::from_utf8(sidecar_search.stderr).unwrap();
+    assert!(
+        sidecar_search_stderr.contains("prefix-keys "),
+        "{sidecar_search_stderr}"
     );
 
     fs::remove_file(index).unwrap();

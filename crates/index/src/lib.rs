@@ -1,7 +1,9 @@
 use gfm_content::Extractor;
 use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
-pub use gfm_search::{SearchFuzzyPosting, SearchRecordColumns, SearchStreamStage};
+pub use gfm_search::{
+    SearchFuzzyPosting, SearchPrefixPosting, SearchRecordColumns, SearchStreamStage,
+};
 use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
     compact_content_segments, read_content_postings, read_records, write_content_postings,
@@ -228,6 +230,35 @@ impl LiveIndex {
         }
         let fuzzy_keys = live.index.import_fuzzy_postings(&fuzzy);
         (live, applied, fuzzy_keys)
+    }
+
+    pub fn from_records_with_sidecars(
+        records: Vec<FileRecord>,
+        columns: Vec<SearchRecordColumns>,
+        prefixes: Vec<SearchPrefixPosting>,
+        fuzzy: Vec<SearchFuzzyPosting>,
+    ) -> (Self, usize, usize, usize) {
+        let mut live = Self::new();
+        let mut columns_by_id = columns
+            .into_iter()
+            .map(|columns| (columns.id, columns))
+            .collect::<HashMap<_, _>>();
+        let mut applied = 0usize;
+        for record in records {
+            if let Some(columns) = columns_by_id.remove(&record.id) {
+                if live
+                    .index
+                    .insert_with_columns_deferred_sidecars(record, columns)
+                {
+                    applied += 1;
+                }
+            } else {
+                live.index.insert(record);
+            }
+        }
+        let prefix_keys = live.index.import_prefix_postings(&prefixes);
+        let fuzzy_keys = live.index.import_fuzzy_postings(&fuzzy);
+        (live, applied, prefix_keys, fuzzy_keys)
     }
 
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {

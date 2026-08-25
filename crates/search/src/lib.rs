@@ -51,6 +51,12 @@ pub struct SearchFuzzyPosting {
     pub terms: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchPrefixPosting {
+    pub prefix: String,
+    pub ids: Vec<FileId>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SearchIndex {
     records: HashMap<FileId, FileRecord>,
@@ -81,6 +87,10 @@ impl SearchIndex {
         self.records.is_empty()
     }
 
+    pub fn indexed_name_prefixes(&self) -> usize {
+        self.name_prefixes.len()
+    }
+
     pub fn insert(&mut self, record: FileRecord) {
         let id = record.id;
         if let Some(old) = self.records.remove(&id) {
@@ -100,7 +110,7 @@ impl SearchIndex {
         record: FileRecord,
         columns: SearchRecordColumns,
     ) -> bool {
-        self.insert_with_columns_inner(record, columns, true)
+        self.insert_with_columns_inner(record, columns, true, true)
     }
 
     pub fn insert_with_columns_deferred_fuzzy(
@@ -108,13 +118,22 @@ impl SearchIndex {
         record: FileRecord,
         columns: SearchRecordColumns,
     ) -> bool {
-        self.insert_with_columns_inner(record, columns, false)
+        self.insert_with_columns_inner(record, columns, true, false)
+    }
+
+    pub fn insert_with_columns_deferred_sidecars(
+        &mut self,
+        record: FileRecord,
+        columns: SearchRecordColumns,
+    ) -> bool {
+        self.insert_with_columns_inner(record, columns, false, false)
     }
 
     fn insert_with_columns_inner(
         &mut self,
         record: FileRecord,
         columns: SearchRecordColumns,
+        build_prefixes: bool,
         build_fuzzy: bool,
     ) -> bool {
         if record.id != columns.id {
@@ -128,11 +147,30 @@ impl SearchIndex {
             self.paths.remove(&path_key(&old.path));
         }
         let normalized = RecordColumns::from_search_columns(&columns);
-        self.add_terms_with_fuzzy_policy(&record, &normalized, build_fuzzy);
+        self.add_terms_with_sidecar_policy(&record, &normalized, build_prefixes, build_fuzzy);
         self.paths.insert(path_key(&record.path), id);
         self.columns.insert(id, normalized);
         self.records.insert(id, record);
         true
+    }
+
+    pub fn import_prefix_postings(&mut self, postings: &[SearchPrefixPosting]) -> usize {
+        for posting in postings {
+            let prefix = normalize(&posting.prefix);
+            if !is_prefix_term(&prefix) {
+                continue;
+            }
+            let ids = posting
+                .ids
+                .iter()
+                .copied()
+                .filter(|id| self.records.contains_key(id))
+                .collect::<BTreeSet<_>>();
+            if !ids.is_empty() {
+                self.name_prefixes.entry(prefix).or_default().extend(ids);
+            }
+        }
+        self.name_prefixes.len()
     }
 
     pub fn import_fuzzy_postings(&mut self, postings: &[SearchFuzzyPosting]) -> usize {
@@ -807,13 +845,14 @@ impl SearchIndex {
     }
 
     fn add_terms(&mut self, record: &FileRecord, columns: &RecordColumns) {
-        self.add_terms_with_fuzzy_policy(record, columns, true);
+        self.add_terms_with_sidecar_policy(record, columns, true, true);
     }
 
-    fn add_terms_with_fuzzy_policy(
+    fn add_terms_with_sidecar_policy(
         &mut self,
         record: &FileRecord,
         columns: &RecordColumns,
+        build_prefixes: bool,
         build_fuzzy: bool,
     ) {
         self.name_exact
@@ -826,11 +865,13 @@ impl SearchIndex {
                 .entry(token.clone())
                 .or_default()
                 .insert(record.id);
-            for prefix in token_prefixes(token) {
-                self.name_prefixes
-                    .entry(prefix)
-                    .or_default()
-                    .insert(record.id);
+            if build_prefixes {
+                for prefix in token_prefixes(token) {
+                    self.name_prefixes
+                        .entry(prefix)
+                        .or_default()
+                        .insert(record.id);
+                }
             }
             if build_fuzzy && is_new {
                 self.add_fuzzy_term(token);

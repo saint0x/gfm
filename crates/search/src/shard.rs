@@ -1,6 +1,6 @@
 use crate::{
-    sort_hits, SearchFuzzyPosting, SearchIndex, SearchQuery, SearchRecordColumns,
-    SearchStreamBatch, SearchStreamStage,
+    sort_hits, SearchFuzzyPosting, SearchIndex, SearchPrefixPosting, SearchQuery,
+    SearchRecordColumns, SearchStreamBatch, SearchStreamStage,
 };
 use gfm_jobs::Cancellation;
 use gfm_types::{FileId, FileRecord, GfmError, Result, SearchHit, VolumeId};
@@ -54,6 +54,18 @@ impl ShardedSearchIndex {
         self.insert_with_columns_inner(record, columns, false)
     }
 
+    pub fn insert_with_columns_deferred_sidecars(
+        &mut self,
+        record: FileRecord,
+        columns: SearchRecordColumns,
+    ) -> bool {
+        self.remove_path(&record.path);
+        let shard = self.shards.entry(record.id.volume).or_default();
+        let inserted = shard.insert_with_columns_deferred_sidecars(record, columns);
+        self.prune_empty_shards();
+        inserted
+    }
+
     fn insert_with_columns_inner(
         &mut self,
         record: FileRecord,
@@ -77,6 +89,33 @@ impl ShardedSearchIndex {
             .map(|shard| shard.import_fuzzy_postings(postings))
             .max()
             .unwrap_or(0)
+    }
+
+    pub fn import_prefix_postings(&mut self, postings: &[SearchPrefixPosting]) -> usize {
+        for (volume, shard) in &mut self.shards {
+            let volume_postings = postings
+                .iter()
+                .filter_map(|posting| {
+                    let ids = posting
+                        .ids
+                        .iter()
+                        .copied()
+                        .filter(|id| id.volume == *volume)
+                        .collect::<Vec<_>>();
+                    (!ids.is_empty()).then(|| SearchPrefixPosting {
+                        prefix: posting.prefix.clone(),
+                        ids,
+                    })
+                })
+                .collect::<Vec<_>>();
+            if !volume_postings.is_empty() {
+                shard.import_prefix_postings(&volume_postings);
+            }
+        }
+        self.shards
+            .values()
+            .map(SearchIndex::indexed_name_prefixes)
+            .sum()
     }
 
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {
