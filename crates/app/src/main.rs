@@ -457,6 +457,14 @@ fn run() -> Result<()> {
             )?;
             println!("{}", Indexer::default().scan_progress(progress)?.as_tsv());
         }
+        Some("fair-scan") => {
+            let root = required_path(args.next(), "fair-scan requires a root path")?;
+            let visible_burst =
+                parse_usize_arg(args.next(), "fair-scan requires a visible burst size")?;
+            let visible_roots = args.map(PathBuf::from).collect::<Vec<_>>();
+            let report = Indexer::default().build_fair(root, &visible_roots, visible_burst)?;
+            println!("{}", report.as_tsv());
+        }
         Some("rename-correlation") => {
             let from = required_path(args.next(), "rename-correlation requires a source path")?;
             let to = required_path(
@@ -1766,6 +1774,7 @@ fn print_usage() {
   gfm index-state-inspect <state.gfmstate>
   gfm scan-progress <root> <records.gfmidx> <progress.gfmprogress>
   gfm scan-progress-inspect <progress.gfmprogress>
+  gfm fair-scan <root> <visible-burst> [visible-root...]
   gfm rename-correlation <source> <destination>
   gfm metadata-update <path> [append-text]
   gfm event-backpressure <capacity> <visible-burst> <background-events> [visible-events]

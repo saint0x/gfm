@@ -85,6 +85,12 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["fair-scan", ".", "8", "crates/index"],
+      "expect_exit": 0
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-rename-old.md",
       "data": "rename identity"

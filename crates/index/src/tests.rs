@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -143,6 +144,72 @@ fn event_backpressure_preserves_visible_progress_under_background_load() {
         .path
         .to_string_lossy()
         .starts_with("/tmp/background-"));
+}
+
+#[test]
+fn fair_scan_prioritizes_visible_roots_during_background_crawl() {
+    let root = unique_temp_dir("gfm-fair-scan-root");
+    let visible = root.join("Visible");
+    fs::create_dir_all(&visible).unwrap();
+    fs::write(visible.join("Needle.md"), "visible first").unwrap();
+    for index in 0..32 {
+        let background = root.join(format!("Background{index:02}"));
+        fs::create_dir_all(&background).unwrap();
+        fs::write(background.join("Bulk.md"), "background").unwrap();
+    }
+
+    let report = Indexer::default().build_fair(&root, &[visible], 2).unwrap();
+
+    assert!(report.summary.visible_records >= 2, "{:?}", report.summary);
+    assert!(
+        report.summary.background_records > report.summary.visible_records,
+        "{:?}",
+        report.summary
+    );
+    assert!(
+        report.summary.max_background_gap <= 2,
+        "{:?}",
+        report.summary
+    );
+    assert!(report
+        .snapshot
+        .records
+        .iter()
+        .any(|record| record.name == "Needle.md"));
+    assert!(report.as_tsv().starts_with("fair-scan\t"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn fair_scan_avoids_duplicate_visible_paths() {
+    let root = unique_temp_dir("gfm-fair-scan-duplicates-root");
+    let visible = root.join("Visible");
+    fs::create_dir_all(&visible).unwrap();
+    fs::write(visible.join("Identity.md"), "one identity").unwrap();
+
+    let report = Indexer::default()
+        .build_fair(&root, std::slice::from_ref(&visible), 4)
+        .unwrap();
+    let unique_paths = report
+        .snapshot
+        .records
+        .iter()
+        .map(|record| record.path.clone())
+        .collect::<HashSet<_>>();
+
+    assert_eq!(unique_paths.len(), report.snapshot.records.len());
+    assert_eq!(
+        report
+            .snapshot
+            .records
+            .iter()
+            .filter(|record| record.path == visible)
+            .count(),
+        1
+    );
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

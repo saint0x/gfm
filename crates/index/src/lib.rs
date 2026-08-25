@@ -21,6 +21,7 @@ mod metadata;
 mod progress;
 mod rename;
 mod repair;
+mod scan;
 mod state;
 
 pub use backpressure::{
@@ -34,6 +35,7 @@ pub use metadata::{diff_metadata, MetadataUpdateReport};
 pub use progress::{ScanProgressCheckpoint, SCAN_PROGRESS_SCHEMA_VERSION};
 pub use rename::{correlate_rename, RenameCorrelationReport};
 pub use repair::{RepairPriority, RepairReason, RepairSchedule, SubtreeRepairJob};
+pub use scan::{FairScanReport, FairScanScheduler, FairScanSummary, ScanLane};
 pub use state::{IndexVolumeState, INDEX_STATE_SCHEMA_VERSION};
 
 #[derive(Debug, Clone)]
@@ -519,6 +521,15 @@ impl Indexer {
 
     pub fn build(&self, root: impl AsRef<Path>) -> Result<IndexSnapshot> {
         scan_tree(root, self.options.clone()).map(IndexSnapshot::from_page)
+    }
+
+    pub fn build_fair(
+        &self,
+        root: impl AsRef<Path>,
+        visible_roots: &[PathBuf],
+        visible_burst: usize,
+    ) -> Result<FairScanReport> {
+        FairScanScheduler::new(self.options.clone(), visible_burst).scan(root, visible_roots)
     }
 
     pub fn build_persistent(
