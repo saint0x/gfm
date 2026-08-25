@@ -91,6 +91,7 @@ The index is compact and incremental:
 - hot mutable buffers
 - progressive result streaming
 - bounded snippets with highlighted content matches
+- binary-signature and control-byte classification before content extraction
 - ranking that separates exact, prefix, substring, fuzzy, metadata, content, and recency signals
 
 Queries return immediately from hot state and refine as deeper metadata/content results arrive.

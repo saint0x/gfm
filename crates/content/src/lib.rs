@@ -83,11 +83,10 @@ impl Extractor {
             return Ok(None);
         }
 
-        let text = String::from_utf8(bytes)
-            .map(|text| normalize_text(&text))
-            .map_err(|err| {
-                GfmError::Format(format!("{} is not valid UTF-8 text: {err}", path.display()))
-            })?;
+        let Ok(text) = String::from_utf8(bytes) else {
+            return Ok(None);
+        };
+        let text = normalize_text(&text);
 
         Ok(Some(ContentDocument {
             bytes_read: text.len(),
@@ -177,7 +176,49 @@ fn normalize_text(input: &str) -> String {
 
 fn is_binary(bytes: &[u8]) -> bool {
     let sample = &bytes[..bytes.len().min(4096)];
-    sample.contains(&0)
+    if sample.is_empty() {
+        return false;
+    }
+    if has_binary_signature(sample) {
+        return true;
+    }
+    if sample.contains(&0) {
+        return true;
+    }
+
+    let controls = sample
+        .iter()
+        .filter(|byte| matches!(**byte, 0x01..=0x08 | 0x0e..=0x1f | 0x7f))
+        .count();
+    sample.len() >= 32 && controls * 100 / sample.len() > 10
+}
+
+fn has_binary_signature(bytes: &[u8]) -> bool {
+    const SIGNATURES: &[&[u8]] = &[
+        b"\x7fELF",
+        b"\x89PNG\r\n\x1a\n",
+        b"\xff\xd8\xff",
+        b"GIF87a",
+        b"GIF89a",
+        b"PK\x03\x04",
+        b"PK\x05\x06",
+        b"PK\x07\x08",
+        b"\x1f\x8b",
+        b"7z\xbc\xaf\x27\x1c",
+        b"Rar!\x1a\x07\x00",
+        b"Rar!\x1a\x07\x01\x00",
+        b"\xca\xfe\xba\xbe",
+        b"\xcf\xfa\xed\xfe",
+        b"\xce\xfa\xed\xfe",
+        b"\xfe\xed\xfa\xcf",
+        b"\xfe\xed\xfa\xce",
+        b"%PDF-",
+        b"SQLite format 3\0",
+        b"bplist00",
+    ];
+    SIGNATURES
+        .iter()
+        .any(|signature| bytes.starts_with(signature))
 }
 
 fn text_extensions() -> BTreeSet<String> {
@@ -236,6 +277,45 @@ mod tests {
         let doc = Extractor::default().extract_path(&path).unwrap();
 
         assert!(doc.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn skips_known_binary_signatures_even_with_text_extension() {
+        let root = unique_temp_dir("gfm-content-binary-signature");
+        let path = root.join("image.txt");
+        fs::write(&path, b"\x89PNG\r\n\x1a\nsuperneedle in binary payload").unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap();
+
+        assert!(doc.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn skips_high_control_byte_payloads() {
+        let root = unique_temp_dir("gfm-content-control-bytes");
+        let path = root.join("controls.log");
+        let mut bytes = b"prefix readable ".to_vec();
+        bytes.extend([1, 2, 3, 4, 5, 6, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21]);
+        bytes.extend(b" suffix");
+        fs::write(&path, bytes).unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap();
+
+        assert!(doc.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn accepts_multibyte_utf8_text() {
+        let root = unique_temp_dir("gfm-content-utf8");
+        let path = root.join("note.txt");
+        fs::write(&path, "cafe naive resume 東京").unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
+
+        assert!(doc.text.contains("東京"));
         fs::remove_dir_all(root).unwrap();
     }
 

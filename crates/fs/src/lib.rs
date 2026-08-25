@@ -239,6 +239,9 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn scans_real_tree_with_identity() {
@@ -291,7 +294,12 @@ mod tests {
 
     fn unique_temp_dir() -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "gfm-fs-{}",
+            "gfm-fs-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst),
+        ));
+        let path = path.with_extension(format!(
+            "{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

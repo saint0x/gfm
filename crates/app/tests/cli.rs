@@ -261,6 +261,30 @@ fn searches_text_content_from_binary() {
 }
 
 #[test]
+fn search_content_skips_disguised_binary_from_binary() {
+    let root = unique_temp_dir("gfm-cli-disguised-binary-root");
+    fs::write(
+        root.join("fake.txt"),
+        b"\x89PNG\r\n\x1a\nsuperneedle hidden in binary payload",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-content", root.to_str().unwrap(), "superneedle"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.is_empty(), "{stdout}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_persisted_text_content_from_binary() {
     let root = unique_temp_dir("gfm-cli-durable-content-root");
     let records = unique_temp_path("gfm-cli-durable-records", "gfmidx");
