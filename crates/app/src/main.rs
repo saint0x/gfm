@@ -33,9 +33,9 @@ use gfm_testkit::{
 use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
 use gfm_ui::{
     AppLaunchSpec, ContextMenuContract, ContextMenuInput, ContextSurface, DialogContract,
-    DialogSurface, IconViewContract, IconViewOptions, MenuContract, SidebarContract,
-    TitlebarContract, ToolbarContract, WindowLifecycleContract, WindowSessionContract,
-    WindowSessionStore,
+    DialogSurface, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
+    MenuContract, SidebarContract, TitlebarContract, ToolbarContract, WindowLifecycleContract,
+    WindowSessionContract, WindowSessionStore,
 };
 use std::env;
 use std::path::PathBuf;
@@ -178,6 +178,30 @@ fn run() -> Result<()> {
             println!(
                 "{}",
                 IconViewContract::from_records(&page.entries, options).as_tsv()
+            );
+        }
+        Some("ui-list-view-contract") => {
+            let path = required_path(
+                args.next(),
+                "ui-list-view-contract requires a directory path",
+            )?;
+            let viewport_rows = args
+                .next()
+                .map(|value| parse_u16(&value, "viewport-rows"))
+                .transpose()?
+                .unwrap_or(24);
+            let scroll_row = args
+                .next()
+                .map(|value| parse_u32(&value, "scroll-row"))
+                .transpose()?
+                .unwrap_or(0);
+            let page = read_directory(&path)?;
+            let options = ListViewOptions::default()
+                .with_viewport_rows(viewport_rows)
+                .with_scroll_row(scroll_row);
+            println!(
+                "{}",
+                ListViewContract::from_records(&page.entries, options).as_tsv()
             );
         }
         Some("list") => {
@@ -843,6 +867,12 @@ fn parse_u16(value: &str, name: &str) -> Result<u16> {
     value
         .parse()
         .map_err(|_| GfmError::Format(format!("{name} must be an unsigned 16-bit integer")))
+}
+
+fn parse_u32(value: &str, name: &str) -> Result<u32> {
+    value
+        .parse()
+        .map_err(|_| GfmError::Format(format!("{name} must be an unsigned 32-bit integer")))
 }
 
 fn parse_u32_arg(value: Option<String>, message: &str) -> Result<u32> {

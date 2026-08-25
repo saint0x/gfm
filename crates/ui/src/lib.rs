@@ -12,6 +12,7 @@ use std::sync::{
 mod context;
 mod dialog;
 mod icon;
+mod list;
 mod menu;
 mod session;
 mod sidebar;
@@ -27,6 +28,10 @@ pub use dialog::{
 };
 pub use icon::{
     IconBadge, IconCellSpec, IconRole, IconSortMode, IconViewContract, IconViewOptions,
+};
+pub use list::{
+    render as render_list_view, ListCellSpec, ListColumnKind, ListColumnSpec, ListRowSpec,
+    ListSortMode, ListViewContract, ListViewOptions,
 };
 pub use menu::{MenuCommandSpec, MenuCommandState, MenuContract};
 pub use session::{
