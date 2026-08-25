@@ -4,10 +4,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod notarize;
+mod policy;
 
 pub use notarize::{
     notarize_app_bundle, NotarizationCredentials, NotarizationSpec, NotarizationStatus,
     NotarizationTicket,
+};
+pub use policy::{
+    CrashReportMode, CrashReportPolicy, DiagnosticMode, DiagnosticsPolicy, ReleaseChannel,
+    ReleasePolicy, RollbackPolicy, UpdateDecision, UpdateMode, UpdatePolicy,
 };
 
 const DEFAULT_MINIMUM_SYSTEM_VERSION: &str = "14.0";

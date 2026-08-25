@@ -56,6 +56,26 @@ fn notarize_app_requires_explicit_credentials_from_binary() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn release_policy_reports_private_defaults_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("release-policy")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains("channel\tstable"), "{stdout}");
+    assert!(stdout.contains("updates\tdisabled"), "{stdout}");
+    assert!(stdout.contains("crash-reports\tlocal-only"), "{stdout}");
+    assert!(stdout.contains("diagnostics\tlocal-only"), "{stdout}");
+    assert!(stdout.contains("remote-allowed=false"), "{stdout}");
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

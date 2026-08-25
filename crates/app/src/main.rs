@@ -16,7 +16,7 @@ use gfm_mac::{current_host_profile, FileEventStream, SupportMatrix, WatchRoot};
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_packaging::{
     build_app_bundle, notarize_app_bundle, register_launch_services, AppBundleSpec,
-    NotarizationCredentials, NotarizationSpec, SigningIdentity,
+    NotarizationCredentials, NotarizationSpec, ReleasePolicy, SigningIdentity,
 };
 use gfm_store::ContentArchive;
 use gfm_testkit::{
@@ -393,6 +393,11 @@ fn run() -> Result<()> {
                     run.gate.violations.len()
                 )));
             }
+        }
+        Some("release-policy") => {
+            let policy = ReleasePolicy::default();
+            policy.validate()?;
+            print_release_policy(&policy);
         }
         Some("bundle-app") => {
             let executable = required_path(args.next(), "bundle-app requires an executable path")?;
@@ -808,6 +813,38 @@ fn macrobench_stage(stage: MacrobenchStage) -> &'static str {
     }
 }
 
+fn print_release_policy(policy: &ReleasePolicy) {
+    println!("channel\t{}", policy.channel.as_str());
+    println!(
+        "updates\t{}\tfeed={}\tinterval={}\trollout={}\trequire-notarized={}",
+        policy.updates.mode.as_str(),
+        policy.updates.feed_url.as_deref().unwrap_or("-"),
+        policy.updates.minimum_interval_secs,
+        policy.updates.staged_rollout_percent,
+        policy.updates.require_notarized
+    );
+    println!(
+        "rollback\tenabled={}\tretained={}\trequire-signed={}\tpreserve-user-state={}",
+        policy.rollback.enabled,
+        policy.rollback.retained_versions,
+        policy.rollback.require_signed_previous,
+        policy.rollback.preserve_user_state
+    );
+    println!(
+        "crash-reports\t{}\tremote-allowed={}\tretention-days={}\tinclude-minidump={}",
+        policy.crash_reports.mode.as_str(),
+        policy.remote_crash_upload_allowed(),
+        policy.crash_reports.retention_days,
+        policy.crash_reports.include_minidump
+    );
+    println!(
+        "diagnostics\t{}\tremote-allowed={}\tretention-days={}",
+        policy.diagnostics.mode.as_str(),
+        policy.remote_diagnostics_upload_allowed(),
+        policy.diagnostics.retention_days
+    );
+}
+
 fn print_usage() {
     println!(
         "gfm commands:
@@ -835,6 +872,7 @@ fn print_usage() {
   gfm support-check
   gfm macrobench <workspace> [smoke|standard]
   gfm regression-gate <workspace> [smoke|standard]
+  gfm release-policy
   gfm bundle-app <executable> <GFM.icns> <output-dir> [--ad-hoc|--unsigned|developer-id]
   gfm register-app <GFM.app>
   gfm notarize-app <GFM.app> <output-dir> --keychain-profile <profile>

@@ -63,7 +63,7 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 - `crates/telemetry`: bounded latency histograms, hard performance budgets, frame timing, UI-thread stall detection, IO/CPU/memory/allocation/queue/compaction summaries, counters, traces, and local-only diagnostics export with privacy review.
 - `crates/diagnostics`: operator commands for index rebuilds, privacy-reviewed trace export, parity baseline selection, and persisted storage inspection.
 - `crates/testkit`: filesystem fixtures, synthetic trees, repeatable macrobenchmarks, macOS capture harnesses, pixel diffing, and benchmark utilities.
-- `crates/packaging`: deterministic macOS `.app` bundle construction, `Info.plist` generation, icon/resource placement, entitlements, ad-hoc or Developer ID signing, hardened-runtime options, Launch Services registration, document associations, and release artifact validation hooks.
+- `crates/packaging`: deterministic macOS `.app` bundle construction, `Info.plist` generation, icon/resource placement, entitlements, ad-hoc or Developer ID signing, hardened-runtime options, Launch Services registration, document associations, release/update/rollback/crash/diagnostics policy, and release artifact validation hooks.
 
 No UI render/update path performs blocking filesystem work. No performance-critical search, ranking, scheduling, virtualization, storage, or operation orchestration path is outsourced to a generic black box. Dependencies exist for platform access and standards compliance; GFM owns the contracts.
 
@@ -196,6 +196,12 @@ Check the current host against the supported macOS and hardware matrix:
 
 ```sh
 cargo run -p gfm -- support-check
+```
+
+Inspect the validated release policy:
+
+```sh
+cargo run -p gfm -- release-policy
 ```
 
 Run repeatable macrobenchmarks:
