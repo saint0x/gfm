@@ -1965,6 +1965,47 @@ fn performs_journaled_copy_move_and_delete_from_binary() {
 }
 
 #[test]
+fn recovers_interrupted_operation_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ops-recover-root");
+    let journal = root.join("ops.journal");
+    let source = root.join("source.txt");
+    let destination = root.join("destination.txt");
+    fs::write(&source, "recoverable bytes").unwrap();
+    fs::write(
+        &journal,
+        format!(
+            "987\tstarted\t1\tcopy\t{}\t{}\t\n",
+            source.to_string_lossy(),
+            destination.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args(["ops-recover", journal.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("987\tcompleted\tcopy\t"), "{stdout}");
+    assert_eq!(
+        fs::read_to_string(&destination).unwrap(),
+        "recoverable bytes"
+    );
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(journal_text.contains("987\tstarted"));
+    assert!(journal_text.contains("987\tcompleted"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_text_content_from_binary() {
     let root = unique_temp_dir("gfm-cli-content-root");
     fs::write(root.join("journal.md"), "the body contains superneedle").unwrap();

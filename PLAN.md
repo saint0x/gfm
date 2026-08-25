@@ -234,7 +234,7 @@ gfm/
 `ops`
 
 - Owns mutating operations and user-visible jobs.
-- Supports APFS clone fast paths through safe native `fclonefileat` bindings with byte-copy fallback for unsupported or cross-device regular-file copies, preserves symlink objects during top-level and directory copies, preserves permissions, access/modified timestamps, and copyable xattrs on copied files and directories, emits exact preflight item/byte totals and completion-backed progress events for recursive operations, journals cancellation distinctly from failures, honors cancellation checkpoints during planning and recursive execution, plus atomic renames, trash semantics, conflict dialogs, resume/retry, checksums where necessary, and network-volume fallbacks.
+- Supports APFS clone fast paths through safe native `fclonefileat` bindings with byte-copy fallback for unsupported or cross-device regular-file copies, preserves symlink objects during top-level and directory copies, preserves permissions, access/modified timestamps, and copyable xattrs on copied files and directories, emits exact preflight item/byte totals and completion-backed progress events for recursive operations, journals cancellation distinctly from failures, honors cancellation checkpoints during planning and recursive execution, replays interrupted started operations from the durable journal with the original operation id, plus atomic renames, trash semantics, conflict dialogs, resume/retry, checksums where necessary, and network-volume fallbacks.
 
 `index`
 
@@ -584,7 +584,7 @@ Scheduler properties:
 - Pause/resume where semantically safe.
 - Conflict policy engine.
 - Dry-run phase for permission/space/conflict estimation.
-- Durable operation journal for crash recovery.
+- Durable operation journal with interrupted-operation replay.
 
 ### APFS Fast Paths
 

@@ -74,6 +74,19 @@ pub struct JournalEntry {
     pub timestamp_nanos: u128,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationRecoveryReport {
+    pub outcomes: Vec<OperationRecoveryOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationRecoveryOutcome {
+    pub id: u128,
+    pub status: OperationStatus,
+    pub operation: Operation,
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct OperationContext {
     pub conflict: ConflictPolicy,
@@ -138,6 +151,42 @@ impl Operator {
     ) -> Result<JournalEntry> {
         let id = now_nanos();
         self.append(JournalEntry::started(id, operation.clone()))?;
+        self.execute_started(id, operation, &mut on_progress)
+    }
+
+    pub fn recover_interrupted(&self) -> Result<OperationRecoveryReport> {
+        let interrupted = interrupted_operations(self.journal()?);
+        let mut outcomes = Vec::with_capacity(interrupted.len());
+        for entry in interrupted {
+            let operation = entry.operation;
+            match self.execute_started(entry.id, operation.clone(), &mut |_| {}) {
+                Ok(completed) => outcomes.push(OperationRecoveryOutcome {
+                    id: completed.id,
+                    status: completed.status,
+                    operation: completed.operation,
+                    message: completed.message,
+                }),
+                Err(err) => outcomes.push(OperationRecoveryOutcome {
+                    id: entry.id,
+                    status: if matches!(err, GfmError::Cancelled) {
+                        OperationStatus::Cancelled
+                    } else {
+                        OperationStatus::Failed
+                    },
+                    operation,
+                    message: (!matches!(err, GfmError::Cancelled)).then(|| err.to_string()),
+                }),
+            }
+        }
+        Ok(OperationRecoveryReport { outcomes })
+    }
+
+    fn execute_started(
+        &self,
+        id: u128,
+        operation: Operation,
+        on_progress: &mut impl FnMut(OperationProgressEvent),
+    ) -> Result<JournalEntry> {
         let plan = match plan_operation_checked(&operation, &self.context.cancellation) {
             Ok(plan) => plan,
             Err(err) => {
@@ -146,7 +195,7 @@ impl Operator {
                 return Err(err);
             }
         };
-        let mut progress = ProgressTracker::new(plan, &self.context.cancellation, &mut on_progress);
+        let mut progress = ProgressTracker::new(plan, &self.context.cancellation, on_progress);
         match self.apply(&operation, &mut progress) {
             Ok(()) => {
                 let entry = JournalEntry::completed(id, operation);
@@ -183,6 +232,44 @@ impl Operator {
     fn append(&self, entry: JournalEntry) -> Result<()> {
         append_journal(&self.context.journal_path, &entry)
     }
+}
+
+#[derive(Debug, Clone)]
+struct OperationRecoveryState {
+    id: u128,
+    operation: Operation,
+    last_status: OperationStatus,
+    timestamp_nanos: u128,
+}
+
+fn interrupted_operations(entries: Vec<JournalEntry>) -> Vec<JournalEntry> {
+    let mut states: Vec<OperationRecoveryState> = Vec::new();
+    for entry in entries {
+        if let Some(state) = states.iter_mut().find(|state| state.id == entry.id) {
+            state.operation = entry.operation;
+            state.last_status = entry.status;
+            state.timestamp_nanos = entry.timestamp_nanos;
+        } else {
+            states.push(OperationRecoveryState {
+                id: entry.id,
+                operation: entry.operation,
+                last_status: entry.status,
+                timestamp_nanos: entry.timestamp_nanos,
+            });
+        }
+    }
+    states.sort_by_key(|state| (state.timestamp_nanos, state.id));
+    states
+        .into_iter()
+        .filter(|state| state.last_status == OperationStatus::Started)
+        .map(|state| JournalEntry {
+            id: state.id,
+            status: state.last_status,
+            operation: state.operation,
+            message: None,
+            timestamp_nanos: state.timestamp_nanos,
+        })
+        .collect()
 }
 
 impl JournalEntry {
@@ -1186,6 +1273,84 @@ mod tests {
         assert_eq!(journal_entries.len(), 2);
         assert_eq!(journal_entries[0].status, OperationStatus::Started);
         assert_eq!(journal_entries[1].status, OperationStatus::Failed);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovers_interrupted_copy_with_original_operation_id() {
+        let root = unique_temp_dir("gfm-ops-recover-copy");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "recover me").unwrap();
+        append_journal(
+            &journal,
+            &JournalEntry::started(
+                42,
+                Operation::Copy {
+                    from: source.clone(),
+                    to: destination.clone(),
+                },
+            ),
+        )
+        .unwrap();
+
+        let report = Operator::new(OperationContext::new(&journal))
+            .recover_interrupted()
+            .unwrap();
+
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "recover me");
+        assert_eq!(report.outcomes.len(), 1);
+        assert_eq!(report.outcomes[0].id, 42);
+        assert_eq!(report.outcomes[0].status, OperationStatus::Completed);
+        let entries = read_journal(&journal).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id, 42);
+        assert_eq!(entries[0].status, OperationStatus::Started);
+        assert_eq!(entries[1].id, 42);
+        assert_eq!(entries[1].status, OperationStatus::Completed);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_ignores_operations_with_terminal_status() {
+        let root = unique_temp_dir("gfm-ops-recover-terminal");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "done").unwrap();
+        append_journal(
+            &journal,
+            &JournalEntry::started(
+                43,
+                Operation::Copy {
+                    from: source.clone(),
+                    to: destination.clone(),
+                },
+            ),
+        )
+        .unwrap();
+        append_journal(
+            &journal,
+            &JournalEntry::completed(
+                43,
+                Operation::Copy {
+                    from: source.clone(),
+                    to: destination.clone(),
+                },
+            ),
+        )
+        .unwrap();
+
+        let report = Operator::new(OperationContext::new(&journal))
+            .recover_interrupted()
+            .unwrap();
+
+        assert!(report.outcomes.is_empty());
+        assert!(!destination.exists());
+        assert_eq!(read_journal(&journal).unwrap().len(), 2);
 
         fs::remove_dir_all(root).unwrap();
     }

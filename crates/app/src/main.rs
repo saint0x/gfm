@@ -2709,6 +2709,22 @@ fn run() -> Result<()> {
                 );
             }
         }
+        Some("ops-recover") => {
+            let journal = args
+                .next()
+                .map(PathBuf::from)
+                .unwrap_or_else(default_journal_path);
+            let report = Operator::new(OperationContext::new(journal)).recover_interrupted()?;
+            for outcome in report.outcomes {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    outcome.id,
+                    operation_status(outcome.status),
+                    operation_kind(&outcome.operation),
+                    outcome.message.unwrap_or_default()
+                );
+            }
+        }
         Some("watch-once") => {
             let root = required_path(args.next(), "watch-once requires a root path")?;
             let stream = FileEventStream::watch(&[WatchRoot::tree(root)])?;
@@ -3185,6 +3201,16 @@ fn operation_status(status: gfm_ops::OperationStatus) -> &'static str {
     }
 }
 
+fn operation_kind(operation: &Operation) -> &'static str {
+    match operation {
+        Operation::Copy { .. } => "copy",
+        Operation::Move { .. } => "move",
+        Operation::Rename { .. } => "rename",
+        Operation::Delete { .. } => "delete",
+        Operation::Trash { .. } => "trash",
+    }
+}
+
 fn marker(kind: FileKind) -> &'static str {
     match kind {
         FileKind::Directory => "dir",
@@ -3531,6 +3557,7 @@ fn print_usage() {
   gfm notarize-app <GFM.app> <output-dir> --apple-id <email> --team-id <team> --password <password>
   gfm notarize-app <GFM.app> <output-dir> --api-key <AuthKey.p8> --key-id <key> --issuer <issuer>
   gfm jobs-recover [jobs.journal]
+  gfm ops-recover [ops.journal]
   gfm watch-once <root>
   gfm copy <source> <destination>
   gfm move <source> <destination>
