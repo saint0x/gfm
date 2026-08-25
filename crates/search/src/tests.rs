@@ -273,6 +273,76 @@ fn imported_prefix_postings_preserve_fallback_prefix_terms() {
 }
 
 #[test]
+fn imported_metadata_postings_drive_deferred_tag_and_comment_search() {
+    let mut index = SearchIndex::new();
+    assert!(index.insert_with_columns_deferred_sidecars(
+        record(1, "/tmp/original.txt", "original.txt"),
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(1), 1),
+            name: "plain.md".to_string(),
+            path: "/tmp/plain.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: vec!["Important".to_string()],
+            comment: Some("launch notes".to_string()),
+        },
+    ));
+    assert!(index.query("important", 10).is_empty());
+    assert!(index.query("launch", 10).is_empty());
+
+    assert_eq!(
+        index.import_metadata_postings(&[
+            SearchMetadataPosting {
+                field: SearchMetadataField::Tag,
+                term: "Important".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 1)],
+            },
+            SearchMetadataPosting {
+                field: SearchMetadataField::Comment,
+                term: "launch".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 1)],
+            },
+        ]),
+        2
+    );
+
+    assert_eq!(index.query("important", 10)[0].reason, MatchReason::Tag);
+    assert_eq!(index.query("launch", 10)[0].reason, MatchReason::Tag);
+}
+
+#[test]
+fn imported_metadata_postings_preserve_fallback_metadata_terms() {
+    let mut index = SearchIndex::new();
+    let mut fallback = record(1, "/tmp/fallback.md", "fallback.md");
+    fallback.tags = vec!["Existing".to_string()];
+    fallback.finder_comment = Some("fallback comment".to_string());
+    index.insert(fallback);
+    assert!(index.insert_with_columns_deferred_sidecars(
+        record(2, "/tmp/plain.txt", "plain.txt"),
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(1), 2),
+            name: "plain.md".to_string(),
+            path: "/tmp/plain.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: vec!["Important".to_string()],
+            comment: Some("launch notes".to_string()),
+        },
+    ));
+
+    assert_eq!(index.query("tag:Existing", 10).len(), 1);
+    assert!(index.query("important", 10).is_empty());
+    assert!(
+        index.import_metadata_postings(&[SearchMetadataPosting {
+            field: SearchMetadataField::Tag,
+            term: "Important".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 2), FileId::new(VolumeId(9), 9)],
+        }]) >= 2
+    );
+
+    assert_eq!(index.query("tag:Existing", 10).len(), 1);
+    assert_eq!(index.query("important", 10)[0].reason, MatchReason::Tag);
+}
+
+#[test]
 fn name_prefix_postings_drive_interactive_prefix_search() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/project-plan.md", "project-plan.md"));
@@ -956,6 +1026,58 @@ fn sharded_prefix_sidecar_import_partitions_ids_by_volume() {
         .query("proj", 10)
         .into_iter()
         .filter(|hit| hit.reason == MatchReason::PrefixName)
+        .map(|hit| hit.record.path)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/Volumes/A/original.md"),
+            PathBuf::from("/Volumes/B/original.md")
+        ]
+    );
+}
+
+#[test]
+fn sharded_metadata_sidecar_import_partitions_ids_by_volume() {
+    let mut index = ShardedSearchIndex::new();
+    index.insert_with_columns_deferred_sidecars(
+        volume_record(1, 1, "/Volumes/A/original.md", "original.md"),
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(1), 1),
+            name: "alpha.md".to_string(),
+            path: "/Volumes/A/alpha.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: vec!["Important".to_string()],
+            comment: None,
+        },
+    );
+    index.insert_with_columns_deferred_sidecars(
+        volume_record(2, 2, "/Volumes/B/original.md", "original.md"),
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(2), 2),
+            name: "beta.md".to_string(),
+            path: "/Volumes/B/beta.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: vec!["Important".to_string()],
+            comment: None,
+        },
+    );
+
+    assert!(
+        index.import_metadata_postings(&[SearchMetadataPosting {
+            field: SearchMetadataField::Tag,
+            term: "Important".to_string(),
+            ids: vec![
+                FileId::new(VolumeId(1), 1),
+                FileId::new(VolumeId(2), 2),
+                FileId::new(VolumeId(9), 9),
+            ],
+        }]) >= 2
+    );
+    let paths = index
+        .query("tag:Important", 10)
+        .into_iter()
         .map(|hit| hit.record.path)
         .collect::<Vec<_>>();
 

@@ -255,9 +255,10 @@
         "search-index-sidecars",
         "tmp/gfm-fozzy-metadata-records.gfmidx",
         "/tmp/gfm-fozzy-columns.gfmcols",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
         "/tmp/gfm-fozzy-prefixes.gfmprefix",
         "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
-        "tag"
+        "tag:Important"
       ],
       "expect_exit": 0
     },

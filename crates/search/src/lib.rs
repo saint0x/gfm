@@ -57,6 +57,19 @@ pub struct SearchPrefixPosting {
     pub ids: Vec<FileId>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchMetadataField {
+    Tag,
+    Comment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchMetadataPosting {
+    pub field: SearchMetadataField,
+    pub term: String,
+    pub ids: Vec<FileId>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SearchIndex {
     records: HashMap<FileId, FileRecord>,
@@ -110,7 +123,7 @@ impl SearchIndex {
         record: FileRecord,
         columns: SearchRecordColumns,
     ) -> bool {
-        self.insert_with_columns_inner(record, columns, true, true)
+        self.insert_with_columns_inner(record, columns, true, true, true)
     }
 
     pub fn insert_with_columns_deferred_fuzzy(
@@ -118,7 +131,7 @@ impl SearchIndex {
         record: FileRecord,
         columns: SearchRecordColumns,
     ) -> bool {
-        self.insert_with_columns_inner(record, columns, true, false)
+        self.insert_with_columns_inner(record, columns, true, false, true)
     }
 
     pub fn insert_with_columns_deferred_sidecars(
@@ -126,7 +139,7 @@ impl SearchIndex {
         record: FileRecord,
         columns: SearchRecordColumns,
     ) -> bool {
-        self.insert_with_columns_inner(record, columns, false, false)
+        self.insert_with_columns_inner(record, columns, false, false, false)
     }
 
     fn insert_with_columns_inner(
@@ -135,6 +148,7 @@ impl SearchIndex {
         columns: SearchRecordColumns,
         build_prefixes: bool,
         build_fuzzy: bool,
+        build_metadata: bool,
     ) -> bool {
         if record.id != columns.id {
             self.insert(record);
@@ -147,7 +161,13 @@ impl SearchIndex {
             self.paths.remove(&path_key(&old.path));
         }
         let normalized = RecordColumns::from_search_columns(&columns);
-        self.add_terms_with_sidecar_policy(&record, &normalized, build_prefixes, build_fuzzy);
+        self.add_terms_with_sidecar_policy(
+            &record,
+            &normalized,
+            build_prefixes,
+            build_fuzzy,
+            build_metadata,
+        );
         self.paths.insert(path_key(&record.path), id);
         self.columns.insert(id, normalized);
         self.records.insert(id, record);
@@ -190,6 +210,31 @@ impl SearchIndex {
             }
         }
         self.fuzzy_terms.len()
+    }
+
+    pub fn import_metadata_postings(&mut self, postings: &[SearchMetadataPosting]) -> usize {
+        for posting in postings {
+            let term = normalize(&posting.term);
+            if term.is_empty() {
+                continue;
+            }
+            let ids = posting
+                .ids
+                .iter()
+                .copied()
+                .filter(|id| self.records.contains_key(id))
+                .collect::<BTreeSet<_>>();
+            if ids.is_empty() {
+                continue;
+            }
+            match posting.field {
+                SearchMetadataField::Tag => self.tags.entry(term).or_default().extend(ids),
+                SearchMetadataField::Comment => {
+                    self.metadata_terms.entry(term).or_default().extend(ids)
+                }
+            }
+        }
+        self.tags.len() + self.metadata_terms.len()
     }
 
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {
@@ -845,7 +890,7 @@ impl SearchIndex {
     }
 
     fn add_terms(&mut self, record: &FileRecord, columns: &RecordColumns) {
-        self.add_terms_with_sidecar_policy(record, columns, true, true);
+        self.add_terms_with_sidecar_policy(record, columns, true, true, true);
     }
 
     fn add_terms_with_sidecar_policy(
@@ -854,6 +899,7 @@ impl SearchIndex {
         columns: &RecordColumns,
         build_prefixes: bool,
         build_fuzzy: bool,
+        build_metadata: bool,
     ) {
         self.name_exact
             .entry(columns.name.clone())
@@ -889,14 +935,16 @@ impl SearchIndex {
                 .or_default()
                 .insert(record.id);
         }
-        for tag in &columns.tags {
-            self.tags.entry(tag.clone()).or_default().insert(record.id);
-        }
-        for token in &columns.metadata_tokens {
-            self.metadata_terms
-                .entry(token.clone())
-                .or_default()
-                .insert(record.id);
+        if build_metadata {
+            for tag in &columns.tags {
+                self.tags.entry(tag.clone()).or_default().insert(record.id);
+            }
+            for token in &columns.metadata_tokens {
+                self.metadata_terms
+                    .entry(token.clone())
+                    .or_default()
+                    .insert(record.id);
+            }
         }
     }
 

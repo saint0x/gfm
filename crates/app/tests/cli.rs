@@ -1080,9 +1080,10 @@ fn searches_persisted_tags_from_binary() {
             "search-index-sidecars",
             index.to_str().unwrap(),
             columns.to_str().unwrap(),
+            metadata.to_str().unwrap(),
             prefixes.to_str().unwrap(),
             fuzzy.to_str().unwrap(),
-            "tag",
+            "tag:Important",
         ])
         .output()
         .unwrap();
@@ -1098,8 +1099,32 @@ fn searches_persisted_tags_from_binary() {
     );
     let sidecar_search_stderr = String::from_utf8(sidecar_search.stderr).unwrap();
     assert!(
-        sidecar_search_stderr.contains("prefix-keys "),
+        sidecar_search_stderr.contains("metadata-keys ")
+            && sidecar_search_stderr.contains("prefix-keys "),
         "{sidecar_search_stderr}"
+    );
+
+    let sidecar_prefix_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-index-sidecars",
+            index.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+            "tag",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        sidecar_prefix_search.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sidecar_prefix_search.stderr)
+    );
+    let sidecar_prefix_stdout = String::from_utf8(sidecar_prefix_search.stdout).unwrap();
+    assert!(
+        sidecar_prefix_stdout.contains("tagged.md"),
+        "{sidecar_prefix_stdout}"
     );
 
     fs::remove_file(index).unwrap();

@@ -2,7 +2,8 @@ use gfm_content::Extractor;
 use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
 pub use gfm_search::{
-    SearchFuzzyPosting, SearchPrefixPosting, SearchRecordColumns, SearchStreamStage,
+    SearchFuzzyPosting, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
+    SearchRecordColumns, SearchStreamStage,
 };
 use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
@@ -235,9 +236,10 @@ impl LiveIndex {
     pub fn from_records_with_sidecars(
         records: Vec<FileRecord>,
         columns: Vec<SearchRecordColumns>,
+        metadata: Vec<SearchMetadataPosting>,
         prefixes: Vec<SearchPrefixPosting>,
         fuzzy: Vec<SearchFuzzyPosting>,
-    ) -> (Self, usize, usize, usize) {
+    ) -> (Self, usize, usize, usize, usize) {
         let mut live = Self::new();
         let mut columns_by_id = columns
             .into_iter()
@@ -256,9 +258,10 @@ impl LiveIndex {
                 live.index.insert(record);
             }
         }
+        let metadata_keys = live.index.import_metadata_postings(&metadata);
         let prefix_keys = live.index.import_prefix_postings(&prefixes);
         let fuzzy_keys = live.index.import_fuzzy_postings(&fuzzy);
-        (live, applied, prefix_keys, fuzzy_keys)
+        (live, applied, metadata_keys, prefix_keys, fuzzy_keys)
     }
 
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {

@@ -199,6 +199,16 @@ impl MmapMetadataArchive {
             .unwrap_or_default())
     }
 
+    pub fn postings(&self) -> Result<Vec<MetadataPosting>> {
+        self.directory
+            .iter()
+            .map(|entry| {
+                let bytes = self.posting_bytes(entry)?;
+                read_metadata_posting(Cursor::new(bytes), &self.path, self.version)
+            })
+            .collect()
+    }
+
     pub fn posting_for(&self, field: MetadataField, term: &str) -> Result<Option<MetadataPosting>> {
         let term = normalize(term);
         if term.is_empty() {
@@ -677,6 +687,7 @@ mod tests {
         let archive = MmapMetadataArchive::open(&path).unwrap();
 
         assert_eq!(read, postings);
+        assert_eq!(archive.postings().unwrap(), postings);
         assert!(archive.indexed_terms() >= 5);
         assert!(archive.mapped_len() > 0);
         assert_eq!(

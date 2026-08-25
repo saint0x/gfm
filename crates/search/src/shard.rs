@@ -1,6 +1,6 @@
 use crate::{
-    sort_hits, SearchFuzzyPosting, SearchIndex, SearchPrefixPosting, SearchQuery,
-    SearchRecordColumns, SearchStreamBatch, SearchStreamStage,
+    sort_hits, SearchFuzzyPosting, SearchIndex, SearchMetadataPosting, SearchPrefixPosting,
+    SearchQuery, SearchRecordColumns, SearchStreamBatch, SearchStreamStage,
 };
 use gfm_jobs::Cancellation;
 use gfm_types::{FileId, FileRecord, GfmError, Result, SearchHit, VolumeId};
@@ -115,6 +115,35 @@ impl ShardedSearchIndex {
         self.shards
             .values()
             .map(SearchIndex::indexed_name_prefixes)
+            .sum()
+    }
+
+    pub fn import_metadata_postings(&mut self, postings: &[SearchMetadataPosting]) -> usize {
+        self.shards
+            .iter_mut()
+            .map(|(volume, shard)| {
+                let volume_postings = postings
+                    .iter()
+                    .filter_map(|posting| {
+                        let ids = posting
+                            .ids
+                            .iter()
+                            .copied()
+                            .filter(|id| id.volume == *volume)
+                            .collect::<Vec<_>>();
+                        (!ids.is_empty()).then(|| SearchMetadataPosting {
+                            field: posting.field,
+                            term: posting.term.clone(),
+                            ids,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                if volume_postings.is_empty() {
+                    0
+                } else {
+                    shard.import_metadata_postings(&volume_postings)
+                }
+            })
             .sum()
     }
 

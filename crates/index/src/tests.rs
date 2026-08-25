@@ -108,7 +108,7 @@ fn live_index_imports_fuzzy_sidecar_after_column_build() {
 }
 
 #[test]
-fn live_index_imports_prefix_and_fuzzy_sidecars_after_column_build() {
+fn live_index_imports_metadata_prefix_and_fuzzy_sidecars_after_column_build() {
     let record = FileRecord {
         id: FileId::new(VolumeId(1), 1),
         parent: None,
@@ -128,29 +128,45 @@ fn live_index_imports_prefix_and_fuzzy_sidecars_after_column_build() {
         xattrs_digest: 0,
     };
 
-    let (live, applied, prefix_keys, fuzzy_keys) = LiveIndex::from_records_with_sidecars(
-        vec![record.clone()],
-        vec![SearchRecordColumns {
-            id: record.id,
-            name: "project-needl.md".to_string(),
-            path: "/tmp/project-needl.md".to_string(),
-            extension: Some("md".to_string()),
-            tags: Vec::new(),
-            comment: None,
-        }],
-        vec![SearchPrefixPosting {
-            prefix: "proj".to_string(),
-            ids: vec![record.id],
-        }],
-        vec![SearchFuzzyPosting {
-            key: "needl".to_string(),
-            terms: vec!["needl".to_string()],
-        }],
-    );
+    let (live, applied, metadata_keys, prefix_keys, fuzzy_keys) =
+        LiveIndex::from_records_with_sidecars(
+            vec![record.clone()],
+            vec![SearchRecordColumns {
+                id: record.id,
+                name: "project-needl.md".to_string(),
+                path: "/tmp/project-needl.md".to_string(),
+                extension: Some("md".to_string()),
+                tags: vec!["Important".to_string()],
+                comment: Some("launch notes".to_string()),
+            }],
+            vec![
+                SearchMetadataPosting {
+                    field: SearchMetadataField::Tag,
+                    term: "Important".to_string(),
+                    ids: vec![record.id],
+                },
+                SearchMetadataPosting {
+                    field: SearchMetadataField::Comment,
+                    term: "launch".to_string(),
+                    ids: vec![record.id],
+                },
+            ],
+            vec![SearchPrefixPosting {
+                prefix: "proj".to_string(),
+                ids: vec![record.id],
+            }],
+            vec![SearchFuzzyPosting {
+                key: "needl".to_string(),
+                terms: vec!["needl".to_string()],
+            }],
+        );
 
     assert_eq!(applied, 1);
+    assert_eq!(metadata_keys, 2);
     assert_eq!(prefix_keys, 1);
     assert_eq!(fuzzy_keys, 1);
+    assert_eq!(live.search("tag:Important", 5).len(), 1);
+    assert_eq!(live.search("launch", 5).len(), 1);
     assert_eq!(live.search("proj", 5).len(), 1);
     assert_eq!(live.search("needle", 5).len(), 1);
 }
