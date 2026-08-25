@@ -21,7 +21,7 @@ use gfm_index::{
     SearchRecordColumns, SearchStreamStage, ThermalState, UserActivity, VolumeIndexPolicy,
 };
 use gfm_jobs::{
-    JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
+    JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, Task, TaskStatus,
     VolumeConcurrencyPolicy, WorkerPool,
 };
 use gfm_mac::{
@@ -3136,10 +3136,64 @@ fn parity_fixture_options(
 
 fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<()> {
     let journal = default_journal_path();
-    let operator = Operator::new(OperationContext::new(journal).with_conflict(conflict));
-    let entry = operator.execute(operation)?;
+    let entry_slot = Arc::new(Mutex::new(None));
+    let entry_slot_task = Arc::clone(&entry_slot);
+    let mut scheduler = Scheduler::new();
+    let job = if let Some(volume) = operation_volume(&operation) {
+        scheduler.schedule_on_volume(Priority::Interactive, operation_kind(&operation), volume)
+    } else {
+        scheduler.schedule(Priority::Interactive, operation_kind(&operation))
+    };
+    let task = Task::new(job.clone(), move |_| {
+        let operator = Operator::new(OperationContext::new(journal).with_conflict(conflict));
+        let entry = operator.execute(operation)?;
+        *entry_slot_task
+            .lock()
+            .expect("operation entry lock poisoned") = Some(entry);
+        Ok(())
+    });
+    let report = WorkerPool::new(1).run_isolated(vec![task], VolumeConcurrencyPolicy::new(1));
+    let outcome = report
+        .outcomes
+        .iter()
+        .find(|outcome| outcome.id == job.id)
+        .ok_or_else(|| GfmError::Format("operation job did not run".to_string()))?;
+    match &outcome.status {
+        TaskStatus::Completed => {}
+        TaskStatus::Started => {
+            return Err(GfmError::Format(
+                "operation job is still running".to_string(),
+            ))
+        }
+        TaskStatus::Cancelled => return Err(GfmError::Cancelled),
+        TaskStatus::Failed(message) => {
+            return Err(GfmError::Format(format!("operation job failed: {message}")))
+        }
+    }
+    let entry = entry_slot
+        .lock()
+        .expect("operation entry lock poisoned")
+        .clone()
+        .ok_or_else(|| GfmError::Format("operation completed without journal entry".to_string()))?;
     println!("{}\t{}", entry.id, operation_status(entry.status));
     Ok(())
+}
+
+fn operation_volume(operation: &Operation) -> Option<VolumeId> {
+    let primary = match operation {
+        Operation::Copy { from, .. }
+        | Operation::Move { from, .. }
+        | Operation::Rename { from, .. } => Some(from.as_path()),
+        Operation::Delete { path } | Operation::Trash { path } => Some(path.as_path()),
+    };
+    primary
+        .and_then(|path| detect_volume_id(path).ok())
+        .or_else(|| operation.target_path().and_then(parent_volume))
+}
+
+fn parent_volume(path: &Path) -> Option<VolumeId> {
+    path.parent()
+        .and_then(|parent| detect_volume_id(parent).ok())
 }
 
 fn run_content_job(

@@ -1965,6 +1965,36 @@ fn performs_journaled_copy_move_and_delete_from_binary() {
 }
 
 #[test]
+fn failed_operation_from_binary_still_journals_failure() {
+    let root = unique_temp_dir("gfm-cli-ops-failure-root");
+    let journal = root.join("ops.journal");
+    let missing = root.join("missing.txt");
+    let destination = root.join("destination.txt");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "copy",
+            missing.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(journal_text.contains("copy"), "{journal_text}");
+    assert!(journal_text.contains("failed"), "{journal_text}");
+    assert!(
+        journal_text.contains(&missing.to_string_lossy().to_string()),
+        "{journal_text}"
+    );
+    assert!(!destination.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn recovers_interrupted_operation_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-recover-root");
     let journal = root.join("ops.journal");

@@ -136,6 +136,8 @@ The operation engine is journaled. A crash, power loss, unmount, permission deni
 
 Runtime workers admit volume-scoped jobs through explicit per-volume limits. Heavy work on one disk, external drive, iCloud subtree, or network mount cannot consume every worker and starve visible work on another volume.
 
+Foreground copy, move, rename, delete, and trash commands enter the operation engine through the same volume-isolated worker admission path while preserving operation journaling and failure records.
+
 Background content indexing persists its `VolumeId` in the durable job spec and resumes through the same isolated, journaled, capped-retry worker path.
 
 ## UI Parity
