@@ -1410,6 +1410,18 @@ fn move_path(
     {
         return move_symlink_replacing_existing(from, to, progress);
     }
+    if conflict == ConflictPolicy::Replace
+        && source_is_directory(from)
+        && replacement_destination_is_directory(to)
+    {
+        return move_directory_replacing_existing(
+            from,
+            to,
+            verification,
+            volume_copy_policy,
+            progress,
+        );
+    }
     prepare_destination(to, conflict)?;
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
@@ -1483,6 +1495,44 @@ fn move_file_replacing_existing(
     }
 }
 
+fn move_directory_replacing_existing(
+    from: &Path,
+    to: &Path,
+    verification: VerificationPolicy,
+    volume_copy_policy: &OperationVolumeCopyPolicy,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    progress.check_cancelled()?;
+    let source_metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+    let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
+    if metadata_same_file(&source_metadata, &destination_metadata) {
+        return progress.complete();
+    }
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
+    match fs::rename(from, to) {
+        Ok(()) => progress.complete(),
+        Err(rename_err) => {
+            let execution = CopyExecution {
+                verification,
+                volume_copy_policy,
+            };
+            let mut session = CopySession::default();
+            copy_directory_replacing_existing(from, to, execution, progress, &mut session)?;
+            delete_path_untracked(from).map_err(|delete_err| {
+                GfmError::Format(format!(
+                    "moved directory to {} but failed to remove source {}: {}; original rename error: {}",
+                    to.display(),
+                    from.display(),
+                    delete_err,
+                    rename_err
+                ))
+            })
+        }
+    }
+}
+
 fn move_symlink_replacing_existing(
     from: &Path,
     to: &Path,
@@ -1526,6 +1576,12 @@ fn source_is_regular_file(path: &Path) -> bool {
 fn source_is_symlink(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+fn source_is_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.is_dir())
         .unwrap_or(false)
 }
 
@@ -5104,6 +5160,79 @@ mod tests {
         assert!(matches!(err, GfmError::Cancelled));
         assert_eq!(fs::read_link(&source).unwrap(), new_target);
         assert_eq!(fs::read_link(&destination).unwrap(), old_target);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn move_replace_directory_uses_final_rename_without_predelete() {
+        let root = unique_temp_dir("gfm-ops-move-replace-directory");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("nested").join("new.txt"), "new").unwrap();
+        fs::create_dir_all(destination.join("nested")).unwrap();
+        fs::write(destination.join("nested").join("old.txt"), "old").unwrap();
+
+        Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::Replace))
+            .execute(Operation::Move {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert!(!path_exists_or_symlink(&source));
+        assert_eq!(
+            fs::read_to_string(destination.join("nested").join("new.txt")).unwrap(),
+            "new"
+        );
+        assert!(!destination.join("nested").join("old.txt").exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_move_replace_directory_preserves_existing_destination() {
+        let root = unique_temp_dir("gfm-ops-move-replace-directory-cancel");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("nested").join("new.txt"), "new").unwrap();
+        fs::create_dir_all(destination.join("nested")).unwrap();
+        fs::write(destination.join("nested").join("old.txt"), "old").unwrap();
+        let cancellation = OperationCancellation::default();
+        let operator = Operator::new(
+            OperationContext::new(&journal)
+                .with_conflict(ConflictPolicy::Replace)
+                .with_cancellation(cancellation.clone()),
+        );
+
+        let err = operator
+            .execute_with_progress(
+                Operation::Move {
+                    from: source.clone(),
+                    to: destination.clone(),
+                },
+                |event| {
+                    if event.phase == OperationProgressPhase::Planned {
+                        cancellation.cancel();
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert_eq!(
+            fs::read_to_string(source.join("nested").join("new.txt")).unwrap(),
+            "new"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("nested").join("old.txt")).unwrap(),
+            "old"
+        );
+        assert!(!destination.join("nested").join("new.txt").exists());
 
         fs::remove_dir_all(root).unwrap();
     }
