@@ -23,7 +23,8 @@ use gfm_preview::{
 };
 use gfm_store::ContentArchive;
 use gfm_testkit::{
-    run_macrobench, run_regression_gate, MacrobenchOptions, MacrobenchScale, MacrobenchStage,
+    materialize_parity_fixture, run_macrobench, run_regression_gate, MacrobenchOptions,
+    MacrobenchScale, MacrobenchStage, ParityFixtureOptions, ParityFixtureScale,
     RegressionGateOptions,
 };
 use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
@@ -541,6 +542,27 @@ fn run() -> Result<()> {
                 eprintln!("budget-violation\t{violation:?}");
             }
         }
+        Some("parity-fixture") => {
+            let options = parity_fixture_options(args.next(), args.next(), "parity-fixture")?;
+            let report = materialize_parity_fixture(&options)?;
+            println!(
+                "fixture\t{}\tmanifest\t{}\tfiles\t{}\tscenarios\t{}",
+                report.fixture_root.display(),
+                report.manifest_path.display(),
+                report.files_materialized(),
+                report.scenarios.len()
+            );
+            for scenario in report.scenarios {
+                println!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    scenario.scenario.directory(),
+                    scenario.scenario.finder_view(),
+                    scenario.root.display(),
+                    scenario.files,
+                    scenario.directories
+                );
+            }
+        }
         Some("regression-gate") => {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
             let run = run_regression_gate(&options, RegressionGateOptions::default())?;
@@ -663,6 +685,27 @@ fn macrobench_options(
         }
     }
     Ok(options)
+}
+
+fn parity_fixture_options(
+    root: Option<String>,
+    scale: Option<String>,
+    command: &str,
+) -> Result<ParityFixtureOptions> {
+    let root = required_path(root, &format!("{command} requires a workspace path"))?;
+    let scale = match scale.as_deref() {
+        Some("standard") => ParityFixtureScale::standard(),
+        Some("smoke") | None => ParityFixtureScale::smoke(),
+        Some(other) => {
+            return Err(GfmError::Format(format!(
+                "{command} scale must be `smoke` or `standard`, got `{other}`"
+            )));
+        }
+    };
+    Ok(ParityFixtureOptions {
+        workspace: root,
+        scale,
+    })
 }
 
 fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<()> {
@@ -924,6 +967,7 @@ fn print_usage() {
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm preview-schedule
   gfm macrobench <workspace> [smoke|standard]
+  gfm parity-fixture <workspace> [smoke|standard]
   gfm regression-gate <workspace> [smoke|standard]
   gfm release-policy
   gfm release-validate <GFM.app> [--allow-unsigned] [--skip-notarization] [--skip-gatekeeper]

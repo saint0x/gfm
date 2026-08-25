@@ -16,7 +16,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 ## Pixel Parity
 
 7. Capture reference Finder screenshots for every target macOS build and appearance.
-8. Build a Finder fixture generator that creates deterministic directory states for icon, list, column, gallery, sidebar, toolbar, search, selection, rename, drag, empty, huge, iCloud, external-volume, network-volume, and Trash scenarios.
+8. Finish the Finder fixture generator by extending the deterministic parity fixture matrix with captured Finder view settings, xattrs, tags, package metadata, iCloud/FileProvider state, real external/network volume descriptors, Trash restore metadata, and per-build baseline manifests.
 9. Build a GFM screenshot harness that renders the same fixture matrix with deterministic fonts, scale factors, window sizes, focus state, and appearance.
 10. Build pixel diffing with explicit masks only for unavoidable OS-owned dynamic pixels.
 11. Define hard failure thresholds for layout, text, icon, selection, focus, hover, toolbar, thumbnail, and preview drift.
