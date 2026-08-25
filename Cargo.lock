@@ -1639,6 +1639,7 @@ dependencies = [
 name = "gfm"
 version = "0.1.0"
 dependencies = [
+ "filetime",
  "flate2",
  "gfm-config",
  "gfm-content",
@@ -1654,6 +1655,7 @@ dependencies = [
  "gfm-testkit",
  "gfm-types",
  "gfm-ui",
+ "xattr 1.6.1",
  "zip",
 ]
 
@@ -1732,10 +1734,12 @@ dependencies = [
 name = "gfm-ops"
 version = "0.1.0"
 dependencies = [
+ "filetime",
  "gfm-types",
  "libc",
  "rustix 1.1.4",
  "trash",
+ "xattr 1.6.1",
 ]
 
 [[package]]

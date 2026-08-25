@@ -1896,12 +1896,36 @@ fn performs_journaled_copy_move_and_delete_from_binary() {
     let copy = root.join("copy.txt");
     let moved = root.join("moved.txt");
     fs::write(&source, "hello ops").unwrap();
+    let modified = filetime::FileTime::from_unix_time(1_700_000_001, 456_000_000);
+    filetime::set_file_mtime(&source, modified).unwrap();
+    let xattr_supported = match xattr::set(&source, "user.gfm.cli-test", b"preserved") {
+        Ok(()) => true,
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::Unsupported | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            false
+        }
+        Err(err) => panic!("unexpected xattr setup failure: {err}"),
+    };
 
     run_gfm(
         &journal,
         ["copy", source.to_str().unwrap(), copy.to_str().unwrap()],
     );
     assert_eq!(fs::read_to_string(&copy).unwrap(), "hello ops");
+    assert_eq!(
+        filetime::FileTime::from_last_modification_time(&fs::metadata(&copy).unwrap()),
+        modified
+    );
+    if xattr_supported {
+        assert_eq!(
+            xattr::get(&copy, "user.gfm.cli-test").unwrap().as_deref(),
+            Some(b"preserved".as_slice())
+        );
+    }
 
     run_gfm(
         &journal,

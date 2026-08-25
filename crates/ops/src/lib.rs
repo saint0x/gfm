@@ -200,7 +200,7 @@ fn trash_path(path: &Path) -> Result<()> {
 fn copy_directory(from: &Path, to: &Path) -> Result<()> {
     fs::create_dir_all(to).map_err(|err| GfmError::io(to, err))?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
-    preserve_permissions(to, &metadata)?;
+    preserve_metadata(from, to, &metadata)?;
 
     for entry in fs::read_dir(from).map_err(|err| GfmError::io(from, err))? {
         let entry = entry.map_err(|err| GfmError::io(from, err))?;
@@ -224,21 +224,69 @@ fn copy_file(from: &Path, to: &Path) -> Result<CopyMethod> {
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     match clone_file(from, to) {
         Ok(()) => {
-            preserve_permissions(to, &metadata)?;
+            preserve_metadata(from, to, &metadata)?;
             Ok(CopyMethod::ApfsClone)
         }
         Err(err) if clone_fallback_allowed(&err) => {
             remove_failed_clone_destination(to)?;
             fs::copy(from, to).map_err(|err| GfmError::io(from, err))?;
-            preserve_permissions(to, &metadata)?;
+            preserve_metadata(from, to, &metadata)?;
             Ok(CopyMethod::ByteCopy)
         }
         Err(err) => Err(GfmError::io(from, err)),
     }
 }
 
+fn preserve_metadata(from: &Path, to: &Path, metadata: &fs::Metadata) -> Result<()> {
+    preserve_permissions(to, metadata)?;
+    preserve_times(to, metadata)?;
+    preserve_xattrs(from, to)
+}
+
 fn preserve_permissions(to: &Path, metadata: &fs::Metadata) -> Result<()> {
     fs::set_permissions(to, metadata.permissions()).map_err(|err| GfmError::io(to, err))
+}
+
+fn preserve_times(to: &Path, metadata: &fs::Metadata) -> Result<()> {
+    let atime = filetime::FileTime::from_last_access_time(metadata);
+    let mtime = filetime::FileTime::from_last_modification_time(metadata);
+    filetime::set_file_times(to, atime, mtime).map_err(|err| GfmError::io(to, err))
+}
+
+fn preserve_xattrs(from: &Path, to: &Path) -> Result<()> {
+    let names = match xattr::list(from) {
+        Ok(names) => names,
+        Err(err) if xattr_copy_unsupported(&err) => return Ok(()),
+        Err(err) => return Err(GfmError::io(from, err)),
+    };
+    for name in names {
+        let value = match xattr::get(from, &name) {
+            Ok(Some(value)) => value,
+            Ok(None) => continue,
+            Err(err) if xattr_copy_unsupported(&err) => continue,
+            Err(err) => return Err(GfmError::io(from, err)),
+        };
+        match xattr::set(to, &name, &value) {
+            Ok(()) => {}
+            Err(err) if xattr_copy_unsupported(&err) => {}
+            Err(err) => return Err(GfmError::io(to, err)),
+        }
+    }
+    Ok(())
+}
+
+fn xattr_copy_unsupported(err: &io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(libc::ENOTSUP)
+            | Some(libc::ENODATA)
+            | Some(libc::ENOATTR)
+            | Some(libc::EPERM)
+            | Some(libc::EACCES)
+    ) || matches!(
+        err.kind(),
+        io::ErrorKind::Unsupported | io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -547,6 +595,65 @@ mod tests {
             }
             Err(err) => panic!("unexpected clonefile failure: {err}"),
         }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_preserves_xattrs_when_host_supports_them() {
+        let root = unique_temp_dir("gfm-ops-xattrs");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "finder metadata").unwrap();
+        match xattr::set(&source, "user.gfm.test", b"tagged") {
+            Ok(()) => {}
+            Err(err) if xattr_copy_unsupported(&err) => {
+                fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            Err(err) => panic!("unexpected xattr setup failure: {err}"),
+        }
+
+        Operator::new(OperationContext::new(&journal))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            xattr::get(&destination, "user.gfm.test")
+                .unwrap()
+                .as_deref(),
+            Some(b"tagged".as_slice())
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_preserves_modified_time() {
+        let root = unique_temp_dir("gfm-ops-times");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "dated").unwrap();
+        let expected = filetime::FileTime::from_unix_time(1_700_000_000, 123_000_000);
+        filetime::set_file_mtime(&source, expected).unwrap();
+
+        Operator::new(OperationContext::new(&journal))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        let copied = fs::metadata(&destination).unwrap();
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(&copied),
+            expected
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

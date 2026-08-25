@@ -132,7 +132,7 @@ GFM supports:
 - network-volume fallbacks
 - checksummed verification where needed
 
-The operation engine is journaled. A crash, power loss, unmount, permission denial, or network failure leaves an inspectable recovery path instead of mystery state. File copies try the native macOS `fclonefileat` path first, report whether the host used the APFS clone fast path or byte-copy fallback in tests, and fall back only for unsupported filesystem or cross-device cases.
+The operation engine is journaled. A crash, power loss, unmount, permission denial, or network failure leaves an inspectable recovery path instead of mystery state. File copies try the native macOS `fclonefileat` path first, report whether the host used the APFS clone fast path or byte-copy fallback in tests, preserve permissions, access/modified timestamps, and copyable xattrs, then fall back only for unsupported filesystem or cross-device cases.
 
 ## UI Parity
 

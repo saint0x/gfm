@@ -234,7 +234,7 @@ gfm/
 `ops`
 
 - Owns mutating operations and user-visible jobs.
-- Supports APFS clone fast paths through safe native `fclonefileat` bindings with byte-copy fallback for unsupported or cross-device copies, plus atomic renames, trash semantics, conflict dialogs, resume/retry, checksums where necessary, and network-volume fallbacks.
+- Supports APFS clone fast paths through safe native `fclonefileat` bindings with byte-copy fallback for unsupported or cross-device copies, preserves permissions, access/modified timestamps, and copyable xattrs on copied files and directories, plus atomic renames, trash semantics, conflict dialogs, resume/retry, checksums where necessary, and network-volume fallbacks.
 
 `index`
 
@@ -590,7 +590,7 @@ Scheduler properties:
 - Use safe native clone operations for same-volume duplicate/copy where supported, and preserve explicit byte-copy fallback behavior for unsupported filesystems and cross-volume copies.
 - Use atomic rename for same-directory rename and same-volume move where possible.
 - Use APFS fast directory sizing when exposed by system APIs.
-- Preserve metadata, xattrs, tags, permissions, and timestamps according to Finder-compatible semantics.
+- Preserve permissions, access/modified timestamps, and copyable xattrs, including Finder tag/comment, quarantine, and resource-fork attributes where the filesystem exposes them.
 - Fall back cleanly on non-APFS volumes.
 
 ## Native macOS Integration
