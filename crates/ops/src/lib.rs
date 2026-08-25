@@ -1690,6 +1690,7 @@ fn empty_trash_path(
     for entry in entries {
         delete_trash_child(&entry, metadata_path, progress)?;
     }
+    reconcile_empty_trash_metadata(metadata_path, path)?;
     progress.complete()
 }
 
@@ -1736,6 +1737,19 @@ fn restore_path(
 fn remove_deleted_trash_metadata(metadata_path: Option<&Path>, deleted_path: &Path) -> Result<()> {
     if let Some(metadata_path) = metadata_path {
         remove_trash_metadata(metadata_path, deleted_path)?;
+    }
+    Ok(())
+}
+
+fn reconcile_empty_trash_metadata(metadata_path: Option<&Path>, trash_dir: &Path) -> Result<()> {
+    let Some(metadata_path) = metadata_path else {
+        return Ok(());
+    };
+    let mut entries = read_trash_metadata(metadata_path)?;
+    let before = entries.len();
+    entries.retain(|name, _| path_exists_or_symlink(&trash_dir.join(name)));
+    if entries.len() != before {
+        write_trash_metadata(metadata_path, entries.values())?;
     }
     Ok(())
 }
@@ -5017,6 +5031,41 @@ mod tests {
         assert!(read_trash_metadata(&metadata)
             .unwrap()
             .contains_key("Trash"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_trash_reconciles_stale_metadata_for_missing_children() {
+        let root = unique_temp_dir("gfm-ops-empty-trash-stale-metadata");
+        let journal = root.join("journal.log");
+        let metadata = root.join("trash.tsv");
+        let trash_dir = root.join("Trash");
+        fs::create_dir_all(&trash_dir).unwrap();
+        append_trash_metadata_entry(
+            &metadata,
+            &TrashRestoreMetadata {
+                name: "already-deleted.md".to_string(),
+                original_path: root.join("Documents").join("already-deleted.md"),
+                deleted_at_nanos: 14,
+                can_restore: true,
+                can_delete_permanently: true,
+                permission_issue: None,
+            },
+        )
+        .unwrap();
+
+        let entry =
+            Operator::new(OperationContext::new(&journal).with_trash_metadata_path(&metadata))
+                .execute(Operation::EmptyTrash {
+                    path: trash_dir.clone(),
+                })
+                .unwrap();
+
+        assert_eq!(entry.status, OperationStatus::Completed);
+        assert!(trash_dir.exists());
+        assert!(fs::read_dir(&trash_dir).unwrap().next().is_none());
+        assert!(read_trash_metadata(&metadata).unwrap().is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
