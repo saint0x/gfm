@@ -337,6 +337,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
    - PDF extraction is policy-bounded separately from plain text, with byte, page, and object caps plus corrupt-file isolation before wider sandboxed extractor coverage lands.
    - DOCX/XLSX/PPTX extraction reads bounded OOXML ZIP packages, selected XML content parts, and capped decoded text output without blocking unrelated content indexing.
    - HTML, RTF, email, and ZIP archive metadata take format-specific extraction paths so markup, transport headers, control words, and archive entry names become searchable without indexing binary payloads.
+   - JSON, CSV, XML plist, and binary plist extraction exposes searchable structural keys, cells, primitive values, and plist dictionaries under explicit text-output budgets.
    - Positional postings support exact quoted phrases and explicit `near:N:alpha,beta` proximity windows after durable reload.
 
 5. Recency and usage index

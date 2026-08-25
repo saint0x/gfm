@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 gfm-types = { path = "../types" }
+plist = "1.7"
 zip = { version = "4.3.0", default-features = false, features = ["deflate"] }
 
 [lints]

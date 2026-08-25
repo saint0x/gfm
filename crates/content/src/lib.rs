@@ -2,6 +2,7 @@ mod archive;
 mod ooxml;
 mod pdf;
 mod rich;
+mod structured;
 
 use archive::{extract_archive_metadata, ArchiveExtractStatus, ArchiveKind};
 use gfm_types::{FileKind, FileRecord, GfmError, Result, SearchSnippet, SnippetHighlight};
@@ -12,6 +13,7 @@ use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use structured::{extract_structured, StructuredExtractStatus, StructuredKind};
 
 #[derive(Debug, Clone)]
 pub struct ExtractionPolicy {
@@ -26,6 +28,7 @@ pub struct ExtractionPolicy {
     pub max_archive_bytes: u64,
     pub max_archive_entries: usize,
     pub max_archive_text_bytes: usize,
+    pub max_structured_text_bytes: usize,
     pub extensions: BTreeSet<String>,
 }
 
@@ -43,6 +46,7 @@ impl Default for ExtractionPolicy {
             max_archive_bytes: 64 * 1024 * 1024,
             max_archive_entries: 20_000,
             max_archive_text_bytes: 2 * 1024 * 1024,
+            max_structured_text_bytes: 4 * 1024 * 1024,
             extensions: text_extensions(),
         }
     }
@@ -113,6 +117,7 @@ impl Extractor {
         let office = office_kind(path);
         let rich = rich_kind(path);
         let archive = archive_kind(path);
+        let structured = structured_kind(path);
         let is_pdf = path_is_pdf(path);
         let max_bytes = if is_pdf {
             self.policy.max_pdf_bytes
@@ -171,6 +176,16 @@ impl Extractor {
             return Ok(extract_rich(&bytes, kind));
         }
 
+        if let Some(kind) = structured {
+            let (status, document) = extract_structured(&bytes, kind, &self.policy);
+            return match status {
+                StructuredExtractStatus::Extracted
+                | StructuredExtractStatus::Unsupported
+                | StructuredExtractStatus::TooLarge
+                | StructuredExtractStatus::Corrupt => Ok(document),
+            };
+        }
+
         if is_binary(&bytes) {
             return Ok(None);
         }
@@ -191,11 +206,21 @@ impl Extractor {
             || office_kind(path).is_some()
             || archive_kind(path).is_some()
             || rich_kind(path).is_some()
+            || structured_kind(path).is_some()
             || path
                 .extension()
                 .and_then(|extension| extension.to_str())
                 .map(|extension| self.policy.extensions.contains(&extension.to_lowercase()))
                 .unwrap_or(false)
+    }
+}
+
+fn structured_kind(path: &Path) -> Option<StructuredKind> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "json" => Some(StructuredKind::Json),
+        "csv" => Some(StructuredKind::Csv),
+        "plist" => Some(StructuredKind::Plist),
+        _ => None,
     }
 }
 
@@ -655,6 +680,55 @@ mod tests {
         let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
 
         assert!(doc.text.contains("docs/zipneedle.txt"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_json_structure() {
+        let root = unique_temp_dir("gfm-content-json");
+        let path = root.join("data.json");
+        fs::write(
+            &path,
+            br#"{"client":"Aperture","items":[{"name":"jsonneedle","count":3}]}"#,
+        )
+        .unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
+
+        assert!(doc.text.contains("client"));
+        assert!(doc.text.contains("Aperture"));
+        assert!(doc.text.contains("jsonneedle"));
+        assert!(doc.text.contains("3"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_csv_cells() {
+        let root = unique_temp_dir("gfm-content-csv");
+        let path = root.join("rows.csv");
+        fs::write(&path, "name,notes\nAda,\"csvneedle, quoted\"\n").unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
+
+        assert_eq!(doc.text, "name notes Ada csvneedle, quoted");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_binary_plist_values() {
+        let root = unique_temp_dir("gfm-content-bplist");
+        let path = root.join("settings.plist");
+        let mut dictionary = plist::Dictionary::new();
+        dictionary.insert("Owner".into(), plist::Value::String("plistneedle".into()));
+        let mut bytes = Vec::new();
+        plist::Value::Dictionary(dictionary)
+            .to_writer_binary(&mut bytes)
+            .unwrap();
+        fs::write(&path, bytes).unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
+
+        assert_eq!(doc.text, "Owner plistneedle");
         fs::remove_dir_all(root).unwrap();
     }
 

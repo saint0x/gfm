@@ -185,6 +185,7 @@ name = "gfm-content"
 version = "0.1.0"
 dependencies = [
  "gfm-types",
+ "plist",
  "zip",
 ]
 
