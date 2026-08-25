@@ -24,11 +24,11 @@ use gfm_index::{
     SearchStreamStage, ThermalState, UserActivity, VolumeIndexPolicy,
 };
 use gfm_jobs::{
-    Cancellation, JobBatteryState, JobClass, JobFairnessPlanner, JobFairnessPolicy, JobIoPressure,
-    JobJournal, JobPayloadCatalog, JobPayloadKind, JobPayloadRecord, JobProgressSnapshot,
-    JobProgressState, JobProgressStore, JobThermalState, JobUserActivity, Priority, RecoveryReason,
-    RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, Task, TaskStatus,
-    VolumeConcurrencyPolicy, WorkerPool,
+    Cancellation, Job, JobBatteryState, JobClass, JobFairnessPlanner, JobFairnessPolicy,
+    JobIoPressure, JobJournal, JobPayloadCatalog, JobPayloadKind, JobPayloadRecord,
+    JobProgressSnapshot, JobProgressState, JobProgressStore, JobThermalState, JobUserActivity,
+    Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, SchedulingAction,
+    SchedulingPressure, Task, TaskStatus, VolumeConcurrencyPolicy, WorkerPool,
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, parse_spotlight_fixture, AccessIntent,
@@ -3647,12 +3647,22 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     let entry_slot = Arc::new(Mutex::new(None));
     let entry_slot_task = Arc::clone(&entry_slot);
     let mut scheduler = Scheduler::new();
+    let label = operation_kind(&operation);
     let job = if let Some(volume) = operation_volume(&operation) {
-        scheduler.schedule_on_volume(Priority::Interactive, operation_kind(&operation), volume)
+        scheduler.schedule_on_volume(Priority::Interactive, label, volume)
     } else {
-        scheduler.schedule(Priority::Interactive, operation_kind(&operation))
+        scheduler.schedule(Priority::Interactive, label)
     };
+    let runtime = RuntimeJobHandle::begin(
+        &job,
+        JobPayloadKind::Operation,
+        label,
+        1,
+        format!("operation:{label}"),
+    )?;
+    let runtime_task = runtime.clone();
     let task = Task::new(job.clone(), move |_| {
+        runtime_task.running()?;
         let operator = Operator::new(OperationContext::new(journal).with_conflict(conflict));
         let entry = operator.execute(operation)?;
         *entry_slot_task
@@ -3666,6 +3676,7 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
         .iter()
         .find(|outcome| outcome.id == job.id)
         .ok_or_else(|| GfmError::Format("operation job did not run".to_string()))?;
+    runtime.finish(&outcome.status)?;
     match &outcome.status {
         TaskStatus::Completed => {}
         TaskStatus::Started => {
@@ -3732,7 +3743,16 @@ where
     } else {
         scheduler.schedule(priority, label)
     };
+    let runtime = RuntimeJobHandle::begin(
+        &job,
+        payload_kind_for_label(label),
+        label,
+        1,
+        format!("{}:{label}", priority.as_str()),
+    )?;
+    let runtime_task = runtime.clone();
     let task = Task::new(job.clone(), move |_| {
+        runtime_task.running()?;
         let result = work()?;
         *result_slot_task
             .lock()
@@ -3745,6 +3765,7 @@ where
         .iter()
         .find(|outcome| outcome.id == job.id)
         .ok_or_else(|| GfmError::Format(format!("{label} job did not run")))?;
+    runtime.finish(&outcome.status)?;
     match &outcome.status {
         TaskStatus::Completed => {}
         TaskStatus::Started => {
@@ -3761,6 +3782,138 @@ where
         .take()
         .ok_or_else(|| GfmError::Format(format!("{label} job completed without a result")))?;
     Ok(result)
+}
+
+#[derive(Clone)]
+struct RuntimeJobHandle {
+    progress_store: Option<JobProgressStore>,
+    snapshot: JobProgressSnapshot,
+}
+
+impl RuntimeJobHandle {
+    fn begin(
+        job: &Job,
+        kind: JobPayloadKind,
+        label: &str,
+        total_units: u64,
+        summary: String,
+    ) -> Result<Self> {
+        if let Some(catalog) = runtime_payload_catalog() {
+            catalog.append(&JobPayloadRecord::new(
+                job.id,
+                kind,
+                label,
+                runtime_payload_path(kind, label),
+                job.volume,
+                summary.clone(),
+            ))?;
+        }
+        let snapshot = JobProgressSnapshot::new(
+            job.id,
+            job.class,
+            job.priority,
+            label,
+            job.volume,
+            total_units.max(1),
+        )
+        .with_progress(JobProgressState::Planned, 0, summary, job_timestamp_ms());
+        let progress_store = runtime_progress_store();
+        if let Some(store) = &progress_store {
+            store.upsert(snapshot.clone())?;
+        }
+        Ok(Self {
+            progress_store,
+            snapshot,
+        })
+    }
+
+    fn running(&self) -> Result<()> {
+        if let Some(store) = &self.progress_store {
+            store.upsert(self.snapshot.clone().with_progress(
+                JobProgressState::Running,
+                0,
+                self.snapshot.detail.clone(),
+                job_timestamp_ms(),
+            ))?;
+        }
+        Ok(())
+    }
+
+    fn finish(&self, status: &TaskStatus) -> Result<()> {
+        if let Some(store) = &self.progress_store {
+            let (completed_units, detail) = match status {
+                TaskStatus::Started => (0, "still-running".to_string()),
+                TaskStatus::Completed => (self.snapshot.total_units, "completed".to_string()),
+                TaskStatus::Cancelled => (0, "cancelled".to_string()),
+                TaskStatus::Failed(message) => (0, message.clone()),
+            };
+            store.upsert(self.snapshot.clone().with_progress(
+                JobProgressState::from(status),
+                completed_units,
+                detail,
+                job_timestamp_ms(),
+            ))?;
+        }
+        Ok(())
+    }
+}
+
+fn runtime_payload_catalog() -> Option<JobPayloadCatalog> {
+    env::var_os("GFM_JOB_PAYLOAD_CATALOG").map(JobPayloadCatalog::new)
+}
+
+fn runtime_progress_store() -> Option<JobProgressStore> {
+    env::var_os("GFM_JOB_PROGRESS_STORE").map(JobProgressStore::new)
+}
+
+fn runtime_payload_path(kind: JobPayloadKind, label: &str) -> PathBuf {
+    PathBuf::from("runtime")
+        .join(kind.as_str())
+        .join(format!("{}.gfmjob", label_slug(label)))
+}
+
+fn label_slug(label: &str) -> String {
+    let mut slug = String::with_capacity(label.len());
+    let mut last_dash = false;
+    for ch in label.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        "job".to_string()
+    } else {
+        slug.to_string()
+    }
+}
+
+fn payload_kind_for_label(label: &str) -> JobPayloadKind {
+    let label = label.to_ascii_lowercase();
+    if label.contains("thumbnail") {
+        JobPayloadKind::Thumbnail
+    } else if label.contains("quicklook") || label.contains("preview") {
+        JobPayloadKind::Preview
+    } else if label.contains("repair") || label.contains("recover") {
+        JobPayloadKind::Repair
+    } else if label.contains("extract") {
+        JobPayloadKind::Extraction
+    } else if label.contains("index") || label.contains("content") {
+        JobPayloadKind::Indexing
+    } else {
+        JobPayloadKind::Operation
+    }
+}
+
+fn job_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

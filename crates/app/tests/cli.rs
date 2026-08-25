@@ -4012,6 +4012,52 @@ fn reports_restorable_job_progress_from_binary() {
 }
 
 #[test]
+fn volume_producers_persist_runtime_payload_and_progress_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-producer-root");
+    let image = root.join("Image.png");
+    fs::write(&image, b"\x89PNG\r\n\x1a\nruntime metadata").unwrap();
+    let catalog = unique_temp_path("gfm-cli-runtime-producer", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-runtime-producer", "gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["thumbnail-generation", image.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(catalog_text.contains("\tthumbnail\t"), "{catalog_text}");
+    assert!(
+        catalog_text.contains("thumbnail generation"),
+        "{catalog_text}"
+    );
+    assert!(
+        catalog_text.contains("runtime/thumbnail/thumbnail-generation.gfmjob"),
+        "{catalog_text}"
+    );
+
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tthumbnail generation"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tcompleted\t1\t1\tcompleted\t"),
+        "{progress_text}"
+    );
+
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn reports_structured_cancellation_tree_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("jobs-cancel-tree")

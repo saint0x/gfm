@@ -150,6 +150,8 @@ The scheduler plans foreground, visible, background, maintenance, and repair wor
 
 Job progress is persisted through atomic typed snapshots that record job id, class, priority, label, volume id, state, completed units, total units, detail text, and update timestamp. On restart, planned, running, and paused snapshots are restored for user-visible progress surfaces while completed, cancelled, and failed terminal work stays out of the active restoration set.
 
+When `GFM_JOB_PAYLOAD_CATALOG` and `GFM_JOB_PROGRESS_STORE` are configured, shared operation and volume-scoped producers publish payload catalog rows and planned/running/terminal progress snapshots directly from the scheduler path. That gives foreground operations, visible preview and repair jobs, index rebuilds, and thumbnail generation one durable runtime metadata contract.
+
 Cancellation is structured rather than flat. A parent job token fans out cancellation to children and grandchildren so nested previews, extraction, indexing, and operation subtasks stop quickly, while cancelling one child branch does not poison sibling work or the parent scope.
 
 Job retries classify failures as transient, permission, missing-file, corrupt-file, offline-volume, or permanent before recovery admission. Transient and offline-volume failures receive bounded exponential backoff; permission, missing-file, corrupt-file, and permanent failures are surfaced without retry churn.
