@@ -28,7 +28,7 @@ use structured::{extract_structured, StructuredExtractStatus, StructuredKind};
 pub const TEXT_EXTRACTOR_VERSION: u32 = 4;
 pub const PDF_EXTRACTOR_VERSION: u32 = 3;
 pub const OFFICE_EXTRACTOR_VERSION: u32 = 3;
-pub const RICH_EXTRACTOR_VERSION: u32 = 4;
+pub const RICH_EXTRACTOR_VERSION: u32 = 5;
 pub const ARCHIVE_EXTRACTOR_VERSION: u32 = 5;
 pub const STRUCTURED_EXTRACTOR_VERSION: u32 = 3;
 pub const UNSUPPORTED_EXTRACTOR_VERSION: u32 = 1;
@@ -54,6 +54,7 @@ pub struct ExtractionPolicy {
     pub max_archive_bytes: u64,
     pub max_archive_entries: usize,
     pub max_archive_text_bytes: usize,
+    pub max_rich_text_bytes: usize,
     pub max_structured_text_bytes: usize,
     pub extensions: BTreeSet<String>,
 }
@@ -76,6 +77,7 @@ impl ExtractionPolicy {
             max_archive_entries: scale_usize(self.max_archive_entries, percent).max(64),
             max_archive_text_bytes: scale_usize(self.max_archive_text_bytes, percent)
                 .max(64 * 1024),
+            max_rich_text_bytes: scale_usize(self.max_rich_text_bytes, percent).max(64 * 1024),
             max_structured_text_bytes: scale_usize(self.max_structured_text_bytes, percent)
                 .max(64 * 1024),
             extensions: self.extensions.clone(),
@@ -99,6 +101,7 @@ impl Default for ExtractionPolicy {
             max_archive_bytes: 64 * 1024 * 1024,
             max_archive_entries: 20_000,
             max_archive_text_bytes: 2 * 1024 * 1024,
+            max_rich_text_bytes: 2 * 1024 * 1024,
             max_structured_text_bytes: 4 * 1024 * 1024,
             extensions: text_extensions(),
         }
@@ -475,7 +478,7 @@ impl Extractor {
         }
 
         if let Some(kind) = rich {
-            let document = extract_rich(&bytes, kind);
+            let document = extract_rich(&bytes, kind, self.policy.max_rich_text_bytes);
             return Ok(ExtractionReport {
                 path: path.to_path_buf(),
                 format,
@@ -896,6 +899,7 @@ mod tests {
         assert_eq!(policy.max_bytes, 1024 * 1024);
         assert_eq!(policy.max_text_bytes, 1024 * 1024);
         assert_eq!(policy.max_pdf_bytes, 8 * 1024 * 1024);
+        assert_eq!(policy.max_rich_text_bytes, 1024 * 1024);
         assert_eq!(policy.max_office_entries, 5_000);
     }
 
@@ -1156,7 +1160,7 @@ mod tests {
             UNSUPPORTED_EXTRACTOR_VERSION
         );
         assert_ne!(TEXT_EXTRACTOR_VERSION, ARCHIVE_EXTRACTOR_VERSION);
-        assert_ne!(RICH_EXTRACTOR_VERSION, ARCHIVE_EXTRACTOR_VERSION);
+        assert_ne!(RICH_EXTRACTOR_VERSION, TEXT_EXTRACTOR_VERSION);
     }
 
     #[test]

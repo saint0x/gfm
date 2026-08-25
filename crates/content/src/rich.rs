@@ -7,14 +7,18 @@ pub(crate) enum RichKind {
     Email,
 }
 
-pub(crate) fn extract_rich(bytes: &[u8], kind: RichKind) -> Option<ContentDocument> {
+pub(crate) fn extract_rich(
+    bytes: &[u8],
+    kind: RichKind,
+    max_text_bytes: usize,
+) -> Option<ContentDocument> {
     let raw = String::from_utf8_lossy(bytes);
     let text = match kind {
         RichKind::Html => html_text(&raw),
         RichKind::Rtf => rtf_text(&raw),
         RichKind::Email => email_text(&raw),
     };
-    let text = normalize_text(text.trim());
+    let text = truncate_text(&normalize_text(text.trim()), max_text_bytes);
     (!text.is_empty()).then_some(ContentDocument {
         bytes_read: bytes.len(),
         text,
@@ -386,6 +390,19 @@ fn collapse_whitespace(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn truncate_text(text: &str, max_bytes: usize) -> String {
+    let end = floor_char_boundary(text, max_bytes);
+    text[..end].to_string()
+}
+
+fn floor_char_boundary(text: &str, mut index: usize) -> usize {
+    index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,6 +412,7 @@ mod tests {
         let doc = extract_rich(
             b"<html><style>.x{}</style><body><h1>Hello &amp; welcome</h1><script>hidden()</script><p>needle text</p></body></html>",
             RichKind::Html,
+            usize::MAX,
         )
         .unwrap();
 
@@ -403,7 +421,12 @@ mod tests {
 
     #[test]
     fn extracts_rtf_visible_text() {
-        let doc = extract_rich(br"{\rtf1\ansi Hello\par rich \'74ext}", RichKind::Rtf).unwrap();
+        let doc = extract_rich(
+            br"{\rtf1\ansi Hello\par rich \'74ext}",
+            RichKind::Rtf,
+            usize::MAX,
+        )
+        .unwrap();
 
         assert_eq!(doc.text, "Hello rich text");
     }
@@ -413,6 +436,7 @@ mod tests {
         let doc = extract_rich(
             b"From: Ada <ada@example.com>\r\nTo: Team\r\nSubject: Launch\r\n\r\nBody has mailneedle=20text",
             RichKind::Email,
+            usize::MAX,
         )
         .unwrap();
 
@@ -448,6 +472,7 @@ attachmentneedle should not index
 --outer--
 "#,
             RichKind::Email,
+            usize::MAX,
         )
         .unwrap();
 
@@ -481,10 +506,24 @@ Content-Type: text/html
 --outer--
 "#,
             RichKind::Email,
+            usize::MAX,
         )
         .unwrap();
 
         assert!(doc.text.contains("nestedneedle"), "{}", doc.text);
         assert!(doc.text.contains("Nested html alternate"), "{}", doc.text);
+    }
+
+    #[test]
+    fn rich_output_budget_truncates_without_splitting_utf8() {
+        let doc = extract_rich(
+            b"<p>alpha \xe6\x9d\xb1\xe4\xba\xac beta</p>",
+            RichKind::Html,
+            "alpha 東".len(),
+        )
+        .unwrap();
+
+        assert_eq!(doc.bytes_read, "<p>alpha 東京 beta</p>".len());
+        assert_eq!(doc.text, "alpha 東");
     }
 }
