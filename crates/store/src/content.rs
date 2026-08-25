@@ -716,33 +716,73 @@ pub fn compact_content_segments(
     output: impl AsRef<Path>,
     segments: &[impl AsRef<Path>],
 ) -> Result<Vec<ContentPosting>> {
-    let mut terms: BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>> = BTreeMap::new();
+    compact_content_postings_with_segments(output, std::iter::empty::<ContentPosting>(), segments)
+}
+
+pub fn compact_content_postings_with_segments(
+    output: impl AsRef<Path>,
+    base_postings: impl IntoIterator<Item = ContentPosting>,
+    segments: &[impl AsRef<Path>],
+) -> Result<Vec<ContentPosting>> {
+    let mut terms = content_terms_from_postings(base_postings);
     for segment_path in segments {
         let segment = read_content_segment(segment_path.as_ref())?;
-        for id in segment.tombstones {
-            for positions in terms.values_mut() {
-                positions.remove(&id);
-            }
-            terms.retain(|_, positions| !positions.is_empty());
-        }
-        for posting in segment.postings {
-            let term = posting.term.trim().to_lowercase();
-            if term.is_empty() {
-                continue;
-            }
-            let ids = terms.entry(term).or_default();
-            for id in posting.ids {
-                ids.entry(id).or_default();
-            }
-            for positions in posting.positions {
-                ids.entry(positions.id)
-                    .or_default()
-                    .extend(positions.positions);
-            }
-        }
+        apply_content_segment(&mut terms, segment);
     }
 
-    let postings: Vec<_> = terms
+    let postings = content_postings_from_terms(terms);
+    write_content_postings(output, &postings)?;
+    Ok(postings)
+}
+
+fn content_terms_from_postings(
+    postings: impl IntoIterator<Item = ContentPosting>,
+) -> BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>> {
+    let mut terms: BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>> = BTreeMap::new();
+    for posting in postings {
+        merge_content_posting(&mut terms, posting);
+    }
+    terms
+}
+
+fn apply_content_segment(
+    terms: &mut BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>>,
+    segment: ContentSegment,
+) {
+    for id in segment.tombstones {
+        for positions in terms.values_mut() {
+            positions.remove(&id);
+        }
+        terms.retain(|_, positions| !positions.is_empty());
+    }
+    for posting in segment.postings {
+        merge_content_posting(terms, posting);
+    }
+}
+
+fn merge_content_posting(
+    terms: &mut BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>>,
+    posting: ContentPosting,
+) {
+    let term = posting.term.trim().to_lowercase();
+    if term.is_empty() {
+        return;
+    }
+    let ids = terms.entry(term).or_default();
+    for id in posting.ids {
+        ids.entry(id).or_default();
+    }
+    for positions in posting.positions {
+        ids.entry(positions.id)
+            .or_default()
+            .extend(positions.positions);
+    }
+}
+
+fn content_postings_from_terms(
+    terms: BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>>,
+) -> Vec<ContentPosting> {
+    terms
         .into_iter()
         .map(|(term, positions)| ContentPosting {
             term,
@@ -756,9 +796,7 @@ pub fn compact_content_segments(
                 })
                 .collect(),
         })
-        .collect();
-    write_content_postings(output, &postings)?;
-    Ok(postings)
+        .collect()
 }
 
 fn content_format_error(path: &Path, reason: &str) -> GfmError {

@@ -4272,6 +4272,104 @@ fn runs_background_content_indexer_from_binary() {
 }
 
 #[test]
+fn background_content_indexer_incrementally_updates_archive_from_binary() {
+    let root = unique_temp_dir("gfm-cli-background-content-incremental-root");
+    let segments = unique_temp_dir("gfm-cli-background-content-incremental-segments");
+    let records = unique_temp_path("gfm-cli-background-incremental-records", "gfmidx");
+    let content = unique_temp_path("gfm-cli-background-incremental-content", "gfmcontent");
+    let first_journal = unique_temp_path("gfm-cli-background-incremental-first", "journal");
+    let second_journal = unique_temp_path("gfm-cli-background-incremental-second", "journal");
+    fs::write(root.join("keep.md"), "stable binarykeeptoken").unwrap();
+    fs::write(root.join("change.md"), "binaryoldtoken before change").unwrap();
+    fs::write(root.join("delete.md"), "binarydeletetoken before removal").unwrap();
+
+    let first = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &first_journal)
+        .args([
+            "index-content-background",
+            root.to_str().unwrap(),
+            segments.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    fs::write(
+        root.join("change.md"),
+        "binarychangedtoken after mutation with a longer body",
+    )
+    .unwrap();
+    fs::remove_file(root.join("delete.md")).unwrap();
+    fs::write(root.join("add.md"), "binaryaddedtoken newly indexed").unwrap();
+
+    let second = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &second_journal)
+        .args([
+            "index-content-background",
+            root.to_str().unwrap(),
+            segments.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_stderr = String::from_utf8(second.stderr).unwrap();
+    assert!(
+        second_stderr.contains("background-content-indexed 2 files"),
+        "{second_stderr}"
+    );
+    assert!(second_stderr.contains("unchanged 1"), "{second_stderr}");
+    assert!(second_stderr.contains("tombstoned 2"), "{second_stderr}");
+
+    for (query, expected) in [
+        ("binarykeeptoken", true),
+        ("binarychangedtoken", true),
+        ("binaryaddedtoken", true),
+        ("binaryoldtoken", false),
+        ("binarydeletetoken", false),
+    ] {
+        let search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args([
+                "search-content-index",
+                records.to_str().unwrap(),
+                content.to_str().unwrap(),
+                query,
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            search.status.success(),
+            "{}",
+            String::from_utf8_lossy(&search.stderr)
+        );
+        let stdout = String::from_utf8(search.stdout).unwrap();
+        assert_eq!(
+            stdout.contains(".md"),
+            expected,
+            "query {query} expected {expected}, got {stdout}"
+        );
+    }
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+    fs::remove_file(first_journal).unwrap();
+    fs::remove_file(second_journal).unwrap();
+}
+
+#[test]
 fn defers_background_content_indexer_under_saturated_io_from_binary() {
     let root = unique_temp_dir("gfm-cli-background-content-defer-root");
     let segments = unique_temp_dir("gfm-cli-background-content-defer-segments");

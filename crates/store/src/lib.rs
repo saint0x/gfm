@@ -16,10 +16,11 @@ mod substring;
 
 pub use columns::{write_record_columns, MmapRecordColumns, RecordColumn};
 pub use content::{
-    compact_content_segments, compact_content_segments_with_policy, plan_content_segment_merge,
-    read_content_postings, read_content_segment, summarize_content_segment, write_content_postings,
-    write_content_segment, ContentArchive, ContentMergeOutcome, ContentMergePlan,
-    ContentMergePolicy, ContentMergeTier, ContentSegmentSummary, MmapContentArchive,
+    compact_content_postings_with_segments, compact_content_segments,
+    compact_content_segments_with_policy, plan_content_segment_merge, read_content_postings,
+    read_content_segment, summarize_content_segment, write_content_postings, write_content_segment,
+    ContentArchive, ContentMergeOutcome, ContentMergePlan, ContentMergePolicy, ContentMergeTier,
+    ContentSegmentSummary, MmapContentArchive,
 };
 pub use contentrecover::{
     content_manifest_recovery_action_name, content_manifest_recovery_reason_name,

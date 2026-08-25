@@ -55,12 +55,12 @@ use gfm_store::{
     plan_archive_rebuilds, plan_columns_archive_rebuild, plan_content_archive_migration,
     plan_content_manifest_promotion_recovery, plan_content_manifest_recovery,
     plan_derived_sidecar_rebuild, plan_metadata_archive_migration, plan_record_archive_migration,
-    promote_content_archive_manifest, rebuild_columns_archive, rebuild_derived_sidecar,
-    recover_content_manifest, recover_content_manifest_promotion, write_dictionary,
-    write_metadata_postings, write_record_columns, ArchiveRebuildInputs, ArchiveSchemaKind,
-    ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive, MmapContentSet,
-    MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
-    MmapRecordColumns, MmapSubstringArchive,
+    promote_content_archive_manifest, read_records, rebuild_columns_archive,
+    rebuild_derived_sidecar, recover_content_manifest, recover_content_manifest_promotion,
+    write_dictionary, write_metadata_postings, write_record_columns, ArchiveRebuildInputs,
+    ArchiveSchemaKind, ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive,
+    MmapContentSet, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
+    MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_store::{
     fuzzy_postings_from_records, plan_sidecar_recovery, prefix_postings_from_records,
@@ -1181,9 +1181,11 @@ fn run() -> Result<()> {
                     GfmError::Format("background content index ran without a report".to_string())
                 })?;
                 eprintln!(
-                    "background-content-indexed {} files; skipped {}; segments {}; terms {}; action={:?}; journal {}; {} inaccessible",
+                    "background-content-indexed {} files; skipped {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; journal {}; {} inaccessible",
                     report.indexed,
                     report.skipped,
+                    report.unchanged,
+                    report.tombstoned,
                     report.segments.len(),
                     report.terms,
                     outcome.scheduling_action,
@@ -1221,9 +1223,11 @@ fn run() -> Result<()> {
                         )
                     })?;
                     eprintln!(
-                        "resumed-background-content-indexed {} files; skipped {}; segments {}; terms {}; action={:?}; recoverable {}",
+                        "resumed-background-content-indexed {} files; skipped {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; recoverable {}",
                         report.indexed,
                         report.skipped,
+                        report.unchanged,
+                        report.tombstoned,
                         report.segments.len(),
                         report.terms,
                         outcome.scheduling_action,
@@ -1262,9 +1266,11 @@ fn run() -> Result<()> {
                         )
                     })?;
                     eprintln!(
-                        "resumed-background-content-indexed {} files; skipped {}; segments {}; terms {}; action={:?}; recoverable {}",
+                        "resumed-background-content-indexed {} files; skipped {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; recoverable {}",
                         report.indexed,
                         report.skipped,
+                        report.unchanged,
+                        report.tombstoned,
                         report.segments.len(),
                         report.terms,
                         outcome.scheduling_action,
@@ -4844,6 +4850,11 @@ fn run_content_job(
 ) -> Result<ContentJobOutcome> {
     let snapshot = Indexer::default().build(&spec.root)?;
     let inaccessible = snapshot.inaccessible.len();
+    let previous_records = if spec.records_path.is_file() && spec.content_path.is_file() {
+        read_records(&spec.records_path)?
+    } else {
+        Vec::new()
+    };
     let volume = spec
         .volume
         .or_else(|| snapshot.records.first().map(|record| record.id.volume))
@@ -4883,6 +4894,7 @@ fn run_content_job(
         .into_iter()
         .map(|scheduled| {
             let snapshot = snapshot.clone();
+            let previous_records = previous_records.clone();
             let segment_dir = spec.segment_dir.clone();
             let content = spec.content_path.clone();
             let worker = worker.clone();
@@ -4890,8 +4902,10 @@ fn run_content_job(
             let runtime = runtime.clone();
             RetriableTask::new(scheduled, move |cancellation| {
                 runtime.running()?;
-                let report = worker.run_and_compact(
+                let report = worker.run_incremental_and_compact(
                     &snapshot,
+                    &previous_records,
+                    Some(&content),
                     segment_dir.clone(),
                     content.clone(),
                     &cancellation,

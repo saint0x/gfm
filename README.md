@@ -105,6 +105,7 @@ The index is compact and incremental:
 - bounded HTML, RTF, MIME multipart email, and ZIP/TAR/TAR.GZ archive-metadata extraction policies, including PAX and GNU TAR long-name headers
 - structured JSON, CSV, XML plist, and binary plist extraction for searchable keys, cells, and values
 - format-scoped extractor versioning so parser upgrades invalidate only the affected content-cache family
+- incremental content indexing that tombstones changed/deleted file IDs and re-extracts only new or content-modified records
 - explicit ranking accumulator for exact, prefix, substring, fuzzy, path, metadata, kind, tag, content, recency, term-frequency, and user-pinned signals
 - user-intent boosts for Applications, Recents, Downloads, Desktop, screenshots, and project folders
 

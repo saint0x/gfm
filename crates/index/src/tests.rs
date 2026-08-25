@@ -973,6 +973,56 @@ fn background_content_indexer_batches_segments_and_compacts() {
 }
 
 #[test]
+fn background_content_indexer_incrementally_updates_existing_archive() {
+    let root = unique_temp_dir("gfm-background-content-incremental-root");
+    let segments = unique_temp_dir("gfm-background-content-incremental-segments");
+    let content = unique_temp_path("gfm-background-content-incremental", "gfmcontent");
+    fs::write(root.join("keep.md"), "stable keeptoken").unwrap();
+    fs::write(root.join("change.md"), "oldtoken before change").unwrap();
+    fs::write(root.join("delete.md"), "deletetoken before removal").unwrap();
+
+    let indexer = Indexer::default();
+    let previous = indexer.build(&root).unwrap();
+    BackgroundContentIndexer::default()
+        .run_and_compact(&previous, &segments, &content, &Cancellation::default())
+        .unwrap();
+
+    fs::write(
+        root.join("change.md"),
+        "changedtoken after content mutation with a longer body",
+    )
+    .unwrap();
+    fs::remove_file(root.join("delete.md")).unwrap();
+    fs::write(root.join("add.md"), "added addedtoken").unwrap();
+    let current = indexer.build(&root).unwrap();
+    let report = BackgroundContentIndexer::default()
+        .run_incremental_and_compact(
+            &current,
+            &previous.records,
+            Some(&content),
+            &segments,
+            &content,
+            &Cancellation::default(),
+        )
+        .unwrap();
+    let mut live = current.into_live();
+    live.load_content_postings(&content).unwrap();
+
+    assert_eq!(report.indexed, 2);
+    assert_eq!(report.unchanged, 1);
+    assert_eq!(report.tombstoned, 2);
+    assert_eq!(live.search("keeptoken", 5).len(), 1);
+    assert_eq!(live.search("changedtoken", 5).len(), 1);
+    assert_eq!(live.search("addedtoken", 5).len(), 1);
+    assert!(live.search("oldtoken", 5).is_empty());
+    assert!(live.search("deletetoken", 5).is_empty());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(content).unwrap();
+}
+
+#[test]
 fn background_content_maintenance_compacts_segments_and_updates_manifest() {
     let root = unique_temp_dir("gfm-background-content-maintenance-root");
     let records = unique_temp_path("gfm-background-content-maintenance-records", "gfmidx");

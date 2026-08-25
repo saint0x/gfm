@@ -1,4 +1,4 @@
-use gfm_content::Extractor;
+use gfm_content::{extractor_version_for_path, Extractor};
 use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
 pub use gfm_search::substring_candidate_grams;
@@ -9,10 +9,11 @@ pub use gfm_search::{
 };
 use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
-    compact_content_segments, compact_content_segments_with_policy, plan_content_segment_merge,
-    read_content_postings, read_records, summarize_content_segment, write_content_postings,
-    write_content_segment, write_records, MmapContentSet, MmapFuzzyArchive, MmapMetadataArchive,
-    MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
+    compact_content_postings_with_segments, compact_content_segments,
+    compact_content_segments_with_policy, plan_content_segment_merge, read_content_postings,
+    read_records, summarize_content_segment, write_content_postings, write_content_segment,
+    write_records, MmapContentSet, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
+    MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
 pub use gfm_store::{
     ContentArchiveCleanupAction, ContentArchiveCleanupPlan, ContentArchiveCleanupPolicy,
@@ -20,10 +21,10 @@ pub use gfm_store::{
     ContentManifestPromotion, ContentMergeOutcome, ContentMergePolicy, ContentMergeTier,
 };
 use gfm_types::{
-    ContentPosting, ContentSegment, DirectoryPage, FileEvent, FileEventKind, FileId, FileRecord,
-    GfmError, Result, ScanIssue, SearchHit, VolumeId,
+    ContentPosting, ContentSegment, DirectoryPage, FileEvent, FileEventKind, FileId, FileKind,
+    FileRecord, GfmError, Result, ScanIssue, SearchHit, VolumeId,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -197,6 +198,34 @@ impl IndexSnapshot {
         };
         write_content_segment(segment_path, &segment)?;
         Ok(indexed)
+    }
+
+    pub fn save_incremental_content_segment(
+        &self,
+        segment_path: impl AsRef<Path>,
+        extractor: &Extractor,
+        previous_records: &[FileRecord],
+    ) -> Result<ContentIndexReport> {
+        let delta = ContentIndexDelta::from_records(&self.records, previous_records);
+        let mut live = LiveIndex::from_records(delta.records.clone());
+        let indexed = live.index_content(extractor)?;
+        let postings = live.content_postings();
+        let terms = postings.len();
+        write_content_segment(
+            segment_path.as_ref(),
+            &ContentSegment {
+                tombstones: delta.tombstones.clone(),
+                postings,
+            },
+        )?;
+        Ok(ContentIndexReport {
+            indexed,
+            skipped: delta.records.len().saturating_sub(indexed),
+            unchanged: delta.unchanged,
+            tombstoned: delta.tombstones.len(),
+            terms,
+            segments: vec![segment_path.as_ref().to_path_buf()],
+        })
     }
 
     pub fn into_live(self) -> LiveIndex {
@@ -1029,8 +1058,90 @@ impl Default for ContentIndexOptions {
 pub struct ContentIndexReport {
     pub indexed: usize,
     pub skipped: usize,
+    pub unchanged: usize,
+    pub tombstoned: usize,
     pub terms: usize,
     pub segments: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentIndexDelta {
+    pub records: Vec<FileRecord>,
+    pub tombstones: Vec<FileId>,
+    pub unchanged: usize,
+}
+
+impl ContentIndexDelta {
+    pub fn from_records(current: &[FileRecord], previous: &[FileRecord]) -> Self {
+        let previous_by_id = previous
+            .iter()
+            .map(|record| (record.id, record))
+            .collect::<HashMap<_, _>>();
+        let current_ids = current
+            .iter()
+            .map(|record| record.id)
+            .collect::<HashSet<_>>();
+        let mut records = Vec::new();
+        let mut tombstones = Vec::new();
+        let mut unchanged = 0;
+
+        for record in current {
+            match previous_by_id.get(&record.id) {
+                Some(previous_record)
+                    if content_record_signature(record)
+                        == content_record_signature(previous_record) =>
+                {
+                    unchanged += 1;
+                }
+                Some(previous_record) => {
+                    if previous_record.kind == FileKind::File {
+                        tombstones.push(record.id);
+                    }
+                    records.push(record.clone());
+                }
+                None => records.push(record.clone()),
+            }
+        }
+
+        for record in previous {
+            if record.kind == FileKind::File && !current_ids.contains(&record.id) {
+                tombstones.push(record.id);
+            }
+        }
+        tombstones.sort();
+        tombstones.dedup();
+
+        Self {
+            records,
+            tombstones,
+            unchanged,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContentRecordSignature {
+    kind: FileKind,
+    len: u64,
+    modified_ns: Option<u128>,
+    changed_ns: Option<u128>,
+    extractor_version: u32,
+}
+
+fn content_record_signature(record: &FileRecord) -> ContentRecordSignature {
+    ContentRecordSignature {
+        kind: record.kind,
+        len: record.len,
+        modified_ns: system_time_ns(record.modified),
+        changed_ns: system_time_ns(record.changed),
+        extractor_version: extractor_version_for_path(&record.path),
+    }
+}
+
+fn system_time_ns(value: Option<std::time::SystemTime>) -> Option<u128> {
+    value
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1214,6 +1325,8 @@ impl BackgroundContentIndexer {
         let mut report = ContentIndexReport {
             indexed: 0,
             skipped: 0,
+            unchanged: 0,
+            tombstoned: 0,
             terms: 0,
             segments: Vec::new(),
         };
@@ -1242,6 +1355,69 @@ impl BackgroundContentIndexer {
         Ok(report)
     }
 
+    pub fn run_incremental_to_segments(
+        &self,
+        snapshot: &IndexSnapshot,
+        previous_records: &[FileRecord],
+        output_dir: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<ContentIndexReport> {
+        let output_dir = output_dir.as_ref();
+        fs::create_dir_all(output_dir).map_err(|err| gfm_types::GfmError::io(output_dir, err))?;
+        let delta = ContentIndexDelta::from_records(&snapshot.records, previous_records);
+        let batch_size = self.options.batch_size.max(1);
+        let mut report = ContentIndexReport {
+            indexed: 0,
+            skipped: 0,
+            unchanged: delta.unchanged,
+            tombstoned: delta.tombstones.len(),
+            terms: 0,
+            segments: Vec::new(),
+        };
+
+        if delta.records.is_empty() && !delta.tombstones.is_empty() {
+            cancellation.check()?;
+            let segment_path =
+                output_dir.join(format!("{}-{:08}.gfmseg", self.options.segment_prefix, 0));
+            write_content_segment(
+                &segment_path,
+                &ContentSegment {
+                    tombstones: delta.tombstones,
+                    postings: Vec::new(),
+                },
+            )?;
+            report.segments.push(segment_path);
+            return Ok(report);
+        }
+
+        for (batch_index, records) in delta.records.chunks(batch_size).enumerate() {
+            cancellation.check()?;
+            let segment_path = output_dir.join(format!(
+                "{}-{:08}.gfmseg",
+                self.options.segment_prefix, batch_index
+            ));
+            let mut live = LiveIndex::from_records(records.to_vec());
+            let indexed = live.index_content(&self.extractor)?;
+            report.indexed += indexed;
+            report.skipped += records.len().saturating_sub(indexed);
+            let postings = live.content_postings();
+            report.terms += postings.len();
+            write_content_segment(
+                &segment_path,
+                &ContentSegment {
+                    tombstones: if batch_index == 0 {
+                        delta.tombstones.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    postings,
+                },
+            )?;
+            report.segments.push(segment_path);
+        }
+        Ok(report)
+    }
+
     pub fn run_and_compact(
         &self,
         snapshot: &IndexSnapshot,
@@ -1252,6 +1428,32 @@ impl BackgroundContentIndexer {
         let mut report = self.run_to_segments(snapshot, segment_dir, cancellation)?;
         cancellation.check()?;
         report.terms = compact_content_segments(content_path, &report.segments)?.len();
+        Ok(report)
+    }
+
+    pub fn run_incremental_and_compact(
+        &self,
+        snapshot: &IndexSnapshot,
+        previous_records: &[FileRecord],
+        previous_content_path: Option<&Path>,
+        segment_dir: impl AsRef<Path>,
+        content_path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<ContentIndexReport> {
+        let mut report = self.run_incremental_to_segments(
+            snapshot,
+            previous_records,
+            segment_dir,
+            cancellation,
+        )?;
+        cancellation.check()?;
+        let base_postings = match previous_content_path {
+            Some(path) if path.is_file() => read_content_postings(path)?,
+            _ => Vec::new(),
+        };
+        report.terms =
+            compact_content_postings_with_segments(content_path, base_postings, &report.segments)?
+                .len();
         Ok(report)
     }
 
