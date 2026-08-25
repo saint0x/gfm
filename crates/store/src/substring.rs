@@ -205,6 +205,33 @@ impl MmapSubstringArchive {
             .collect()
     }
 
+    pub fn postings_for_limit<I, S>(
+        &self,
+        grams: I,
+        limit_per_gram: usize,
+    ) -> Result<Vec<SubstringPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut selected = BTreeSet::new();
+        for gram in grams {
+            let gram = normalize(gram.as_ref());
+            if is_substring_gram(&gram) {
+                selected.insert(gram);
+            }
+        }
+
+        let mut postings = Vec::new();
+        for gram in selected {
+            let (ids, _) = self.ids_for_limit(&gram, limit_per_gram)?;
+            if !ids.is_empty() {
+                postings.push(SubstringPosting { gram, ids });
+            }
+        }
+        Ok(postings)
+    }
+
     pub fn posting_for(&self, gram: &str) -> Result<Option<SubstringPosting>> {
         let gram = normalize(gram);
         if !is_substring_gram(&gram) {
@@ -571,6 +598,36 @@ mod tests {
             archive.postings_for(["rep", "missing", "REP"]).unwrap(),
             vec![postings[1].clone()]
         );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_substring_archive_reads_bounded_selected_postings_for_query_import() {
+        let path = temp_path("gfm-substring-bounded-postings", "gfmsubstr");
+        let postings = vec![
+            SubstringPosting {
+                gram: "por".to_string(),
+                ids: (0..8)
+                    .map(|node| FileId::new(VolumeId(1), node + 1))
+                    .collect(),
+            },
+            SubstringPosting {
+                gram: "rep".to_string(),
+                ids: vec![FileId::new(VolumeId(2), 1), FileId::new(VolumeId(2), 2)],
+            },
+        ];
+
+        write_substring_postings(&path, &postings).unwrap();
+        let archive = MmapSubstringArchive::open(&path).unwrap();
+        let limited = archive
+            .postings_for_limit(["REP", "missing", "por", "por"], 3)
+            .unwrap();
+
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].gram, "por");
+        assert_eq!(limited[0].ids.len(), 3);
+        assert_eq!(limited[0].ids[0], FileId::new(VolumeId(1), 1));
+        assert_eq!(limited[1], postings[1]);
         std::fs::remove_file(path).unwrap();
     }
 

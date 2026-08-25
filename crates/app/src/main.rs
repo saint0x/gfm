@@ -1416,6 +1416,7 @@ fn run() -> Result<()> {
             let substrings_archive = MmapSubstringArchive::open(&substrings)?;
             let lookup = SearchArchiveLookup::open(prefixes, substrings, fuzzy)?;
             let content = MmapContentArchive::open(content)?;
+            let budget = SearchLookupBudget::default();
             let mut search_columns = Vec::with_capacity(columns.len());
             for index in 0..columns.len() {
                 let column = columns.column(index)?;
@@ -1444,14 +1445,20 @@ fn run() -> Result<()> {
                 })
                 .collect();
             let search_substrings = substrings_archive
-                .postings_for(substring_candidate_grams(&query))?
+                .postings_for_limit(
+                    substring_candidate_grams(&query),
+                    budget.max_substring_ids_per_gram,
+                )?
                 .into_iter()
                 .map(|posting| SearchSubstringPosting {
                     gram: posting.gram,
                     ids: posting.ids,
                 })
                 .collect();
-            let search_content = content.postings_for_terms(content_query_terms(&query))?;
+            let search_content = content.postings_for_terms_limit(
+                content_query_terms(&query),
+                budget.max_content_ids_per_term,
+            )?;
             let (
                 live,
                 applied,
@@ -1470,12 +1477,15 @@ fn run() -> Result<()> {
                 search_content,
             );
             eprintln!(
-                "columns-indexed {applied} metadata-keys {metadata_keys} prefix-keys {prefix_keys} substring-keys {substring_keys} fuzzy-keys {fuzzy_keys} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {content_keys}",
+                "columns-indexed {applied} metadata-keys {metadata_keys} prefix-keys {prefix_keys} substring-keys {substring_keys} fuzzy-keys {fuzzy_keys} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {content_keys} substring-budget {} content-budget {}",
                 lookup.indexed_prefixes(),
                 lookup.indexed_substring_grams(),
-                lookup.indexed_fuzzy_keys()
+                lookup.indexed_fuzzy_keys(),
+                budget.max_substring_ids_per_gram,
+                budget.max_content_ids_per_term
             );
-            for hit in live.search_with_lookup(&query, 50, &lookup)? {
+            let report = live.search_with_lookup_budget(&query, 50, &lookup, budget)?;
+            for hit in report.hits {
                 print_hit(&hit);
             }
         }
@@ -1575,7 +1585,7 @@ fn run() -> Result<()> {
                 })
                 .collect();
             let search_substrings = substrings_archive
-                .postings_for(substring_candidate_grams(&query))?
+                .postings_for_limit(substring_candidate_grams(&query), max_substring_ids)?
                 .into_iter()
                 .map(|posting| SearchSubstringPosting {
                     gram: posting.gram,

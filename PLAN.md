@@ -471,6 +471,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - positive `name:`, `path:`, `ext:`, `tag:`, and `kind:` filters seed boolean expression candidates from maintained posting maps before final expression evaluation, so indexed filter `AND`/`OR` branches do not force a full-record universe scan;
   - sharded search fans out the same archive lookup across volume shards and filters candidate ids per shard;
   - archive-backed lookup avoids importing large prefix/substring/fuzzy candidate maps into heap memory for each machine-wide query session;
+  - default sidecar-backed search imports only budgeted query-matching substring and content postings before ranking; explicit operator budget commands can lower or raise those caps for diagnostics;
   - the archive lookup caches repeated prefix, substring gram, and fuzzy key probes inside the mmap-backed lookup object and reports request, hit, and miss counters with each budgeted query;
   - prefix ids, archive prefix length, substring grams, substring ids per gram, fuzzy delete keys, fuzzy terms per key, and verified fuzzy candidates are capped by an explicit search lookup budget;
   - adaptive prefix cutoffs skip archive expansion for too-short prefixes and already-saturated local candidate sets before they can touch mmap sidecars;

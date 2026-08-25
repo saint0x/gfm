@@ -1736,7 +1736,9 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_search_stderr.contains("prefix-archive-keys")
             && sidecar_search_stderr.contains("substring-archive-keys")
             && sidecar_search_stderr.contains("fuzzy-archive-keys")
-            && sidecar_search_stderr.contains("content-keys 0"),
+            && sidecar_search_stderr.contains("content-keys 0")
+            && sidecar_search_stderr.contains("substring-budget 4096")
+            && sidecar_search_stderr.contains("content-budget 4096"),
         "{sidecar_search_stderr}"
     );
 
