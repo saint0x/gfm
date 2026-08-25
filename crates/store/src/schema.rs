@@ -1,7 +1,8 @@
 use crate::{
-    read_content_postings, read_records, write_content_postings, write_records, ContentArchive,
-    ContentArchiveManifest, MmapContentArchive, MmapDictionary, MmapFuzzyArchive,
-    MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
+    read_content_postings, read_metadata_postings, read_records, write_content_postings,
+    write_metadata_postings, write_records, ContentArchive, ContentArchiveManifest,
+    MmapContentArchive, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
+    MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_types::{GfmError, Result};
 use std::fmt;
@@ -203,6 +204,68 @@ pub struct ContentArchiveMigration {
     pub after: ArchiveSchemaReport,
     pub migrated_postings: usize,
     pub backup_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataArchiveMigrationAction {
+    Ready,
+    Migrate,
+    CannotMigrate,
+}
+
+impl MetadataArchiveMigrationAction {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Migrate => "migrate",
+            Self::CannotMigrate => "cannot-migrate",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetadataArchiveMigrationPlan {
+    pub action: MetadataArchiveMigrationAction,
+    pub before: ArchiveSchemaReport,
+    pub detail: Option<String>,
+}
+
+impl MetadataArchiveMigrationPlan {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "metadata-archive-migration-plan\taction={}\tstatus={}\tschema={}\tcurrent={}\tpath={}\tdetail={}",
+            self.action.as_str(),
+            self.before.status.as_str(),
+            self.before.schema.as_deref().unwrap_or("-"),
+            self.before.current_schema,
+            escape_field(&self.before.path.display().to_string()),
+            self.detail.as_deref().map(escape_field).unwrap_or("-".to_string())
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetadataArchiveMigration {
+    pub before: MetadataArchiveMigrationPlan,
+    pub after: ArchiveSchemaReport,
+    pub migrated_postings: usize,
+    pub backup_path: Option<PathBuf>,
+}
+
+impl MetadataArchiveMigration {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "metadata-archive-migration\tmigrated-postings={}\tbefore-status={}\tafter-status={}\tbackup={}\tpath={}",
+            self.migrated_postings,
+            self.before.before.status.as_str(),
+            self.after.status.as_str(),
+            self.backup_path
+                .as_ref()
+                .map(|path| escape_field(&path.display().to_string()))
+                .unwrap_or("-".to_string()),
+            escape_field(&self.after.path.display().to_string())
+        )
+    }
 }
 
 impl ContentArchiveMigration {
@@ -423,6 +486,85 @@ pub fn migrate_content_archive(
         )));
     }
     Ok(ContentArchiveMigration {
+        before,
+        after,
+        migrated_postings: postings.len(),
+        backup_path: Some(backup_path),
+    })
+}
+
+pub fn plan_metadata_archive_migration(path: impl AsRef<Path>) -> MetadataArchiveMigrationPlan {
+    let before = inspect_archive_schema(ArchiveSchemaKind::Metadata, path);
+    let (action, detail) = match before.status {
+        ArchiveSchemaStatus::Current => (
+            MetadataArchiveMigrationAction::Ready,
+            Some("metadata archive is already current".to_string()),
+        ),
+        ArchiveSchemaStatus::Legacy => (
+            MetadataArchiveMigrationAction::Migrate,
+            Some("legacy metadata archive can be rewritten as current gfm-metadata-v3".to_string()),
+        ),
+        ArchiveSchemaStatus::Missing => (
+            MetadataArchiveMigrationAction::CannotMigrate,
+            Some("missing metadata archive must be rebuilt from durable records".to_string()),
+        ),
+        ArchiveSchemaStatus::Unsupported => (
+            MetadataArchiveMigrationAction::CannotMigrate,
+            Some("unsupported metadata archive schema cannot be migrated".to_string()),
+        ),
+        ArchiveSchemaStatus::Unreadable => (
+            MetadataArchiveMigrationAction::CannotMigrate,
+            Some("unreadable metadata archive must be quarantined and rebuilt".to_string()),
+        ),
+    };
+    MetadataArchiveMigrationPlan {
+        action,
+        before,
+        detail,
+    }
+}
+
+pub fn migrate_metadata_archive(
+    path: impl AsRef<Path>,
+    backup_dir: impl AsRef<Path>,
+) -> Result<MetadataArchiveMigration> {
+    let path = path.as_ref();
+    let backup_dir = backup_dir.as_ref();
+    let before = plan_metadata_archive_migration(path);
+    match before.action {
+        MetadataArchiveMigrationAction::Ready => {
+            return Ok(MetadataArchiveMigration {
+                after: before.before.clone(),
+                before,
+                migrated_postings: 0,
+                backup_path: None,
+            });
+        }
+        MetadataArchiveMigrationAction::CannotMigrate => {
+            return Err(GfmError::Format(format!(
+                "{} cannot be migrated: {}",
+                path.display(),
+                before
+                    .detail
+                    .as_deref()
+                    .unwrap_or("unsupported migration state")
+            )));
+        }
+        MetadataArchiveMigrationAction::Migrate => {}
+    }
+
+    let postings = read_metadata_postings(path)?;
+    let backup_path = backup_archive(path, backup_dir, "legacy")?;
+    write_metadata_postings(path, &postings)?;
+    let after = inspect_archive_schema(ArchiveSchemaKind::Metadata, path);
+    if after.status != ArchiveSchemaStatus::Current {
+        return Err(GfmError::Format(format!(
+            "{} migration produced {} instead of current schema",
+            path.display(),
+            after.status.as_str()
+        )));
+    }
+    Ok(MetadataArchiveMigration {
         before,
         after,
         migrated_postings: postings.len(),
@@ -679,6 +821,7 @@ mod tests {
         metadata_postings_from_records, prefix_postings_from_records, write_content_postings,
         write_dictionary, write_fuzzy_postings, write_metadata_postings, write_prefix_postings,
         write_record_columns, write_records, ContentArchiveManifestEntry, ContentMergeTier,
+        MetadataField, MetadataPosting,
     };
     use gfm_types::{ContentPosting, FileId, FileKind, FileRecord, VolumeId};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -844,6 +987,46 @@ mod tests {
     }
 
     #[test]
+    fn migrates_legacy_metadata_archive_to_current_schema_with_backup() {
+        let dir = temp_dir("gfm-schema-metadata-migration");
+        let metadata = dir.join("legacy.gfmmeta");
+        let backup = dir.join("backup");
+        let postings = vec![
+            MetadataPosting {
+                field: MetadataField::Tag,
+                term: "important".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 2), FileId::new(VolumeId(1), 4)],
+            },
+            MetadataPosting {
+                field: MetadataField::Comment,
+                term: "handoff".to_string(),
+                ids: vec![FileId::new(VolumeId(2), 1)],
+            },
+        ];
+        write_legacy_metadata_archive(&metadata, &postings);
+
+        let plan = plan_metadata_archive_migration(&metadata);
+        assert_eq!(plan.action, MetadataArchiveMigrationAction::Migrate);
+
+        let migration = migrate_metadata_archive(&metadata, &backup).unwrap();
+
+        assert_eq!(migration.migrated_postings, 2);
+        assert_eq!(migration.after.status, ArchiveSchemaStatus::Current);
+        assert_eq!(read_metadata_postings(&metadata).unwrap(), postings);
+        assert!(MmapMetadataArchive::open(&metadata)
+            .unwrap()
+            .is_checksummed());
+        let backup_path = migration.backup_path.unwrap();
+        assert!(backup_path.exists());
+        assert_eq!(
+            inspect_archive_schema(ArchiveSchemaKind::Metadata, &backup_path).status,
+            ArchiveSchemaStatus::Legacy
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn current_record_archive_migration_is_noop() {
         let dir = temp_dir("gfm-schema-record-migration-current");
         let records = dir.join("current.gfmidx");
@@ -912,6 +1095,54 @@ mod tests {
             write_legacy_file_ids(&mut bytes, &posting.ids);
         }
         std::fs::write(path, bytes).unwrap();
+    }
+
+    fn write_legacy_metadata_archive(path: &Path, postings: &[MetadataPosting]) {
+        let mut bytes = Vec::new();
+        bytes.extend(b"gfm-metadata-v1\n");
+        push_varint(&mut bytes, postings.len() as u64);
+        let mut directory = Vec::new();
+        let mut postings = postings.to_vec();
+        postings.sort_by(|left, right| {
+            (metadata_field_code(left.field), left.term.as_str())
+                .cmp(&(metadata_field_code(right.field), right.term.as_str()))
+        });
+        for posting in &postings {
+            let offset = bytes.len() as u64;
+            write_legacy_metadata_posting(&mut bytes, posting);
+            directory.push((
+                posting.field,
+                posting.term.clone(),
+                offset,
+                bytes.len() as u64 - offset,
+            ));
+        }
+        let directory_offset = bytes.len() as u64;
+        push_varint(&mut bytes, directory.len() as u64);
+        for (field, term, offset, len) in directory {
+            bytes.push(metadata_field_code(field));
+            push_varint(&mut bytes, term.len() as u64);
+            bytes.extend(term.as_bytes());
+            push_varint(&mut bytes, offset);
+            push_varint(&mut bytes, len);
+        }
+        bytes.extend(directory_offset.to_le_bytes());
+        bytes.extend(b"gfm-metadata-index-v1\n");
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn write_legacy_metadata_posting(bytes: &mut Vec<u8>, posting: &MetadataPosting) {
+        bytes.push(metadata_field_code(posting.field));
+        push_varint(bytes, posting.term.len() as u64);
+        bytes.extend(posting.term.as_bytes());
+        write_legacy_file_ids(bytes, &posting.ids);
+    }
+
+    fn metadata_field_code(field: MetadataField) -> u8 {
+        match field {
+            MetadataField::Tag => b't',
+            MetadataField::Comment => b'c',
+        }
     }
 
     fn write_legacy_file_ids(bytes: &mut Vec<u8>, ids: &[FileId]) {

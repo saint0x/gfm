@@ -39,8 +39,9 @@ use gfm_preview::{
 };
 use gfm_store::{
     dictionary_term_report_from_records, inspect_archive_schema, metadata_postings_from_records,
-    migrate_content_archive, migrate_record_archive, plan_content_archive_migration,
-    plan_content_manifest_recovery, plan_record_archive_migration, recover_content_manifest,
+    migrate_content_archive, migrate_metadata_archive, migrate_record_archive,
+    plan_content_archive_migration, plan_content_manifest_recovery,
+    plan_metadata_archive_migration, plan_record_archive_migration, recover_content_manifest,
     write_dictionary, write_metadata_postings, write_record_columns, ArchiveSchemaKind,
     ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive, MmapContentSet,
     MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
@@ -1508,6 +1509,20 @@ fn run() -> Result<()> {
             let backup_dir =
                 required_path(args.next(), "content-migrate requires a backup directory")?;
             let migration = migrate_content_archive(content, backup_dir)?;
+            println!("{}", migration.as_tsv());
+        }
+        Some("metadata-migration-plan") => {
+            let metadata = required_path(
+                args.next(),
+                "metadata-migration-plan requires a metadata path",
+            )?;
+            println!("{}", plan_metadata_archive_migration(metadata).as_tsv());
+        }
+        Some("metadata-migrate") => {
+            let metadata = required_path(args.next(), "metadata-migrate requires a metadata path")?;
+            let backup_dir =
+                required_path(args.next(), "metadata-migrate requires a backup directory")?;
+            let migration = migrate_metadata_archive(metadata, backup_dir)?;
             println!("{}", migration.as_tsv());
         }
         Some("index-columns") => {
@@ -3256,6 +3271,8 @@ fn print_usage() {
   gfm records-migrate <records.gfmidx> <backup-dir>
   gfm content-migration-plan <content.gfmcontent>
   gfm content-migrate <content.gfmcontent> <backup-dir>
+  gfm metadata-migration-plan <metadata.gfmmeta>
+  gfm metadata-migrate <metadata.gfmmeta> <backup-dir>
   gfm records-verify <index.gfmidx>
   gfm index-columns <records.gfmidx> <columns.gfmcols>
   gfm columns-verify <columns.gfmcols>

@@ -1,4 +1,4 @@
-use gfm_store::{read_records, write_content_postings};
+use gfm_store::{read_records, write_content_postings, MetadataField, MetadataPosting};
 use gfm_types::{ContentPosting, FileId, VolumeId};
 use std::fs;
 use std::io::{Cursor, Write};
@@ -277,6 +277,75 @@ fn migrates_legacy_content_archive_from_binary() {
     assert!(backup.read_dir().unwrap().next().is_some());
 
     fs::remove_file(content).unwrap();
+    fs::remove_dir_all(backup).unwrap();
+}
+
+#[test]
+fn migrates_legacy_metadata_archive_from_binary() {
+    let metadata = unique_temp_path("gfm-cli-metadata-migrate", "gfmmeta");
+    let backup = unique_temp_dir("gfm-cli-metadata-migrate-backup");
+    write_legacy_metadata_archive(
+        &metadata,
+        &[MetadataPosting {
+            field: MetadataField::Tag,
+            term: "important".to_string(),
+            ids: vec![FileId::new(VolumeId(7), 11)],
+        }],
+    );
+
+    let plan = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["metadata-migration-plan", metadata.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let plan_stdout = String::from_utf8(plan.stdout).unwrap();
+    assert!(
+        plan_stdout.contains("metadata-archive-migration-plan\taction=migrate"),
+        "{plan_stdout}"
+    );
+
+    let migration = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "metadata-migrate",
+            metadata.to_str().unwrap(),
+            backup.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        migration.status.success(),
+        "{}",
+        String::from_utf8_lossy(&migration.stderr)
+    );
+    let migration_stdout = String::from_utf8(migration.stdout).unwrap();
+    assert!(
+        migration_stdout.contains(
+            "metadata-archive-migration\tmigrated-postings=1\tbefore-status=legacy\tafter-status=current"
+        ),
+        "{migration_stdout}"
+    );
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["metadata-verify", metadata.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        verify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify.stderr)
+    );
+    let verify_stdout = String::from_utf8(verify.stdout).unwrap();
+    assert!(
+        verify_stdout.contains("\tchecksum=verified"),
+        "{verify_stdout}"
+    );
+    assert!(backup.read_dir().unwrap().next().is_some());
+
+    fs::remove_file(metadata).unwrap();
     fs::remove_dir_all(backup).unwrap();
 }
 
@@ -2967,6 +3036,54 @@ fn write_legacy_content_archive(path: &std::path::Path, postings: &[ContentPosti
         write_legacy_file_ids(&mut bytes, &posting.ids);
     }
     fs::write(path, bytes).unwrap();
+}
+
+fn write_legacy_metadata_archive(path: &std::path::Path, postings: &[MetadataPosting]) {
+    let mut bytes = Vec::new();
+    bytes.extend(b"gfm-metadata-v1\n");
+    push_varint(&mut bytes, postings.len() as u64);
+    let mut directory = Vec::new();
+    let mut postings = postings.to_vec();
+    postings.sort_by(|left, right| {
+        (metadata_field_code(left.field), left.term.as_str())
+            .cmp(&(metadata_field_code(right.field), right.term.as_str()))
+    });
+    for posting in &postings {
+        let offset = bytes.len() as u64;
+        write_legacy_metadata_posting(&mut bytes, posting);
+        directory.push((
+            posting.field,
+            posting.term.clone(),
+            offset,
+            bytes.len() as u64 - offset,
+        ));
+    }
+    let directory_offset = bytes.len() as u64;
+    push_varint(&mut bytes, directory.len() as u64);
+    for (field, term, offset, len) in directory {
+        bytes.push(metadata_field_code(field));
+        push_varint(&mut bytes, term.len() as u64);
+        bytes.extend(term.as_bytes());
+        push_varint(&mut bytes, offset);
+        push_varint(&mut bytes, len);
+    }
+    bytes.extend(directory_offset.to_le_bytes());
+    bytes.extend(b"gfm-metadata-index-v1\n");
+    fs::write(path, bytes).unwrap();
+}
+
+fn write_legacy_metadata_posting(bytes: &mut Vec<u8>, posting: &MetadataPosting) {
+    bytes.push(metadata_field_code(posting.field));
+    push_varint(bytes, posting.term.len() as u64);
+    bytes.extend(posting.term.as_bytes());
+    write_legacy_file_ids(bytes, &posting.ids);
+}
+
+fn metadata_field_code(field: MetadataField) -> u8 {
+    match field {
+        MetadataField::Tag => b't',
+        MetadataField::Comment => b'c',
+    }
 }
 
 fn write_legacy_file_ids(bytes: &mut Vec<u8>, ids: &[FileId]) {

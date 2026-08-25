@@ -271,6 +271,8 @@ cargo run -p gfm -- records-migration-plan records.gfmidx
 cargo run -p gfm -- records-migrate records.gfmidx quarantine
 cargo run -p gfm -- content-migration-plan content.gfmcontent
 cargo run -p gfm -- content-migrate content.gfmcontent quarantine
+cargo run -p gfm -- metadata-migration-plan metadata.gfmmeta
+cargo run -p gfm -- metadata-migrate metadata.gfmmeta quarantine
 ```
 
 `regression-gate` materializes benchmark indexes and real prefix/fuzzy sidecar archives, then fails on latency, index-density, prefix lookup, fuzzy lookup, cache-path, and sidecar-truncation drift.
@@ -281,6 +283,7 @@ cargo run -p gfm -- content-migrate content.gfmcontent quarantine
 `archive-schema` classifies record, column, metadata, prefix, fuzzy, dictionary, content, and content-manifest archives as current, legacy, unsupported, missing, or unreadable while validating known schemas through the production readers used by search and diagnostics.
 `records-migration-plan` and `records-migrate` rewrite legacy record archives into the current checksummed schema after preserving a byte backup for operator rollback and forensic inspection.
 `content-migration-plan` and `content-migrate` rewrite legacy sequential content archives into the current indexed and checksummed content schema after preserving a byte backup.
+`metadata-migration-plan` and `metadata-migrate` rewrite legacy metadata archives into the current checksummed metadata schema after preserving a byte backup.
 
 Build, sign, and register the native app bundle:
 
@@ -330,6 +333,8 @@ cargo run -p gfm -- records-migration-plan /tmp/gfm.gfmidx
 cargo run -p gfm -- records-migrate /tmp/gfm.gfmidx /tmp/gfm-migration-backups
 cargo run -p gfm -- content-migration-plan /tmp/gfm.gfmcontent
 cargo run -p gfm -- content-migrate /tmp/gfm.gfmcontent /tmp/gfm-migration-backups
+cargo run -p gfm -- metadata-migration-plan /tmp/gfm.gfmmeta
+cargo run -p gfm -- metadata-migrate /tmp/gfm.gfmmeta /tmp/gfm-migration-backups
 cargo run -p gfm -- records-verify /tmp/gfm.gfmidx
 cargo run -p gfm -- index-columns /tmp/gfm.gfmidx /tmp/gfm.gfmcols
 cargo run -p gfm -- columns-verify /tmp/gfm.gfmcols

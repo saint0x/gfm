@@ -458,6 +458,10 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - legacy sequential content archives are planned before mutation, copied byte-for-byte into an operator-supplied backup directory, and rewritten through the production indexed/checksummed content encoder;
   - migrated content archives are reclassified after publication and must reopen as current `gfm-content-v5` archives before the migration is reported successful;
   - current content archives are deterministic no-ops, while missing, unsupported, or unreadable content routes to extraction-segment rebuild/quarantine recovery rather than unsafe migration.
+- Metadata archive migration:
+  - legacy tag/comment metadata archives are planned before mutation, copied byte-for-byte into an operator-supplied backup directory, and rewritten through the production checksummed metadata encoder;
+  - migrated metadata archives are reclassified after publication and must reopen as current `gfm-metadata-v3` archives before the migration is reported successful;
+  - current metadata archives are deterministic no-ops, while missing, unsupported, or unreadable metadata routes to durable-record rebuild/quarantine recovery rather than unsafe migration.
 - Persistent index recovery:
   - record archives and volume-state files are classified before startup use as ready, missing, unreadable, schema-mismatched, root-mismatched, path-mismatched, or count-mismatched;
   - valid records with missing, stale, unreadable, or migratable state rebuild the state file without rescanning the volume;
