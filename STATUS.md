@@ -53,7 +53,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 33. Complete Office extraction beyond bounded OOXML with legacy binary format strategy, protected/encrypted document handling, sandboxed workers, extractor-version invalidation, and corrupt-package quarantine.
 34. Complete extraction policy depth beyond current UTF-8 text, HTML, RTF, email, ZIP metadata, JSON, CSV, and plist paths, including MIME multipart emails, richer archive formats, per-format invalidation, and corrupt-input quarantine.
 35. Implement OCR strategy for image-only PDFs and screenshots without blocking primary indexing.
-36. Bind the implemented file-type, size, volume-class, thermal-state, battery-state, and user-activity extraction budget profile into remaining foreground snippet extraction, direct content search, and future sandboxed extractor workers beyond the background content indexing and adaptive resume paths.
+36. Bind the implemented file-type, size, volume-class, thermal-state, battery-state, and user-activity extraction budget profile into remaining foreground snippet extraction and future sandboxed extractor workers beyond the background content indexing, adaptive resume, and adaptive direct content search paths.
 
 ## Storage Engine
 

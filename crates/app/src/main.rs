@@ -1183,19 +1183,23 @@ fn run() -> Result<()> {
             let query = args.next().ok_or_else(|| {
                 gfm_types::GfmError::Format("search-content requires a query string".to_string())
             })?;
-            let volume = detect_volume_id(&root).ok();
-            let (indexed, hits): (usize, Vec<SearchHit>) = run_volume_task(
-                volume,
-                Priority::Visible,
-                "content extraction search",
-                move || {
-                    let snapshot = Indexer::default().build(root)?;
-                    let mut live = snapshot.into_live();
-                    let indexed = live.index_content(&Extractor::default())?;
-                    let hits = live.search_with_snippets(&query, 50, &Extractor::default(), 96)?;
-                    Ok((indexed, hits))
-                },
-            )?;
+            let (indexed, hits) = run_content_search(root, query, Extractor::default())?;
+            eprintln!("content-indexed {indexed} files");
+            for hit in hits {
+                print_hit(&hit);
+            }
+        }
+        Some("search-content-adaptive") => {
+            let root = required_path(args.next(), "search-content-adaptive requires a root path")?;
+            let query = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "search-content-adaptive requires a query string".to_string(),
+                )
+            })?;
+            let pressure = parse_required_scheduling_pressure(&mut args, "content search")?;
+            let extractor =
+                Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
+            let (indexed, hits) = run_content_search(root, query, extractor)?;
             eprintln!("content-indexed {indexed} files");
             for hit in hits {
                 print_hit(&hit);
@@ -3718,6 +3722,26 @@ fn print_persistent_index_recovery_report(report: PersistentIndexRecovery) {
     println!("{}", report.after.as_tsv());
 }
 
+fn run_content_search(
+    root: PathBuf,
+    query: String,
+    extractor: Extractor,
+) -> Result<(usize, Vec<SearchHit>)> {
+    let volume = detect_volume_id(&root).ok();
+    run_volume_task(
+        volume,
+        Priority::Visible,
+        "content extraction search",
+        move || {
+            let snapshot = Indexer::default().build(root)?;
+            let mut live = snapshot.into_live();
+            let indexed = live.index_content(&extractor)?;
+            let hits = live.search_with_snippets(&query, 50, &extractor, 96)?;
+            Ok((indexed, hits))
+        },
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ContentJobOutcome {
     report: Option<ContentIndexReport>,
@@ -4139,6 +4163,7 @@ fn print_usage() {
   gfm search <root> <query>
   gfm search-stream <root> <query>
   gfm search-content <root> <query>
+  gfm search-content-adaptive <root> <query> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm search-index <index.gfmidx> <query>
   gfm search-index-mmap <index.gfmidx> <query>
   gfm search-index-columns <index.gfmidx> <columns.gfmcols> <query>

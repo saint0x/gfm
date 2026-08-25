@@ -2135,6 +2135,38 @@ fn searches_text_content_from_binary() {
 }
 
 #[test]
+fn adaptive_search_content_applies_pressure_budget_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-pressure-root");
+    let mut body = "x".repeat(1024 * 1024 + 1);
+    body.push_str(" directpressuremarker");
+    fs::write(root.join("large.md"), body).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-adaptive",
+            root.to_str().unwrap(),
+            "directpressuremarker",
+            "elevated",
+            "serious",
+            "low",
+            "active",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("content-indexed 0 files"), "{stderr}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("large.md"), "{stdout}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_pdf_content_from_binary() {
     let root = unique_temp_dir("gfm-cli-pdf-content-root");
     fs::write(root.join("brief.pdf"), minimal_pdf("pdfneedle lives here")).unwrap();
