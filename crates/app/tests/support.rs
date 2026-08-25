@@ -100,6 +100,35 @@ fn reports_ui_menu_contract_from_binary() {
 }
 
 #[test]
+fn reports_ui_toolbar_contract_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["ui-toolbar-contract", "/tmp/gfm"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let mut lines = stdout.lines();
+
+    assert_eq!(
+        lines.next(),
+        Some("toolbar\theight=54\ttraffic-light-gutter=96")
+    );
+    assert!(stdout.contains(
+        "control\tlocation\tpath-title\tgfm\tcurrent-folder-title\tpath-title\t220px\tenabled=true\tselected=false"
+    ));
+    assert!(stdout.contains(
+        "control\tview\ticon-view\tgrid\tview-as-icons\tsegmented-button\t34px\tenabled=true\tselected=true"
+    ));
+    assert!(stdout.contains(
+        "control\tsearch\tsearch-field\tSearch\tmachine-search\tsearch-field\t232px\tenabled=true\tselected=false"
+    ));
+}
+
+#[test]
 fn reports_preview_security_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["preview-check", "/tmp/example.app", "quick-look"])

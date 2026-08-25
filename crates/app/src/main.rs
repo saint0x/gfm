@@ -27,7 +27,7 @@ use gfm_testkit::{
     RegressionGateOptions,
 };
 use gfm_types::{FileId, FileKind, Result, SearchHit, VolumeId};
-use gfm_ui::{AppLaunchSpec, MenuContract, WindowLifecycleContract};
+use gfm_ui::{AppLaunchSpec, MenuContract, ToolbarContract, WindowLifecycleContract};
 use std::env;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -60,6 +60,13 @@ fn run() -> Result<()> {
         }
         Some("ui-menu-contract") => {
             println!("{}", MenuContract::finder_default().as_tsv());
+        }
+        Some("ui-toolbar-contract") => {
+            let path = match args.next() {
+                Some(path) => PathBuf::from(path),
+                None => env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+            };
+            println!("{}", ToolbarContract::finder_default(path).as_tsv());
         }
         Some("list") => {
             let path = args
@@ -794,6 +801,7 @@ fn print_usage() {
   gfm app [path]
   gfm ui-contract [path]
   gfm ui-menu-contract
+  gfm ui-toolbar-contract [path]
   gfm list [path]
   gfm index <root> <output.gfmidx>
   gfm index-content <root> <records.gfmidx> <content.gfmcontent>

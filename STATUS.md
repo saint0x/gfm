@@ -6,7 +6,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Native App Shell
 
-1. Build Finder-matched toolbar composition, including navigation controls, title/path presentation, view controls, action controls, share, tags, more menu, and search field.
+1. Finish byte-for-byte Finder toolbar parity by calibrating the native GPUI toolbar's exact symbols, spacing, vibrancy, hover/focus states, search-field behavior, enabled-state transitions, and menu/action wiring against captured Finder baselines.
 2. Implement Finder-matched sidebar sections, row heights, icon sizing, indentation, separators, disclosure behavior, drag targets, tags, iCloud entries, mounted volumes, network locations, and eject controls.
 3. Implement Finder-matched titlebar, traffic-light spacing, focus appearance, vibrancy/material behavior, active/inactive states, and full-screen behavior beyond the initial transparent GPUI titlebar lifecycle.
 4. Implement multi-window support, tab support beyond the initial tab group contract, restoration, window placement persistence, and macOS scene activation behavior.

@@ -1,13 +1,15 @@
 use gfm_types::{GfmError, Result};
 use gpui::{
-    div, px, rgb, size, App, AppContext, Application, Bounds, Context, IntoElement, Render,
-    SharedString, Styled, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, size, App, AppContext, Application, Bounds, Context, IntoElement,
+    Render, SharedString, Styled, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use std::path::PathBuf;
 
 mod menu;
+mod toolbar;
 
 pub use menu::{MenuCommandSpec, MenuCommandState, MenuContract};
+pub use toolbar::{ToolbarContract, ToolbarControlKind, ToolbarControlSpec};
 
 const DEFAULT_WIDTH: f32 = 1040.0;
 const DEFAULT_HEIGHT: f32 = 720.0;
@@ -188,8 +190,13 @@ struct RootView {
 
 impl Render for RootView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let _ = &self.initial_path;
-        div().size_full().bg(rgb(0x1e1e1e))
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(0x1e1e1e))
+            .child(toolbar::render(&self.initial_path))
+            .child(div().flex_1().w_full().bg(rgb(0x1e1e1e)))
     }
 }
 
