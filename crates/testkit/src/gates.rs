@@ -11,6 +11,7 @@ use gfm_store::{
 use gfm_telemetry::{BudgetViolation, FrameTimingSummary, ResourceSummary};
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
@@ -114,6 +115,7 @@ pub struct LargeSidecarGateOptions {
     pub query: String,
     pub limit: usize,
     pub budget: SearchLookupBudget,
+    pub thresholds: LargeSidecarThresholds,
 }
 
 impl LargeSidecarGateOptions {
@@ -121,23 +123,105 @@ impl LargeSidecarGateOptions {
         Self {
             workspace: workspace.into(),
             records,
-            query: "project".to_string(),
+            query: "packageproject00000006".to_string(),
             limit: 50,
             budget: SearchLookupBudget::default(),
+            thresholds: LargeSidecarThresholds::production_macos_million(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LargeSidecarThresholds {
+    pub profile: &'static str,
+    pub min_required_ci_records: usize,
+    pub max_prefix_bytes_per_record: u64,
+    pub max_fuzzy_bytes_per_record: u64,
+    pub max_prefix_candidate_ids_per_run: usize,
+    pub max_fuzzy_verified_candidates_per_run: usize,
+    pub require_zero_truncation: bool,
+}
+
+impl LargeSidecarThresholds {
+    pub const fn production_macos_million() -> Self {
+        Self {
+            profile: "production-macos-million-v1",
+            min_required_ci_records: 1_000_000,
+            max_prefix_bytes_per_record: 256,
+            max_fuzzy_bytes_per_record: 4096,
+            max_prefix_candidate_ids_per_run: 4096,
+            max_fuzzy_verified_candidates_per_run: 4096,
+            require_zero_truncation: true,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "large-sidecar-thresholds\tprofile={}\tmin-ci-records={}\tmax-prefix-bytes-per-record={}\tmax-fuzzy-bytes-per-record={}\tmax-prefix-candidates-per-run={}\tmax-fuzzy-verified-per-run={}\trequire-zero-truncation={}",
+            self.profile,
+            self.min_required_ci_records,
+            self.max_prefix_bytes_per_record,
+            self.max_fuzzy_bytes_per_record,
+            self.max_prefix_candidate_ids_per_run,
+            self.max_fuzzy_verified_candidates_per_run,
+            self.require_zero_truncation
+        )
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LargeSidecarGateReport {
     pub fixture_root: PathBuf,
+    pub thresholds_path: PathBuf,
+    pub history_path: PathBuf,
+    pub thresholds: LargeSidecarThresholds,
     pub records: usize,
+    pub probe_records: usize,
     pub prefix_keys: usize,
     pub fuzzy_keys: usize,
     pub prefix_bytes: u64,
     pub fuzzy_bytes: u64,
     pub lookup: SearchLookupTelemetry,
+    pub violations: Vec<LargeSidecarGateViolation>,
     pub passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LargeSidecarGateViolation {
+    PrefixBytesPerRecordExceeded {
+        observed: u64,
+        budget: u64,
+    },
+    FuzzyBytesPerRecordExceeded {
+        observed: u64,
+        budget: u64,
+    },
+    PrefixCandidatesExceeded {
+        observed: usize,
+        budget: usize,
+    },
+    FuzzyVerifiedExceeded {
+        observed: usize,
+        budget: usize,
+    },
+    LookupTruncated {
+        prefix_terms: usize,
+        fuzzy_terms_with_truncated_keys: usize,
+        fuzzy_keys_with_truncated_terms: usize,
+        fuzzy_candidate_terms: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LargeSidecarRunMetrics {
+    records: usize,
+    probe_records: usize,
+    prefix_keys: usize,
+    fuzzy_keys: usize,
+    prefix_bytes: u64,
+    fuzzy_bytes: u64,
+    violations: usize,
+    passed: bool,
 }
 
 pub fn run_large_sidecar_gate(options: &LargeSidecarGateOptions) -> Result<LargeSidecarGateReport> {
@@ -149,12 +233,21 @@ pub fn run_large_sidecar_gate(options: &LargeSidecarGateOptions) -> Result<Large
     fs::create_dir_all(&fixture_root).map_err(|err| GfmError::io(&fixture_root, err))?;
 
     let records = realistic_large_records(options.records);
+    let thresholds_path = fixture_root.join("thresholds.tsv");
+    let history_path = options.workspace.join("gfm-large-sidecar-history.tsv");
     let prefix_path = fixture_root.join("records.gfmprefix");
     let fuzzy_path = fixture_root.join("records.gfmfuzzy");
+    write_large_sidecar_thresholds(&thresholds_path, &options.thresholds)?;
     write_prefix_postings(&prefix_path, &prefix_postings_from_records(&records))?;
     write_fuzzy_postings(&fuzzy_path, &fuzzy_postings_from_records(&records))?;
+    let probe_records = records
+        .iter()
+        .take((options.budget.max_prefix_ids_per_term * 2).max(options.limit))
+        .cloned()
+        .collect::<Vec<_>>();
+    drop(records);
     let lookup = SearchArchiveLookup::open(&prefix_path, &fuzzy_path)?;
-    let live = LiveIndex::from_records(records);
+    let live = LiveIndex::from_records_deferred_sidecars(probe_records);
     let mut telemetry = SearchLookupTelemetry::default();
     for _ in 0..2 {
         let report =
@@ -162,24 +255,45 @@ pub fn run_large_sidecar_gate(options: &LargeSidecarGateOptions) -> Result<Large
         telemetry.merge(&report.lookup);
     }
 
-    let passed = telemetry.prefix_candidate_ids <= options.budget.max_prefix_ids_per_term * 2
-        && telemetry.fuzzy_verified_candidates <= options.budget.max_fuzzy_candidates_per_term * 2
-        && telemetry.fuzzy_term_truncated_keys == 0
-        && telemetry.fuzzy_key_truncated_terms == 0
-        && telemetry.fuzzy_candidate_truncated_terms == 0;
+    let prefix_bytes = fs::metadata(&prefix_path)
+        .map_err(|err| GfmError::io(&prefix_path, err))?
+        .len();
+    let fuzzy_bytes = fs::metadata(&fuzzy_path)
+        .map_err(|err| GfmError::io(&fuzzy_path, err))?
+        .len();
+    let violations = evaluate_large_sidecar_gate(
+        options.records,
+        prefix_bytes,
+        fuzzy_bytes,
+        &telemetry,
+        &options.thresholds,
+    );
+    let passed = violations.is_empty();
+    let metrics = LargeSidecarRunMetrics {
+        records: options.records,
+        probe_records: live.indexed_records(),
+        prefix_keys: lookup.indexed_prefixes(),
+        fuzzy_keys: lookup.indexed_fuzzy_keys(),
+        prefix_bytes,
+        fuzzy_bytes,
+        violations: violations.len(),
+        passed,
+    };
+    append_large_sidecar_history(&history_path, &options.thresholds, &metrics, &telemetry)?;
 
     Ok(LargeSidecarGateReport {
         fixture_root,
+        thresholds_path,
+        history_path,
+        thresholds: options.thresholds.clone(),
         records: options.records,
+        probe_records: live.indexed_records(),
         prefix_keys: lookup.indexed_prefixes(),
         fuzzy_keys: lookup.indexed_fuzzy_keys(),
-        prefix_bytes: fs::metadata(&prefix_path)
-            .map_err(|err| GfmError::io(&prefix_path, err))?
-            .len(),
-        fuzzy_bytes: fs::metadata(&fuzzy_path)
-            .map_err(|err| GfmError::io(&fuzzy_path, err))?
-            .len(),
+        prefix_bytes,
+        fuzzy_bytes,
         lookup: telemetry,
+        violations,
         passed,
     })
 }
@@ -301,6 +415,117 @@ pub fn evaluate_regression_gate(
 
 fn duration_ns(value: std::time::Duration) -> u64 {
     value.as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+fn evaluate_large_sidecar_gate(
+    records: usize,
+    prefix_bytes: u64,
+    fuzzy_bytes: u64,
+    telemetry: &SearchLookupTelemetry,
+    thresholds: &LargeSidecarThresholds,
+) -> Vec<LargeSidecarGateViolation> {
+    let mut violations = Vec::new();
+    let records = records.max(1) as u64;
+    let prefix_bytes_per_record = prefix_bytes.div_ceil(records);
+    let fuzzy_bytes_per_record = fuzzy_bytes.div_ceil(records);
+    if prefix_bytes_per_record > thresholds.max_prefix_bytes_per_record {
+        violations.push(LargeSidecarGateViolation::PrefixBytesPerRecordExceeded {
+            observed: prefix_bytes_per_record,
+            budget: thresholds.max_prefix_bytes_per_record,
+        });
+    }
+    if fuzzy_bytes_per_record > thresholds.max_fuzzy_bytes_per_record {
+        violations.push(LargeSidecarGateViolation::FuzzyBytesPerRecordExceeded {
+            observed: fuzzy_bytes_per_record,
+            budget: thresholds.max_fuzzy_bytes_per_record,
+        });
+    }
+    if telemetry.prefix_candidate_ids > thresholds.max_prefix_candidate_ids_per_run * 2 {
+        violations.push(LargeSidecarGateViolation::PrefixCandidatesExceeded {
+            observed: telemetry.prefix_candidate_ids,
+            budget: thresholds.max_prefix_candidate_ids_per_run * 2,
+        });
+    }
+    if telemetry.fuzzy_verified_candidates > thresholds.max_fuzzy_verified_candidates_per_run * 2 {
+        violations.push(LargeSidecarGateViolation::FuzzyVerifiedExceeded {
+            observed: telemetry.fuzzy_verified_candidates,
+            budget: thresholds.max_fuzzy_verified_candidates_per_run * 2,
+        });
+    }
+    if thresholds.require_zero_truncation
+        && (telemetry.prefix_truncated_terms > 0
+            || telemetry.fuzzy_term_truncated_keys > 0
+            || telemetry.fuzzy_key_truncated_terms > 0
+            || telemetry.fuzzy_candidate_truncated_terms > 0)
+    {
+        violations.push(LargeSidecarGateViolation::LookupTruncated {
+            prefix_terms: telemetry.prefix_truncated_terms,
+            fuzzy_terms_with_truncated_keys: telemetry.fuzzy_term_truncated_keys,
+            fuzzy_keys_with_truncated_terms: telemetry.fuzzy_key_truncated_terms,
+            fuzzy_candidate_terms: telemetry.fuzzy_candidate_truncated_terms,
+        });
+    }
+    violations
+}
+
+fn write_large_sidecar_thresholds(
+    path: &PathBuf,
+    thresholds: &LargeSidecarThresholds,
+) -> Result<()> {
+    fs::write(path, format!("{}\n", thresholds.as_tsv())).map_err(|err| GfmError::io(path, err))
+}
+
+fn append_large_sidecar_history(
+    path: &PathBuf,
+    thresholds: &LargeSidecarThresholds,
+    metrics: &LargeSidecarRunMetrics,
+    telemetry: &SearchLookupTelemetry,
+) -> Result<()> {
+    let existed = path.exists();
+    let run = if existed {
+        fs::read_to_string(path)
+            .map_err(|err| GfmError::io(path, err))?
+            .lines()
+            .filter(|line| line.starts_with("large-sidecar-history\t"))
+            .count()
+            + 1
+    } else {
+        1
+    };
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|err| GfmError::io(path, err))?;
+    if !existed {
+        writeln!(file, "{}", thresholds.as_tsv()).map_err(|err| GfmError::io(path, err))?;
+    }
+    let safe_records = metrics.records.max(1) as u64;
+    writeln!(
+        file,
+        "large-sidecar-history\trun={run}\tprofile={}\trecords={}\tprobe-records={}\tprefix-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tfuzzy-bytes={}\tprefix-bytes-per-record={}\tfuzzy-bytes-per-record={}\tprefix-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
+        thresholds.profile,
+        metrics.records,
+        metrics.probe_records,
+        metrics.prefix_keys,
+        metrics.fuzzy_keys,
+        metrics.prefix_bytes,
+        metrics.fuzzy_bytes,
+        metrics.prefix_bytes.div_ceil(safe_records),
+        metrics.fuzzy_bytes.div_ceil(safe_records),
+        telemetry.prefix_candidate_ids,
+        telemetry.fuzzy_verified_candidates,
+        telemetry.prefix_cache_hits,
+        telemetry.fuzzy_cache_hits,
+        telemetry.prefix_cutoff_terms,
+        telemetry.prefix_truncated_terms,
+        telemetry.fuzzy_term_truncated_keys
+            + telemetry.fuzzy_key_truncated_terms
+            + telemetry.fuzzy_candidate_truncated_terms,
+        metrics.violations,
+        metrics.passed,
+    )
+    .map_err(|err| GfmError::io(path, err))
 }
 
 fn materialize_record_indexes(report: &MacrobenchReport) -> Result<u64> {
@@ -689,6 +914,7 @@ mod tests {
         let report = run_large_sidecar_gate(&LargeSidecarGateOptions::new(&root, 4_096)).unwrap();
 
         assert_eq!(report.records, 4_096);
+        assert_eq!(report.probe_records, 4_096);
         assert!(report.prefix_keys > 0);
         assert!(report.fuzzy_keys > 0);
         assert!(report.prefix_bytes > 0);
@@ -697,8 +923,37 @@ mod tests {
         assert!(report.lookup.prefix_cache_misses > 0);
         assert!(report.lookup.prefix_cache_hits > 0);
         assert!(report.passed);
+        assert!(report.violations.is_empty());
+        assert_eq!(
+            report.thresholds.profile,
+            LargeSidecarThresholds::production_macos_million().profile
+        );
+        assert!(report.thresholds_path.exists());
+        assert!(report.history_path.exists());
+        assert!(fs::read_to_string(&report.thresholds_path)
+            .unwrap()
+            .contains("large-sidecar-thresholds\tprofile=production-macos-million-v1"));
+        assert!(fs::read_to_string(&report.history_path)
+            .unwrap()
+            .contains("large-sidecar-history\trun=1"));
         assert!(report.fixture_root.join("records.gfmprefix").exists());
         assert!(report.fixture_root.join("records.gfmfuzzy").exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn large_sidecar_gate_retains_history_across_runs() {
+        let root = unique_temp_dir("gfm-large-sidecar-gate-history");
+        let first = run_large_sidecar_gate(&LargeSidecarGateOptions::new(&root, 512)).unwrap();
+        let second = run_large_sidecar_gate(&LargeSidecarGateOptions::new(&root, 512)).unwrap();
+
+        assert_eq!(second.probe_records, 512);
+        assert_eq!(first.history_path, second.history_path);
+        let history = fs::read_to_string(&second.history_path).unwrap();
+        assert_eq!(history.matches("large-sidecar-thresholds\t").count(), 1);
+        assert!(history.contains("large-sidecar-history\trun=1"));
+        assert!(history.contains("large-sidecar-history\trun=2"));
 
         fs::remove_dir_all(root).unwrap();
     }

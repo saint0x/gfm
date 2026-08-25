@@ -35,15 +35,18 @@ pub struct MmapFuzzyArchive {
 }
 
 pub fn fuzzy_postings_from_records(records: &[FileRecord]) -> Vec<FuzzyPosting> {
-    let mut postings: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut terms = BTreeSet::new();
     for record in records {
         for token in tokenize(&normalize(&record.name)) {
-            if !is_fuzzy_term(&token) {
-                continue;
+            if is_fuzzy_term(&token) {
+                terms.insert(token);
             }
-            for key in deletion_keys(&token, FUZZY_MAX_DELETIONS) {
-                postings.entry(key).or_default().insert(token.clone());
-            }
+        }
+    }
+    let mut postings: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for token in terms {
+        for key in deletion_keys(&token, FUZZY_MAX_DELETIONS) {
+            postings.entry(key).or_default().insert(token.clone());
         }
     }
     postings
@@ -358,12 +361,29 @@ fn tokenize(value: &str) -> Vec<String> {
 }
 
 fn is_fuzzy_term(term: &str) -> bool {
-    (FUZZY_MIN_TERM_LEN..=FUZZY_MAX_TERM_LEN).contains(&term.chars().count())
+    let mut count = 0;
+    let mut has_alpha = false;
+    let mut consecutive_digits = 0;
+    for ch in term.chars() {
+        count += 1;
+        if ch.is_alphabetic() {
+            has_alpha = true;
+            consecutive_digits = 0;
+        } else if ch.is_ascii_digit() {
+            consecutive_digits += 1;
+            if consecutive_digits > 4 {
+                return false;
+            }
+        } else {
+            consecutive_digits = 0;
+        }
+    }
+    (FUZZY_MIN_TERM_LEN..=FUZZY_MAX_TERM_LEN).contains(&count) && has_alpha
 }
 
 fn deletion_keys(term: &str, max_deletions: usize) -> Vec<String> {
     let chars: Vec<char> = term.chars().collect();
-    if chars.is_empty() {
+    if !is_fuzzy_term(term) {
         return Vec::new();
     }
     let mut keys = BTreeSet::new();
@@ -483,6 +503,26 @@ mod tests {
 
         assert_eq!(tagge.terms, vec!["tagged"]);
         assert_eq!(md.terms, vec!["md"]);
+    }
+
+    #[test]
+    fn fuzzy_postings_skip_numeric_only_and_digit_run_terms() {
+        let postings = fuzzy_postings_from_records(&[record(
+            1,
+            "/tmp/project-PackageProject00012345.md",
+            "project-PackageProject00012345.md",
+        )]);
+
+        assert!(postings
+            .iter()
+            .any(|posting| posting.terms == vec!["project".to_string()]));
+        assert!(!postings
+            .iter()
+            .any(|posting| posting.terms.iter().any(|term| term == "00012345")));
+        assert!(!postings.iter().any(|posting| posting
+            .terms
+            .iter()
+            .any(|term| term == "packageproject00012345")));
     }
 
     #[test]

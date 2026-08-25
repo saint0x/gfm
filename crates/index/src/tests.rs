@@ -87,6 +87,34 @@ fn live_index_builds_from_records_with_columns_in_one_pass() {
 }
 
 #[test]
+fn live_index_builds_records_with_deferred_sidecar_terms() {
+    let record = FileRecord {
+        id: FileId::new(VolumeId(1), 1),
+        parent: None,
+        path: PathBuf::from("/tmp/DeferredSidecar.md"),
+        name: "DeferredSidecar.md".to_string(),
+        kind: FileKind::File,
+        len: 0,
+        created: Some(UNIX_EPOCH),
+        modified: Some(SystemTime::now()),
+        changed: Some(SystemTime::now()),
+        mode: 0o644,
+        owner: 501,
+        group: 20,
+        hidden: false,
+        tags: vec!["Important".to_string()],
+        finder_comment: Some("Launch Notes".to_string()),
+        xattrs_digest: 0,
+    };
+
+    let live = LiveIndex::from_records_deferred_sidecars(vec![record]);
+
+    assert_eq!(live.indexed_records(), 1);
+    assert_eq!(live.search("deferred", 5).len(), 1);
+    assert!(live.search("defered", 5).is_empty());
+}
+
+#[test]
 fn live_index_imports_fuzzy_sidecar_after_column_build() {
     let record = FileRecord {
         id: FileId::new(VolumeId(1), 1),

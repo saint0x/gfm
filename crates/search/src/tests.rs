@@ -1052,6 +1052,34 @@ fn sidecar_fuzzy_lookup_budget_caps_keys_terms_and_verified_candidates() {
 }
 
 #[test]
+fn fuzzy_lookup_skips_numeric_only_and_digit_run_terms() {
+    let mut index = SearchIndex::new();
+    index.insert(record(
+        1,
+        "/tmp/project-PackageProject00012345.md",
+        "project-PackageProject00012345.md",
+    ));
+    let lookup = StaticLookup {
+        prefix_ids: Vec::new(),
+        fuzzy_terms: vec!["packageproject00012345".to_string()],
+    };
+
+    let report = index
+        .query_structured_with_lookup_budget_cancellable(
+            &SearchQuery::parse("PackageProject00012346"),
+            10,
+            &lookup,
+            SearchLookupBudget::default(),
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(report.lookup.fuzzy_terms, 0);
+    assert_eq!(report.lookup.fuzzy_keys, 0);
+    assert_eq!(report.lookup.fuzzy_lookup_terms, 0);
+}
+
+#[test]
 fn removes_reindexed_fuzzy_postings() {
     let mut index = SearchIndex::new();
     let mut item = record(1, "/tmp/needl", "needl");

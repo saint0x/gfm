@@ -1297,7 +1297,24 @@ fn path_key(path: &std::path::Path) -> String {
 }
 
 fn is_fuzzy_term(term: &str) -> bool {
-    (FUZZY_MIN_TERM_LEN..=FUZZY_MAX_TERM_LEN).contains(&term.chars().count())
+    let mut count = 0;
+    let mut has_alpha = false;
+    let mut consecutive_digits = 0;
+    for ch in term.chars() {
+        count += 1;
+        if ch.is_alphabetic() {
+            has_alpha = true;
+            consecutive_digits = 0;
+        } else if ch.is_ascii_digit() {
+            consecutive_digits += 1;
+            if consecutive_digits > 4 {
+                return false;
+            }
+        } else {
+            consecutive_digits = 0;
+        }
+    }
+    (FUZZY_MIN_TERM_LEN..=FUZZY_MAX_TERM_LEN).contains(&count) && has_alpha
 }
 
 fn is_prefix_term(term: &str) -> bool {

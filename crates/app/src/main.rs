@@ -2632,9 +2632,14 @@ fn run() -> Result<()> {
             )?;
             let report = run_large_sidecar_gate(&LargeSidecarGateOptions::new(workspace, records))?;
             println!(
-                "large-sidecar-gate\tfixture={}\trecords={}\tprefix-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tfuzzy-bytes={}\tprefix-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tfuzzy-truncated={}\tpassed={}",
+                "large-sidecar-gate\tfixture={}\tthresholds={}\thistory={}\tprofile={}\tmin-ci-records={}\trecords={}\tprobe-records={}\tprefix-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tfuzzy-bytes={}\tprefix-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
                 report.fixture_root.display(),
+                report.thresholds_path.display(),
+                report.history_path.display(),
+                report.thresholds.profile,
+                report.thresholds.min_required_ci_records,
                 report.records,
+                report.probe_records,
                 report.prefix_keys,
                 report.fuzzy_keys,
                 report.prefix_bytes,
@@ -2648,8 +2653,12 @@ fn run() -> Result<()> {
                 report.lookup.fuzzy_term_truncated_keys
                     + report.lookup.fuzzy_key_truncated_terms
                     + report.lookup.fuzzy_candidate_truncated_terms,
+                report.violations.len(),
                 report.passed
             );
+            for violation in &report.violations {
+                eprintln!("large-sidecar-violation\t{violation:?}");
+            }
             if !report.passed {
                 return Err(GfmError::Format(
                     "large sidecar lookup gate failed".to_string(),

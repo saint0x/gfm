@@ -282,14 +282,29 @@ fn runs_large_sidecar_gate_from_binary() {
 
     assert!(stdout.contains("large-sidecar-gate\t"), "{stdout}");
     assert!(stdout.contains("\trecords=4096\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tprofile=production-macos-million-v1\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tmin-ci-records=1000000\t"), "{stdout}");
     assert!(stdout.contains("\tprefix-keys="), "{stdout}");
+    assert!(stdout.contains("\tprobe-records=4096\t"), "{stdout}");
     assert!(stdout.contains("\tfuzzy-keys="), "{stdout}");
     assert!(stdout.contains("\tprefix-cache-hits="), "{stdout}");
+    assert!(stdout.contains("\tviolations=0\t"), "{stdout}");
     assert!(stdout.contains("\tpassed=true"), "{stdout}");
-    assert!(root
-        .join("gfm-large-sidecar-gate")
-        .join("records.gfmprefix")
-        .exists());
+    let fixture = root.join("gfm-large-sidecar-gate");
+    assert!(fixture.join("records.gfmprefix").exists());
+    assert!(fixture.join("thresholds.tsv").exists());
+    assert!(root.join("gfm-large-sidecar-history.tsv").exists());
+    assert!(fs::read_to_string(fixture.join("thresholds.tsv"))
+        .unwrap()
+        .contains("large-sidecar-thresholds\tprofile=production-macos-million-v1"));
+    assert!(
+        fs::read_to_string(root.join("gfm-large-sidecar-history.tsv"))
+            .unwrap()
+            .contains("large-sidecar-history\trun=1")
+    );
 
     fs::remove_dir_all(root).unwrap();
 }

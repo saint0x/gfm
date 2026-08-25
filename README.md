@@ -283,7 +283,7 @@ cargo run -p gfm -- derived-sidecar-rebuild records.gfmidx prefixes prefixes.gfm
 ```
 
 `regression-gate` materializes benchmark indexes and real prefix/fuzzy sidecar archives, then fails on latency, index-density, prefix lookup, fuzzy lookup, cache-path, and sidecar-truncation drift.
-`large-sidecar-gate` synthesizes realistic record distributions, writes real prefix/fuzzy sidecars, and verifies bounded repeated lookup behavior at million-entry scale.
+`large-sidecar-gate` synthesizes realistic record distributions, writes real prefix/fuzzy sidecars, verifies bounded repeated lookup behavior at million-entry scale, skips digit-run-heavy tokens in fuzzy sidecars, probes full sidecars with a bounded live record set, and retains `thresholds.tsv` plus `gfm-large-sidecar-history.tsv` artifacts using the `production-macos-million-v1` calibration profile.
 `diagnostics-index-recovery-plan` and `diagnostics-index-recover` classify persistent record/state health, rebuild missing or stale state, and quarantine corrupt record archives before rebuilding.
 `content-manifest-recovery-plan` and `content-manifest-recover` classify content manifest health, prune invalid archives, and quarantine corrupt manifests before rebuilding from mmap-validated archives.
 `content-manifest-promotion-recovery-plan` and `content-manifest-promotion-recover` complete or clean up interrupted content manifest promotions from the durable promotion journal so compaction cannot strand a valid new content archive behind a stale manifest.

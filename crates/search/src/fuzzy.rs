@@ -26,13 +26,29 @@ pub(crate) fn bounded_levenshtein(left: &str, right: &str, max: usize) -> Option
 
 pub(crate) fn deletion_keys(term: &str, max_deletions: usize) -> Vec<String> {
     let chars: Vec<char> = term.chars().collect();
-    if chars.is_empty() {
+    if chars.is_empty() || !chars.iter().any(|ch| ch.is_alphabetic()) || has_long_digit_run(&chars)
+    {
         return Vec::new();
     }
 
     let mut keys = std::collections::BTreeSet::new();
     collect_deletions(&chars, max_deletions, &mut keys);
     keys.into_iter().collect()
+}
+
+fn has_long_digit_run(chars: &[char]) -> bool {
+    let mut consecutive_digits = 0;
+    for ch in chars {
+        if ch.is_ascii_digit() {
+            consecutive_digits += 1;
+            if consecutive_digits > 4 {
+                return true;
+            }
+        } else {
+            consecutive_digits = 0;
+        }
+    }
+    false
 }
 
 fn collect_deletions(

@@ -641,6 +641,10 @@ impl LiveIndex {
         Self::default()
     }
 
+    pub fn indexed_records(&self) -> usize {
+        self.index.len()
+    }
+
     pub fn from_records(records: Vec<FileRecord>) -> Self {
         let mut live = Self::new();
         for record in records {
@@ -696,6 +700,23 @@ impl LiveIndex {
         }
         let fuzzy_keys = live.index.import_fuzzy_postings(&fuzzy);
         (live, applied, fuzzy_keys)
+    }
+
+    pub fn from_records_deferred_sidecars(records: Vec<FileRecord>) -> Self {
+        let mut live = Self::new();
+        for record in records {
+            let columns = SearchRecordColumns {
+                id: record.id,
+                name: record.name.clone(),
+                path: record.path.to_string_lossy().into_owned(),
+                extension: record.extension().map(ToOwned::to_owned),
+                tags: record.tags.clone(),
+                comment: record.finder_comment.clone(),
+            };
+            live.index
+                .insert_with_columns_deferred_sidecars(record, columns);
+        }
+        live
     }
 
     pub fn from_records_with_sidecars(
