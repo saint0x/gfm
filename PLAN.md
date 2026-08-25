@@ -465,6 +465,9 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - budgeted content-term loads decode only the bounded compressed ID prefix and matching bounded positional prefix needed by the active lookup budget, then union per-archive heads deterministically before import;
   - duplicate file ids and positional offsets are merged deterministically through ordered sets;
   - this lets background compaction publish new tier files while retained archives remain searchable.
+- Query-time record hydration:
+  - mmap record archives keep a lightweight file-ID directory built from numeric record headers so search can hydrate exact candidate records by stable ID without parsing every full record in the archive;
+  - the file-ID directory is independent of archive row order, preserving append/rebuild flexibility while making candidate resolution logarithmic before the single matching row is parsed.
 - Query-time prefix, substring, and fuzzy archive lookup:
   - prefix, name-substring trigram, and delete-key fuzzy sidecars expose a store-agnostic lookup contract to the search engine;
   - live hot records keep in-memory prefix/substring/fuzzy maps while immutable sidecars answer query candidates directly from mmap archives;

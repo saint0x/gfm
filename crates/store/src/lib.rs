@@ -176,6 +176,13 @@ pub struct MmapRecordArchive {
     mmap: Mmap,
     version: StoreVersion,
     records: Vec<Range<usize>>,
+    directory: Vec<RecordDirectoryEntry>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RecordDirectoryEntry {
+    id: FileId,
+    index: usize,
 }
 
 impl MmapRecordArchive {
@@ -197,20 +204,28 @@ impl MmapRecordArchive {
         })?;
         let version = record_version(header, path)?;
         let mut records = Vec::new();
+        let mut directory = Vec::new();
         while offset < indexed_len {
             let Some((line, next)) = next_line(&mmap, offset) else {
                 break;
             };
             if !line.is_empty() {
+                let index = records.len();
+                let id = parse_record_id(line).map_err(|err| {
+                    GfmError::Format(format!("{} line {}: {}", path.display(), index + 2, err))
+                })?;
                 records.push(offset..offset + line.len());
+                directory.push(RecordDirectoryEntry { id, index });
             }
             offset = next;
         }
+        directory.sort_by_key(|entry| (entry.id.volume, entry.id.node));
         Ok(Self {
             path: path.to_path_buf(),
             mmap,
             version,
             records,
+            directory,
         })
     }
 
@@ -252,6 +267,21 @@ impl MmapRecordArchive {
                 err
             ))
         })
+    }
+
+    pub fn find(&self, id: FileId) -> Result<Option<FileRecord>> {
+        let Some(entry) = self
+            .directory
+            .binary_search_by_key(&(id.volume, id.node), |entry| {
+                (entry.id.volume, entry.id.node)
+            })
+            .ok()
+            .map(|index| self.directory[index])
+        else {
+            return Ok(None);
+        };
+
+        self.record(entry.index).map(Some)
     }
 
     pub fn records(&self) -> Result<Vec<FileRecord>> {
@@ -393,6 +423,43 @@ fn parse_record(line: &str, version: StoreVersion) -> std::result::Result<FileRe
         tags,
         finder_comment,
     })
+}
+
+fn parse_record_id(line: &[u8]) -> std::result::Result<FileId, String> {
+    let mut fields = line.splitn(3, |byte| *byte == b'\t');
+    let volume = fields
+        .next()
+        .ok_or_else(|| "missing volume field".to_string())
+        .and_then(|field| parse_u64_bytes(field, "volume"))?;
+    let node = fields
+        .next()
+        .ok_or_else(|| "missing node field".to_string())
+        .and_then(|field| parse_u64_bytes(field, "node"))?;
+
+    Ok(FileId::new(VolumeId(volume), node))
+}
+
+fn parse_u64_bytes(value: &[u8], field: &str) -> std::result::Result<u64, String> {
+    if value.is_empty() {
+        return Err(format!("invalid {field} ``: empty integer"));
+    }
+
+    let mut parsed = 0u64;
+    for byte in value {
+        if !byte.is_ascii_digit() {
+            let rendered = String::from_utf8_lossy(value);
+            return Err(format!("invalid {field} `{rendered}`: expected digits"));
+        }
+        parsed = parsed
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(u64::from(byte - b'0')))
+            .ok_or_else(|| {
+                let rendered = String::from_utf8_lossy(value);
+                format!("invalid {field} `{rendered}`: integer overflow")
+            })?;
+    }
+
+    Ok(parsed)
 }
 
 fn parse_u64(value: &str, field: &str) -> std::result::Result<u64, String> {
@@ -610,7 +677,87 @@ mod tests {
         assert!(archive.mapped_len() > 0);
         assert!(archive.is_checksummed());
         assert_eq!(archive.record(1).unwrap(), records[1]);
+        assert_eq!(
+            archive.find(FileId::new(VolumeId(4), 13)).unwrap(),
+            Some(records[1].clone())
+        );
+        assert_eq!(archive.find(FileId::new(VolumeId(4), 999)).unwrap(), None);
         assert_eq!(archive.records().unwrap(), records);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_record_archive_finds_records_when_rows_are_not_id_sorted() {
+        let path = temp_path("gfm-store-mmap-find", "idx");
+        let records = vec![
+            FileRecord {
+                id: FileId::new(VolumeId(4), 40),
+                parent: Some(FileId::new(VolumeId(4), 1)),
+                path: PathBuf::from("/tmp/a/zeta.txt"),
+                name: "zeta.txt".to_string(),
+                kind: FileKind::File,
+                len: 40,
+                mode: 0o100644,
+                owner: 501,
+                group: 20,
+                xattrs_digest: 0,
+                created: None,
+                modified: None,
+                changed: None,
+                hidden: false,
+                tags: Vec::new(),
+                finder_comment: None,
+            },
+            FileRecord {
+                id: FileId::new(VolumeId(4), 10),
+                parent: Some(FileId::new(VolumeId(4), 1)),
+                path: PathBuf::from("/tmp/a/alpha.txt"),
+                name: "alpha.txt".to_string(),
+                kind: FileKind::File,
+                len: 10,
+                mode: 0o100644,
+                owner: 501,
+                group: 20,
+                xattrs_digest: 0,
+                created: None,
+                modified: None,
+                changed: None,
+                hidden: false,
+                tags: Vec::new(),
+                finder_comment: None,
+            },
+            FileRecord {
+                id: FileId::new(VolumeId(5), 1),
+                parent: None,
+                path: PathBuf::from("/Volumes/other/root.txt"),
+                name: "root.txt".to_string(),
+                kind: FileKind::File,
+                len: 1,
+                mode: 0o100644,
+                owner: 501,
+                group: 20,
+                xattrs_digest: 0,
+                created: None,
+                modified: None,
+                changed: None,
+                hidden: false,
+                tags: Vec::new(),
+                finder_comment: None,
+            },
+        ];
+
+        write_records(&path, &records).unwrap();
+        let archive = MmapRecordArchive::open(&path).unwrap();
+
+        assert_eq!(
+            archive.find(FileId::new(VolumeId(4), 10)).unwrap(),
+            Some(records[1].clone())
+        );
+        assert_eq!(
+            archive.find(FileId::new(VolumeId(5), 1)).unwrap(),
+            Some(records[2].clone())
+        );
+        assert_eq!(archive.find(FileId::new(VolumeId(6), 1)).unwrap(), None);
         std::fs::remove_file(path).unwrap();
     }
 

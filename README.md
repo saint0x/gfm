@@ -92,6 +92,7 @@ The index is compact and incremental:
 - tombstones for deletion and replacement
 - background compaction
 - mmap immutable readers
+- mmap record archives with direct file-ID lookup so query-time candidate hydration does not require full-record scans
 - mmap-backed index footprint telemetry with adaptive run/throttle/defer compaction scheduling
 - hot mutable buffers
 - progressive hot/deep result streaming with stable dedupe
