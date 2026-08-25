@@ -25,7 +25,9 @@ pub use session::SearchSupersession;
 pub use shard::ShardedSearchIndex;
 
 use gfm_jobs::Cancellation;
-use gfm_types::{ContentPositions, ContentPosting, FileId, FileRecord, MatchReason, SearchHit};
+use gfm_types::{
+    ContentPositions, ContentPosting, FileId, FileKind, FileRecord, MatchReason, SearchHit,
+};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -252,6 +254,7 @@ pub struct SearchIndex {
     fuzzy_terms: BTreeMap<String, BTreeSet<String>>,
     extension: BTreeMap<String, BTreeSet<FileId>>,
     tags: BTreeMap<String, BTreeSet<FileId>>,
+    kind: HashMap<FileKind, BTreeSet<FileId>>,
     content_terms: BTreeMap<String, BTreeMap<FileId, Vec<u32>>>,
     pinned: BTreeSet<FileId>,
 }
@@ -741,6 +744,10 @@ impl SearchIndex {
         let mut telemetry = SearchLookupTelemetry::default();
         let text = query.terms.join(" ");
         let intent = QueryIntent::from_query(query);
+        let expression_candidates = query
+            .expression
+            .as_ref()
+            .and_then(|expression| self.expression_candidate_ids(expression, pass));
 
         if !text.is_empty() {
             if let Some(ids) = self.name_exact.get(&text) {
@@ -854,6 +861,10 @@ impl SearchIndex {
             }
         }
 
+        if let Some(ids) = &expression_candidates {
+            seed_scores(&mut scores, ids);
+        }
+
         if !intent.is_empty() {
             for record in self.records.values() {
                 cancellation.check()?;
@@ -867,15 +878,13 @@ impl SearchIndex {
             }
         }
 
-        if query
-            .expression
-            .as_ref()
-            .is_some_and(expression_needs_universe)
-            || (scores.is_empty()
-                && !query.filters.is_empty()
-                && query.terms.is_empty()
-                && query.phrases.is_empty()
-                && query.proximities.is_empty())
+        if query.expression.as_ref().is_some_and(|expression| {
+            expression_needs_universe(expression) && expression_candidates.is_none()
+        }) || (scores.is_empty()
+            && !query.filters.is_empty()
+            && query.terms.is_empty()
+            && query.phrases.is_empty()
+            && query.proximities.is_empty())
         {
             for record in self.records.values() {
                 cancellation.check()?;
@@ -1400,6 +1409,7 @@ impl SearchIndex {
                 .or_default()
                 .insert(record.id);
         }
+        self.kind.entry(record.kind).or_default().insert(record.id);
         if build_metadata {
             for tag in &columns.tags {
                 self.tags.entry(tag.clone()).or_default().insert(record.id);
@@ -1437,6 +1447,12 @@ impl SearchIndex {
         }
         if let Some(ext) = &columns.extension {
             remove_id(&mut self.extension, ext, record.id);
+        }
+        if let Some(ids) = self.kind.get_mut(&record.kind) {
+            ids.remove(&record.id);
+            if ids.is_empty() {
+                self.kind.remove(&record.kind);
+            }
         }
         for tag in &columns.tags {
             remove_id(&mut self.tags, tag, record.id);
@@ -1493,6 +1509,127 @@ impl SearchIndex {
         self.columns
             .get(&record.id)
             .is_some_and(|columns| filter_matches_columns(filter, record, columns))
+    }
+
+    fn expression_candidate_ids(
+        &self,
+        expression: &QueryExpr,
+        pass: SearchPass,
+    ) -> Option<BTreeSet<FileId>> {
+        match expression {
+            QueryExpr::Term(term) => Some(self.term_candidate_ids(term, pass)),
+            QueryExpr::Phrase(phrase) => Some(
+                self.record_phrase_ids(phrase)
+                    .into_iter()
+                    .chain(
+                        pass.includes_deep()
+                            .then(|| self.content_phrase_ids(phrase))
+                            .into_iter()
+                            .flatten(),
+                    )
+                    .collect(),
+            ),
+            QueryExpr::Proximity(proximity) => pass
+                .includes_deep()
+                .then(|| self.content_proximity_ids(proximity).into_iter().collect()),
+            QueryExpr::Filter(filter) => self.filter_candidate_ids(filter),
+            QueryExpr::Not(_) => None,
+            QueryExpr::And(expressions) => expressions
+                .iter()
+                .filter_map(|expression| self.expression_candidate_ids(expression, pass))
+                .min_by_key(BTreeSet::len),
+            QueryExpr::Or(expressions) => {
+                if expressions.is_empty() {
+                    return Some(BTreeSet::new());
+                }
+                let mut ids = BTreeSet::new();
+                for expression in expressions {
+                    ids.extend(self.expression_candidate_ids(expression, pass)?);
+                }
+                Some(ids)
+            }
+        }
+    }
+
+    fn term_candidate_ids(&self, term: &str, pass: SearchPass) -> BTreeSet<FileId> {
+        let mut ids = BTreeSet::new();
+        for postings in [
+            self.name_terms.get(term),
+            self.path_terms.get(term),
+            self.metadata_terms.get(term),
+            self.extension.get(term),
+            self.tags.get(term),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            ids.extend(postings);
+        }
+        if pass.includes_deep() {
+            if let Some(postings) = self.content_terms.get(term) {
+                ids.extend(postings.keys());
+            }
+        }
+        ids
+    }
+
+    fn filter_candidate_ids(&self, filter: &QueryFilter) -> Option<BTreeSet<FileId>> {
+        match filter {
+            QueryFilter::Name(value, false) => {
+                self.text_filter_candidate_ids(value, &self.name_terms, |columns, value| {
+                    columns.name.contains(value)
+                })
+            }
+            QueryFilter::Path(value, false) => {
+                self.text_filter_candidate_ids(value, &self.path_terms, |columns, value| {
+                    columns.path.contains(value)
+                })
+            }
+            QueryFilter::Extension(value, false) => {
+                Some(self.extension.get(value).cloned().unwrap_or_default())
+            }
+            QueryFilter::Tag(value, false) => {
+                Some(self.tags.get(value).cloned().unwrap_or_default())
+            }
+            QueryFilter::Kind(kind, false) => Some(
+                self.kind
+                    .get(&query_kind_file_kind(*kind))
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+            QueryFilter::Scope(_, false)
+            | QueryFilter::Size(_, false)
+            | QueryFilter::Date(_, _, false) => None,
+            QueryFilter::Name(_, true)
+            | QueryFilter::Path(_, true)
+            | QueryFilter::Extension(_, true)
+            | QueryFilter::Tag(_, true)
+            | QueryFilter::Scope(_, true)
+            | QueryFilter::Kind(_, true)
+            | QueryFilter::Size(_, true)
+            | QueryFilter::Date(_, _, true) => None,
+        }
+    }
+
+    fn text_filter_candidate_ids(
+        &self,
+        value: &str,
+        postings: &BTreeMap<String, BTreeSet<FileId>>,
+        matches: impl Fn(&RecordColumns, &str) -> bool,
+    ) -> Option<BTreeSet<FileId>> {
+        let terms = tokenize(value);
+        let candidates = rarest_term_postings(&terms, postings)?;
+        Some(
+            candidates
+                .iter()
+                .copied()
+                .filter(|id| {
+                    self.columns
+                        .get(id)
+                        .is_some_and(|columns| matches(columns, value))
+                })
+                .collect(),
+        )
     }
 
     fn record_fuzzy_matches_term(&self, record: &FileRecord, term: &str) -> bool {
@@ -1635,6 +1772,23 @@ fn add_scores(
             .entry(*id)
             .and_modify(|score| score.add(points, reason.clone()))
             .or_insert_with(|| RankAccumulator::new(points, reason.clone()));
+    }
+}
+
+fn seed_scores(scores: &mut HashMap<FileId, RankAccumulator>, ids: &BTreeSet<FileId>) {
+    for id in ids {
+        scores
+            .entry(*id)
+            .or_insert_with(|| RankAccumulator::new(0, MatchReason::PathComponent));
+    }
+}
+
+fn query_kind_file_kind(kind: QueryKind) -> FileKind {
+    match kind {
+        QueryKind::Directory => FileKind::Directory,
+        QueryKind::File => FileKind::File,
+        QueryKind::Symlink => FileKind::Symlink,
+        QueryKind::Other => FileKind::Other,
     }
 }
 

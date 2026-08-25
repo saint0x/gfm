@@ -940,6 +940,46 @@ fn unanchored_boolean_branches_still_request_universe_scan() {
 }
 
 #[test]
+fn indexed_filter_expression_candidates_bound_boolean_not_queries() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/report.md", "report.md"));
+    index.insert(record(2, "/tmp/draft.md", "draft.md"));
+    index.insert(record(3, "/tmp/report.pdf", "report.pdf"));
+    let query = SearchQuery::parse("ext:md AND NOT draft");
+    let expression = query.expression.as_ref().unwrap();
+
+    let candidates = index
+        .expression_candidate_ids(expression, SearchPass::Full)
+        .unwrap();
+    let hits = index.query_structured(&query, 10);
+    let names: Vec<_> = hits.iter().map(|hit| hit.record.name.as_str()).collect();
+
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(names, vec!["report.md"]);
+}
+
+#[test]
+fn indexed_filter_expression_candidates_bound_boolean_or_queries() {
+    let mut index = SearchIndex::new();
+    let mut tagged = record(1, "/tmp/tagged.txt", "tagged.txt");
+    tagged.tags = vec!["Important".to_string()];
+    index.insert(tagged);
+    index.insert(record(2, "/tmp/report.md", "report.md"));
+    index.insert(record(3, "/tmp/client.pdf", "client.pdf"));
+    let query = SearchQuery::parse("tag:important OR ext:md OR kind:symlink OR client");
+    let expression = query.expression.as_ref().unwrap();
+
+    let candidates = index
+        .expression_candidate_ids(expression, SearchPass::Full)
+        .unwrap();
+    let hits = index.query_structured(&query, 10);
+    let names: Vec<_> = hits.iter().map(|hit| hit.record.name.as_str()).collect();
+
+    assert_eq!(candidates.len(), 3);
+    assert_eq!(names, vec!["client.pdf", "report.md", "tagged.txt"]);
+}
+
+#[test]
 fn supports_boolean_or_between_filters() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/report.md", "report.md"));
