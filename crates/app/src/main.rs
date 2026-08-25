@@ -20,9 +20,10 @@ use gfm_index::{
     ContentMaintenanceOptions, ContentMaintenanceReport, ContentMergePolicy, ContentMergeTier,
     EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
     IndexFootprintSpec, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState,
-    Indexer, IoPressure, LiveIndex, PersistentIndexRecovery, SearchArchiveLookup,
-    SearchLookupBudget, SearchMetadataField, SearchMetadataPosting, SearchRecordColumns,
-    SearchStreamStage, SearchSubstringPosting, ThermalState, UserActivity, VolumeIndexPolicy,
+    Indexer, IoPressure, LiveIndex, PersistentIndexRecovery, QuarantineContentIndexRequest,
+    SearchArchiveLookup, SearchLookupBudget, SearchMetadataField, SearchMetadataPosting,
+    SearchRecordColumns, SearchStreamStage, SearchSubstringPosting, ThermalState, UserActivity,
+    VolumeIndexPolicy,
 };
 use gfm_jobs::{
     Cancellation, Job, JobBatteryState, JobClass, JobFairnessPlanner, JobFairnessPolicy,
@@ -1181,9 +1182,10 @@ fn run() -> Result<()> {
                     GfmError::Format("background content index ran without a report".to_string())
                 })?;
                 eprintln!(
-                    "background-content-indexed {} files; skipped {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; journal {}; {} inaccessible",
+                    "background-content-indexed {} files; skipped {}; quarantined {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; journal {}; {} inaccessible",
                     report.indexed,
                     report.skipped,
+                    report.quarantined,
                     report.unchanged,
                     report.tombstoned,
                     report.segments.len(),
@@ -1223,9 +1225,10 @@ fn run() -> Result<()> {
                         )
                     })?;
                     eprintln!(
-                        "resumed-background-content-indexed {} files; skipped {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; recoverable {}",
+                        "resumed-background-content-indexed {} files; skipped {}; quarantined {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; recoverable {}",
                         report.indexed,
                         report.skipped,
+                        report.quarantined,
                         report.unchanged,
                         report.tombstoned,
                         report.segments.len(),
@@ -1266,9 +1269,10 @@ fn run() -> Result<()> {
                         )
                     })?;
                     eprintln!(
-                        "resumed-background-content-indexed {} files; skipped {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; recoverable {}",
+                        "resumed-background-content-indexed {} files; skipped {}; quarantined {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; recoverable {}",
                         report.indexed,
                         report.skipped,
+                        report.quarantined,
                         report.unchanged,
                         report.tombstoned,
                         report.segments.len(),
@@ -4877,6 +4881,8 @@ fn run_content_job(
     }
     let extractor = Extractor::with_budget_profile(extraction_budget_profile(&spec.root, pressure));
     let worker = BackgroundContentIndexer::new(extractor, spec.options());
+    let quarantine_store = default_extraction_quarantine_path();
+    let extraction_quarantine = read_extraction_quarantine(&quarantine_store, 2)?;
     let content_report = Arc::new(Mutex::new(None));
     let content_report_task = Arc::clone(&content_report);
     let mut scheduler = Scheduler::new();
@@ -4897,19 +4903,27 @@ fn run_content_job(
             let previous_records = previous_records.clone();
             let segment_dir = spec.segment_dir.clone();
             let content = spec.content_path.clone();
+            let quarantine_store = quarantine_store.clone();
+            let extraction_quarantine = extraction_quarantine.clone();
             let worker = worker.clone();
             let content_report_task = Arc::clone(&content_report_task);
             let runtime = runtime.clone();
             RetriableTask::new(scheduled, move |cancellation| {
                 runtime.running()?;
-                let report = worker.run_incremental_and_compact(
-                    &snapshot,
-                    &previous_records,
-                    Some(&content),
-                    segment_dir.clone(),
-                    content.clone(),
-                    &cancellation,
+                let mut extraction_quarantine = extraction_quarantine.clone();
+                let request = QuarantineContentIndexRequest {
+                    snapshot: &snapshot,
+                    previous_records: &previous_records,
+                    previous_content_path: Some(&content),
+                    segment_dir: &segment_dir,
+                    content_path: &content,
+                    cancellation: &cancellation,
+                };
+                let report = worker.run_incremental_and_compact_with_quarantine(
+                    request,
+                    &mut extraction_quarantine,
                 )?;
+                extraction_quarantine.write(&quarantine_store)?;
                 *content_report_task
                     .lock()
                     .expect("content index report lock poisoned") = Some(report);
@@ -5000,6 +5014,12 @@ fn default_content_job_path() -> PathBuf {
     std::env::var_os("GFM_CONTENT_JOB")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("gfm-content.job"))
+}
+
+fn default_extraction_quarantine_path() -> PathBuf {
+    std::env::var_os("GFM_EXTRACTION_QUARANTINE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("gfm-extraction.gfmquarantine"))
 }
 
 fn operation_status(status: gfm_ops::OperationStatus) -> &'static str {

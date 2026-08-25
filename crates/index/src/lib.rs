@@ -1,4 +1,7 @@
-use gfm_content::{extractor_version_for_path, Extractor};
+use gfm_content::{
+    extractor_version_for_path, ExtractionFingerprint, ExtractionQuarantine, ExtractionStatus,
+    Extractor, QuarantineDecision,
+};
 use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
 pub use gfm_search::substring_candidate_grams;
@@ -221,6 +224,7 @@ impl IndexSnapshot {
         Ok(ContentIndexReport {
             indexed,
             skipped: delta.records.len().saturating_sub(indexed),
+            quarantined: 0,
             unchanged: delta.unchanged,
             tombstoned: delta.tombstones.len(),
             terms,
@@ -947,6 +951,47 @@ impl LiveIndex {
         Ok(indexed)
     }
 
+    pub fn index_content_with_quarantine(
+        &mut self,
+        extractor: &Extractor,
+        quarantine: &mut ExtractionQuarantine,
+    ) -> Result<ContentIndexBatchReport> {
+        let records: Vec<_> = self.index.records().cloned().collect();
+        let mut report = ContentIndexBatchReport::default();
+        for record in records {
+            if record.kind != FileKind::File {
+                report.skipped += 1;
+                continue;
+            }
+
+            let fingerprint = ExtractionFingerprint::for_path(&record.path)?;
+            if matches!(
+                quarantine.before_extract(&record.path, &fingerprint),
+                QuarantineDecision::Quarantined(_)
+            ) {
+                report.skipped += 1;
+                report.quarantined += 1;
+                continue;
+            }
+
+            let extraction = extractor.extract_path_report(&record.path)?;
+            let status = extraction.status.clone();
+            let decision = quarantine.record_report(&extraction);
+            if let Some(document) = extraction.document {
+                self.index.insert_content(record.id, &document.text);
+                report.indexed += 1;
+            } else {
+                report.skipped += 1;
+            }
+            if matches!(status, ExtractionStatus::Quarantined(_))
+                || matches!(decision, QuarantineDecision::Quarantined(_))
+            {
+                report.quarantined += 1;
+            }
+        }
+        Ok(report)
+    }
+
     pub fn save_content_postings(&self, path: impl AsRef<Path>) -> Result<()> {
         write_content_postings(path, &self.index.content_postings())
     }
@@ -1058,10 +1103,28 @@ impl Default for ContentIndexOptions {
 pub struct ContentIndexReport {
     pub indexed: usize,
     pub skipped: usize,
+    pub quarantined: usize,
     pub unchanged: usize,
     pub tombstoned: usize,
     pub terms: usize,
     pub segments: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContentIndexBatchReport {
+    pub indexed: usize,
+    pub skipped: usize,
+    pub quarantined: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct QuarantineContentIndexRequest<'a> {
+    pub snapshot: &'a IndexSnapshot,
+    pub previous_records: &'a [FileRecord],
+    pub previous_content_path: Option<&'a Path>,
+    pub segment_dir: &'a Path,
+    pub content_path: &'a Path,
+    pub cancellation: &'a Cancellation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1116,6 +1179,30 @@ impl ContentIndexDelta {
             tombstones,
             unchanged,
         }
+    }
+
+    fn retry_quarantine_entries(
+        &mut self,
+        current: &[FileRecord],
+        quarantine: &ExtractionQuarantine,
+    ) -> Result<()> {
+        let mut selected = self
+            .records
+            .iter()
+            .map(|record| record.id)
+            .collect::<HashSet<_>>();
+        for record in current {
+            if record.kind != FileKind::File || selected.contains(&record.id) {
+                continue;
+            }
+            let fingerprint = ExtractionFingerprint::for_path(&record.path)?;
+            if quarantine.has_entry(&record.path, &fingerprint) {
+                self.records.push(record.clone());
+                selected.insert(record.id);
+                self.unchanged = self.unchanged.saturating_sub(1);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1325,6 +1412,7 @@ impl BackgroundContentIndexer {
         let mut report = ContentIndexReport {
             indexed: 0,
             skipped: 0,
+            quarantined: 0,
             unchanged: 0,
             tombstoned: 0,
             terms: 0,
@@ -1362,13 +1450,34 @@ impl BackgroundContentIndexer {
         output_dir: impl AsRef<Path>,
         cancellation: &Cancellation,
     ) -> Result<ContentIndexReport> {
+        self.run_incremental_to_segments_with_quarantine(
+            snapshot,
+            previous_records,
+            output_dir,
+            cancellation,
+            None,
+        )
+    }
+
+    fn run_incremental_to_segments_with_quarantine(
+        &self,
+        snapshot: &IndexSnapshot,
+        previous_records: &[FileRecord],
+        output_dir: impl AsRef<Path>,
+        cancellation: &Cancellation,
+        mut quarantine: Option<&mut ExtractionQuarantine>,
+    ) -> Result<ContentIndexReport> {
         let output_dir = output_dir.as_ref();
         fs::create_dir_all(output_dir).map_err(|err| gfm_types::GfmError::io(output_dir, err))?;
-        let delta = ContentIndexDelta::from_records(&snapshot.records, previous_records);
+        let mut delta = ContentIndexDelta::from_records(&snapshot.records, previous_records);
+        if let Some(quarantine) = quarantine.as_deref() {
+            delta.retry_quarantine_entries(&snapshot.records, quarantine)?;
+        }
         let batch_size = self.options.batch_size.max(1);
         let mut report = ContentIndexReport {
             indexed: 0,
             skipped: 0,
+            quarantined: 0,
             unchanged: delta.unchanged,
             tombstoned: delta.tombstones.len(),
             terms: 0,
@@ -1397,9 +1506,22 @@ impl BackgroundContentIndexer {
                 self.options.segment_prefix, batch_index
             ));
             let mut live = LiveIndex::from_records(records.to_vec());
-            let indexed = live.index_content(&self.extractor)?;
-            report.indexed += indexed;
-            report.skipped += records.len().saturating_sub(indexed);
+            let batch = match quarantine.as_deref_mut() {
+                Some(quarantine) => {
+                    live.index_content_with_quarantine(&self.extractor, quarantine)?
+                }
+                None => {
+                    let indexed = live.index_content(&self.extractor)?;
+                    ContentIndexBatchReport {
+                        indexed,
+                        skipped: records.len().saturating_sub(indexed),
+                        quarantined: 0,
+                    }
+                }
+            };
+            report.indexed += batch.indexed;
+            report.skipped += batch.skipped;
+            report.quarantined += batch.quarantined;
             let postings = live.content_postings();
             report.terms += postings.len();
             write_content_segment(
@@ -1454,6 +1576,32 @@ impl BackgroundContentIndexer {
         report.terms =
             compact_content_postings_with_segments(content_path, base_postings, &report.segments)?
                 .len();
+        Ok(report)
+    }
+
+    pub fn run_incremental_and_compact_with_quarantine(
+        &self,
+        request: QuarantineContentIndexRequest<'_>,
+        quarantine: &mut ExtractionQuarantine,
+    ) -> Result<ContentIndexReport> {
+        let mut report = self.run_incremental_to_segments_with_quarantine(
+            request.snapshot,
+            request.previous_records,
+            request.segment_dir,
+            request.cancellation,
+            Some(quarantine),
+        )?;
+        request.cancellation.check()?;
+        let base_postings = match request.previous_content_path {
+            Some(path) if path.is_file() => read_content_postings(path)?,
+            _ => Vec::new(),
+        };
+        report.terms = compact_content_postings_with_segments(
+            request.content_path,
+            base_postings,
+            &report.segments,
+        )?
+        .len();
         Ok(report)
     }
 

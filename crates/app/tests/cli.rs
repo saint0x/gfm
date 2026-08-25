@@ -4370,6 +4370,76 @@ fn background_content_indexer_incrementally_updates_archive_from_binary() {
 }
 
 #[test]
+fn background_content_indexer_persists_extraction_quarantine_from_binary() {
+    let root = unique_temp_dir("gfm-cli-background-content-quarantine-root");
+    let segments = unique_temp_dir("gfm-cli-background-content-quarantine-segments");
+    let records = unique_temp_path("gfm-cli-background-quarantine-records", "gfmidx");
+    let content = unique_temp_path("gfm-cli-background-quarantine-content", "gfmcontent");
+    let quarantine = unique_temp_path("gfm-cli-background-quarantine", "gfmquarantine");
+    let first_journal = unique_temp_path("gfm-cli-background-quarantine-first", "journal");
+    let second_journal = unique_temp_path("gfm-cli-background-quarantine-second", "journal");
+    fs::write(root.join("corrupt.pdf"), corrupt_pdf()).unwrap();
+
+    for (journal, expected_unchanged) in [
+        (&first_journal, "unchanged 0"),
+        (&second_journal, "unchanged 1"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .env("GFM_JOB_JOURNAL", journal)
+            .env("GFM_EXTRACTION_QUARANTINE", &quarantine)
+            .args([
+                "index-content-background",
+                root.to_str().unwrap(),
+                segments.to_str().unwrap(),
+                records.to_str().unwrap(),
+                content.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr.contains("background-content-indexed 0 files"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("quarantined 1"), "{stderr}");
+        assert!(stderr.contains(expected_unchanged), "{stderr}");
+    }
+
+    let quarantine_text = fs::read_to_string(&quarantine).unwrap();
+    assert!(quarantine_text.contains("corrupt-pdf"), "{quarantine_text}");
+    assert!(quarantine_text.contains("\t2\t"), "{quarantine_text}");
+
+    let search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index",
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "not-valid-zlib",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search.stderr)
+    );
+    assert!(String::from_utf8(search.stdout).unwrap().is_empty());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+    fs::remove_file(quarantine).unwrap();
+    fs::remove_file(first_journal).unwrap();
+    fs::remove_file(second_journal).unwrap();
+}
+
+#[test]
 fn defers_background_content_indexer_under_saturated_io_from_binary() {
     let root = unique_temp_dir("gfm-cli-background-content-defer-root");
     let segments = unique_temp_dir("gfm-cli-background-content-defer-segments");
@@ -4996,6 +5066,20 @@ endobj
         text
     )
     .into_bytes()
+}
+
+fn corrupt_pdf() -> Vec<u8> {
+    b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Contents 2 0 R >>
+endobj
+2 0 obj
+<< /Length 12 /Filter /FlateDecode >>
+stream
+not-valid-zlib
+endstream
+endobj"
+        .to_vec()
 }
 
 fn compressed_pdf(text: &str) -> Vec<u8> {

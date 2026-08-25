@@ -412,6 +412,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
    - JSON, CSV, XML plist, and binary plist extraction exposes searchable structural keys, cells, primitive values, and plist dictionaries under explicit text-output budgets.
    - Format-scoped extractor versions feed content fingerprints and cache keys so archive, rich-text, PDF, Office, structured-data, text, and unsupported-path parser upgrades do not evict unrelated hot search caches.
    - Background content indexing is delta-based: it compares current records to the previously published record archive, tombstones changed or deleted file IDs, re-extracts only new or content-modified records, and atomically rewrites the searchable content archive from the prior postings plus delta segments.
+   - Background content indexing consults and persists the extraction quarantine store, reselecting unchanged files with outstanding failure history until they are cleared by success or blocked before extraction after repeated corrupt/encrypted failures.
    - Positional postings support exact quoted phrases and explicit `near:N:alpha,beta` proximity windows after durable reload.
 
 5. Recency and usage index

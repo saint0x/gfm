@@ -93,6 +93,10 @@ impl ExtractionQuarantine {
         }
     }
 
+    pub fn has_entry(&self, path: &Path, fingerprint: &ExtractionFingerprint) -> bool {
+        self.entries.contains_key(&fingerprint.cache_key(path))
+    }
+
     pub fn record_report(&mut self, report: &ExtractionReport) -> QuarantineDecision {
         let key = report.fingerprint.cache_key(&report.path);
         match &report.status {

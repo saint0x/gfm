@@ -1,4 +1,5 @@
 use super::*;
+use gfm_content::ExtractionQuarantine;
 use gfm_store::{
     fuzzy_postings_from_records, metadata_postings_from_records, prefix_postings_from_records,
     substring_postings_from_records, write_fuzzy_postings, write_metadata_postings,
@@ -1023,6 +1024,72 @@ fn background_content_indexer_incrementally_updates_existing_archive() {
 }
 
 #[test]
+fn background_content_indexer_persists_extraction_quarantine() {
+    let root = unique_temp_dir("gfm-background-content-quarantine-root");
+    let segments = unique_temp_dir("gfm-background-content-quarantine-segments");
+    let content = unique_temp_path("gfm-background-content-quarantine", "gfmcontent");
+    let path = root.join("corrupt.pdf");
+    fs::write(&path, corrupt_pdf()).unwrap();
+
+    let indexer = Indexer::default();
+    let previous = indexer.build(&root).unwrap();
+    let worker = BackgroundContentIndexer::default();
+    let cancellation = Cancellation::default();
+    let mut quarantine = ExtractionQuarantine::new(2);
+
+    let first = worker
+        .run_incremental_and_compact_with_quarantine(
+            QuarantineContentIndexRequest {
+                snapshot: &previous,
+                previous_records: &[],
+                previous_content_path: None,
+                segment_dir: &segments,
+                content_path: &content,
+                cancellation: &cancellation,
+            },
+            &mut quarantine,
+        )
+        .unwrap();
+    let second = worker
+        .run_incremental_and_compact_with_quarantine(
+            QuarantineContentIndexRequest {
+                snapshot: &previous,
+                previous_records: &[],
+                previous_content_path: Some(&content),
+                segment_dir: &segments,
+                content_path: &content,
+                cancellation: &cancellation,
+            },
+            &mut quarantine,
+        )
+        .unwrap();
+    let third = worker
+        .run_incremental_and_compact_with_quarantine(
+            QuarantineContentIndexRequest {
+                snapshot: &previous,
+                previous_records: &[],
+                previous_content_path: Some(&content),
+                segment_dir: &segments,
+                content_path: &content,
+                cancellation: &cancellation,
+            },
+            &mut quarantine,
+        )
+        .unwrap();
+
+    assert_eq!(first.indexed, 0);
+    assert_eq!(first.quarantined, 1);
+    assert_eq!(second.quarantined, 1);
+    assert_eq!(third.quarantined, 1);
+    assert!(third.skipped >= 1);
+    assert_eq!(third.terms, 0);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(content).unwrap();
+}
+
+#[test]
 fn background_content_maintenance_compacts_segments_and_updates_manifest() {
     let root = unique_temp_dir("gfm-background-content-maintenance-root");
     let records = unique_temp_path("gfm-background-content-maintenance-records", "gfmidx");
@@ -1642,4 +1709,18 @@ fn unique_temp_path(prefix: &str, extension: &str) -> PathBuf {
         name.push_str(extension);
     }
     std::env::temp_dir().join(name)
+}
+
+fn corrupt_pdf() -> Vec<u8> {
+    b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Contents 2 0 R >>
+endobj
+2 0 obj
+<< /Length 12 /Filter /FlateDecode >>
+stream
+not-valid-zlib
+endstream
+endobj"
+        .to_vec()
 }
