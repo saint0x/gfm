@@ -1589,6 +1589,7 @@ fn copy_symlink(
     create_symlink(&target, to)?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     preserve_xattrs(from, to)?;
+    preserve_symlink_times(to, &metadata)?;
     progress.advance(&metadata)
 }
 
@@ -1855,6 +1856,16 @@ fn preserve_times(to: &Path, metadata: &fs::Metadata) -> Result<()> {
     let mtime = filetime::FileTime::from_last_modification_time(metadata);
     filetime::set_file_times(to, atime, mtime).map_err(|err| GfmError::io(to, err))?;
     preserve_creation_time(to, metadata)
+}
+
+fn preserve_symlink_times(to: &Path, metadata: &fs::Metadata) -> Result<()> {
+    let atime = filetime::FileTime::from_last_access_time(metadata);
+    let mtime = filetime::FileTime::from_last_modification_time(metadata);
+    match filetime::set_symlink_file_times(to, atime, mtime) {
+        Ok(()) => Ok(()),
+        Err(err) if time_preservation_unsupported(&err) => Ok(()),
+        Err(err) => Err(GfmError::io(to, err)),
+    }
 }
 
 #[cfg(target_vendor = "apple")]
@@ -3041,6 +3052,44 @@ mod tests {
         let destination_metadata = fs::symlink_metadata(&destination).unwrap();
         assert!(destination_metadata.file_type().is_symlink());
         assert_eq!(fs::read_link(&destination).unwrap(), target);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_preserves_symlink_timestamps_when_host_supports_them() {
+        let root = unique_temp_dir("gfm-ops-symlink-times");
+        let journal = root.join("journal.log");
+        let target = root.join("target.txt");
+        let source = root.join("source-link");
+        let destination = root.join("destination-link");
+        fs::write(&target, "target bytes").unwrap();
+        std::os::unix::fs::symlink(&target, &source).unwrap();
+        let atime = filetime::FileTime::from_unix_time(1_650_000_000, 111_000_000);
+        let mtime = filetime::FileTime::from_unix_time(1_650_000_123, 222_000_000);
+        match filetime::set_symlink_file_times(&source, atime, mtime) {
+            Ok(()) => {}
+            Err(err) if time_preservation_unsupported(&err) => {
+                fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            Err(err) => panic!("unexpected symlink time setup failure: {err}"),
+        }
+
+        Operator::new(OperationContext::new(&journal))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(
+                &fs::symlink_metadata(&destination).unwrap()
+            ),
+            mtime
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
