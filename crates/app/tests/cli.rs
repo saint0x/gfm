@@ -3350,6 +3350,56 @@ fn runs_background_content_indexer_from_binary() {
 }
 
 #[test]
+fn defers_background_content_indexer_under_saturated_io_from_binary() {
+    let root = unique_temp_dir("gfm-cli-background-content-defer-root");
+    let segments = unique_temp_dir("gfm-cli-background-content-defer-segments");
+    let records = unique_temp_path("gfm-cli-background-defer-records", "gfmidx");
+    let content = unique_temp_path("gfm-cli-background-defer-content", "gfmcontent");
+    let journal = unique_temp_path("gfm-cli-background-defer-jobs", "journal");
+    let spec = unique_temp_path("gfm-cli-background-defer-content", "job");
+    fs::write(root.join("worker.md"), "deferred workermarker").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_CONTENT_JOB", &spec)
+        .args([
+            "index-content-background",
+            root.to_str().unwrap(),
+            segments.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("background-content-deferred action=Defer"),
+        "{stderr}"
+    );
+    assert!(records.exists());
+    assert!(!content.exists());
+    assert!(fs::read_to_string(&spec)
+        .unwrap()
+        .contains("gfm-content-job-v1"));
+    assert!(!journal.exists());
+    assert!(fs::read_dir(&segments).unwrap().next().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(spec).unwrap();
+}
+
+#[test]
 fn resumes_content_index_job_from_binary() {
     let root = unique_temp_dir("gfm-cli-resume-content-root");
     let segments = unique_temp_dir("gfm-cli-resume-content-segments");

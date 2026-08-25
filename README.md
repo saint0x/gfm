@@ -144,6 +144,8 @@ Quick Look preview and thumbnail generation commands also enter through volume-i
 
 Background content indexing persists its `VolumeId` in the durable job spec and resumes through the same isolated, journaled, capped-retry worker path.
 
+Background content indexing also consumes explicit runtime pressure signals: saturated I/O or critical thermal pressure defers the durable job before extraction starts, while elevated pressure, low power, or active user input throttles worker admission.
+
 Sidecar repair, persistent index repair, and diagnostics index rebuild commands enter through volume-isolated worker admission before scanning, rebuilding, quarantining, or publishing repaired archives.
 
 ## UI Parity
@@ -420,6 +422,7 @@ Run the background content indexing pipeline:
 
 ```sh
 cargo run -p gfm -- index-content-background . /tmp/gfm-segments /tmp/gfm.gfmidx /tmp/gfm.gfmcontent
+cargo run -p gfm -- index-content-background . /tmp/gfm-segments /tmp/gfm.gfmidx /tmp/gfm.gfmcontent saturated nominal ac idle
 cargo run -p gfm -- jobs-recover /tmp/gfm-jobs.journal
 ```
 

@@ -33,6 +33,50 @@ fn drains_ready_jobs_in_priority_order() {
 }
 
 #[test]
+fn scheduling_pressure_defers_background_under_saturated_io() {
+    let pressure = SchedulingPressure {
+        io: JobIoPressure::Saturated,
+        ..SchedulingPressure::default()
+    };
+
+    let decision = pressure.decide(Priority::Background, 8, 4);
+
+    assert_eq!(decision.action, SchedulingAction::Defer);
+    assert_eq!(decision.worker_threads, 0);
+    assert_eq!(decision.volume_policy.default_limit(), 1);
+}
+
+#[test]
+fn scheduling_pressure_throttles_background_under_active_user_load() {
+    let pressure = SchedulingPressure {
+        user_activity: JobUserActivity::Active,
+        ..SchedulingPressure::default()
+    };
+
+    let decision = pressure.decide(Priority::Background, 8, 4);
+
+    assert_eq!(decision.action, SchedulingAction::Throttle);
+    assert_eq!(decision.worker_threads, 4);
+    assert_eq!(decision.volume_policy.default_limit(), 2);
+}
+
+#[test]
+fn scheduling_pressure_preserves_visible_work_under_host_pressure() {
+    let pressure = SchedulingPressure {
+        io: JobIoPressure::Saturated,
+        thermal: JobThermalState::Critical,
+        battery: JobBatteryState::LowPower,
+        user_activity: JobUserActivity::Active,
+    };
+
+    let decision = pressure.decide(Priority::Visible, 8, 4);
+
+    assert_eq!(decision.action, SchedulingAction::Run);
+    assert_eq!(decision.worker_threads, 8);
+    assert_eq!(decision.volume_policy.default_limit(), 4);
+}
+
+#[test]
 fn worker_pool_runs_tasks_and_reports_outcomes() {
     let mut scheduler = Scheduler::new();
     let first = scheduler.schedule(Priority::Background, "first");

@@ -21,8 +21,9 @@ use gfm_index::{
     SearchRecordColumns, SearchStreamStage, ThermalState, UserActivity, VolumeIndexPolicy,
 };
 use gfm_jobs::{
-    JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, Task, TaskStatus,
-    VolumeConcurrencyPolicy, WorkerPool,
+    JobBatteryState, JobIoPressure, JobJournal, JobThermalState, JobUserActivity, Priority,
+    RecoveryReason, RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure,
+    Task, TaskStatus, VolumeConcurrencyPolicy, WorkerPool,
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, parse_spotlight_fixture, AccessIntent,
@@ -1010,20 +1011,34 @@ fn run() -> Result<()> {
                 args.next(),
                 "index-content-background requires a content path",
             )?;
+            let pressure = parse_optional_scheduling_pressure(&mut args)?;
             let journal = JobJournal::new(default_job_journal_path());
             let spec = ContentIndexJobSpec::new(&root, segment_dir, records, content)
                 .with_volume(detect_volume_id(&root)?);
             spec.write(default_content_job_path())?;
-            let (report, inaccessible) = run_content_job(&spec, &journal)?;
-            eprintln!(
-                "background-content-indexed {} files; skipped {}; segments {}; terms {}; journal {}; {} inaccessible",
-                report.indexed,
-                report.skipped,
-                report.segments.len(),
-                report.terms,
-                journal.path().display(),
-                inaccessible
-            );
+            let outcome = run_content_job(&spec, &journal, pressure)?;
+            if outcome.deferred {
+                eprintln!(
+                    "background-content-deferred action={:?}; journal {}; {} inaccessible",
+                    outcome.scheduling_action,
+                    journal.path().display(),
+                    outcome.inaccessible
+                );
+            } else {
+                let report = outcome.report.ok_or_else(|| {
+                    GfmError::Format("background content index ran without a report".to_string())
+                })?;
+                eprintln!(
+                    "background-content-indexed {} files; skipped {}; segments {}; terms {}; action={:?}; journal {}; {} inaccessible",
+                    report.indexed,
+                    report.skipped,
+                    report.segments.len(),
+                    report.terms,
+                    outcome.scheduling_action,
+                    journal.path().display(),
+                    outcome.inaccessible
+                );
+            }
         }
         Some("resume-content-background") => {
             let spec_path = args
@@ -1040,15 +1055,29 @@ fn run() -> Result<()> {
                 eprintln!("no recoverable background content jobs");
             } else {
                 let spec = ContentIndexJobSpec::read(spec_path)?;
-                let (report, _) = run_content_job(&spec, &journal)?;
-                eprintln!(
-                    "resumed-background-content-indexed {} files; skipped {}; segments {}; terms {}; recoverable {}",
-                    report.indexed,
-                    report.skipped,
-                    report.segments.len(),
-                    report.terms,
-                    recoverable.len()
-                );
+                let outcome = run_content_job(&spec, &journal, SchedulingPressure::default())?;
+                if outcome.deferred {
+                    eprintln!(
+                        "resumed-background-content-deferred action={:?}; recoverable {}",
+                        outcome.scheduling_action,
+                        recoverable.len()
+                    );
+                } else {
+                    let report = outcome.report.ok_or_else(|| {
+                        GfmError::Format(
+                            "resumed background content index ran without a report".to_string(),
+                        )
+                    })?;
+                    eprintln!(
+                        "resumed-background-content-indexed {} files; skipped {}; segments {}; terms {}; action={:?}; recoverable {}",
+                        report.indexed,
+                        report.skipped,
+                        report.segments.len(),
+                        report.terms,
+                        outcome.scheduling_action,
+                        recoverable.len()
+                    );
+                }
             }
         }
         Some("search") => {
@@ -2890,6 +2919,48 @@ fn required_string(value: Option<String>, message: &str) -> Result<String> {
     value.ok_or_else(|| GfmError::Format(message.to_string()))
 }
 
+fn parse_optional_scheduling_pressure(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<SchedulingPressure> {
+    let Some(io) = args.next() else {
+        return Ok(SchedulingPressure::default());
+    };
+    let thermal = required_string(
+        args.next(),
+        "adaptive scheduling pressure requires thermal state",
+    )?;
+    let battery = required_string(
+        args.next(),
+        "adaptive scheduling pressure requires battery state",
+    )?;
+    let user_activity = required_string(
+        args.next(),
+        "adaptive scheduling pressure requires user activity",
+    )?;
+    Ok(SchedulingPressure {
+        io: match parse_io_pressure(io)? {
+            IoPressure::Nominal => JobIoPressure::Nominal,
+            IoPressure::Elevated => JobIoPressure::Elevated,
+            IoPressure::Saturated => JobIoPressure::Saturated,
+        },
+        thermal: match parse_thermal_state(thermal)? {
+            ThermalState::Nominal => JobThermalState::Nominal,
+            ThermalState::Fair => JobThermalState::Fair,
+            ThermalState::Serious => JobThermalState::Serious,
+            ThermalState::Critical => JobThermalState::Critical,
+        },
+        battery: match parse_battery_state(battery)? {
+            BatteryState::AcPower => JobBatteryState::AcPower,
+            BatteryState::Battery => JobBatteryState::Battery,
+            BatteryState::LowPower => JobBatteryState::LowPower,
+        },
+        user_activity: match parse_user_activity(user_activity)? {
+            UserActivity::Idle => JobUserActivity::Idle,
+            UserActivity::Active => JobUserActivity::Active,
+        },
+    })
+}
+
 fn parse_io_pressure(value: String) -> Result<IoPressure> {
     match value.as_str() {
         "nominal" => Ok(IoPressure::Nominal),
@@ -3287,10 +3358,19 @@ where
     Ok(result)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContentJobOutcome {
+    report: Option<ContentIndexReport>,
+    inaccessible: usize,
+    scheduling_action: SchedulingAction,
+    deferred: bool,
+}
+
 fn run_content_job(
     spec: &ContentIndexJobSpec,
     journal: &JobJournal,
-) -> Result<(ContentIndexReport, usize)> {
+    pressure: SchedulingPressure,
+) -> Result<ContentJobOutcome> {
     let snapshot = Indexer::default().build(&spec.root)?;
     let inaccessible = snapshot.inaccessible.len();
     let volume = spec
@@ -3304,6 +3384,15 @@ fn run_content_job(
             ))
         })?;
     snapshot.save(&spec.records_path)?;
+    let scheduling = pressure.decide(Priority::Background, 1, 1);
+    if scheduling.action == SchedulingAction::Defer {
+        return Ok(ContentJobOutcome {
+            report: None,
+            inaccessible,
+            scheduling_action: scheduling.action,
+            deferred: true,
+        });
+    }
     let worker = BackgroundContentIndexer::new(Extractor::default(), spec.options());
     let content_report = Arc::new(Mutex::new(None));
     let content_report_task = Arc::clone(&content_report);
@@ -3333,11 +3422,11 @@ fn run_content_job(
             })
         })
         .collect();
-    let worker_report = WorkerPool::new(1).run_retriable_isolated(
+    let worker_report = WorkerPool::new(scheduling.worker_threads).run_retriable_isolated(
         tasks,
         journal,
         RetryPolicy { max_attempts: 2 },
-        VolumeConcurrencyPolicy::new(1),
+        scheduling.volume_policy,
     );
     let outcome = worker_report
         .outcomes
@@ -3369,7 +3458,12 @@ fn run_content_job(
                 "background content index completed without a report".to_string(),
             )
         })?;
-    Ok((report, inaccessible))
+    Ok(ContentJobOutcome {
+        report: Some(report),
+        inaccessible,
+        scheduling_action: scheduling.action,
+        deferred: false,
+    })
 }
 
 fn detect_volume_id(path: &Path) -> Result<VolumeId> {
@@ -3677,7 +3771,7 @@ fn print_usage() {
   gfm content-manifest-cleanup <manifest.gfmmanifest> <candidate-archive...>
   gfm content-cleanup-plan <manifest.gfmmanifest> <min-retired-archives> <min-retired-bytes> <max-cleanup-archives> <candidate-archive...>
   gfm content-maintain-segments <manifest.gfmmanifest> <output.gfmcontent> <segments.gfmseg...>
-  gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent>
+  gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent> [<nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>]
   gfm resume-content-background [content.job] [jobs.journal]
   gfm search <root> <query>
   gfm search-stream <root> <query>

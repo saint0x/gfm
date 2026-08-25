@@ -272,6 +272,7 @@ gfm/
 - Admits Quick Look preview and thumbnail generation jobs through the same volume-isolated worker path before producing preview contracts.
 - Persists background content indexing job volume identity and resumes that job through the same isolated, journaled, capped-retry worker path.
 - Admits sidecar repair, persistent index repair, and diagnostics index rebuild jobs through volume-isolated worker admission before scanning, rebuilding, quarantining, or publishing repaired archives.
+- Applies the jobs-layer adaptive scheduling policy to background content indexing so saturated I/O or critical thermal pressure defers heavy extraction, while elevated pressure, low power, or active user input throttles worker admission instead of competing with visible work.
 
 `config`
 
@@ -583,6 +584,7 @@ All operations go through a scheduler:
 Scheduler properties:
 
 - Per-volume queues backed by worker admission limits so one hot volume cannot monopolize all runtime workers or destroy interactive I/O latency; foreground file operations, live content extraction/search, Quick Look previews, thumbnail generation, background content indexing, sidecar repair, persistent index repair, and diagnostics index rebuild already run through isolated worker admission.
+- Background content indexing consumes explicit runtime pressure signals and adapts its action to run, throttle, or defer before doing extraction or compaction work.
 - Operation dependencies.
 - Priority inheritance from visible UI.
 - Exact preflight item/byte totals and completion-backed progress aggregation.

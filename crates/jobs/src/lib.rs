@@ -32,6 +32,116 @@ pub enum Priority {
     Interactive,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SchedulingPressure {
+    pub io: JobIoPressure,
+    pub thermal: JobThermalState,
+    pub battery: JobBatteryState,
+    pub user_activity: JobUserActivity,
+}
+
+impl Default for SchedulingPressure {
+    fn default() -> Self {
+        Self {
+            io: JobIoPressure::Nominal,
+            thermal: JobThermalState::Nominal,
+            battery: JobBatteryState::AcPower,
+            user_activity: JobUserActivity::Idle,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobIoPressure {
+    Nominal,
+    Elevated,
+    Saturated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobThermalState {
+    Nominal,
+    Fair,
+    Serious,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobBatteryState {
+    AcPower,
+    Battery,
+    LowPower,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobUserActivity {
+    Idle,
+    Active,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulingAction {
+    Run,
+    Throttle,
+    Defer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchedulingDecision {
+    pub action: SchedulingAction,
+    pub worker_threads: usize,
+    pub volume_policy: VolumeConcurrencyPolicy,
+}
+
+impl SchedulingPressure {
+    pub fn decide(
+        self,
+        priority: Priority,
+        base_threads: usize,
+        base_volume_limit: usize,
+    ) -> SchedulingDecision {
+        let base_threads = base_threads.max(1);
+        let base_volume_limit = base_volume_limit.max(1);
+        let action = self.action_for(priority);
+        let (worker_threads, volume_limit) = match action {
+            SchedulingAction::Run => (base_threads, base_volume_limit),
+            SchedulingAction::Throttle => (
+                throttle_limit(base_threads),
+                throttle_limit(base_volume_limit),
+            ),
+            SchedulingAction::Defer => (0, 1),
+        };
+        SchedulingDecision {
+            action,
+            worker_threads,
+            volume_policy: VolumeConcurrencyPolicy::new(volume_limit),
+        }
+    }
+
+    fn action_for(self, priority: Priority) -> SchedulingAction {
+        if matches!(priority, Priority::Visible | Priority::Interactive) {
+            return SchedulingAction::Run;
+        }
+        if matches!(self.io, JobIoPressure::Saturated)
+            || matches!(self.thermal, JobThermalState::Critical)
+        {
+            return SchedulingAction::Defer;
+        }
+        if matches!(self.io, JobIoPressure::Elevated)
+            || matches!(self.thermal, JobThermalState::Serious)
+            || matches!(self.battery, JobBatteryState::LowPower)
+            || matches!(self.user_activity, JobUserActivity::Active)
+        {
+            return SchedulingAction::Throttle;
+        }
+        SchedulingAction::Run
+    }
+}
+
+fn throttle_limit(limit: usize) -> usize {
+    (limit / 2).max(1)
+}
+
 #[derive(Debug, Clone)]
 pub struct Job {
     pub id: JobId,
@@ -234,6 +344,10 @@ impl VolumeConcurrencyPolicy {
             .get(&volume)
             .copied()
             .unwrap_or(self.default_limit)
+    }
+
+    pub fn default_limit(&self) -> usize {
+        self.default_limit
     }
 }
 
