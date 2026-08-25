@@ -1,6 +1,6 @@
 use crate::{
-    sort_hits, SearchFuzzyPosting, SearchIndex, SearchMetadataPosting, SearchPrefixPosting,
-    SearchQuery, SearchRecordColumns, SearchStreamBatch, SearchStreamStage,
+    sort_hits, SearchFuzzyPosting, SearchIndex, SearchLookup, SearchMetadataPosting,
+    SearchPrefixPosting, SearchQuery, SearchRecordColumns, SearchStreamBatch, SearchStreamStage,
 };
 use gfm_jobs::Cancellation;
 use gfm_types::{FileId, FileRecord, GfmError, Result, SearchHit, VolumeId};
@@ -255,6 +255,21 @@ impl ShardedSearchIndex {
         limit: usize,
         cancellation: &Cancellation,
     ) -> Result<Vec<SearchHit>> {
+        self.query_structured_with_lookup_cancellable(
+            query,
+            limit,
+            &crate::EmptySearchLookup,
+            cancellation,
+        )
+    }
+
+    pub fn query_structured_with_lookup_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        lookup: &dyn SearchLookup,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchHit>> {
         cancellation.check()?;
         if query.is_empty() || limit == 0 || self.shards.is_empty() {
             return Ok(Vec::new());
@@ -267,7 +282,12 @@ impl ShardedSearchIndex {
                 .values()
                 .map(|shard| {
                     scope.spawn(move || {
-                        shard.query_structured_cancellable(query, limit, cancellation)
+                        shard.query_structured_with_lookup_cancellable(
+                            query,
+                            limit,
+                            lookup,
+                            cancellation,
+                        )
                     })
                 })
                 .collect();

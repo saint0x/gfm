@@ -11,13 +11,12 @@ use gfm_fs::{
     PackageTraversalReport, ScanOptions,
 };
 use gfm_index::{
-    comment_query_terms, content_query_terms, fuzzy_query_keys, parse_volume_indexing_policy,
-    prefix_query_terms, tag_query_terms, BackgroundContentIndexer, ContentArchiveManifest,
-    ContentArchiveManifestEntry, ContentIndexJobSpec, ContentIndexReport,
-    ContentMaintenanceOptions, ContentMergePolicy, ContentMergeTier, EventBackpressureQueue,
-    EventPriority, FseventsCursor, FseventsCursorHealth, IndexMountState, IndexVolumeClass,
-    IndexVolumeDescriptor, IndexVolumeState, Indexer, LiveIndex, SearchFuzzyPosting,
-    SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting, SearchRecordColumns,
+    comment_query_terms, content_query_terms, parse_volume_indexing_policy, tag_query_terms,
+    BackgroundContentIndexer, ContentArchiveManifest, ContentArchiveManifestEntry,
+    ContentIndexJobSpec, ContentIndexReport, ContentMaintenanceOptions, ContentMergePolicy,
+    ContentMergeTier, EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
+    IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState, Indexer, LiveIndex,
+    SearchArchiveLookup, SearchMetadataField, SearchMetadataPosting, SearchRecordColumns,
     SearchStreamStage, VolumeIndexPolicy,
 };
 use gfm_jobs::{
@@ -40,12 +39,12 @@ use gfm_preview::{
 use gfm_store::{
     dictionary_terms_from_records, metadata_postings_from_records, write_dictionary,
     write_metadata_postings, write_record_columns, ContentArchive, MetadataField,
-    MmapContentArchive, MmapContentSet, MmapDictionary, MmapMetadataArchive, MmapPrefixArchive,
-    MmapRecordArchive, MmapRecordColumns,
+    MmapContentArchive, MmapContentSet, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive,
+    MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_store::{
     fuzzy_postings_from_records, prefix_postings_from_records, write_fuzzy_postings,
-    write_prefix_postings, MmapFuzzyArchive,
+    write_prefix_postings,
 };
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
@@ -1045,8 +1044,7 @@ fn run() -> Result<()> {
             let records = MmapRecordArchive::open(records)?;
             let columns = MmapRecordColumns::open(columns)?;
             let metadata = MmapMetadataArchive::open(metadata)?;
-            let prefixes = MmapPrefixArchive::open(prefixes)?;
-            let fuzzy = MmapFuzzyArchive::open(fuzzy)?;
+            let lookup = SearchArchiveLookup::open(prefixes, fuzzy)?;
             let content = MmapContentArchive::open(content)?;
             let mut search_columns = Vec::with_capacity(columns.len());
             for index in 0..columns.len() {
@@ -1060,22 +1058,6 @@ fn run() -> Result<()> {
                     comment: column.comment,
                 });
             }
-            let search_fuzzy = fuzzy
-                .postings_for(fuzzy_query_keys(&query))?
-                .into_iter()
-                .map(|posting| SearchFuzzyPosting {
-                    key: posting.key,
-                    terms: posting.terms,
-                })
-                .collect();
-            let search_prefixes = prefixes
-                .postings_for(prefix_query_terms(&query))?
-                .into_iter()
-                .map(|posting| SearchPrefixPosting {
-                    prefix: posting.prefix,
-                    ids: posting.ids,
-                })
-                .collect();
             let mut selected_metadata =
                 metadata.postings_for(MetadataField::Comment, comment_query_terms(&query))?;
             selected_metadata
@@ -1097,14 +1079,16 @@ fn run() -> Result<()> {
                     records.records()?,
                     search_columns,
                     search_metadata,
-                    search_prefixes,
-                    search_fuzzy,
+                    Vec::new(),
+                    Vec::new(),
                     search_content,
                 );
             eprintln!(
-                "columns-indexed {applied} metadata-keys {metadata_keys} prefix-keys {prefix_keys} fuzzy-keys {fuzzy_keys} content-keys {content_keys}"
+                "columns-indexed {applied} metadata-keys {metadata_keys} prefix-keys {prefix_keys} fuzzy-keys {fuzzy_keys} prefix-archive-keys {} fuzzy-archive-keys {} content-keys {content_keys}",
+                lookup.indexed_prefixes(),
+                lookup.indexed_fuzzy_keys()
             );
-            for hit in live.search(&query, 50) {
+            for hit in live.search_with_lookup(&query, 50, &lookup)? {
                 print_hit(&hit);
             }
         }

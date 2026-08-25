@@ -1,5 +1,6 @@
 use super::*;
-use gfm_types::{FileKind, VolumeId};
+use gfm_store::{write_fuzzy_postings, write_prefix_postings, FuzzyPosting, PrefixPosting};
+use gfm_types::{FileKind, MatchReason, VolumeId};
 use std::collections::HashSet;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -192,6 +193,86 @@ fn live_index_imports_metadata_prefix_and_fuzzy_sidecars_after_column_build() {
     assert_eq!(live.search("proj", 5).len(), 1);
     assert_eq!(live.search("needle", 5).len(), 1);
     assert_eq!(live.search("bodymarker", 5).len(), 1);
+}
+
+#[test]
+fn live_index_queries_prefix_and_fuzzy_archive_lookup_without_importing_sidecars() {
+    let record = FileRecord {
+        id: FileId::new(VolumeId(1), 1),
+        parent: None,
+        path: PathBuf::from("/tmp/original.txt"),
+        name: "original.txt".to_string(),
+        kind: FileKind::File,
+        len: 0,
+        created: Some(UNIX_EPOCH),
+        modified: Some(SystemTime::now()),
+        changed: Some(SystemTime::now()),
+        mode: 0o644,
+        owner: 501,
+        group: 20,
+        hidden: false,
+        tags: Vec::new(),
+        finder_comment: None,
+        xattrs_digest: 0,
+    };
+    let prefixes = unique_temp_path("gfm-prefix-archive-lookup", "gfmprefix");
+    let fuzzy = unique_temp_path("gfm-fuzzy-archive-lookup", "gfmfuzzy");
+
+    write_prefix_postings(
+        &prefixes,
+        &[PrefixPosting {
+            prefix: "proj".to_string(),
+            ids: vec![record.id],
+        }],
+    )
+    .unwrap();
+    write_fuzzy_postings(
+        &fuzzy,
+        &[FuzzyPosting {
+            key: "needl".to_string(),
+            terms: vec!["needl".to_string()],
+        }],
+    )
+    .unwrap();
+
+    let (live, applied, metadata_keys, prefix_keys, fuzzy_keys, content_keys) =
+        LiveIndex::from_records_with_sidecars(
+            vec![record.clone()],
+            vec![SearchRecordColumns {
+                id: record.id,
+                name: "project-needl.md".to_string(),
+                path: "/tmp/project-needl.md".to_string(),
+                extension: Some("md".to_string()),
+                tags: Vec::new(),
+                comment: None,
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+    let lookup = SearchArchiveLookup::open(&prefixes, &fuzzy).unwrap();
+
+    assert_eq!(applied, 1);
+    assert_eq!(metadata_keys, 0);
+    assert_eq!(prefix_keys, 0);
+    assert_eq!(fuzzy_keys, 0);
+    assert_eq!(content_keys, 0);
+    assert_eq!(lookup.indexed_prefixes(), 1);
+    assert_eq!(lookup.indexed_fuzzy_keys(), 1);
+    let prefix_without_lookup = live.search("proj", 5);
+    assert_eq!(prefix_without_lookup.len(), 1);
+    assert_eq!(prefix_without_lookup[0].reason, MatchReason::SubstringName);
+    assert_eq!(live.search("needle", 5).len(), 0);
+    let prefix_hits = live.search_with_lookup("proj", 5, &lookup).unwrap();
+    let fuzzy_hits = live.search_with_lookup("needle", 5, &lookup).unwrap();
+    assert_eq!(prefix_hits.len(), 1);
+    assert_eq!(prefix_hits[0].reason, MatchReason::PrefixName);
+    assert_eq!(fuzzy_hits.len(), 1);
+    assert_eq!(fuzzy_hits[0].reason, MatchReason::FuzzyName);
+
+    fs::remove_file(prefixes).unwrap();
+    fs::remove_file(fuzzy).unwrap();
 }
 
 #[test]

@@ -51,6 +51,24 @@ pub struct SearchFuzzyPosting {
     pub terms: Vec<String>,
 }
 
+pub trait SearchLookup: Sync {
+    fn prefix_ids(&self, prefix: &str) -> gfm_types::Result<Vec<FileId>>;
+    fn fuzzy_terms(&self, key: &str) -> gfm_types::Result<Vec<String>>;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EmptySearchLookup;
+
+impl SearchLookup for EmptySearchLookup {
+    fn prefix_ids(&self, _prefix: &str) -> gfm_types::Result<Vec<FileId>> {
+        Ok(Vec::new())
+    }
+
+    fn fuzzy_terms(&self, _key: &str) -> gfm_types::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchPrefixPosting {
     pub prefix: String,
@@ -411,7 +429,22 @@ impl SearchIndex {
         limit: usize,
         cancellation: &Cancellation,
     ) -> gfm_types::Result<Vec<SearchHit>> {
-        self.query_pass(query, limit, SearchPass::Full, cancellation)
+        self.query_structured_with_lookup_cancellable(
+            query,
+            limit,
+            &EmptySearchLookup,
+            cancellation,
+        )
+    }
+
+    pub fn query_structured_with_lookup_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        lookup: &dyn SearchLookup,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<Vec<SearchHit>> {
+        self.query_pass(query, limit, SearchPass::Full, lookup, cancellation)
     }
 
     pub fn stream(&self, query: &str, limit: usize) -> gfm_types::Result<Vec<SearchStreamBatch>> {
@@ -446,8 +479,20 @@ impl SearchIndex {
             return Ok(Vec::new());
         }
 
-        let hot = self.query_pass(query, limit, SearchPass::Hot, cancellation)?;
-        let full = self.query_pass(query, limit, SearchPass::Full, cancellation)?;
+        let hot = self.query_pass(
+            query,
+            limit,
+            SearchPass::Hot,
+            &EmptySearchLookup,
+            cancellation,
+        )?;
+        let full = self.query_pass(
+            query,
+            limit,
+            SearchPass::Full,
+            &EmptySearchLookup,
+            cancellation,
+        )?;
         let mut seen: HashMap<FileId, i64> = HashMap::new();
         let mut batches = Vec::new();
 
@@ -483,6 +528,7 @@ impl SearchIndex {
         query: &SearchQuery,
         limit: usize,
         pass: SearchPass,
+        lookup: &dyn SearchLookup,
         cancellation: &Cancellation,
     ) -> gfm_types::Result<Vec<SearchHit>> {
         cancellation.check()?;
@@ -500,8 +546,9 @@ impl SearchIndex {
         }
 
         if !text.is_empty() {
-            if let Some(ids) = self.name_prefix_ids(&text) {
-                add_scores(&mut scores, ids, PREFIX_NAME, MatchReason::PrefixName);
+            let ids = self.name_prefix_ids(&text, lookup)?;
+            if !ids.is_empty() {
+                add_scores(&mut scores, &ids, PREFIX_NAME, MatchReason::PrefixName);
             }
         }
 
@@ -532,7 +579,7 @@ impl SearchIndex {
         if pass.includes_deep() {
             for term in &query.terms {
                 cancellation.check()?;
-                for id in self.fuzzy_ids(term) {
+                for id in self.fuzzy_ids(term, lookup)? {
                     cancellation.check()?;
                     let Some(record) = self.records.get(&id) else {
                         continue;
@@ -776,30 +823,51 @@ impl SearchIndex {
             .unwrap_or(0)
     }
 
-    fn fuzzy_ids(&self, term: &str) -> BTreeSet<FileId> {
+    fn fuzzy_ids(
+        &self,
+        term: &str,
+        lookup: &dyn SearchLookup,
+    ) -> gfm_types::Result<BTreeSet<FileId>> {
         if !is_fuzzy_term(term) {
-            return BTreeSet::new();
+            return Ok(BTreeSet::new());
         }
         let mut ids = BTreeSet::new();
         for key in deletion_keys(term, 2) {
-            if let Some(candidates) = self.fuzzy_terms.get(&key) {
-                for candidate in candidates {
-                    if bounded_levenshtein(candidate, term, 2).is_some() {
-                        if let Some(matches) = self.name_terms.get(candidate) {
-                            ids.extend(matches);
-                        }
+            let mut candidates = self.fuzzy_terms.get(&key).cloned().unwrap_or_default();
+            candidates.extend(
+                lookup
+                    .fuzzy_terms(&key)?
+                    .into_iter()
+                    .map(|term| normalize(&term))
+                    .filter(|term| is_fuzzy_term(term)),
+            );
+            for candidate in candidates {
+                if bounded_levenshtein(&candidate, term, 2).is_some() {
+                    if let Some(matches) = self.name_terms.get(&candidate) {
+                        ids.extend(matches);
                     }
                 }
             }
         }
-        ids
+        Ok(ids)
     }
 
-    fn name_prefix_ids(&self, term: &str) -> Option<&BTreeSet<FileId>> {
+    fn name_prefix_ids(
+        &self,
+        term: &str,
+        lookup: &dyn SearchLookup,
+    ) -> gfm_types::Result<BTreeSet<FileId>> {
         if !is_prefix_term(term) {
-            return None;
+            return Ok(BTreeSet::new());
         }
-        self.name_prefixes.get(term)
+        let mut ids = self.name_prefixes.get(term).cloned().unwrap_or_default();
+        ids.extend(
+            lookup
+                .prefix_ids(term)?
+                .into_iter()
+                .filter(|id| self.records.contains_key(id)),
+        );
+        Ok(ids)
     }
 
     fn content_matches_phrase(&self, id: FileId, phrase: &str) -> bool {

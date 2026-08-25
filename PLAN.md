@@ -428,6 +428,11 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - each query term performs binary directory lookup inside each archive instead of hydrating all postings;
   - duplicate file ids and positional offsets are merged deterministically through ordered sets;
   - this lets background compaction publish new tier files while retained archives remain searchable.
+- Query-time prefix and fuzzy archive lookup:
+  - prefix and delete-key fuzzy sidecars expose a store-agnostic lookup contract to the search engine;
+  - live hot records keep in-memory prefix/fuzzy maps while immutable sidecars answer query candidates directly from mmap archives;
+  - sharded search fans out the same archive lookup across volume shards and filters candidate ids per shard;
+  - archive-backed lookup avoids importing large prefix/fuzzy candidate maps into heap memory for each machine-wide query session.
 
 ### Query Pipeline
 

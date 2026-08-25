@@ -95,6 +95,7 @@ The index is compact and incremental:
 - hot mutable buffers
 - progressive hot/deep result streaming with stable dedupe
 - delete-key fuzzy candidate indexes for typo tolerance without full-record scans
+- archive-backed prefix and fuzzy lookup so machine-wide sidecars stay mmap-resident instead of being hydrated into session heap
 - exact phrase and `near:N:alpha,beta` positional content retrieval
 - bounded snippets with highlighted content matches
 - binary-signature and control-byte classification before content extraction

@@ -5,11 +5,11 @@ pub use gfm_search::{
     SearchFuzzyPosting, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
     SearchRecordColumns, SearchStreamStage,
 };
-use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
+use gfm_search::{SearchLookup, SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
     compact_content_segments, compact_content_segments_with_policy, plan_content_segment_merge,
     read_content_postings, read_records, write_content_postings, write_content_segment,
-    write_records, MmapContentSet,
+    write_records, MmapContentSet, MmapFuzzyArchive, MmapPrefixArchive,
 };
 pub use gfm_store::{
     ContentArchiveCleanupReport, ContentArchiveManifest, ContentArchiveManifestEntry,
@@ -196,6 +196,42 @@ pub struct LiveIndex {
     index: ShardedSearchIndex,
 }
 
+#[derive(Debug)]
+pub struct SearchArchiveLookup {
+    prefixes: MmapPrefixArchive,
+    fuzzy: MmapFuzzyArchive,
+}
+
+impl SearchArchiveLookup {
+    pub fn open(
+        prefixes: impl AsRef<Path>,
+        fuzzy: impl AsRef<Path>,
+    ) -> Result<SearchArchiveLookup> {
+        Ok(Self {
+            prefixes: MmapPrefixArchive::open(prefixes)?,
+            fuzzy: MmapFuzzyArchive::open(fuzzy)?,
+        })
+    }
+
+    pub fn indexed_prefixes(&self) -> usize {
+        self.prefixes.indexed_prefixes()
+    }
+
+    pub fn indexed_fuzzy_keys(&self) -> usize {
+        self.fuzzy.indexed_keys()
+    }
+}
+
+impl SearchLookup for SearchArchiveLookup {
+    fn prefix_ids(&self, prefix: &str) -> Result<Vec<FileId>> {
+        self.prefixes.ids_for(prefix)
+    }
+
+    fn fuzzy_terms(&self, key: &str) -> Result<Vec<String>> {
+        self.fuzzy.terms_for(key)
+    }
+}
+
 impl LiveIndex {
     pub fn new() -> Self {
         Self::default()
@@ -313,6 +349,20 @@ impl LiveIndex {
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
         self.index.query(query, limit)
+    }
+
+    pub fn search_with_lookup(
+        &self,
+        query: &str,
+        limit: usize,
+        lookup: &dyn SearchLookup,
+    ) -> Result<Vec<SearchHit>> {
+        self.index.query_structured_with_lookup_cancellable(
+            &SearchQuery::parse(query),
+            limit,
+            lookup,
+            &Cancellation::default(),
+        )
     }
 
     pub fn stream_search(&self, query: &str, limit: usize) -> Result<Vec<SearchStreamBatch>> {
