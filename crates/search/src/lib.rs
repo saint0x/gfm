@@ -30,6 +30,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const FUZZY_MIN_TERM_LEN: usize = 2;
 const FUZZY_MAX_TERM_LEN: usize = 32;
+const PREFIX_MIN_TERM_LEN: usize = 1;
+const PREFIX_MAX_TERM_LEN: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchStreamStage {
@@ -49,6 +51,7 @@ pub struct SearchIndex {
     columns: HashMap<FileId, RecordColumns>,
     paths: HashMap<String, FileId>,
     name_exact: BTreeMap<String, BTreeSet<FileId>>,
+    name_prefixes: BTreeMap<String, BTreeSet<FileId>>,
     name_terms: BTreeMap<String, BTreeSet<FileId>>,
     path_terms: BTreeMap<String, BTreeSet<FileId>>,
     metadata_terms: BTreeMap<String, BTreeSet<FileId>>,
@@ -152,6 +155,14 @@ impl SearchIndex {
 
     pub fn is_pinned(&self, id: FileId) -> bool {
         self.pinned.contains(&id)
+    }
+
+    #[cfg(test)]
+    fn name_prefix_posting_count(&self, prefix: &str) -> usize {
+        self.name_prefixes
+            .get(prefix)
+            .map(BTreeSet::len)
+            .unwrap_or(0)
     }
 
     pub fn insert_content(&mut self, id: FileId, text: &str) {
@@ -341,11 +352,7 @@ impl SearchIndex {
         }
 
         if !text.is_empty() {
-            for (term, ids) in self.name_terms.range(text.clone()..) {
-                cancellation.check()?;
-                if !term.starts_with(&text) {
-                    break;
-                }
+            if let Some(ids) = self.name_prefix_ids(&text) {
                 add_scores(&mut scores, ids, PREFIX_NAME, MatchReason::PrefixName);
             }
         }
@@ -640,6 +647,13 @@ impl SearchIndex {
         ids
     }
 
+    fn name_prefix_ids(&self, term: &str) -> Option<&BTreeSet<FileId>> {
+        if !is_prefix_term(term) {
+            return None;
+        }
+        self.name_prefixes.get(term)
+    }
+
     fn content_matches_phrase(&self, id: FileId, phrase: &str) -> bool {
         let terms = tokenize(&normalize(phrase));
         if terms.is_empty() {
@@ -738,6 +752,12 @@ impl SearchIndex {
                 .entry(token.clone())
                 .or_default()
                 .insert(record.id);
+            for prefix in token_prefixes(token) {
+                self.name_prefixes
+                    .entry(prefix)
+                    .or_default()
+                    .insert(record.id);
+            }
             if is_new {
                 self.add_fuzzy_term(token);
             }
@@ -774,6 +794,9 @@ impl SearchIndex {
         remove_id(&mut self.name_exact, &columns.name, record.id);
         for token in &columns.name_tokens {
             remove_id(&mut self.name_terms, token, record.id);
+            for prefix in token_prefixes(token) {
+                remove_id(&mut self.name_prefixes, &prefix, record.id);
+            }
             if !self.name_terms.contains_key(token) {
                 self.remove_fuzzy_term(token);
             }
@@ -869,6 +892,19 @@ fn path_key(path: &std::path::Path) -> String {
 
 fn is_fuzzy_term(term: &str) -> bool {
     (FUZZY_MIN_TERM_LEN..=FUZZY_MAX_TERM_LEN).contains(&term.chars().count())
+}
+
+fn is_prefix_term(term: &str) -> bool {
+    (PREFIX_MIN_TERM_LEN..=PREFIX_MAX_TERM_LEN).contains(&term.chars().count())
+}
+
+fn token_prefixes(term: &str) -> impl Iterator<Item = String> + '_ {
+    term.char_indices()
+        .map(|(index, _)| index)
+        .skip(1)
+        .chain(std::iter::once(term.len()))
+        .take(PREFIX_MAX_TERM_LEN)
+        .map(|end| term[..end].to_string())
 }
 
 fn expression_needs_universe(expression: &QueryExpr) -> bool {

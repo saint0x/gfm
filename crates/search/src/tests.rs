@@ -73,6 +73,59 @@ fn applied_record_columns_drive_matching_and_filters() {
 }
 
 #[test]
+fn name_prefix_postings_drive_interactive_prefix_search() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/project-plan.md", "project-plan.md"));
+    index.insert(record(2, "/tmp/profile.txt", "profile.txt"));
+    index.insert(record(3, "/tmp/archive.txt", "archive.txt"));
+
+    assert_eq!(index.name_prefix_posting_count("pro"), 2);
+    assert_eq!(index.name_prefix_posting_count("proj"), 1);
+
+    let hits = index.query("proj", 10);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.name, "project-plan.md");
+    assert_eq!(hits[0].reason, MatchReason::PrefixName);
+}
+
+#[test]
+fn reindexed_records_remove_stale_name_prefix_postings() {
+    let mut index = SearchIndex::new();
+    let mut item = record(1, "/tmp/quartz.md", "quartz.md");
+    index.insert(item.clone());
+
+    item.path = PathBuf::from("/tmp/ledger.md");
+    item.name = "ledger.md".to_string();
+    index.insert(item);
+
+    assert_eq!(index.name_prefix_posting_count("qua"), 0);
+    assert!(index.query("qua", 10).is_empty());
+    assert_eq!(index.query("led", 10).len(), 1);
+}
+
+#[test]
+fn applied_record_columns_replace_name_prefix_postings() {
+    let mut index = SearchIndex::new();
+    let item = record(1, "/tmp/original.txt", "original.txt");
+    index.insert(item.clone());
+
+    assert!(index.apply_record_columns(SearchRecordColumns {
+        id: item.id,
+        name: "cached.md".to_string(),
+        path: "/tmp/cached.md".to_string(),
+        extension: Some("md".to_string()),
+        tags: Vec::new(),
+        comment: None,
+    }));
+
+    assert_eq!(index.name_prefix_posting_count("ori"), 0);
+    assert_eq!(index.name_prefix_posting_count("cac"), 1);
+    assert!(index.query("ori", 10).is_empty());
+    assert_eq!(index.query("cac", 10).len(), 1);
+}
+
+#[test]
 fn removes_subtree_by_path() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/folder", "folder"));
