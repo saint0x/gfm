@@ -1,8 +1,8 @@
 use gfm_content::Extractor;
 use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
+pub use gfm_search::{SearchFuzzyPosting, SearchRecordColumns, SearchStreamStage};
 use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
-pub use gfm_search::{SearchRecordColumns, SearchStreamStage};
 use gfm_store::{
     compact_content_segments, read_content_postings, read_records, write_content_postings,
     write_content_segment, write_records,
@@ -201,6 +201,33 @@ impl LiveIndex {
             }
         }
         (live, applied)
+    }
+
+    pub fn from_records_with_columns_and_fuzzy(
+        records: Vec<FileRecord>,
+        columns: Vec<SearchRecordColumns>,
+        fuzzy: Vec<SearchFuzzyPosting>,
+    ) -> (Self, usize, usize) {
+        let mut live = Self::new();
+        let mut columns_by_id = columns
+            .into_iter()
+            .map(|columns| (columns.id, columns))
+            .collect::<HashMap<_, _>>();
+        let mut applied = 0usize;
+        for record in records {
+            if let Some(columns) = columns_by_id.remove(&record.id) {
+                if live
+                    .index
+                    .insert_with_columns_deferred_fuzzy(record, columns)
+                {
+                    applied += 1;
+                }
+            } else {
+                live.index.insert(record);
+            }
+        }
+        let fuzzy_keys = live.index.import_fuzzy_postings(&fuzzy);
+        (live, applied, fuzzy_keys)
     }
 
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {

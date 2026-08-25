@@ -66,6 +66,48 @@ fn live_index_builds_from_records_with_columns_in_one_pass() {
 }
 
 #[test]
+fn live_index_imports_fuzzy_sidecar_after_column_build() {
+    let record = FileRecord {
+        id: FileId::new(VolumeId(1), 1),
+        parent: None,
+        path: PathBuf::from("/tmp/original.txt"),
+        name: "original.txt".to_string(),
+        kind: FileKind::File,
+        len: 0,
+        created: Some(UNIX_EPOCH),
+        modified: Some(SystemTime::now()),
+        changed: Some(SystemTime::now()),
+        mode: 0o644,
+        owner: 501,
+        group: 20,
+        hidden: false,
+        tags: Vec::new(),
+        finder_comment: None,
+        xattrs_digest: 0,
+    };
+
+    let (live, applied, fuzzy_keys) = LiveIndex::from_records_with_columns_and_fuzzy(
+        vec![record.clone()],
+        vec![SearchRecordColumns {
+            id: record.id,
+            name: "needl.md".to_string(),
+            path: "/tmp/needl.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: Vec::new(),
+            comment: None,
+        }],
+        vec![SearchFuzzyPosting {
+            key: "needl".to_string(),
+            terms: vec!["needl".to_string()],
+        }],
+    );
+
+    assert_eq!(applied, 1);
+    assert_eq!(fuzzy_keys, 1);
+    assert_eq!(live.search("needle", 5).len(), 1);
+}
+
+#[test]
 fn live_index_applies_create_modify_and_remove_events() {
     let root = unique_temp_dir("gfm-live-root");
     let target = root.join("Needle.txt");

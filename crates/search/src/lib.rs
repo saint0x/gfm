@@ -45,6 +45,12 @@ pub struct SearchStreamBatch {
     pub hits: Vec<SearchHit>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchFuzzyPosting {
+    pub key: String,
+    pub terms: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SearchIndex {
     records: HashMap<FileId, FileRecord>,
@@ -94,6 +100,23 @@ impl SearchIndex {
         record: FileRecord,
         columns: SearchRecordColumns,
     ) -> bool {
+        self.insert_with_columns_inner(record, columns, true)
+    }
+
+    pub fn insert_with_columns_deferred_fuzzy(
+        &mut self,
+        record: FileRecord,
+        columns: SearchRecordColumns,
+    ) -> bool {
+        self.insert_with_columns_inner(record, columns, false)
+    }
+
+    fn insert_with_columns_inner(
+        &mut self,
+        record: FileRecord,
+        columns: SearchRecordColumns,
+        build_fuzzy: bool,
+    ) -> bool {
         if record.id != columns.id {
             self.insert(record);
             return false;
@@ -105,11 +128,30 @@ impl SearchIndex {
             self.paths.remove(&path_key(&old.path));
         }
         let normalized = RecordColumns::from_search_columns(&columns);
-        self.add_terms(&record, &normalized);
+        self.add_terms_with_fuzzy_policy(&record, &normalized, build_fuzzy);
         self.paths.insert(path_key(&record.path), id);
         self.columns.insert(id, normalized);
         self.records.insert(id, record);
         true
+    }
+
+    pub fn import_fuzzy_postings(&mut self, postings: &[SearchFuzzyPosting]) -> usize {
+        for posting in postings {
+            let key = normalize(&posting.key);
+            if key.is_empty() {
+                continue;
+            }
+            let terms = posting
+                .terms
+                .iter()
+                .map(|term| normalize(term))
+                .filter(|term| is_fuzzy_term(term))
+                .collect::<BTreeSet<_>>();
+            if !terms.is_empty() {
+                self.fuzzy_terms.entry(key).or_default().extend(terms);
+            }
+        }
+        self.fuzzy_terms.len()
     }
 
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {
@@ -765,6 +807,15 @@ impl SearchIndex {
     }
 
     fn add_terms(&mut self, record: &FileRecord, columns: &RecordColumns) {
+        self.add_terms_with_fuzzy_policy(record, columns, true);
+    }
+
+    fn add_terms_with_fuzzy_policy(
+        &mut self,
+        record: &FileRecord,
+        columns: &RecordColumns,
+        build_fuzzy: bool,
+    ) {
         self.name_exact
             .entry(columns.name.clone())
             .or_default()
@@ -781,7 +832,7 @@ impl SearchIndex {
                     .or_default()
                     .insert(record.id);
             }
-            if is_new {
+            if build_fuzzy && is_new {
                 self.add_fuzzy_term(token);
             }
         }

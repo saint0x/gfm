@@ -151,6 +151,65 @@ fn mismatched_record_columns_fall_back_to_record_indexing() {
 }
 
 #[test]
+fn imported_fuzzy_postings_drive_deferred_fuzzy_search() {
+    let mut index = SearchIndex::new();
+    let item = record(1, "/tmp/original.txt", "original.txt");
+    assert!(index.insert_with_columns_deferred_fuzzy(
+        item,
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(1), 1),
+            name: "needl.md".to_string(),
+            path: "/tmp/needl.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: Vec::new(),
+            comment: None,
+        },
+    ));
+    assert!(index.query("needle", 10).is_empty());
+
+    assert_eq!(
+        index.import_fuzzy_postings(&[SearchFuzzyPosting {
+            key: "needl".to_string(),
+            terms: vec!["needl".to_string()],
+        }]),
+        1
+    );
+    let hits = index.query("needle", 10);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].reason, MatchReason::FuzzyName);
+}
+
+#[test]
+fn imported_fuzzy_postings_preserve_fallback_fuzzy_terms() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/plannn.md", "plannn.md"));
+    assert!(index.insert_with_columns_deferred_fuzzy(
+        record(2, "/tmp/original.txt", "original.txt"),
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(1), 2),
+            name: "sidecarr.md".to_string(),
+            path: "/tmp/sidecarr.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: Vec::new(),
+            comment: None,
+        },
+    ));
+
+    assert_eq!(index.query("planner", 10).len(), 1);
+    assert!(index.query("sidecarz", 10).is_empty());
+    assert!(
+        index.import_fuzzy_postings(&[SearchFuzzyPosting {
+            key: "sidecar".to_string(),
+            terms: vec!["sidecarr".to_string()],
+        }]) >= 2
+    );
+
+    assert_eq!(index.query("planner", 10).len(), 1);
+    assert_eq!(index.query("sidecarz", 10).len(), 1);
+}
+
+#[test]
 fn name_prefix_postings_drive_interactive_prefix_search() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/project-plan.md", "project-plan.md"));

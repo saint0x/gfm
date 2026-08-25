@@ -14,8 +14,8 @@ use gfm_index::{
     parse_volume_indexing_policy, BackgroundContentIndexer, ContentIndexJobSpec,
     ContentIndexReport, EventBackpressureQueue, EventPriority, FseventsCursor,
     FseventsCursorHealth, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor,
-    IndexVolumeState, Indexer, LiveIndex, SearchRecordColumns, SearchStreamStage,
-    VolumeIndexPolicy,
+    IndexVolumeState, Indexer, LiveIndex, SearchFuzzyPosting, SearchRecordColumns,
+    SearchStreamStage, VolumeIndexPolicy,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -848,6 +848,50 @@ fn run() -> Result<()> {
             let (live, applied) =
                 LiveIndex::from_records_with_columns(records.records()?, search_columns);
             eprintln!("columns-indexed {applied}");
+            for hit in live.search(&query, 50) {
+                print_hit(&hit);
+            }
+        }
+        Some("search-index-sidecars") => {
+            let records =
+                required_path(args.next(), "search-index-sidecars requires a records path")?;
+            let columns =
+                required_path(args.next(), "search-index-sidecars requires a columns path")?;
+            let fuzzy = required_path(args.next(), "search-index-sidecars requires a fuzzy path")?;
+            let query = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "search-index-sidecars requires a query string".to_string(),
+                )
+            })?;
+            let records = MmapRecordArchive::open(records)?;
+            let columns = MmapRecordColumns::open(columns)?;
+            let fuzzy = MmapFuzzyArchive::open(fuzzy)?;
+            let mut search_columns = Vec::with_capacity(columns.len());
+            for index in 0..columns.len() {
+                let column = columns.column(index)?;
+                search_columns.push(SearchRecordColumns {
+                    id: column.id,
+                    name: column.name,
+                    path: column.path,
+                    extension: column.extension,
+                    tags: column.tags,
+                    comment: column.comment,
+                });
+            }
+            let search_fuzzy = fuzzy
+                .postings()?
+                .into_iter()
+                .map(|posting| SearchFuzzyPosting {
+                    key: posting.key,
+                    terms: posting.terms,
+                })
+                .collect();
+            let (live, applied, fuzzy_keys) = LiveIndex::from_records_with_columns_and_fuzzy(
+                records.records()?,
+                search_columns,
+                search_fuzzy,
+            );
+            eprintln!("columns-indexed {applied} fuzzy-keys {fuzzy_keys}");
             for hit in live.search(&query, 50) {
                 print_hit(&hit);
             }
@@ -2250,6 +2294,7 @@ fn print_usage() {
   gfm search-index <index.gfmidx> <query>
   gfm search-index-mmap <index.gfmidx> <query>
   gfm search-index-columns <index.gfmidx> <columns.gfmcols> <query>
+  gfm search-index-sidecars <index.gfmidx> <columns.gfmcols> <fuzzy.gfmfuzzy> <query>
   gfm records-verify <index.gfmidx>
   gfm index-columns <records.gfmidx> <columns.gfmcols>
   gfm columns-verify <columns.gfmcols>

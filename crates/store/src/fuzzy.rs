@@ -139,6 +139,16 @@ impl MmapFuzzyArchive {
             .unwrap_or_default())
     }
 
+    pub fn postings(&self) -> Result<Vec<FuzzyPosting>> {
+        self.directory
+            .iter()
+            .map(|entry| {
+                let bytes = self.posting_bytes(entry)?;
+                read_fuzzy_posting(Cursor::new(bytes), &self.path)
+            })
+            .collect()
+    }
+
     pub fn posting_for(&self, key: &str) -> Result<Option<FuzzyPosting>> {
         let key = normalize(key);
         if key.is_empty() {

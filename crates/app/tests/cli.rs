@@ -1075,6 +1075,27 @@ fn searches_persisted_tags_from_binary() {
         "{column_search_stdout}"
     );
 
+    let sidecar_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-index-sidecars",
+            index.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+            "tagge",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        sidecar_search.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sidecar_search.stderr)
+    );
+    let sidecar_search_stdout = String::from_utf8(sidecar_search.stdout).unwrap();
+    assert!(
+        sidecar_search_stdout.contains("tagged.md"),
+        "{sidecar_search_stdout}"
+    );
+
     fs::remove_file(index).unwrap();
     fs::remove_file(metadata).unwrap();
     fs::remove_file(dictionary).unwrap();

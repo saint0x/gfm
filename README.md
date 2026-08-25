@@ -296,6 +296,7 @@ cargo run -p gfm -- fsevents-repair-schedule /tmp/gfm.gfmstate /tmp/gfm.gfmcurso
 cargo run -p gfm -- search-index /tmp/gfm.gfmidx PLAN
 cargo run -p gfm -- search-index-mmap /tmp/gfm.gfmidx PLAN
 cargo run -p gfm -- search-index-columns /tmp/gfm.gfmidx /tmp/gfm.gfmcols PLAN
+cargo run -p gfm -- search-index-sidecars /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmfuzzy PLAN
 cargo run -p gfm -- records-verify /tmp/gfm.gfmidx
 cargo run -p gfm -- index-columns /tmp/gfm.gfmidx /tmp/gfm.gfmcols
 cargo run -p gfm -- columns-verify /tmp/gfm.gfmcols
