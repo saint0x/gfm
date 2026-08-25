@@ -2231,6 +2231,92 @@ fn recovers_paused_operation_from_binary() {
 }
 
 #[test]
+fn restores_trash_entry_from_binary_using_metadata_destination() {
+    let root = unique_temp_dir("gfm-cli-ops-restore-root");
+    let journal = root.join("ops.journal");
+    let metadata = root.join("trash.tsv");
+    let trash_dir = root.join("Trash");
+    let original_dir = root.join("Documents");
+    let trashed = trash_dir.join("report.md");
+    let original = original_dir.join("report.md");
+    fs::create_dir_all(&trash_dir).unwrap();
+    fs::create_dir_all(&original_dir).unwrap();
+    fs::write(&trashed, "restored bytes").unwrap();
+    fs::write(
+        &metadata,
+        format!(
+            "report.md\t{}\t7\ttrue\ttrue\t\n",
+            original.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .env("GFM_TRASH_METADATA", &metadata)
+        .args(["restore", trashed.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\tcompleted"), "{stdout}");
+    assert!(!trashed.exists());
+    assert_eq!(fs::read_to_string(&original).unwrap(), "restored bytes");
+    assert!(fs::read_to_string(&metadata).unwrap().trim().is_empty());
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(journal_text.contains("\trestore\t"), "{journal_text}");
+    assert!(journal_text.contains("\tcompleted\t"), "{journal_text}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn restores_trash_entry_from_binary_with_metadata_destination_and_replace() {
+    let root = unique_temp_dir("gfm-cli-ops-restore-replace-root");
+    let journal = root.join("ops.journal");
+    let metadata = root.join("trash.tsv");
+    let trash_dir = root.join("Trash");
+    let original_dir = root.join("Documents");
+    let trashed = trash_dir.join("report.md");
+    let original = original_dir.join("report.md");
+    fs::create_dir_all(&trash_dir).unwrap();
+    fs::create_dir_all(&original_dir).unwrap();
+    fs::write(&trashed, "replacement").unwrap();
+    fs::write(&original, "existing").unwrap();
+    fs::write(
+        &metadata,
+        format!(
+            "report.md\t{}\t8\ttrue\ttrue\t\n",
+            original.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .env("GFM_TRASH_METADATA", &metadata)
+        .args(["restore", trashed.to_str().unwrap(), "--replace"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(!trashed.exists());
+    assert_eq!(fs::read_to_string(&original).unwrap(), "replacement");
+    assert!(fs::read_to_string(&metadata).unwrap().trim().is_empty());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn retries_failed_operation_from_binary_when_policy_allows_it() {
     let root = unique_temp_dir("gfm-cli-ops-retry-root");
     let journal = root.join("ops.journal");

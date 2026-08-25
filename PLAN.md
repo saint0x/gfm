@@ -174,7 +174,7 @@ The application should be a multi-crate Rust workspace with a thin native macOS 
 gfm/
   Cargo.toml
   crates/
-    app/          binary entrypoint, command routing, operator inspection
+    app/          native app entrypoint, internal operator/test harness routing, diagnostics
     ui/           GPUI app composition, production window lifecycle, root surface, Finder-parity components, layout tokens, view renderers
     mac/          Objective-C/Swift/CoreServices/AppKit/QuickLook bridges
     fs/           enumeration, stat, permissions, aliases, packages, volumes
@@ -204,7 +204,7 @@ gfm/
 
 `app`
 
-- Owns the native binary entrypoint, command routing, and operator-facing inspection commands.
+- Owns the native GPUI application entrypoint plus internal operator/test harness routes for deterministic diagnostics, recovery, and verification.
 - Does not perform direct filesystem work.
 - Does not know index storage internals.
 
@@ -234,7 +234,7 @@ gfm/
 `ops`
 
 - Owns mutating operations and user-visible jobs.
-- Supports APFS clone fast paths through safe native `fclonefileat` bindings with byte-copy fallback for unsupported or cross-device regular-file copies, preserves symlink objects during top-level and directory copies, preserves ownership where the host permits it, preserves permissions, access/modified timestamps, and copyable xattrs on copied files and directories, verifies copied regular-file output with size-only or streaming byte comparison policies before reporting success, emits exact preflight item/byte totals and completion-backed progress events for recursive operations, journals cancellation distinctly from failures, honors cancellation and pause checkpoints during planning and recursive execution, resolves replace, keep-both, and merge-folder conflicts through operation-engine policies before journaling the actual destination, replays interrupted started operations from the durable journal with the original operation id, resumes paused copy/move/rename operations through idempotent destination verification before appending completion, retries classified transient failed operations under explicit capped policy, plus atomic renames, trash semantics, conflict dialogs, checksums where necessary, and network-volume fallbacks.
+- Supports APFS clone fast paths through safe native `fclonefileat` bindings with byte-copy fallback for unsupported or cross-device regular-file copies, preserves symlink objects during top-level and directory copies, preserves ownership where the host permits it, preserves permissions, access/modified timestamps, and copyable xattrs on copied files and directories, verifies copied regular-file output with size-only or streaming byte comparison policies before reporting success, emits exact preflight item/byte totals and completion-backed progress events for recursive operations, journals cancellation distinctly from failures, honors cancellation and pause checkpoints during planning and recursive execution, resolves replace, keep-both, and merge-folder conflicts through operation-engine policies before journaling the actual destination, records GFM Trash restore metadata, restores trash entries to their metadata-backed original paths through the same journaled operation engine, replays interrupted started operations from the durable journal with the original operation id, resumes paused copy/move/rename operations through idempotent destination verification before appending completion, retries classified transient failed operations under explicit capped policy, plus atomic renames, trash semantics, conflict dialogs, checksums where necessary, and network-volume fallbacks.
 
 `index`
 
@@ -275,7 +275,7 @@ gfm/
 - Provides structured cancellation tokens where parent cancellation propagates to child and grandchild work, child cancellation stays local to that branch, and nested worker checks observe cancellation through the shared jobs-layer contract.
 - Classifies retriable job failures as transient, permission, missing-file, corrupt-file, offline-volume, or permanent before recovery admission, applies bounded exponential backoff only to retryable classes, and exposes the decision through an operator CLI report.
 - Retries adaptive scheduled repair, maintenance, and rebuild producers through the isolated jobs worker with capped retry policy, persistent attempt journal entries, runtime metadata updates, and a deterministic operator probe for validating transient retry behavior.
-- Admits foreground copy, move, rename, delete, and trash operation CLI jobs through the volume-isolated worker path before they enter the operation engine.
+- Admits foreground copy, move, rename, delete, trash, and restore actions through the volume-isolated worker path before they enter the operation engine; command-line routes remain internal operator/test harnesses, not the product file-manager UI.
 - Admits interactive live content extraction/search jobs through the same volume-isolated worker path before they crawl, extract, and snippet candidate files.
 - Admits Quick Look preview and thumbnail generation jobs through the same volume-isolated worker path before producing preview contracts.
 - Persists background content indexing job volume identity and resumes that job through the same isolated, journaled, capped-retry worker path.

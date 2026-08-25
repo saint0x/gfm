@@ -36,7 +36,10 @@ use gfm_mac::{
     SecurityScopedAccessReport, SpotlightMetadataReader, SpotlightReconciliationReport,
     SupportMatrix, VolumeDescriptor, VolumeDiscoveryReport, VolumeKind, WatchRoot,
 };
-use gfm_ops::{ConflictPolicy, Operation, OperationContext, OperationRecoveryPolicy, Operator};
+use gfm_ops::{
+    read_trash_metadata, ConflictPolicy, Operation, OperationContext, OperationRecoveryPolicy,
+    Operator,
+};
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path,
     PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
@@ -3197,6 +3200,20 @@ fn run() -> Result<()> {
             let path = required_path(args.next(), "trash requires a path")?;
             execute_operation(Operation::Trash { path }, ConflictPolicy::Fail)?;
         }
+        Some("restore") => {
+            let from = required_path(args.next(), "restore requires a trash entry path")?;
+            let mut restore_args = args.collect::<Vec<_>>();
+            let to = if restore_args
+                .first()
+                .is_some_and(|value| !value.starts_with("--"))
+            {
+                PathBuf::from(restore_args.remove(0))
+            } else {
+                restore_destination_from_metadata(&from)?
+            };
+            let conflict = parse_operation_conflict_args(&mut restore_args.into_iter(), "restore")?;
+            execute_operation(Operation::Restore { from, to }, conflict)?;
+        }
         _ => print_usage(),
     }
     Ok(())
@@ -3270,6 +3287,31 @@ fn parse_operation_conflict_args(
         }
     }
     Ok(conflict)
+}
+
+fn restore_destination_from_metadata(trashed_path: &Path) -> Result<PathBuf> {
+    let name = trashed_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            GfmError::Format(format!(
+                "could not derive trash entry name for {}",
+                trashed_path.display()
+            ))
+        })?;
+    let metadata_path = default_trash_metadata_path();
+    let metadata = read_trash_metadata(&metadata_path)?;
+    metadata
+        .get(&name)
+        .filter(|entry| entry.can_restore)
+        .map(|entry| entry.original_path.clone())
+        .ok_or_else(|| {
+            GfmError::Format(format!(
+                "no restorable trash metadata for `{name}` in {}",
+                metadata_path.display()
+            ))
+        })
 }
 
 fn parse_sidecar_paths(
@@ -3711,6 +3753,7 @@ fn parity_fixture_options(
 
 fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<()> {
     let journal = default_journal_path();
+    let trash_metadata = default_trash_metadata_path();
     let entry_slot = Arc::new(Mutex::new(None));
     let entry_slot_task = Arc::clone(&entry_slot);
     let mut scheduler = Scheduler::new();
@@ -3730,7 +3773,11 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     let runtime_task = runtime.clone();
     let task = Task::new(job.clone(), move |_| {
         runtime_task.running()?;
-        let operator = Operator::new(OperationContext::new(journal).with_conflict(conflict));
+        let operator = Operator::new(
+            OperationContext::new(journal)
+                .with_conflict(conflict)
+                .with_trash_metadata_path(trash_metadata),
+        );
         let entry = operator.execute(operation)?;
         *entry_slot_task
             .lock()
@@ -3769,7 +3816,8 @@ fn operation_volume(operation: &Operation) -> Option<VolumeId> {
     let primary = match operation {
         Operation::Copy { from, .. }
         | Operation::Move { from, .. }
-        | Operation::Rename { from, .. } => Some(from.as_path()),
+        | Operation::Rename { from, .. }
+        | Operation::Restore { from, .. } => Some(from.as_path()),
         Operation::Delete { path } | Operation::Trash { path } => Some(path.as_path()),
     };
     primary
@@ -4641,6 +4689,12 @@ fn default_journal_path() -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("gfm-ops.journal"))
 }
 
+fn default_trash_metadata_path() -> PathBuf {
+    std::env::var_os("GFM_TRASH_METADATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("gfm-trash.tsv"))
+}
+
 fn default_job_journal_path() -> PathBuf {
     std::env::var_os("GFM_JOB_JOURNAL")
         .map(PathBuf::from)
@@ -4670,6 +4724,7 @@ fn operation_kind(operation: &Operation) -> &'static str {
         Operation::Rename { .. } => "rename",
         Operation::Delete { .. } => "delete",
         Operation::Trash { .. } => "trash",
+        Operation::Restore { .. } => "restore",
     }
 }
 
@@ -5227,6 +5282,7 @@ fn print_usage() {
   gfm move <source> <destination> [--replace|--keep-both|--merge]
   gfm rename <source> <destination> [--replace|--keep-both|--merge]
   gfm delete <path>
-  gfm trash <path>"
+  gfm trash <path>
+  gfm restore <trash-entry> [original-path] [--replace|--keep-both|--merge]"
     );
 }

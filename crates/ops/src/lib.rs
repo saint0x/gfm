@@ -1,4 +1,5 @@
 use gfm_types::{GfmError, Result};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -22,12 +23,16 @@ pub enum Operation {
     Rename { from: PathBuf, to: PathBuf },
     Delete { path: PathBuf },
     Trash { path: PathBuf },
+    Restore { from: PathBuf, to: PathBuf },
 }
 
 impl Operation {
     pub fn target_path(&self) -> Option<&Path> {
         match self {
-            Self::Copy { to, .. } | Self::Move { to, .. } | Self::Rename { to, .. } => Some(to),
+            Self::Copy { to, .. }
+            | Self::Move { to, .. }
+            | Self::Rename { to, .. }
+            | Self::Restore { to, .. } => Some(to),
             Self::Delete { .. } | Self::Trash { .. } => None,
         }
     }
@@ -123,6 +128,7 @@ pub struct OperationRecoveryOutcome {
 pub struct OperationContext {
     pub conflict: ConflictPolicy,
     pub journal_path: PathBuf,
+    pub trash_metadata_path: Option<PathBuf>,
     pub cancellation: OperationCancellation,
     pub pause: OperationPause,
     pub verification: VerificationPolicy,
@@ -133,6 +139,7 @@ impl OperationContext {
         Self {
             conflict: ConflictPolicy::Fail,
             journal_path: journal_path.into(),
+            trash_metadata_path: None,
             cancellation: OperationCancellation::default(),
             pause: OperationPause::default(),
             verification: VerificationPolicy::Bytes,
@@ -141,6 +148,11 @@ impl OperationContext {
 
     pub fn with_conflict(mut self, conflict: ConflictPolicy) -> Self {
         self.conflict = conflict;
+        self
+    }
+
+    pub fn with_trash_metadata_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.trash_metadata_path = Some(path.into());
         self
     }
 
@@ -340,7 +352,16 @@ impl Operator {
                 progress,
             ),
             Operation::Delete { path } => delete_path(path, progress),
-            Operation::Trash { path } => trash_path(path, progress),
+            Operation::Trash { path } => {
+                trash_path(path, self.context.trash_metadata_path.as_deref(), progress)
+            }
+            Operation::Restore { from, to } => restore_path(
+                from,
+                to,
+                self.context.conflict,
+                self.context.trash_metadata_path.as_deref(),
+                progress,
+            ),
         }
     }
 
@@ -514,7 +535,8 @@ fn plan_operation_checked(
     match operation {
         Operation::Copy { from, .. }
         | Operation::Move { from, .. }
-        | Operation::Rename { from, .. } => plan_path(from, cancellation),
+        | Operation::Rename { from, .. }
+        | Operation::Restore { from, .. } => plan_path(from, cancellation),
         Operation::Delete { path } | Operation::Trash { path } => plan_path(path, cancellation),
     }
 }
@@ -736,12 +758,195 @@ fn delete_path_untracked(path: &Path) -> Result<()> {
 
 fn trash_path(
     path: &Path,
+    metadata_path: Option<&Path>,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
     ensure_source_exists(path)?;
+    if let Some(metadata_path) = metadata_path {
+        append_trash_metadata(metadata_path, path)?;
+    }
     trash::delete(path).map_err(|err| GfmError::io(path, err))?;
     progress.complete()
+}
+
+fn restore_path(
+    from: &Path,
+    to: &Path,
+    conflict: ConflictPolicy,
+    metadata_path: Option<&Path>,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    progress.check_cancelled()?;
+    move_path(
+        from,
+        to,
+        conflict,
+        VerificationPolicy::Bytes,
+        false,
+        progress,
+    )?;
+    if let Some(metadata_path) = metadata_path {
+        remove_trash_metadata(metadata_path, from)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashRestoreMetadata {
+    pub name: String,
+    pub original_path: PathBuf,
+    pub deleted_at_nanos: u128,
+    pub can_restore: bool,
+    pub can_delete_permanently: bool,
+    pub permission_issue: Option<String>,
+}
+
+impl TrashRestoreMetadata {
+    fn from_original_path(path: &Path) -> Result<Self> {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| {
+                GfmError::Format(format!(
+                    "could not derive trash metadata name for {}",
+                    path.display()
+                ))
+            })?;
+        Ok(Self {
+            name,
+            original_path: path.to_path_buf(),
+            deleted_at_nanos: now_nanos(),
+            can_restore: true,
+            can_delete_permanently: true,
+            permission_issue: None,
+        })
+    }
+
+    fn as_tsv(&self) -> String {
+        [
+            escape(&self.name),
+            escape(&path_string(&self.original_path)),
+            self.deleted_at_nanos.to_string(),
+            self.can_restore.to_string(),
+            self.can_delete_permanently.to_string(),
+            escape(self.permission_issue.as_deref().unwrap_or("")),
+        ]
+        .join("\t")
+    }
+}
+
+pub fn read_trash_metadata(
+    path: impl AsRef<Path>,
+) -> Result<BTreeMap<String, TrashRestoreMetadata>> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+    let reader = BufReader::new(file);
+    let mut entries = BTreeMap::new();
+    for (line_index, line) in reader.lines().enumerate() {
+        let line = line.map_err(|err| GfmError::io(path, err))?;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() != 6 {
+            return Err(GfmError::Format(format!(
+                "{}:{} expected 6 tab-separated fields: name, original_path, deleted_at_nanos, can_restore, can_delete_permanently, permission_issue",
+                path.display(),
+                line_index + 1
+            )));
+        }
+        let name = unescape(fields[0]).map_err(GfmError::Format)?;
+        let original_path = PathBuf::from(unescape(fields[1]).map_err(GfmError::Format)?);
+        let deleted_at_nanos = fields[2].parse().map_err(|err| {
+            GfmError::Format(format!(
+                "{}:{} invalid deleted_at_nanos `{}`: {err}",
+                path.display(),
+                line_index + 1,
+                fields[2]
+            ))
+        })?;
+        let can_restore = parse_bool_field(fields[3], "can_restore", path, line_index + 1)?;
+        let can_delete_permanently =
+            parse_bool_field(fields[4], "can_delete_permanently", path, line_index + 1)?;
+        let permission_issue = unescape(fields[5])
+            .map_err(GfmError::Format)
+            .map(|value| (!value.is_empty()).then_some(value))?;
+        entries.insert(
+            name.clone(),
+            TrashRestoreMetadata {
+                name,
+                original_path,
+                deleted_at_nanos,
+                can_restore,
+                can_delete_permanently,
+                permission_issue,
+            },
+        );
+    }
+    Ok(entries)
+}
+
+fn append_trash_metadata(path: &Path, original_path: &Path) -> Result<()> {
+    append_trash_metadata_entry(
+        path,
+        &TrashRestoreMetadata::from_original_path(original_path)?,
+    )
+}
+
+fn append_trash_metadata_entry(path: &Path, entry: &TrashRestoreMetadata) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
+    let mut entries = read_trash_metadata(path)?;
+    entries.insert(entry.name.clone(), entry.clone());
+    write_trash_metadata(path, entries.values())
+}
+
+fn remove_trash_metadata(path: &Path, trashed_path: &Path) -> Result<()> {
+    let Some(name) = trashed_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+    else {
+        return Ok(());
+    };
+    let mut entries = read_trash_metadata(path)?;
+    entries.remove(&name);
+    write_trash_metadata(path, entries.values())
+}
+
+fn write_trash_metadata<'a>(
+    path: &Path,
+    entries: impl IntoIterator<Item = &'a TrashRestoreMetadata>,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
+    let tmp = path.with_extension("tmp");
+    {
+        let mut file = File::create(&tmp).map_err(|err| GfmError::io(&tmp, err))?;
+        for entry in entries {
+            writeln!(file, "{}", entry.as_tsv()).map_err(|err| GfmError::io(&tmp, err))?;
+        }
+        file.flush().map_err(|err| GfmError::io(&tmp, err))?;
+    }
+    fs::rename(&tmp, path).map_err(|err| GfmError::io(path, err))
+}
+
+fn parse_bool_field(value: &str, name: &str, path: &Path, line: usize) -> Result<bool> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(GfmError::Format(format!(
+            "{}:{} invalid {name} `{other}`",
+            path.display(),
+            line
+        ))),
+    }
 }
 
 fn copy_directory(
@@ -1182,6 +1387,10 @@ fn resolve_operation_conflicts(
         }),
         Operation::Delete { path } => Ok(Operation::Delete { path }),
         Operation::Trash { path } => Ok(Operation::Trash { path }),
+        Operation::Restore { from, to } => Ok(Operation::Restore {
+            from,
+            to: keep_both_path(&to)?,
+        }),
     }
 }
 
@@ -1325,6 +1534,7 @@ fn encode_operation(operation: &Operation) -> (&'static str, String, String) {
         Operation::Rename { from, to } => ("rename", path_string(from), path_string(to)),
         Operation::Delete { path } => ("delete", path_string(path), String::new()),
         Operation::Trash { path } => ("trash", path_string(path), String::new()),
+        Operation::Restore { from, to } => ("restore", path_string(from), path_string(to)),
     }
 }
 
@@ -1347,6 +1557,10 @@ fn decode_operation(kind: &str, from: &str, to: &str) -> std::result::Result<Ope
         }),
         "trash" => Ok(Operation::Trash {
             path: PathBuf::from(from),
+        }),
+        "restore" => Ok(Operation::Restore {
+            from: PathBuf::from(from),
+            to: PathBuf::from(to),
         }),
         other => Err(format!("unknown operation `{other}`")),
     }
@@ -2131,6 +2345,101 @@ mod tests {
             fs::read_to_string(destination.join("nested").join("old.txt")).unwrap(),
             "old"
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn trash_metadata_round_trips_original_restore_destination() {
+        let root = unique_temp_dir("gfm-ops-trash-metadata");
+        let metadata = root.join("trash.tsv");
+        let original = root.join("Documents").join("report.md");
+        fs::create_dir_all(original.parent().unwrap()).unwrap();
+
+        append_trash_metadata(&metadata, &original).unwrap();
+
+        let entries = read_trash_metadata(&metadata).unwrap();
+        let entry = entries.get("report.md").unwrap();
+        assert_eq!(entry.original_path, original);
+        assert!(entry.can_restore);
+        assert!(entry.can_delete_permanently);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restore_moves_trash_entry_to_metadata_destination_and_removes_metadata() {
+        let root = unique_temp_dir("gfm-ops-restore");
+        let journal = root.join("journal.log");
+        let metadata = root.join("trash.tsv");
+        let trash_dir = root.join("Trash");
+        let original_dir = root.join("Documents");
+        let trashed = trash_dir.join("report.md");
+        let original = original_dir.join("report.md");
+        fs::create_dir_all(&trash_dir).unwrap();
+        fs::create_dir_all(&original_dir).unwrap();
+        fs::write(&trashed, "restore me").unwrap();
+        append_trash_metadata_entry(
+            &metadata,
+            &TrashRestoreMetadata {
+                name: "report.md".to_string(),
+                original_path: original.clone(),
+                deleted_at_nanos: 7,
+                can_restore: true,
+                can_delete_permanently: true,
+                permission_issue: None,
+            },
+        )
+        .unwrap();
+
+        let entry = Operator::new(
+            OperationContext::new(&journal)
+                .with_trash_metadata_path(&metadata)
+                .with_conflict(ConflictPolicy::Fail),
+        )
+        .execute(Operation::Restore {
+            from: trashed.clone(),
+            to: original.clone(),
+        })
+        .unwrap();
+
+        assert_eq!(entry.status, OperationStatus::Completed);
+        assert!(!trashed.exists());
+        assert_eq!(fs::read_to_string(&original).unwrap(), "restore me");
+        assert!(read_trash_metadata(&metadata).unwrap().is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restore_conflict_preserves_trash_entry_and_existing_destination() {
+        let root = unique_temp_dir("gfm-ops-restore-conflict");
+        let journal = root.join("journal.log");
+        let metadata = root.join("trash.tsv");
+        let trash_dir = root.join("Trash");
+        let original_dir = root.join("Documents");
+        let trashed = trash_dir.join("report.md");
+        let original = original_dir.join("report.md");
+        fs::create_dir_all(&trash_dir).unwrap();
+        fs::create_dir_all(&original_dir).unwrap();
+        fs::write(&trashed, "trashed").unwrap();
+        fs::write(&original, "existing").unwrap();
+        append_trash_metadata(&metadata, &original).unwrap();
+
+        let err =
+            Operator::new(OperationContext::new(&journal).with_trash_metadata_path(&metadata))
+                .execute(Operation::Restore {
+                    from: trashed.clone(),
+                    to: original.clone(),
+                })
+                .unwrap_err();
+
+        assert!(matches!(err, GfmError::Conflict { .. }));
+        assert_eq!(fs::read_to_string(&trashed).unwrap(), "trashed");
+        assert_eq!(fs::read_to_string(&original).unwrap(), "existing");
+        assert!(read_trash_metadata(&metadata)
+            .unwrap()
+            .contains_key("report.md"));
 
         fs::remove_dir_all(root).unwrap();
     }
