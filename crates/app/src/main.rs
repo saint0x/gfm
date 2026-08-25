@@ -15,7 +15,8 @@ use gfm_jobs::{
     WorkerPool,
 };
 use gfm_mac::{
-    current_host_profile, current_permission_onboarding, FileEventStream, SupportMatrix, WatchRoot,
+    current_host_profile, current_permission_onboarding, FileEventStream, MacBridgeContract,
+    SupportMatrix, WatchRoot,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_preview::{
@@ -713,6 +714,9 @@ fn run() -> Result<()> {
                     escape_output_field(&item.reason)
                 );
             }
+        }
+        Some("mac-bridges") => {
+            println!("{}", MacBridgeContract::finder_required().as_tsv());
         }
         Some("preview-check") => {
             let path = required_path(args.next(), "preview-check requires a path")?;
@@ -1479,6 +1483,7 @@ fn print_usage() {
   gfm diagnostics-storage-inspect <records.gfmidx|content.gfmcontent>
   gfm support-check
   gfm permission-onboarding
+  gfm mac-bridges
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm preview-schedule
   gfm macrobench <workspace> [smoke|standard]

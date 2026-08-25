@@ -5,8 +5,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 
+mod bridge;
 mod permissions;
 
+pub use bridge::{
+    MacBridgeContract, MacBridgeSpec, MacBridgeStatus, MacBridgeThreadPolicy, MacFramework,
+};
 pub use permissions::{
     current_permission_onboarding, PermissionAction, PermissionOnboardingPlan, PermissionPolicy,
     PermissionPromptMode, PermissionReadiness, PermissionScope, PermissionState,

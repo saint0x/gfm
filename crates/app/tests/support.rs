@@ -58,6 +58,31 @@ fn reports_permission_onboarding_from_binary() {
 }
 
 #[test]
+fn reports_mac_bridge_contract_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("mac-bridges")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("mac-bridges\timplemented=4\trequired=6\ttotal=10"));
+    assert!(stdout.contains(
+        "bridge\tfoundation-host-profile\tfoundation\tcrates/mac\tsw-vers-uname-sysctl-host-profile\tbackground-safe\timplemented"
+    ));
+    assert!(stdout.contains(
+        "bridge\tfsevents-file-event-stream\tfile-events\tcrates/mac\ttyped-create-modify-remove-rename-rescan-events\tdedicated-worker\timplemented"
+    ));
+    assert!(stdout.contains(
+        "bridge\tquicklook-preview\tquicklook\tcrates/preview\tquicklook-preview-controller-thumbnail-generator\tmain-thread\trequired"
+    ));
+}
+
+#[test]
 fn reports_ui_lifecycle_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-contract", "/tmp/gfm"])

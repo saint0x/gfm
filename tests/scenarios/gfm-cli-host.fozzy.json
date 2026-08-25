@@ -235,6 +235,12 @@
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["mac-bridges"],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["ui-contract", "/tmp/gfm"],
       "expect_exit": 0
     },

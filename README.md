@@ -207,6 +207,7 @@ cargo run -p gfm -- diagnostics-storage-inspect /tmp/gfm.gfmidx
 cargo run -p gfm -- diagnostics-storage-inspect /tmp/gfm.gfmcontent
 cargo run -p gfm -- diagnostics-trace-export /tmp/gfm-diagnostics.json
 cargo run -p gfm -- diagnostics-parity-baseline ~/Library/Application\ Support/GFM/config.toml tests/parity/baselines 25A354
+cargo run -p gfm -- mac-bridges
 ```
 
 Check the current host against the supported macOS and hardware matrix:

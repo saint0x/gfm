@@ -37,7 +37,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## macOS Integration
 
-23. Build typed AppKit/Foundation/CoreServices bridges behind narrow Rust APIs.
+23. Finish native macOS bridges by replacing the implemented bridge registry's required surfaces with narrow Rust APIs for direct AppKit, Foundation, CoreServices, LaunchServices, Quick Look, Security, DiskArbitration, FileProvider, Spotlight, and FSEvents bindings, with ownership isolation, thread-affinity enforcement, error mapping, and host-version gates.
 24. Implement native file icons via LaunchServices and Finder-compatible badge composition.
 25. Implement Quick Look previews and preview controller integration.
 26. Implement thumbnail generation through QuickLookThumbnailing with cache policy and invalidation.
