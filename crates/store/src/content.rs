@@ -1,4 +1,7 @@
 use crate::durable;
+use crate::ids::{
+    read_blocked_file_id_block_from_slice, read_blocked_file_ids, write_blocked_file_ids,
+};
 use gfm_types::{
     ContentPositions, ContentPosting, ContentSegment, FileId, GfmError, Result, VolumeId,
 };
@@ -11,6 +14,7 @@ use std::path::{Path, PathBuf};
 const CONTENT_MAGIC_V1: &[u8] = b"gfm-content-v1\n";
 const CONTENT_MAGIC_V2: &[u8] = b"gfm-content-v2\n";
 const CONTENT_MAGIC_V3: &[u8] = b"gfm-content-v3\n";
+const CONTENT_MAGIC_V4: &[u8] = b"gfm-content-v4\n";
 const CONTENT_SEGMENT_MAGIC: &[u8] = b"gfm-content-segment-v1\n";
 const CONTENT_SEGMENT_MAGIC_V2: &[u8] = b"gfm-content-segment-v2\n";
 const CONTENT_INDEX_FOOTER: &[u8] = b"gfm-content-index-v1\n";
@@ -21,18 +25,33 @@ enum ContentStoreVersion {
     Legacy,
     IndexedIds,
     IndexedPositions,
+    IndexedBlockedPositions,
+}
+
+impl ContentStoreVersion {
+    const fn uses_positions(self) -> bool {
+        matches!(self, Self::IndexedPositions | Self::IndexedBlockedPositions)
+    }
+
+    const fn uses_blocked_ids(self) -> bool {
+        matches!(self, Self::IndexedBlockedPositions)
+    }
 }
 
 pub fn write_content_postings(path: impl AsRef<Path>, postings: &[ContentPosting]) -> Result<()> {
     let path = path.as_ref();
     durable::atomic_write(path, |writer| {
         let mut writer = CountingWriter::new(writer);
-        writer.write_all(CONTENT_MAGIC_V3)?;
+        writer.write_all(CONTENT_MAGIC_V4)?;
         write_varint(&mut writer, postings.len() as u64)?;
         let mut directory = Vec::with_capacity(postings.len());
         for posting in postings {
             let offset = writer.position();
-            write_content_posting(&mut writer, posting)?;
+            write_content_posting(
+                &mut writer,
+                posting,
+                ContentStoreVersion::IndexedBlockedPositions,
+            )?;
             let end = writer.position();
             directory.push(ContentDirectoryEntry {
                 term: posting.term.trim().to_lowercase(),
@@ -58,7 +77,8 @@ pub fn read_content_postings(path: impl AsRef<Path>) -> Result<Vec<ContentPostin
     let path = path.as_ref();
     let mut file = File::open(path).map_err(|err| GfmError::io(path, err))?;
     let magic = read_content_magic(&mut file, path)?;
-    if magic != CONTENT_MAGIC_V1 && magic != CONTENT_MAGIC_V2 && magic != CONTENT_MAGIC_V3 {
+    let version = content_version(&magic, path)?;
+    if version == ContentStoreVersion::Legacy && magic != CONTENT_MAGIC_V1 {
         return Err(GfmError::Format(format!(
             "unsupported content store header in {}",
             path.display()
@@ -68,11 +88,7 @@ pub fn read_content_postings(path: impl AsRef<Path>) -> Result<Vec<ContentPostin
     let count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
-        postings.push(read_content_posting(
-            &mut file,
-            path,
-            magic.as_slice() == CONTENT_MAGIC_V3,
-        )?);
+        postings.push(read_content_posting(&mut file, path, version)?);
     }
     Ok(postings)
 }
@@ -95,7 +111,7 @@ pub struct ContentArchive {
     path: PathBuf,
     file: File,
     directory: ContentArchiveDirectory,
-    uses_positions: bool,
+    version: ContentStoreVersion,
 }
 
 #[derive(Debug)]
@@ -103,7 +119,7 @@ pub struct MmapContentArchive {
     path: PathBuf,
     mmap: Mmap,
     directory: Vec<ContentDirectoryEntry>,
-    uses_positions: bool,
+    version: ContentStoreVersion,
 }
 
 impl ContentArchive {
@@ -111,27 +127,33 @@ impl ContentArchive {
         let path = path.as_ref();
         let mut file = File::open(path).map_err(|err| GfmError::io(path, err))?;
         let magic = read_content_magic(&mut file, path)?;
-        if magic == CONTENT_MAGIC_V2 || magic == CONTENT_MAGIC_V3 {
+        let version = content_version(&magic, path)?;
+        if matches!(
+            version,
+            ContentStoreVersion::IndexedIds
+                | ContentStoreVersion::IndexedPositions
+                | ContentStoreVersion::IndexedBlockedPositions
+        ) {
             let directory = read_content_directory(&mut file, path)?;
             Ok(Self {
                 path: path.to_path_buf(),
                 file,
                 directory: ContentArchiveDirectory::Indexed(directory),
-                uses_positions: magic == CONTENT_MAGIC_V3,
+                version,
             })
-        } else if magic == CONTENT_MAGIC_V1 {
+        } else if version == ContentStoreVersion::Legacy {
             file.seek(SeekFrom::Start(CONTENT_MAGIC_V1.len() as u64))
                 .map_err(|err| GfmError::io(path, err))?;
             let count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
             let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
             for _ in 0..count {
-                postings.push(read_content_posting(&mut file, path, false)?);
+                postings.push(read_content_posting(&mut file, path, version)?);
             }
             Ok(Self {
                 path: path.to_path_buf(),
                 file,
                 directory: ContentArchiveDirectory::Legacy(postings),
-                uses_positions: false,
+                version,
             })
         } else {
             Err(GfmError::Format(format!(
@@ -161,7 +183,7 @@ impl ContentArchive {
                 let posting = read_content_posting(
                     (&mut self.file).take(entry.len),
                     &self.path,
-                    self.uses_positions,
+                    self.version,
                 )?;
                 if posting.term.trim().to_lowercase() == term {
                     Ok(posting.ids)
@@ -211,7 +233,7 @@ impl MmapContentArchive {
             path: path.to_path_buf(),
             mmap,
             directory,
-            uses_positions: version == ContentStoreVersion::IndexedPositions,
+            version,
         })
     }
 
@@ -235,18 +257,8 @@ impl MmapContentArchive {
         else {
             return Ok(None);
         };
-        let start = usize::try_from(entry.offset)
-            .map_err(|_| content_format_error(&self.path, "posting offset overflow"))?;
-        let len = usize::try_from(entry.len)
-            .map_err(|_| content_format_error(&self.path, "posting length overflow"))?;
-        let end = start
-            .checked_add(len)
-            .ok_or_else(|| content_format_error(&self.path, "posting range overflow"))?;
-        let bytes = self
-            .mmap
-            .get(start..end)
-            .ok_or_else(|| content_format_error(&self.path, "posting range out of bounds"))?;
-        let posting = read_content_posting(Cursor::new(bytes), &self.path, self.uses_positions)?;
+        let bytes = self.posting_bytes(entry)?;
+        let posting = read_content_posting(Cursor::new(bytes), &self.path, self.version)?;
         if posting.term.trim().to_lowercase() == term {
             Ok(Some(posting))
         } else {
@@ -261,8 +273,54 @@ impl MmapContentArchive {
         self.directory.len()
     }
 
+    pub fn id_block_for_term(&self, term: &str, block_index: usize) -> Result<Vec<FileId>> {
+        let term = term.trim().to_lowercase();
+        if term.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(entry) = self
+            .directory
+            .binary_search_by(|entry| entry.term.as_str().cmp(term.as_str()))
+            .ok()
+            .map(|index| &self.directory[index])
+        else {
+            return Ok(Vec::new());
+        };
+        if !self.version.uses_blocked_ids() {
+            return self.ids_for_term(&term);
+        }
+        let bytes = self.posting_bytes(entry)?;
+        let mut cursor = Cursor::new(bytes);
+        let decoded_term = read_content_posting_term(&mut cursor, &self.path)?;
+        if decoded_term.trim().to_lowercase() != term {
+            return Err(content_format_error(
+                &self.path,
+                "content directory points at the wrong term",
+            ));
+        }
+        let ids_start = usize::try_from(cursor.position())
+            .map_err(|_| content_format_error(&self.path, "content id offset overflow"))?;
+        let id_bytes = bytes
+            .get(ids_start..)
+            .ok_or_else(|| content_format_error(&self.path, "content id offset out of bounds"))?;
+        read_blocked_file_id_block_from_slice(id_bytes, block_index, &self.path)
+    }
+
     pub fn mapped_len(&self) -> usize {
         self.mmap.len()
+    }
+
+    fn posting_bytes(&self, entry: &ContentDirectoryEntry) -> Result<&[u8]> {
+        let start = usize::try_from(entry.offset)
+            .map_err(|_| content_format_error(&self.path, "posting offset overflow"))?;
+        let len = usize::try_from(entry.len)
+            .map_err(|_| content_format_error(&self.path, "posting length overflow"))?;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| content_format_error(&self.path, "posting range overflow"))?;
+        self.mmap
+            .get(start..end)
+            .ok_or_else(|| content_format_error(&self.path, "posting range out of bounds"))
     }
 }
 
@@ -285,6 +343,23 @@ fn read_content_magic(mut file: impl Read, path: &Path) -> Result<Vec<u8>> {
         longer.extend(extra);
     }
     Ok(longer)
+}
+
+fn content_version(bytes: &[u8], path: &Path) -> Result<ContentStoreVersion> {
+    if bytes == CONTENT_MAGIC_V4 {
+        Ok(ContentStoreVersion::IndexedBlockedPositions)
+    } else if bytes == CONTENT_MAGIC_V3 {
+        Ok(ContentStoreVersion::IndexedPositions)
+    } else if bytes == CONTENT_MAGIC_V2 {
+        Ok(ContentStoreVersion::IndexedIds)
+    } else if bytes == CONTENT_MAGIC_V1 {
+        Ok(ContentStoreVersion::Legacy)
+    } else {
+        Err(GfmError::Format(format!(
+            "unsupported content store header in {}",
+            path.display()
+        )))
+    }
 }
 
 struct CountingWriter<'a> {
@@ -321,7 +396,7 @@ pub fn write_content_segment(path: impl AsRef<Path>, segment: &ContentSegment) -
         write_file_ids(&mut *writer, &segment.tombstones)?;
         write_varint(&mut *writer, segment.postings.len() as u64)?;
         for posting in &segment.postings {
-            write_content_posting(&mut *writer, posting)?;
+            write_content_posting(&mut *writer, posting, ContentStoreVersion::IndexedPositions)?;
         }
         Ok(())
     })
@@ -349,7 +424,12 @@ pub fn read_content_segment(path: impl AsRef<Path>) -> Result<ContentSegment> {
     let posting_count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
     let mut postings = Vec::with_capacity(posting_count.min(1_000_000) as usize);
     for _ in 0..posting_count {
-        postings.push(read_content_posting(&mut file, path, uses_positions)?);
+        let version = if uses_positions {
+            ContentStoreVersion::IndexedPositions
+        } else {
+            ContentStoreVersion::IndexedIds
+        };
+        postings.push(read_content_posting(&mut file, path, version)?);
     }
     Ok(ContentSegment {
         tombstones,
@@ -469,7 +549,9 @@ fn read_content_directory(file: &mut File, path: &Path) -> Result<Vec<ContentDir
 }
 
 fn mmap_content_version(bytes: &[u8], path: &Path) -> Result<ContentStoreVersion> {
-    if bytes.starts_with(CONTENT_MAGIC_V3) {
+    if bytes.starts_with(CONTENT_MAGIC_V4) {
+        Ok(ContentStoreVersion::IndexedBlockedPositions)
+    } else if bytes.starts_with(CONTENT_MAGIC_V3) {
         Ok(ContentStoreVersion::IndexedPositions)
     } else if bytes.starts_with(CONTENT_MAGIC_V2) {
         Ok(ContentStoreVersion::IndexedIds)
@@ -545,29 +627,38 @@ fn read_directory_entry(mut reader: impl Read, path: &Path) -> Result<ContentDir
     Ok(ContentDirectoryEntry { term, offset, len })
 }
 
-fn write_content_posting(mut writer: impl Write, posting: &ContentPosting) -> std::io::Result<()> {
+fn write_content_posting(
+    mut writer: impl Write,
+    posting: &ContentPosting,
+    version: ContentStoreVersion,
+) -> std::io::Result<()> {
     let term = posting.term.as_bytes();
     write_varint(&mut writer, term.len() as u64)?;
     writer.write_all(term)?;
-    write_file_ids(&mut writer, &posting.ids)?;
-    write_content_positions(writer, &posting.positions)
+    if version.uses_blocked_ids() {
+        write_blocked_file_ids(&mut writer, &posting.ids)?;
+    } else {
+        write_file_ids(&mut writer, &posting.ids)?;
+    }
+    if version.uses_positions() {
+        write_content_positions(writer, &posting.positions)
+    } else {
+        Ok(())
+    }
 }
 
 fn read_content_posting(
     mut reader: impl Read,
     path: &Path,
-    uses_positions: bool,
+    version: ContentStoreVersion,
 ) -> Result<ContentPosting> {
-    let term_len = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
-    let mut term = vec![0; term_len as usize];
-    reader
-        .read_exact(&mut term)
-        .map_err(|err| GfmError::io(path, err))?;
-    let term = String::from_utf8(term).map_err(|err| {
-        GfmError::Format(format!("invalid UTF-8 term in {}: {err}", path.display()))
-    })?;
-    let ids = read_file_ids(&mut reader, path)?;
-    let positions = if uses_positions {
+    let term = read_content_posting_term(&mut reader, path)?;
+    let ids = if version.uses_blocked_ids() {
+        read_blocked_file_ids(&mut reader, path)?
+    } else {
+        read_file_ids(&mut reader, path)?
+    };
+    let positions = if version.uses_positions() {
         read_content_positions(reader, path)?
     } else {
         Vec::new()
@@ -577,6 +668,18 @@ fn read_content_posting(
         ids,
         positions,
     })
+}
+
+fn read_content_posting_term(mut reader: impl Read, path: &Path) -> Result<String> {
+    let term_len = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+    let mut term = vec![0; term_len as usize];
+    reader
+        .read_exact(&mut term)
+        .map_err(|err| GfmError::io(path, err))?;
+    let term = String::from_utf8(term).map_err(|err| {
+        GfmError::Format(format!("invalid UTF-8 term in {}: {err}", path.display()))
+    })?;
+    Ok(term)
 }
 
 fn write_content_positions(
@@ -834,6 +937,36 @@ mod tests {
         assert_eq!(archive.ids_for_term("beta").unwrap(), vec![beta]);
         assert_eq!(posting.positions[0].positions, vec![8]);
         assert!(archive.ids_for_term("missing").unwrap().is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_content_archive_reads_one_compressed_id_block() {
+        let path = temp_path("gfm-content-blocked-archive", "gfmcontent");
+        let ids = (0..300)
+            .map(|node| FileId::new(VolumeId(8), 20_000 + node))
+            .collect::<Vec<_>>();
+        let posting = ContentPosting {
+            term: "needle".to_string(),
+            ids: ids.clone(),
+            positions: ids
+                .iter()
+                .map(|id| ContentPositions {
+                    id: *id,
+                    positions: vec![1, 3],
+                })
+                .collect(),
+        };
+
+        write_content_postings(&path, &[posting]).unwrap();
+        let archive = MmapContentArchive::open(&path).unwrap();
+        let block = archive.id_block_for_term("needle", 1).unwrap();
+        let full = archive.posting_for_term("needle").unwrap().unwrap();
+
+        assert_eq!(full.ids, ids);
+        assert_eq!(full.positions.len(), 300);
+        assert_eq!(block.len(), 128);
+        assert_eq!(block[0], FileId::new(VolumeId(8), 20_128));
         std::fs::remove_file(path).unwrap();
     }
 

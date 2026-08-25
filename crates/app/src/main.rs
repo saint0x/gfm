@@ -927,6 +927,24 @@ fn run() -> Result<()> {
                 println!("{}\t{}", id.volume.0, id.node);
             }
         }
+        Some("content-id-block-mmap") => {
+            let content =
+                required_path(args.next(), "content-id-block-mmap requires a content path")?;
+            let term = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format("content-id-block-mmap requires a term".to_string())
+            })?;
+            let block_index = args
+                .next()
+                .ok_or_else(|| {
+                    GfmError::Format("content-id-block-mmap requires a block index".to_string())
+                })?
+                .parse::<usize>()
+                .map_err(|err| GfmError::Format(format!("invalid content block index: {err}")))?;
+            let archive = MmapContentArchive::open(content)?;
+            for id in archive.id_block_for_term(&term, block_index)? {
+                println!("{}\t{}", id.volume.0, id.node);
+            }
+        }
         Some("config-path") => {
             println!("{}", ConfigStore::platform_default()?.path().display());
         }
@@ -2028,6 +2046,7 @@ fn print_usage() {
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>
   gfm content-ids <content.gfmcontent> <term>
   gfm content-ids-mmap <content.gfmcontent> <term>
+  gfm content-id-block-mmap <content.gfmcontent> <term> <block-index>
   gfm config-path
   gfm config-init [config.toml]
   gfm config-check [config.toml]

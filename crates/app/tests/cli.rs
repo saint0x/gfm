@@ -1363,6 +1363,24 @@ fn resolves_content_ids_from_archive_directory() {
     let mmap_stdout = String::from_utf8(mmap_output.stdout).unwrap();
     assert_eq!(mmap_stdout, stdout);
 
+    let block_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-id-block-mmap",
+            content.to_str().unwrap(),
+            "directmarker",
+            "0",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        block_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&block_output.stderr)
+    );
+
+    let block_stdout = String::from_utf8(block_output.stdout).unwrap();
+    assert_eq!(block_stdout, stdout);
+
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(content).unwrap();
