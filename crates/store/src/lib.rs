@@ -5,6 +5,7 @@ mod durable;
 mod ids;
 mod integrity;
 mod metadata;
+mod prefix;
 
 pub use columns::{write_record_columns, MmapRecordColumns, RecordColumn};
 pub use content::{
@@ -18,6 +19,10 @@ pub use durable::{atomic_write, DurableCommit};
 pub use metadata::{
     metadata_postings_from_records, read_metadata_postings, write_metadata_postings, MetadataField,
     MetadataPosting, MmapMetadataArchive,
+};
+pub use prefix::{
+    prefix_postings_from_records, read_prefix_postings, write_prefix_postings, MmapPrefixArchive,
+    PrefixPosting,
 };
 
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};

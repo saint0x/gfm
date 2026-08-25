@@ -183,6 +183,46 @@
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "index-prefixes",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "prefix-ids-mmap",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "tag"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "prefix-id-block-mmap",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "tag",
+        "0"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "prefix-verify",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "index-state",
         ".",
         "/tmp/gfm-fozzy-host-state.gfmidx",

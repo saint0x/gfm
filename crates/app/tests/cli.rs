@@ -775,6 +775,7 @@ fn searches_persisted_tags_from_binary() {
     let metadata = unique_temp_path("gfm-cli-tags", "gfmmeta");
     let dictionary = unique_temp_path("gfm-cli-tags", "gfmdict");
     let columns = unique_temp_path("gfm-cli-tags", "gfmcols");
+    let prefixes = unique_temp_path("gfm-cli-tags", "gfmprefix");
     fs::write(
         &index,
         "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\tImportant,Client\t/tmp/tagged.md\n2\t2\t0\tf\t5\t0\t0\t0\t0\tLater\t/tmp/other.md\n",
@@ -905,6 +906,62 @@ fn searches_persisted_tags_from_binary() {
         "{dictionary_verify_stdout}"
     );
 
+    let prefixes_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-prefixes",
+            index.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        prefixes_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prefixes_output.stderr)
+    );
+
+    let prefix_ids = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["prefix-ids-mmap", prefixes.to_str().unwrap(), "tag"])
+        .output()
+        .unwrap();
+    assert!(
+        prefix_ids.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prefix_ids.stderr)
+    );
+    assert_eq!(String::from_utf8(prefix_ids.stdout).unwrap(), "1\t1\n");
+
+    let prefix_block = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "prefix-id-block-mmap",
+            prefixes.to_str().unwrap(),
+            "tag",
+            "0",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        prefix_block.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prefix_block.stderr)
+    );
+    assert_eq!(String::from_utf8(prefix_block.stdout).unwrap(), "1\t1\n");
+
+    let prefix_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["prefix-verify", prefixes.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        prefix_verify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prefix_verify.stderr)
+    );
+    let prefix_verify_stdout = String::from_utf8(prefix_verify.stdout).unwrap();
+    assert!(
+        prefix_verify_stdout.contains("\tchecksum=true"),
+        "{prefix_verify_stdout}"
+    );
+
     let columns_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "index-columns",
@@ -981,6 +1038,7 @@ fn searches_persisted_tags_from_binary() {
     fs::remove_file(metadata).unwrap();
     fs::remove_file(dictionary).unwrap();
     fs::remove_file(columns).unwrap();
+    fs::remove_file(prefixes).unwrap();
 }
 
 #[test]

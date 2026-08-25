@@ -37,8 +37,10 @@ use gfm_preview::{
 use gfm_store::{
     dictionary_terms_from_records, metadata_postings_from_records, write_dictionary,
     write_metadata_postings, write_record_columns, ContentArchive, MetadataField,
-    MmapContentArchive, MmapDictionary, MmapMetadataArchive, MmapRecordArchive, MmapRecordColumns,
+    MmapContentArchive, MmapDictionary, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
+    MmapRecordColumns,
 };
+use gfm_store::{prefix_postings_from_records, write_prefix_postings};
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
     run_macrobench, run_parity_gate_manifest, run_regression_gate,
@@ -925,6 +927,53 @@ fn run() -> Result<()> {
             let terms = dictionary_terms_from_records(&archive.records()?);
             write_dictionary(output, &terms)?;
             eprintln!("dictionary-indexed {} terms", terms.len());
+        }
+        Some("index-prefixes") => {
+            let records = required_path(args.next(), "index-prefixes requires a records path")?;
+            let output =
+                required_path(args.next(), "index-prefixes requires an output prefix path")?;
+            let archive = MmapRecordArchive::open(records)?;
+            let postings = prefix_postings_from_records(&archive.records()?);
+            write_prefix_postings(output, &postings)?;
+            eprintln!("prefixes-indexed {} prefixes", postings.len());
+        }
+        Some("prefix-ids-mmap") => {
+            let prefixes = required_path(args.next(), "prefix-ids-mmap requires a prefix path")?;
+            let prefix = args
+                .next()
+                .ok_or_else(|| GfmError::Format("prefix-ids-mmap requires a prefix".to_string()))?;
+            let archive = MmapPrefixArchive::open(prefixes)?;
+            for id in archive.ids_for(&prefix)? {
+                println!("{}\t{}", id.volume.0, id.node);
+            }
+        }
+        Some("prefix-id-block-mmap") => {
+            let prefixes =
+                required_path(args.next(), "prefix-id-block-mmap requires a prefix path")?;
+            let prefix = args.next().ok_or_else(|| {
+                GfmError::Format("prefix-id-block-mmap requires a prefix".to_string())
+            })?;
+            let block_index = args
+                .next()
+                .ok_or_else(|| {
+                    GfmError::Format("prefix-id-block-mmap requires a block index".to_string())
+                })?
+                .parse::<usize>()
+                .map_err(|err| GfmError::Format(format!("invalid prefix block index: {err}")))?;
+            let archive = MmapPrefixArchive::open(prefixes)?;
+            for id in archive.id_block_for(&prefix, block_index)? {
+                println!("{}\t{}", id.volume.0, id.node);
+            }
+        }
+        Some("prefix-verify") => {
+            let prefixes = required_path(args.next(), "prefix-verify requires a prefix path")?;
+            let archive = MmapPrefixArchive::open(prefixes)?;
+            println!(
+                "prefix-verify\tprefixes={}\tbytes={}\tchecksum={}",
+                archive.indexed_prefixes(),
+                archive.mapped_len(),
+                archive.is_checksummed()
+            );
         }
         Some("dictionary-lookup") => {
             let dictionary =
@@ -2177,6 +2226,10 @@ fn print_usage() {
   gfm columns-lookup <columns.gfmcols> <volume-id> <node-id>
   gfm index-metadata <records.gfmidx> <metadata.gfmmeta>
   gfm index-dictionary <records.gfmidx> <dictionary.gfmdict>
+  gfm index-prefixes <records.gfmidx> <prefixes.gfmprefix>
+  gfm prefix-ids-mmap <prefixes.gfmprefix> <prefix>
+  gfm prefix-id-block-mmap <prefixes.gfmprefix> <prefix> <block-index>
+  gfm prefix-verify <prefixes.gfmprefix>
   gfm dictionary-lookup <dictionary.gfmdict> <term>
   gfm dictionary-verify <dictionary.gfmdict>
   gfm metadata-ids-mmap <metadata.gfmmeta> <tag|comment> <term>
