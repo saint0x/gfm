@@ -1,4 +1,7 @@
 use crate::durable;
+use crate::ids::{
+    read_blocked_file_id_block_from_slice, read_blocked_file_ids, write_blocked_file_ids,
+};
 use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::{BTreeMap, BTreeSet};
@@ -7,8 +10,15 @@ use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 const METADATA_MAGIC_V1: &[u8] = b"gfm-metadata-v1\n";
+const METADATA_MAGIC_V2: &[u8] = b"gfm-metadata-v2\n";
 const METADATA_INDEX_FOOTER: &[u8] = b"gfm-metadata-index-v1\n";
 const METADATA_FOOTER_LEN: u64 = 8 + METADATA_INDEX_FOOTER.len() as u64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetadataStoreVersion {
+    V1,
+    V2,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MetadataField {
@@ -52,6 +62,7 @@ struct MetadataDirectoryEntry {
 pub struct MmapMetadataArchive {
     path: PathBuf,
     mmap: Mmap,
+    version: MetadataStoreVersion,
     directory: Vec<MetadataDirectoryEntry>,
 }
 
@@ -90,7 +101,7 @@ pub fn write_metadata_postings(path: impl AsRef<Path>, postings: &[MetadataPosti
     let path = path.as_ref();
     durable::atomic_write(path, |writer| {
         let mut writer = CountingWriter::new(writer);
-        writer.write_all(METADATA_MAGIC_V1)?;
+        writer.write_all(METADATA_MAGIC_V2)?;
         write_varint(&mut writer, postings.len() as u64)?;
         let mut directory = Vec::with_capacity(postings.len());
         let mut postings = postings.to_vec();
@@ -99,7 +110,7 @@ pub fn write_metadata_postings(path: impl AsRef<Path>, postings: &[MetadataPosti
         });
         for posting in &postings {
             let offset = writer.position();
-            write_metadata_posting(&mut writer, posting)?;
+            write_metadata_posting(&mut writer, posting, MetadataStoreVersion::V2)?;
             let end = writer.position();
             directory.push(MetadataDirectoryEntry {
                 field: posting.field,
@@ -126,13 +137,11 @@ pub fn read_metadata_postings(path: impl AsRef<Path>) -> Result<Vec<MetadataPost
     let mut magic = vec![0; METADATA_MAGIC_V1.len()];
     file.read_exact(&mut magic)
         .map_err(|err| GfmError::io(path, err))?;
-    if magic != METADATA_MAGIC_V1 {
-        return Err(metadata_format_error(path, "unsupported metadata header"));
-    }
+    let version = metadata_version(&magic, path)?;
     let count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
-        postings.push(read_metadata_posting(&mut file, path)?);
+        postings.push(read_metadata_posting(&mut file, path, version)?);
     }
     Ok(postings)
 }
@@ -147,13 +156,15 @@ impl MmapMetadataArchive {
             // atomic rename, so this API never observes in-place mutation.
             unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
         };
-        if !mmap.starts_with(METADATA_MAGIC_V1) {
-            return Err(metadata_format_error(path, "unsupported metadata header"));
-        }
+        let magic = mmap
+            .get(..METADATA_MAGIC_V1.len())
+            .ok_or_else(|| metadata_format_error(path, "unsupported metadata header"))?;
+        let version = metadata_version(magic, path)?;
         let directory = read_metadata_directory_from_slice(&mmap, path)?;
         Ok(Self {
             path: path.to_path_buf(),
             mmap,
+            version,
             directory,
         })
     }
@@ -180,18 +191,8 @@ impl MmapMetadataArchive {
         else {
             return Ok(None);
         };
-        let start = usize::try_from(entry.offset)
-            .map_err(|_| metadata_format_error(&self.path, "posting offset overflow"))?;
-        let len = usize::try_from(entry.len)
-            .map_err(|_| metadata_format_error(&self.path, "posting length overflow"))?;
-        let end = start
-            .checked_add(len)
-            .ok_or_else(|| metadata_format_error(&self.path, "posting range overflow"))?;
-        let bytes = self
-            .mmap
-            .get(start..end)
-            .ok_or_else(|| metadata_format_error(&self.path, "posting range out of bounds"))?;
-        let posting = read_metadata_posting(Cursor::new(bytes), &self.path)?;
+        let bytes = self.posting_bytes(entry)?;
+        let posting = read_metadata_posting(Cursor::new(bytes), &self.path, self.version)?;
         if posting.field == field && posting.term == term {
             Ok(Some(posting))
         } else {
@@ -206,8 +207,55 @@ impl MmapMetadataArchive {
         self.directory.len()
     }
 
+    pub fn id_block_for(
+        &self,
+        field: MetadataField,
+        term: &str,
+        block_index: usize,
+    ) -> Result<Vec<FileId>> {
+        let term = normalize(term);
+        if term.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(entry) = self
+            .directory
+            .binary_search_by(|entry| {
+                (entry.field, entry.term.as_str()).cmp(&(field, term.as_str()))
+            })
+            .ok()
+            .map(|index| &self.directory[index])
+        else {
+            return Ok(Vec::new());
+        };
+        if self.version == MetadataStoreVersion::V1 {
+            return self.ids_for(field, &term);
+        }
+        let bytes = self.posting_bytes(entry)?;
+        let mut cursor = Cursor::new(bytes);
+        read_metadata_posting_header(&mut cursor, &self.path)?;
+        let ids_start = usize::try_from(cursor.position())
+            .map_err(|_| metadata_format_error(&self.path, "metadata id offset overflow"))?;
+        let id_bytes = bytes
+            .get(ids_start..)
+            .ok_or_else(|| metadata_format_error(&self.path, "metadata id offset out of bounds"))?;
+        read_blocked_file_id_block_from_slice(id_bytes, block_index, &self.path)
+    }
+
     pub fn mapped_len(&self) -> usize {
         self.mmap.len()
+    }
+
+    fn posting_bytes(&self, entry: &MetadataDirectoryEntry) -> Result<&[u8]> {
+        let start = usize::try_from(entry.offset)
+            .map_err(|_| metadata_format_error(&self.path, "posting offset overflow"))?;
+        let len = usize::try_from(entry.len)
+            .map_err(|_| metadata_format_error(&self.path, "posting length overflow"))?;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| metadata_format_error(&self.path, "posting range overflow"))?;
+        self.mmap
+            .get(start..end)
+            .ok_or_else(|| metadata_format_error(&self.path, "posting range out of bounds"))
     }
 }
 
@@ -326,15 +374,35 @@ fn read_directory_entry(mut reader: impl Read, path: &Path) -> Result<MetadataDi
 fn write_metadata_posting(
     mut writer: impl Write,
     posting: &MetadataPosting,
+    version: MetadataStoreVersion,
 ) -> std::io::Result<()> {
     writer.write_all(&[metadata_field_code(posting.field)])?;
     let term = posting.term.as_bytes();
     write_varint(&mut writer, term.len() as u64)?;
     writer.write_all(term)?;
-    write_file_ids(writer, &posting.ids)
+    match version {
+        MetadataStoreVersion::V1 => write_file_ids(writer, &posting.ids),
+        MetadataStoreVersion::V2 => write_blocked_file_ids(writer, &posting.ids),
+    }
 }
 
-fn read_metadata_posting(mut reader: impl Read, path: &Path) -> Result<MetadataPosting> {
+fn read_metadata_posting(
+    mut reader: impl Read,
+    path: &Path,
+    version: MetadataStoreVersion,
+) -> Result<MetadataPosting> {
+    let (field, term) = read_metadata_posting_header(&mut reader, path)?;
+    let ids = match version {
+        MetadataStoreVersion::V1 => read_file_ids(reader, path)?,
+        MetadataStoreVersion::V2 => read_blocked_file_ids(reader, path)?,
+    };
+    Ok(MetadataPosting { field, term, ids })
+}
+
+fn read_metadata_posting_header(
+    mut reader: impl Read,
+    path: &Path,
+) -> Result<(MetadataField, String)> {
     let mut field = [0u8; 1];
     reader
         .read_exact(&mut field)
@@ -351,8 +419,7 @@ fn read_metadata_posting(mut reader: impl Read, path: &Path) -> Result<MetadataP
             path.display()
         ))
     })?;
-    let ids = read_file_ids(reader, path)?;
-    Ok(MetadataPosting { field, term, ids })
+    Ok((field, term))
 }
 
 fn write_file_ids(mut writer: impl Write, ids: &[FileId]) -> std::io::Result<()> {
@@ -444,6 +511,16 @@ fn metadata_field_from_code(value: u8, path: &Path) -> Result<MetadataField> {
     }
 }
 
+fn metadata_version(bytes: &[u8], path: &Path) -> Result<MetadataStoreVersion> {
+    if bytes == METADATA_MAGIC_V2 {
+        Ok(MetadataStoreVersion::V2)
+    } else if bytes == METADATA_MAGIC_V1 {
+        Ok(MetadataStoreVersion::V1)
+    } else {
+        Err(metadata_format_error(path, "unsupported metadata header"))
+    }
+}
+
 fn normalize(value: &str) -> String {
     value.trim().to_lowercase()
 }
@@ -519,6 +596,33 @@ mod tests {
             archive.ids_for(MetadataField::Tag, "missing").unwrap(),
             Vec::new()
         );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_metadata_archive_reads_one_compressed_id_block() {
+        let path = temp_path("gfm-metadata-blocked", "gfmmeta");
+        let ids = (0..300)
+            .map(|node| FileId::new(VolumeId(12), 10_000 + node))
+            .collect::<Vec<_>>();
+        let posting = MetadataPosting {
+            field: MetadataField::Tag,
+            term: "important".to_string(),
+            ids: ids.clone(),
+        };
+
+        write_metadata_postings(&path, &[posting]).unwrap();
+        let archive = MmapMetadataArchive::open(&path).unwrap();
+        let block = archive
+            .id_block_for(MetadataField::Tag, "important", 1)
+            .unwrap();
+
+        assert_eq!(
+            archive.ids_for(MetadataField::Tag, "important").unwrap(),
+            ids
+        );
+        assert_eq!(block.len(), 128);
+        assert_eq!(block[0], FileId::new(VolumeId(12), 10_128));
         std::fs::remove_file(path).unwrap();
     }
 

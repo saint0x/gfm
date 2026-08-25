@@ -809,6 +809,23 @@ fn searches_persisted_tags_from_binary() {
     );
     assert_eq!(String::from_utf8(ids_output.stdout).unwrap(), "1\t1\n");
 
+    let block_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "metadata-id-block-mmap",
+            metadata.to_str().unwrap(),
+            "tag",
+            "Important",
+            "0",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        block_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&block_output.stderr)
+    );
+    assert_eq!(String::from_utf8(block_output.stdout).unwrap(), "1\t1\n");
+
     let dictionary_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "index-dictionary",

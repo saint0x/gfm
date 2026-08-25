@@ -866,6 +866,32 @@ fn run() -> Result<()> {
                 println!("{}\t{}", id.volume.0, id.node);
             }
         }
+        Some("metadata-id-block-mmap") => {
+            let metadata = required_path(
+                args.next(),
+                "metadata-id-block-mmap requires a metadata path",
+            )?;
+            let field = parse_metadata_field(
+                args.next().as_deref().ok_or_else(|| {
+                    GfmError::Format("metadata-id-block-mmap requires a field".to_string())
+                })?,
+                "metadata field",
+            )?;
+            let term = args.next().ok_or_else(|| {
+                GfmError::Format("metadata-id-block-mmap requires a term".to_string())
+            })?;
+            let block_index = args
+                .next()
+                .ok_or_else(|| {
+                    GfmError::Format("metadata-id-block-mmap requires a block index".to_string())
+                })?
+                .parse::<usize>()
+                .map_err(|err| GfmError::Format(format!("invalid metadata block index: {err}")))?;
+            let archive = MmapMetadataArchive::open(metadata)?;
+            for id in archive.id_block_for(field, &term, block_index)? {
+                println!("{}\t{}", id.volume.0, id.node);
+            }
+        }
         Some("search-content-index") => {
             let records =
                 required_path(args.next(), "search-content-index requires a records path")?;
@@ -1998,6 +2024,7 @@ fn print_usage() {
   gfm index-dictionary <records.gfmidx> <dictionary.gfmdict>
   gfm dictionary-lookup <dictionary.gfmdict> <term>
   gfm metadata-ids-mmap <metadata.gfmmeta> <tag|comment> <term>
+  gfm metadata-id-block-mmap <metadata.gfmmeta> <tag|comment> <term> <block-index>
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>
   gfm content-ids <content.gfmcontent> <term>
   gfm content-ids-mmap <content.gfmcontent> <term>

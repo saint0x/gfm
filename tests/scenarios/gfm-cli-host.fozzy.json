@@ -86,6 +86,18 @@
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "metadata-id-block-mmap",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "tag",
+        "Important",
+        "0"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "index-dictionary",
         "tmp/gfm-fozzy-metadata-records.gfmidx",
         "/tmp/gfm-fozzy-dictionary.gfmdict"
