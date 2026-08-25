@@ -105,6 +105,7 @@ fn extract_tar_metadata(
     let mut text = String::new();
     let mut cursor = 0usize;
     let mut entries = 0usize;
+    let mut pending_path: Option<String> = None;
     while cursor + 512 <= bytes.len() {
         let header = &bytes[cursor..cursor + 512];
         if header.iter().all(|byte| *byte == 0) {
@@ -113,19 +114,9 @@ fn extract_tar_metadata(
         if !tar_checksum_is_plausible(header) {
             return (ArchiveExtractStatus::Corrupt, None);
         }
-        entries += 1;
-        if entries > policy.max_archive_entries {
-            return (ArchiveExtractStatus::TooManyEntries, None);
-        }
         let Some(size) = parse_tar_size(&header[124..136]) else {
             return (ArchiveExtractStatus::Corrupt, None);
         };
-        let Some(name) = tar_entry_name(header) else {
-            return (ArchiveExtractStatus::Corrupt, None);
-        };
-        if !name.is_empty() {
-            push_entry_metadata(&mut text, &name, size, policy.max_archive_text_bytes);
-        }
         let data_blocks = (usize::try_from(size)
             .unwrap_or(usize::MAX)
             .saturating_add(511))
@@ -135,6 +126,39 @@ fn extract_tar_metadata(
         };
         if next > bytes.len() {
             return (ArchiveExtractStatus::Corrupt, None);
+        }
+        let payload_start = cursor + 512;
+        let payload_end = payload_start + usize::try_from(size).unwrap_or(usize::MAX);
+        let payload = bytes.get(payload_start..payload_end).unwrap_or_default();
+        match header[156] {
+            b'x' | b'g' => {
+                if let Some(path) = pax_path(payload) {
+                    pending_path = Some(path);
+                }
+            }
+            b'L' => {
+                if let Some(path) = gnu_long_name(payload) {
+                    pending_path = Some(path);
+                }
+            }
+            _ => {
+                entries += 1;
+                if entries > policy.max_archive_entries {
+                    return (ArchiveExtractStatus::TooManyEntries, None);
+                }
+                let name = match pending_path.take() {
+                    Some(path) => path,
+                    None => {
+                        let Some(name) = tar_entry_name(header) else {
+                            return (ArchiveExtractStatus::Corrupt, None);
+                        };
+                        name
+                    }
+                };
+                if !name.is_empty() {
+                    push_entry_metadata(&mut text, &name, size, policy.max_archive_text_bytes);
+                }
+            }
         }
         cursor = next;
         if text.len() >= policy.max_archive_text_bytes {
@@ -154,6 +178,38 @@ fn extract_tar_metadata(
             text,
         }),
     )
+}
+
+fn pax_path(payload: &[u8]) -> Option<String> {
+    let mut cursor = 0usize;
+    while cursor < payload.len() {
+        let space = payload[cursor..]
+            .iter()
+            .position(|byte| *byte == b' ')
+            .map(|offset| cursor + offset)?;
+        let length = std::str::from_utf8(&payload[cursor..space])
+            .ok()?
+            .parse::<usize>()
+            .ok()?;
+        if length == 0 || cursor + length > payload.len() {
+            return None;
+        }
+        let record = &payload[space + 1..cursor + length];
+        let record = record.strip_suffix(b"\n").unwrap_or(record);
+        if let Some(value) = record.strip_prefix(b"path=") {
+            return String::from_utf8(value.to_vec()).ok();
+        }
+        cursor += length;
+    }
+    None
+}
+
+fn gnu_long_name(payload: &[u8]) -> Option<String> {
+    let end = payload
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(payload.len());
+    String::from_utf8(payload[..end].to_vec()).ok()
 }
 
 fn tar_entry_name(header: &[u8]) -> Option<String> {
@@ -272,6 +328,45 @@ mod tests {
     }
 
     #[test]
+    fn extracts_pax_tar_long_path_metadata() {
+        let path = "deep/archive/path/with/pax-long-name-needle.txt";
+        let bytes = tar_file_with_pax_path(path, "body");
+
+        let (status, doc) =
+            extract_archive_metadata(&bytes, ArchiveKind::Tar, &ExtractionPolicy::default());
+
+        assert_eq!(status, ArchiveExtractStatus::Extracted);
+        assert!(doc.unwrap().text.contains(path));
+    }
+
+    #[test]
+    fn extracts_gnu_tar_long_name_metadata() {
+        let path = "deep/archive/path/with/gnu-long-name-needle.txt";
+        let bytes = tar_file_with_gnu_long_name(path, "body");
+
+        let (status, doc) =
+            extract_archive_metadata(&bytes, ArchiveKind::Tar, &ExtractionPolicy::default());
+
+        assert_eq!(status, ArchiveExtractStatus::Extracted);
+        assert!(doc.unwrap().text.contains(path));
+    }
+
+    #[test]
+    fn extension_headers_do_not_count_as_archive_entries() {
+        let path = "deep/archive/path/with/pax-budget-needle.txt";
+        let bytes = tar_file_with_pax_path(path, "body");
+        let policy = ExtractionPolicy {
+            max_archive_entries: 1,
+            ..ExtractionPolicy::default()
+        };
+
+        let (status, doc) = extract_archive_metadata(&bytes, ArchiveKind::Tar, &policy);
+
+        assert_eq!(status, ArchiveExtractStatus::Extracted);
+        assert!(doc.unwrap().text.contains(path));
+    }
+
+    #[test]
     fn enforces_archive_entry_budget() {
         let bytes = tar_file(&[("a.txt", "a"), ("b.txt", "b")]);
         let policy = ExtractionPolicy {
@@ -305,29 +400,67 @@ mod tests {
     fn tar_file(parts: &[(&str, &str)]) -> Vec<u8> {
         let mut bytes = Vec::new();
         for (name, text) in parts {
-            let payload = text.as_bytes();
-            let mut header = [0u8; 512];
-            write_tar_string(&mut header[0..100], name);
-            write_tar_octal(&mut header[100..108], 0o644);
-            write_tar_octal(&mut header[108..116], 0);
-            write_tar_octal(&mut header[116..124], 0);
-            write_tar_octal(&mut header[124..136], payload.len() as u64);
-            write_tar_octal(&mut header[136..148], 0);
-            for byte in &mut header[148..156] {
-                *byte = b' ';
-            }
-            header[156] = b'0';
-            header[257..263].copy_from_slice(b"ustar\0");
-            header[263..265].copy_from_slice(b"00");
-            let checksum: u64 = header.iter().map(|byte| u64::from(*byte)).sum();
-            write_tar_octal(&mut header[148..156], checksum);
-            bytes.extend_from_slice(&header);
-            bytes.extend_from_slice(payload);
-            let padding = (512 - payload.len() % 512) % 512;
-            bytes.extend(std::iter::repeat_n(0, padding));
+            append_tar_entry(&mut bytes, name, b'0', text.as_bytes());
         }
         bytes.extend([0u8; 1024]);
         bytes
+    }
+
+    fn tar_file_with_pax_path(path: &str, text: &str) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        append_tar_entry(
+            &mut bytes,
+            "./PaxHeaders/gfm",
+            b'x',
+            pax_path_record(path).as_bytes(),
+        );
+        append_tar_entry(&mut bytes, "truncated-name.txt", b'0', text.as_bytes());
+        bytes.extend([0u8; 1024]);
+        bytes
+    }
+
+    fn tar_file_with_gnu_long_name(path: &str, text: &str) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut long_name = path.as_bytes().to_vec();
+        long_name.push(0);
+        append_tar_entry(&mut bytes, "././@LongLink", b'L', &long_name);
+        append_tar_entry(&mut bytes, "truncated-name.txt", b'0', text.as_bytes());
+        bytes.extend([0u8; 1024]);
+        bytes
+    }
+
+    fn pax_path_record(path: &str) -> String {
+        let mut length = 0usize;
+        loop {
+            let record = format!("{length} path={path}\n");
+            let next = record.len();
+            if next == length {
+                return record;
+            }
+            length = next;
+        }
+    }
+
+    fn append_tar_entry(bytes: &mut Vec<u8>, name: &str, typeflag: u8, payload: &[u8]) {
+        let mut header = [0u8; 512];
+        write_tar_string(&mut header[0..100], name);
+        write_tar_octal(&mut header[100..108], 0o644);
+        write_tar_octal(&mut header[108..116], 0);
+        write_tar_octal(&mut header[116..124], 0);
+        write_tar_octal(&mut header[124..136], payload.len() as u64);
+        write_tar_octal(&mut header[136..148], 0);
+        for byte in &mut header[148..156] {
+            *byte = b' ';
+        }
+        header[156] = typeflag;
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        let checksum: u64 = header.iter().map(|byte| u64::from(*byte)).sum();
+        write_tar_octal(&mut header[148..156], checksum);
+        bytes.extend_from_slice(&header);
+        bytes.extend_from_slice(payload);
+        let padding = (512 - payload.len() % 512) % 512;
+        bytes.extend(std::iter::repeat_n(0, padding));
     }
 
     fn write_tar_string(field: &mut [u8], value: &str) {

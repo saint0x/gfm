@@ -25,7 +25,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use structured::{extract_structured, StructuredExtractStatus, StructuredKind};
 
-pub const EXTRACTOR_VERSION: u32 = 4;
+pub const EXTRACTOR_VERSION: u32 = 5;
 
 #[derive(Debug, Clone)]
 pub struct ExtractionPolicy {

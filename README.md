@@ -102,7 +102,7 @@ The index is compact and incremental:
 - binary-signature and control-byte classification before content extraction
 - bounded PDF text-stream extraction with PDF-specific byte, page, and object budgets
 - bounded OOXML extraction for DOCX, XLSX, and PPTX with ZIP entry, XML part, and text-output budgets
-- bounded HTML, RTF, MIME multipart email, and ZIP/TAR/TAR.GZ archive-metadata extraction policies
+- bounded HTML, RTF, MIME multipart email, and ZIP/TAR/TAR.GZ archive-metadata extraction policies, including PAX and GNU TAR long-name headers
 - structured JSON, CSV, XML plist, and binary plist extraction for searchable keys, cells, and values
 - explicit ranking accumulator for exact, prefix, substring, fuzzy, path, metadata, kind, tag, content, recency, term-frequency, and user-pinned signals
 - user-intent boosts for Applications, Recents, Downloads, Desktop, screenshots, and project folders

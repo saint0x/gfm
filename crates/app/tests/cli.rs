@@ -2806,6 +2806,31 @@ fn searches_tar_archive_metadata_from_binary() {
 }
 
 #[test]
+fn searches_pax_tar_archive_metadata_from_binary() {
+    let root = unique_temp_dir("gfm-cli-pax-tar-content-root");
+    fs::write(
+        root.join("bundle.tar"),
+        tar_pax_package("deep/archive/path/paxbinaryneedle.txt", "payload"),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-content", root.to_str().unwrap(), "paxbinaryneedle"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("bundle.tar"), "{stdout}");
+    assert!(stdout.contains("[[paxbinaryneedle]]"), "{stdout}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_compressed_tar_archive_metadata_from_binary() {
     let root = unique_temp_dir("gfm-cli-targz-content-root");
     fs::write(
@@ -4998,32 +5023,60 @@ fn tar_gz_package(parts: &[(&str, &str)]) -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
+fn tar_pax_package(path: &str, text: &str) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    append_tar_entry(
+        &mut bytes,
+        "./PaxHeaders/gfm",
+        b'x',
+        pax_path_record(path).as_bytes(),
+    );
+    append_tar_entry(&mut bytes, "truncated-name.txt", b'0', text.as_bytes());
+    bytes.extend([0u8; 1024]);
+    bytes
+}
+
 fn tar_package(parts: &[(&str, &str)]) -> Vec<u8> {
     let mut bytes = Vec::new();
     for (name, text) in parts {
-        let payload = text.as_bytes();
-        let mut header = [0u8; 512];
-        write_tar_string(&mut header[0..100], name);
-        write_tar_octal(&mut header[100..108], 0o644);
-        write_tar_octal(&mut header[108..116], 0);
-        write_tar_octal(&mut header[116..124], 0);
-        write_tar_octal(&mut header[124..136], payload.len() as u64);
-        write_tar_octal(&mut header[136..148], 0);
-        for byte in &mut header[148..156] {
-            *byte = b' ';
-        }
-        header[156] = b'0';
-        header[257..263].copy_from_slice(b"ustar\0");
-        header[263..265].copy_from_slice(b"00");
-        let checksum: u64 = header.iter().map(|byte| u64::from(*byte)).sum();
-        write_tar_octal(&mut header[148..156], checksum);
-        bytes.extend_from_slice(&header);
-        bytes.extend_from_slice(payload);
-        let padding = (512 - payload.len() % 512) % 512;
-        bytes.extend(std::iter::repeat_n(0, padding));
+        append_tar_entry(&mut bytes, name, b'0', text.as_bytes());
     }
     bytes.extend([0u8; 1024]);
     bytes
+}
+
+fn pax_path_record(path: &str) -> String {
+    let mut length = 0usize;
+    loop {
+        let record = format!("{length} path={path}\n");
+        let next = record.len();
+        if next == length {
+            return record;
+        }
+        length = next;
+    }
+}
+
+fn append_tar_entry(bytes: &mut Vec<u8>, name: &str, typeflag: u8, payload: &[u8]) {
+    let mut header = [0u8; 512];
+    write_tar_string(&mut header[0..100], name);
+    write_tar_octal(&mut header[100..108], 0o644);
+    write_tar_octal(&mut header[108..116], 0);
+    write_tar_octal(&mut header[116..124], 0);
+    write_tar_octal(&mut header[124..136], payload.len() as u64);
+    write_tar_octal(&mut header[136..148], 0);
+    for byte in &mut header[148..156] {
+        *byte = b' ';
+    }
+    header[156] = typeflag;
+    header[257..263].copy_from_slice(b"ustar\0");
+    header[263..265].copy_from_slice(b"00");
+    let checksum: u64 = header.iter().map(|byte| u64::from(*byte)).sum();
+    write_tar_octal(&mut header[148..156], checksum);
+    bytes.extend_from_slice(&header);
+    bytes.extend_from_slice(payload);
+    let padding = (512 - payload.len() % 512) % 512;
+    bytes.extend(std::iter::repeat_n(0, padding));
 }
 
 fn write_tar_string(field: &mut [u8], value: &str) {
