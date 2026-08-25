@@ -358,6 +358,17 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-preview.pdf",
+      "data": "%PDF-1.7\n"
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["quicklook-session", "tmp/gfm-fozzy-preview.pdf"],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["preview-schedule"],

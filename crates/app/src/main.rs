@@ -23,7 +23,8 @@ use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path,
     PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
-    PreviewSchedulingPolicy, PreviewSecurityPolicy, PreviewTask, Rect, Viewport,
+    PreviewSchedulingPolicy, PreviewSecurityPolicy, PreviewTask, QuickLookSessionContract,
+    QuickLookSessionInput, Rect, Viewport,
 };
 use gfm_store::ContentArchive;
 use gfm_testkit::{
@@ -743,6 +744,24 @@ fn run() -> Result<()> {
                 invalidation.invalidate_disk,
                 path.display()
             );
+        }
+        Some("quicklook-session") => {
+            let path = required_path(args.next(), "quicklook-session requires a path")?;
+            let record = record_for_path(&path, None, false)?;
+            let rect = Rect::new(0, 0, 640, 480);
+            let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
+            let input = QuickLookSessionInput::new(
+                PreviewRequestKey::new(record.id, path, PreviewKind::QuickLook),
+                rect,
+                viewport,
+            )
+            .with_invalidation(PreviewInvalidationEvent {
+                content_changed: true,
+                ..PreviewInvalidationEvent::default()
+            });
+            let contract =
+                QuickLookSessionContract::from_input(&PreviewSecurityPolicy::default(), input)?;
+            println!("{}", contract.as_tsv());
         }
         Some("preview-schedule") => {
             let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy {
@@ -1492,6 +1511,7 @@ fn print_usage() {
   gfm mac-bridges
   gfm native-icon <path>
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
+  gfm quicklook-session <path>
   gfm preview-schedule
   gfm macrobench <workspace> [smoke|standard]
   gfm parity-fixture <workspace> [smoke|standard]

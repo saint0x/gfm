@@ -227,6 +227,7 @@ Inspect preview security and invalidation policy:
 
 ```sh
 cargo run -p gfm -- preview-check /tmp/example.app quick-look
+cargo run -p gfm -- quicklook-session /tmp/example.pdf
 cargo run -p gfm -- preview-schedule
 ```
 

@@ -615,6 +615,31 @@ fn reports_preview_security_from_binary() {
 }
 
 #[test]
+fn reports_quicklook_session_from_binary() {
+    let path = std::env::temp_dir().join(format!("gfm-quicklook-{}.pdf", std::process::id()));
+    std::fs::write(&path, b"%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("quicklook-session")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("quicklook-session\tquick-look\t"));
+    assert!(stdout.contains("\tallow-native\tnative-preview-controller\t"));
+    assert!(stdout.contains("\tinvalidate-memory=true\tinvalidate-disk=true\t"));
+    assert!(stdout.ends_with("schedule=scheduled:visible\n"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn reports_preview_scheduling_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("preview-schedule")
