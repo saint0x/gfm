@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictPolicy {
@@ -294,6 +294,45 @@ pub struct OperationProgress {
 pub struct OperationProgressEvent {
     pub phase: OperationProgressPhase,
     pub progress: OperationProgress,
+    pub throughput: Option<OperationThroughputSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationThroughputClass {
+    FullSpeed,
+    Constrained,
+    Slow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OperationThroughputSnapshot {
+    pub bytes_per_second: u64,
+    pub class: OperationThroughputClass,
+}
+
+impl OperationThroughputSnapshot {
+    const CONSTRAINED_BYTES_PER_SECOND: u64 = 96 * 1024 * 1024;
+    const SLOW_BYTES_PER_SECOND: u64 = 16 * 1024 * 1024;
+
+    pub fn classify(bytes: u64, elapsed_nanos: u128) -> Option<Self> {
+        if bytes == 0 {
+            return None;
+        }
+        let elapsed_nanos = elapsed_nanos.max(1);
+        let bytes_per_second =
+            ((bytes as u128) * 1_000_000_000 / elapsed_nanos).min(u64::MAX as u128) as u64;
+        let class = if bytes_per_second < Self::SLOW_BYTES_PER_SECOND {
+            OperationThroughputClass::Slow
+        } else if bytes_per_second < Self::CONSTRAINED_BYTES_PER_SECOND {
+            OperationThroughputClass::Constrained
+        } else {
+            OperationThroughputClass::FullSpeed
+        };
+        Some(Self {
+            bytes_per_second,
+            class,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -901,6 +940,7 @@ struct ProgressTracker<'a, F: FnMut(OperationProgressEvent)> {
     cancellation: &'a OperationCancellation,
     pause: &'a OperationPause,
     on_progress: &'a mut F,
+    started_at: Instant,
 }
 
 impl<'a, F: FnMut(OperationProgressEvent)> ProgressTracker<'a, F> {
@@ -915,6 +955,7 @@ impl<'a, F: FnMut(OperationProgressEvent)> ProgressTracker<'a, F> {
             cancellation,
             pause,
             on_progress,
+            started_at: Instant::now(),
         };
         tracker.emit(OperationProgressPhase::Planned);
         tracker
@@ -952,10 +993,25 @@ impl<'a, F: FnMut(OperationProgressEvent)> ProgressTracker<'a, F> {
     }
 
     fn emit(&mut self, phase: OperationProgressPhase) {
+        let throughput = self.throughput_snapshot(phase);
         (self.on_progress)(OperationProgressEvent {
             phase,
             progress: self.progress,
+            throughput,
         });
+    }
+
+    fn throughput_snapshot(
+        &self,
+        phase: OperationProgressPhase,
+    ) -> Option<OperationThroughputSnapshot> {
+        if phase != OperationProgressPhase::Advanced {
+            return None;
+        }
+        OperationThroughputSnapshot::classify(
+            self.progress.completed_bytes,
+            self.started_at.elapsed().as_nanos(),
+        )
     }
 
     fn check_cancelled(&self) -> Result<()> {
@@ -2511,11 +2567,26 @@ mod tests {
             .iter()
             .any(|event| event.phase == OperationProgressPhase::Advanced
                 && event.progress.completed_items == 0
-                && event.progress.completed_bytes == COPY_BUFFER_BYTES as u64));
+                && event.progress.completed_bytes == COPY_BUFFER_BYTES as u64
+                && event.throughput.is_some()));
         let last = events.last().unwrap();
         assert_eq!(last.progress.completed_items, 1);
         assert_eq!(last.progress.completed_bytes, bytes.len() as u64);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn throughput_snapshot_classifies_slow_and_constrained_transfers() {
+        let slow = OperationThroughputSnapshot::classify(8 * 1024 * 1024, 1_000_000_000).unwrap();
+        let constrained =
+            OperationThroughputSnapshot::classify(32 * 1024 * 1024, 1_000_000_000).unwrap();
+        let full_speed =
+            OperationThroughputSnapshot::classify(256 * 1024 * 1024, 1_000_000_000).unwrap();
+
+        assert_eq!(slow.class, OperationThroughputClass::Slow);
+        assert_eq!(constrained.class, OperationThroughputClass::Constrained);
+        assert_eq!(full_speed.class, OperationThroughputClass::FullSpeed);
+        assert_eq!(OperationThroughputSnapshot::classify(0, 1_000), None);
     }
 
     #[test]
