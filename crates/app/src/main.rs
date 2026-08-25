@@ -40,12 +40,12 @@ use gfm_preview::{
 use gfm_store::{
     dictionary_term_report_from_records, inspect_archive_schema, metadata_postings_from_records,
     migrate_content_archive, migrate_metadata_archive, migrate_record_archive,
-    plan_content_archive_migration, plan_content_manifest_recovery,
-    plan_metadata_archive_migration, plan_record_archive_migration, recover_content_manifest,
-    write_dictionary, write_metadata_postings, write_record_columns, ArchiveSchemaKind,
-    ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive, MmapContentSet,
-    MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
-    MmapRecordColumns,
+    plan_columns_archive_rebuild, plan_content_archive_migration, plan_content_manifest_recovery,
+    plan_metadata_archive_migration, plan_record_archive_migration, rebuild_columns_archive,
+    recover_content_manifest, write_dictionary, write_metadata_postings, write_record_columns,
+    ArchiveSchemaKind, ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive,
+    MmapContentSet, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
+    MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_store::{
     fuzzy_postings_from_records, plan_sidecar_recovery, prefix_postings_from_records,
@@ -1524,6 +1524,24 @@ fn run() -> Result<()> {
                 required_path(args.next(), "metadata-migrate requires a backup directory")?;
             let migration = migrate_metadata_archive(metadata, backup_dir)?;
             println!("{}", migration.as_tsv());
+        }
+        Some("columns-rebuild-plan") => {
+            let records =
+                required_path(args.next(), "columns-rebuild-plan requires a records path")?;
+            let columns =
+                required_path(args.next(), "columns-rebuild-plan requires a columns path")?;
+            println!(
+                "{}",
+                plan_columns_archive_rebuild(records, columns).as_tsv()
+            );
+        }
+        Some("columns-rebuild") => {
+            let records = required_path(args.next(), "columns-rebuild requires a records path")?;
+            let columns = required_path(args.next(), "columns-rebuild requires a columns path")?;
+            let backup_dir =
+                required_path(args.next(), "columns-rebuild requires a backup directory")?;
+            let rebuild = rebuild_columns_archive(records, columns, backup_dir)?;
+            println!("{}", rebuild.as_tsv());
         }
         Some("index-columns") => {
             let records = required_path(args.next(), "index-columns requires a records path")?;
@@ -3273,6 +3291,8 @@ fn print_usage() {
   gfm content-migrate <content.gfmcontent> <backup-dir>
   gfm metadata-migration-plan <metadata.gfmmeta>
   gfm metadata-migrate <metadata.gfmmeta> <backup-dir>
+  gfm columns-rebuild-plan <records.gfmidx> <columns.gfmcols>
+  gfm columns-rebuild <records.gfmidx> <columns.gfmcols> <backup-dir>
   gfm records-verify <index.gfmidx>
   gfm index-columns <records.gfmidx> <columns.gfmcols>
   gfm columns-verify <columns.gfmcols>

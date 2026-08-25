@@ -462,6 +462,11 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - legacy tag/comment metadata archives are planned before mutation, copied byte-for-byte into an operator-supplied backup directory, and rewritten through the production checksummed metadata encoder;
   - migrated metadata archives are reclassified after publication and must reopen as current `gfm-metadata-v3` archives before the migration is reported successful;
   - current metadata archives are deterministic no-ops, while missing, unsupported, or unreadable metadata routes to durable-record rebuild/quarantine recovery rather than unsafe migration.
+- Derived column archive rebuild:
+  - column archives are treated as latency-critical derived sidecars, so legacy, missing, unsupported, and unreadable columns are regenerated from the durable mmap record archive instead of being lossy-migrated from partial column-only data;
+  - legacy, unsupported, and unreadable column files are copied byte-for-byte into an operator-supplied backup directory before replacement, while missing columns rebuild without fabricating a backup artifact;
+  - rebuilt columns are reclassified after publication and must reopen as current checksummed `gfm-record-columns-v2` archives before the rebuild is reported successful;
+  - unreadable, missing, or unsupported record archives block column rebuilds because records are the authoritative source for all column fields.
 - Persistent index recovery:
   - record archives and volume-state files are classified before startup use as ready, missing, unreadable, schema-mismatched, root-mismatched, path-mismatched, or count-mismatched;
   - valid records with missing, stale, unreadable, or migratable state rebuild the state file without rescanning the volume;

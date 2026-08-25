@@ -9,6 +9,7 @@ mod ids;
 mod integrity;
 mod metadata;
 mod prefix;
+mod rebuild;
 mod schema;
 mod sidecar;
 
@@ -49,6 +50,10 @@ pub use metadata::{
 pub use prefix::{
     prefix_postings_from_records, read_prefix_postings, write_prefix_postings, MmapPrefixArchive,
     PrefixPosting,
+};
+pub use rebuild::{
+    plan_columns_archive_rebuild, rebuild_columns_archive, ColumnsArchiveRebuild,
+    ColumnsArchiveRebuildAction, ColumnsArchiveRebuildPlan,
 };
 pub use schema::{
     inspect_archive_schema, migrate_content_archive, migrate_metadata_archive,

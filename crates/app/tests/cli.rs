@@ -350,6 +350,89 @@ fn migrates_legacy_metadata_archive_from_binary() {
 }
 
 #[test]
+fn rebuilds_columns_archive_from_binary() {
+    let root = unique_temp_dir("gfm-cli-columns-rebuild-root");
+    let records = unique_temp_path("gfm-cli-columns-rebuild-records", "gfmidx");
+    let columns = unique_temp_path("gfm-cli-columns-rebuild-columns", "gfmcols");
+    let backup = unique_temp_dir("gfm-cli-columns-rebuild-backup");
+    fs::write(root.join("ColumnNeedle.md"), "alpha").unwrap();
+
+    let index = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index.stderr)
+    );
+
+    let plan = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "columns-rebuild-plan",
+            records.to_str().unwrap(),
+            columns.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let plan_stdout = String::from_utf8(plan.stdout).unwrap();
+    assert!(
+        plan_stdout.contains(
+            "columns-archive-rebuild-plan\taction=rebuild\trecords-status=current\tcolumns-status=missing",
+        ),
+        "{plan_stdout}"
+    );
+
+    let rebuild = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "columns-rebuild",
+            records.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            backup.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        rebuild.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuild.stderr)
+    );
+    let rebuild_stdout = String::from_utf8(rebuild.stdout).unwrap();
+    assert!(
+        rebuild_stdout.contains(
+            "columns-archive-rebuild\trebuilt-records=2\trecords-status=current\tbefore-status=missing\tafter-status=current",
+        ),
+        "{rebuild_stdout}"
+    );
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["columns-verify", columns.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        verify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify.stderr)
+    );
+    let verify_stdout = String::from_utf8(verify.stdout).unwrap();
+    assert!(
+        verify_stdout.contains("\tchecksum=verified"),
+        "{verify_stdout}"
+    );
+    assert!(backup.read_dir().unwrap().next().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(columns).unwrap();
+    fs::remove_dir_all(backup).unwrap();
+}
+
+#[test]
 fn persists_volume_index_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-index-state-root");
     let index = unique_temp_path("gfm-cli-index-state-records", "gfmidx");

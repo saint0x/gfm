@@ -783,7 +783,7 @@ fn report(
     }
 }
 
-fn backup_archive(path: &Path, backup_dir: &Path, label: &str) -> Result<PathBuf> {
+pub(crate) fn backup_archive(path: &Path, backup_dir: &Path, label: &str) -> Result<PathBuf> {
     fs::create_dir_all(backup_dir).map_err(|err| GfmError::io(backup_dir, err))?;
     let name = path
         .file_name()
@@ -804,7 +804,7 @@ fn backup_archive(path: &Path, backup_dir: &Path, label: &str) -> Result<PathBuf
     Ok(backup_path)
 }
 
-fn escape_field(value: &str) -> String {
+pub(crate) fn escape_field(value: &str) -> String {
     value.replace(['\t', '\n', '\r'], " ")
 }
 

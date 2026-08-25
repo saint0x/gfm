@@ -101,7 +101,10 @@ fn write_record_columns_v2(path: impl AsRef<Path>, records: &[FileRecord]) -> Re
 }
 
 #[cfg(test)]
-fn write_record_columns_v1(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<()> {
+pub(crate) fn write_record_columns_v1(
+    path: impl AsRef<Path>,
+    records: &[FileRecord],
+) -> Result<()> {
     let path = path.as_ref();
     durable::atomic_write(path, |writer| {
         let mut bytes = Vec::new();
