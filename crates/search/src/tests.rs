@@ -693,6 +693,48 @@ fn simple_content_term_search_combines_exact_and_content_scores() {
 }
 
 #[test]
+fn simple_multi_term_content_search_anchors_on_bounded_candidates() {
+    let mut index = SearchIndex::new();
+    for node in (1..=96).rev() {
+        let item = record(
+            node,
+            &format!("/tmp/multi/{node:03}.txt"),
+            &format!("{node:03}.txt"),
+        );
+        index.insert(item.clone());
+        index.insert_content(item.id, "alpha beta body text");
+    }
+
+    let hits = index.query("alpha beta", 3);
+    let paths: Vec<_> = hits.into_iter().map(|hit| hit.record.path).collect();
+
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/tmp/multi/001.txt"),
+            PathBuf::from("/tmp/multi/002.txt"),
+            PathBuf::from("/tmp/multi/003.txt")
+        ]
+    );
+}
+
+#[test]
+fn simple_multi_term_search_combines_name_and_content_scores() {
+    let mut index = SearchIndex::new();
+    let name_and_content = record(1, "/tmp/a/alpha-beta.md", "alpha-beta.md");
+    let name_only = record(2, "/tmp/b/alpha-beta.md", "alpha-beta.md");
+    index.insert(name_and_content.clone());
+    index.insert(name_only);
+    index.insert_content(name_and_content.id, "alpha beta body text");
+
+    let hits = index.query("alpha beta", 2);
+
+    assert_eq!(hits[0].record.id, name_and_content.id);
+    assert_eq!(hits[0].reason, MatchReason::SubstringName);
+    assert!(hits[0].score > hits[1].score);
+}
+
+#[test]
 fn content_proximity_uses_rarest_posting_candidates_without_id_sets() {
     let mut index = SearchIndex::new();
     for node in 1..=64 {

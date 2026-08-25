@@ -797,6 +797,11 @@ impl SearchIndex {
         {
             return Ok(report);
         }
+        if let Some(report) =
+            self.query_simple_multi_term_pass(query, limit, pass, lookup, budget, cancellation)?
+        {
+            return Ok(report);
+        }
         let expression_candidates = query
             .expression
             .as_ref()
@@ -1092,6 +1097,152 @@ impl SearchIndex {
             hits: hits.into_sorted_hits(),
             lookup: telemetry,
         }))
+    }
+
+    fn query_simple_multi_term_pass(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        pass: SearchPass,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<Option<SearchQueryReport>> {
+        if pass != SearchPass::Full
+            || query.expression.is_some()
+            || query.terms.len() < 2
+            || !query.excluded_terms.is_empty()
+            || !query.phrases.is_empty()
+            || !query.proximities.is_empty()
+            || !query.filters.is_empty()
+            || !QueryIntent::from_query(query).is_empty()
+        {
+            return Ok(None);
+        }
+
+        let text = query.terms.join(" ");
+        let mut telemetry = SearchLookupTelemetry::default();
+        let full_text_prefix_ids = self.name_prefix_ids(&text, lookup, budget, &mut telemetry)?;
+        let mut fuzzy_by_term = Vec::with_capacity(query.terms.len());
+        let mut candidate_sets = Vec::with_capacity(query.terms.len());
+        for term in &query.terms {
+            cancellation.check()?;
+            let fuzzy_ids = self.fuzzy_ids(term, lookup, budget, &mut telemetry)?;
+            let mut candidates = self.term_candidate_ids(term, SearchPass::Full);
+            candidates.extend(fuzzy_ids.iter().copied());
+            if candidates.is_empty() {
+                return Ok(Some(SearchQueryReport {
+                    hits: Vec::new(),
+                    lookup: telemetry,
+                }));
+            }
+            fuzzy_by_term.push(fuzzy_ids);
+            candidate_sets.push(candidates);
+        }
+
+        let Some(anchor) = candidate_sets.iter().min_by_key(|ids| ids.len()) else {
+            return Ok(None);
+        };
+        let mut hits = BoundedHitMerge::new(limit);
+        for id in anchor {
+            cancellation.check()?;
+            let Some(record) = self.records.get(id) else {
+                continue;
+            };
+            if !self.record_matches_query(record, query, pass) {
+                continue;
+            }
+            let mut score = self.score_plain_multi_term_record(
+                record,
+                query,
+                &text,
+                &full_text_prefix_ids,
+                &fuzzy_by_term,
+            );
+            score.boost(self.composite_boosts(record, query, pass));
+            let (score, reason) = score.finish();
+            hits.push(SearchHit {
+                record: record.clone(),
+                score,
+                reason,
+                snippet: None,
+            });
+        }
+
+        Ok(Some(SearchQueryReport {
+            hits: hits.into_sorted_hits(),
+            lookup: telemetry,
+        }))
+    }
+
+    fn score_plain_multi_term_record(
+        &self,
+        record: &FileRecord,
+        query: &SearchQuery,
+        text: &str,
+        full_text_prefix_ids: &BTreeSet<FileId>,
+        fuzzy_by_term: &[BTreeSet<FileId>],
+    ) -> RankAccumulator {
+        let mut score = RankAccumulator::new(0, MatchReason::PathComponent);
+        if self
+            .name_exact
+            .get(text)
+            .is_some_and(|ids| ids.contains(&record.id))
+        {
+            score.add(EXACT_NAME, MatchReason::ExactName);
+        }
+        if full_text_prefix_ids.contains(&record.id) {
+            score.add(PREFIX_NAME, MatchReason::PrefixName);
+        }
+        for (index, term) in query.terms.iter().enumerate() {
+            if self
+                .name_terms
+                .get(term)
+                .is_some_and(|ids| ids.contains(&record.id))
+            {
+                score.add(NAME_TOKEN, MatchReason::SubstringName);
+            }
+            if self
+                .path_terms
+                .get(term)
+                .is_some_and(|ids| ids.contains(&record.id))
+            {
+                score.add(PATH_COMPONENT, MatchReason::PathComponent);
+            }
+            if self
+                .metadata_terms
+                .get(term)
+                .is_some_and(|ids| ids.contains(&record.id))
+            {
+                score.add(TAG, MatchReason::Tag);
+            }
+            if self
+                .extension
+                .get(term)
+                .is_some_and(|ids| ids.contains(&record.id))
+            {
+                score.add(EXTENSION, MatchReason::Extension);
+            }
+            if self
+                .tags
+                .get(term)
+                .is_some_and(|ids| ids.contains(&record.id))
+            {
+                score.add(TAG, MatchReason::Tag);
+            }
+            if self.content_has(record.id, term) {
+                score.add(CONTENT, MatchReason::Content);
+            }
+            if fuzzy_by_term
+                .get(index)
+                .is_some_and(|ids| ids.contains(&record.id))
+                && !self.record_contains_term(record, term)
+                && self.record_fuzzy_matches_term(record, term)
+            {
+                score.add(FUZZY_NAME, MatchReason::FuzzyName);
+            }
+        }
+        score
     }
 
     fn record_matches_query(
