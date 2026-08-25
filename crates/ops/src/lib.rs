@@ -647,8 +647,8 @@ fn copy_symlink(
     }
     let target = fs::read_link(from).map_err(|err| GfmError::io(from, err))?;
     create_symlink(&target, to)?;
-    preserve_xattrs(from, to)?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+    preserve_xattrs(from, to)?;
     progress.advance(&metadata)
 }
 
@@ -757,9 +757,50 @@ fn create_symlink(target: &Path, link: &Path) -> Result<()> {
 }
 
 fn preserve_metadata(from: &Path, to: &Path, metadata: &fs::Metadata) -> Result<()> {
+    preserve_ownership(to, metadata)?;
     preserve_permissions(to, metadata)?;
     preserve_times(to, metadata)?;
     preserve_xattrs(from, to)
+}
+
+#[cfg(unix)]
+fn preserve_ownership(to: &Path, metadata: &fs::Metadata) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    match rustix::fs::chown(
+        to,
+        Some(rustix::fs::Uid::from_raw(metadata.uid())),
+        Some(rustix::fs::Gid::from_raw(metadata.gid())),
+    ) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let err = io::Error::from(err);
+            if ownership_preservation_unsupported(&err) {
+                Ok(())
+            } else {
+                Err(GfmError::io(to, err))
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn ownership_preservation_unsupported(err: &io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(libc::EPERM) | Some(libc::EACCES) | Some(libc::ENOTSUP)
+    ) || matches!(
+        err.kind(),
+        io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
+    )
+}
+
+#[cfg(not(unix))]
+fn preserve_ownership(_to: &Path, _metadata: &fs::Metadata) -> Result<()> {
+    Ok(())
 }
 
 fn preserve_permissions(to: &Path, metadata: &fs::Metadata) -> Result<()> {
@@ -1392,6 +1433,32 @@ mod tests {
             filetime::FileTime::from_last_modification_time(&copied),
             expected
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_preserves_owner_and_group_when_host_allows_it() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = unique_temp_dir("gfm-ops-ownership");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "ownership").unwrap();
+
+        Operator::new(OperationContext::new(&journal))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        let source_metadata = fs::symlink_metadata(&source).unwrap();
+        let destination_metadata = fs::symlink_metadata(&destination).unwrap();
+        assert_eq!(destination_metadata.uid(), source_metadata.uid());
+        assert_eq!(destination_metadata.gid(), source_metadata.gid());
 
         fs::remove_dir_all(root).unwrap();
     }

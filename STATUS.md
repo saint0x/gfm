@@ -61,7 +61,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## File Operations
 
-38. Finish Finder-compatible copy preservation for ownership, ACLs, birthtime, package behavior, and verified edge cases beyond the implemented symlink preservation, permissions, access/modified timestamps, and copyable xattrs.
+38. Finish Finder-compatible copy preservation for ACLs, birthtime, package behavior, and verified edge cases beyond the implemented symlink preservation, ownership preservation where the host permits it, permissions, access/modified timestamps, and copyable xattrs.
 39. Implement operation pause and resume beyond the implemented journaled cancellation checkpoints, interrupted-operation recovery replay, and explicit capped retry for classified transient failed operations.
 40. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
 41. Implement Trash restore metadata and restore operation.
