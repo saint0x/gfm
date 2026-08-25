@@ -122,26 +122,24 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Telemetry And Performance
 
-84. Implement latency histograms for navigation, selection, rename, search keystrokes, result streaming, thumbnail display, preview open, copy start, cancel, and window render.
-85. Implement frame timing and UI-thread stall detection.
-86. Implement IO, CPU, memory, allocation, queue-depth, and compaction telemetry.
-87. Implement local-only diagnostics export with privacy review.
-88. Define hard budgets for p50, p95, p99, cold start, warm start, first result, full result, directory open, and visible thumbnail completion.
-89. Build repeatable macrobenchmarks against small, medium, huge, developer, media, iCloud, external, and network-volume trees.
-90. Add regression gates that fail on latency, memory, index size, or frame-time drift.
+84. Implement IO, CPU, memory, allocation, queue-depth, and compaction telemetry.
+85. Implement local-only diagnostics export with privacy review.
+86. Define hard budgets for p50, p95, p99, cold start, warm start, first result, full result, directory open, and visible thumbnail completion.
+87. Build repeatable macrobenchmarks against small, medium, huge, developer, media, iCloud, external, and network-volume trees.
+88. Add regression gates that fail on latency, memory, index size, or frame-time drift.
 
 ## Packaging
 
-91. Build signed `.app` bundle with icons, entitlements, Info.plist, launch services registration, and document associations.
-92. Implement hardened runtime settings.
-93. Implement notarization pipeline.
-94. Implement first-run permission onboarding that remains Finder-parity by default.
-95. Implement update, rollback, crash-report, and diagnostics policy.
-96. Implement release artifact validation on clean macOS machines.
+89. Build signed `.app` bundle with icons, entitlements, Info.plist, launch services registration, and document associations.
+90. Implement hardened runtime settings.
+91. Implement notarization pipeline.
+92. Implement first-run permission onboarding that remains Finder-parity by default.
+93. Implement update, rollback, crash-report, and diagnostics policy.
+94. Implement release artifact validation on clean macOS machines.
 
 ## Documentation
 
-97. Expand `PLAN.md` when architectural decisions change materially.
-98. Keep `README.md` written as the completed product contract.
-99. Keep this file limited to unfinished work only.
-100. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+95. Expand `PLAN.md` when architectural decisions change materially.
+96. Keep `README.md` written as the completed product contract.
+97. Keep this file limited to unfinished work only.
+98. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

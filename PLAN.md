@@ -271,7 +271,9 @@ gfm/
 `telemetry`
 
 - Owns local-only metrics.
-- Records latency histograms, queue depths, cache hit rates, dropped frames, slow paths, index lag, and operation failures.
+- Records bounded p50/p95/p99 latency histograms for navigation, selection, rename, search keystrokes, result streaming, thumbnail display, preview open, copy start, cancel, and window render.
+- Records frame timing histograms and UI-thread stalls against explicit stall thresholds.
+- Records queue depths, cache hit rates, slow paths, index lag, and operation failures.
 
 ## Data Model
 
