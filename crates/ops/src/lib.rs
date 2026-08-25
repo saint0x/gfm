@@ -1380,9 +1380,8 @@ fn copy_directory(
 ) -> Result<()> {
     progress.check_cancelled()?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
-    let rollback_incomplete_package = mode == CopyExistingMode::Fresh
-        && metadata.is_dir()
-        && is_finder_package_dir(from, &metadata);
+    let rollback_incomplete_fresh_destination =
+        mode == CopyExistingMode::Fresh && metadata.is_dir();
     let mut created_destination = false;
     let result = (|| {
         if mode != CopyExistingMode::Fresh && path_exists_or_symlink(to) {
@@ -1476,7 +1475,7 @@ fn copy_directory(
         }
         Ok(())
     })();
-    if rollback_incomplete_package
+    if rollback_incomplete_fresh_destination
         && created_destination
         && result
             .as_ref()
@@ -2478,9 +2477,7 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, GfmError::Cancelled));
-        assert!(destination.is_dir());
-        assert!(!destination.join("first.txt").exists());
-        assert!(!destination.join("nested").exists());
+        assert!(!path_exists_or_symlink(&destination));
         assert_eq!(
             events
                 .iter()
@@ -3304,6 +3301,41 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].status, OperationStatus::Started);
         assert_eq!(entries[1].status, OperationStatus::Failed);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_fresh_directory_copy_removes_incomplete_destination() {
+        let root = unique_temp_dir("gfm-ops-directory-cancel");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("nested").join("file.txt"), "nested").unwrap();
+        let cancellation = OperationCancellation::default();
+        let cancellation_callback = cancellation.clone();
+
+        let err = Operator::new(OperationContext::new(&journal).with_cancellation(cancellation))
+            .execute_with_progress(
+                Operation::Copy {
+                    from: source.clone(),
+                    to: destination.clone(),
+                },
+                |event| {
+                    if event.phase == OperationProgressPhase::Advanced
+                        && event.progress.completed_items == 1
+                    {
+                        cancellation_callback.cancel();
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert!(!path_exists_or_symlink(&destination));
+        let entries = read_journal(&journal).unwrap();
+        assert_eq!(entries[1].status, OperationStatus::Cancelled);
 
         fs::remove_dir_all(root).unwrap();
     }
