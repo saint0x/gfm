@@ -30,6 +30,27 @@ fn removes_reindexed_records() {
 }
 
 #[test]
+fn reindexed_records_refresh_cached_columns() {
+    let mut index = SearchIndex::new();
+    let mut item = record(1, "/tmp/alpha.md", "alpha.md");
+    item.tags = vec!["Important".to_string()];
+    item.finder_comment = Some("launch notes".to_string());
+    index.insert(item.clone());
+
+    item.path = PathBuf::from("/tmp/beta.pdf");
+    item.name = "beta.pdf".to_string();
+    item.tags = vec!["Later".to_string()];
+    item.finder_comment = Some("archive notes".to_string());
+    index.insert(item);
+
+    assert!(index.query("alpha", 10).is_empty());
+    assert!(index.query("tag:important", 10).is_empty());
+    assert!(index.query("launch", 10).is_empty());
+    assert!(index.query("ext:md", 10).is_empty());
+    assert_eq!(index.query("beta tag:later archive ext:pdf", 10).len(), 1);
+}
+
+#[test]
 fn removes_subtree_by_path() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/folder", "folder"));

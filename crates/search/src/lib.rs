@@ -1,3 +1,4 @@
+mod columns;
 mod fuzzy;
 mod intent;
 mod query;
@@ -5,6 +6,7 @@ mod ranking;
 mod session;
 mod shard;
 
+use columns::{filter_matches_columns, RecordColumns};
 use fuzzy::{bounded_levenshtein, deletion_keys};
 use intent::{intent_score, term_matches_intent};
 use query::{normalize, tokenize};
@@ -43,6 +45,7 @@ pub struct SearchStreamBatch {
 #[derive(Debug, Clone, Default)]
 pub struct SearchIndex {
     records: HashMap<FileId, FileRecord>,
+    columns: HashMap<FileId, RecordColumns>,
     paths: HashMap<String, FileId>,
     name_exact: BTreeMap<String, BTreeSet<FileId>>,
     name_terms: BTreeMap<String, BTreeSet<FileId>>,
@@ -72,16 +75,20 @@ impl SearchIndex {
         let id = record.id;
         if let Some(old) = self.records.remove(&id) {
             self.remove_terms(&old);
+            self.columns.remove(&id);
             self.paths.remove(&path_key(&old.path));
         }
-        self.add_terms(&record);
+        let columns = RecordColumns::from_record(&record);
+        self.add_terms(&record, &columns);
         self.paths.insert(path_key(&record.path), id);
+        self.columns.insert(id, columns);
         self.records.insert(id, record);
     }
 
     pub fn remove(&mut self, id: FileId) -> Option<FileRecord> {
         let record = self.records.remove(&id)?;
         self.remove_terms(&record);
+        self.columns.remove(&id);
         self.pinned.remove(&id);
         self.paths.remove(&path_key(&record.path));
         Some(record)
@@ -363,8 +370,8 @@ impl SearchIndex {
                     let Some(record) = self.records.get(&id) else {
                         continue;
                     };
-                    if !record_contains_term(record, term)
-                        && record_fuzzy_matches_term(record, term)
+                    if !self.record_contains_term(record, term)
+                        && self.record_fuzzy_matches_term(record, term)
                     {
                         scores
                             .entry(id)
@@ -380,7 +387,7 @@ impl SearchIndex {
         for phrase in &query.phrases {
             cancellation.check()?;
             for record in self.records.values().filter(|record| {
-                record_matches_phrase(record, phrase)
+                self.record_matches_phrase(record, phrase)
                     || (pass.includes_deep() && self.content_matches_phrase(record.id, phrase))
             }) {
                 cancellation.check()?;
@@ -412,8 +419,12 @@ impl SearchIndex {
         if scores.len() < limit {
             for record in self.records.values() {
                 cancellation.check()?;
-                let name = normalize(&record.name);
-                if !text.is_empty() && name.contains(&text) {
+                if !text.is_empty()
+                    && self
+                        .columns
+                        .get(&record.id)
+                        .is_some_and(|columns| columns.name.contains(&text))
+                {
                     scores
                         .entry(record.id)
                         .and_modify(|score| score.add(SUBSTRING_NAME, MatchReason::SubstringName))
@@ -493,13 +504,13 @@ impl SearchIndex {
             return self.record_matches_expression(record, expression, pass);
         }
         if query.excluded_terms.iter().any(|term| {
-            record_contains_term(record, term)
+            self.record_contains_term(record, term)
                 || (pass.includes_deep() && self.content_has(record.id, term))
         }) {
             return false;
         }
         if !query.phrases.iter().all(|phrase| {
-            record_matches_phrase(record, phrase)
+            self.record_matches_phrase(record, phrase)
                 || (pass.includes_deep() && self.content_matches_phrase(record.id, phrase))
         }) {
             return false;
@@ -515,7 +526,10 @@ impl SearchIndex {
         if !pass.includes_deep() && !query.proximities.is_empty() {
             return false;
         }
-        query.filters.iter().all(|filter| filter.matches(record))
+        query
+            .filters
+            .iter()
+            .all(|filter| self.filter_matches(record, filter))
     }
 
     fn record_matches_expression(
@@ -526,19 +540,19 @@ impl SearchIndex {
     ) -> bool {
         match expression {
             QueryExpr::Term(term) => {
-                record_contains_term(record, term)
+                self.record_contains_term(record, term)
                     || (pass.includes_deep() && self.content_has(record.id, term))
-                    || (pass.includes_deep() && record_fuzzy_matches_term(record, term))
+                    || (pass.includes_deep() && self.record_fuzzy_matches_term(record, term))
                     || term_matches_intent(term, record)
             }
             QueryExpr::Phrase(phrase) => {
-                record_matches_phrase(record, phrase)
+                self.record_matches_phrase(record, phrase)
                     || (pass.includes_deep() && self.content_matches_phrase(record.id, phrase))
             }
             QueryExpr::Proximity(proximity) => {
                 pass.includes_deep() && self.content_matches_proximity(record.id, proximity)
             }
-            QueryExpr::Filter(filter) => filter.matches(record),
+            QueryExpr::Filter(filter) => self.filter_matches(record, filter),
             QueryExpr::Not(expression) => !self.record_matches_expression(record, expression, pass),
             QueryExpr::And(expressions) => expressions
                 .iter()
@@ -551,22 +565,22 @@ impl SearchIndex {
 
     fn composite_boosts(&self, record: &FileRecord, query: &SearchQuery, pass: SearchPass) -> i64 {
         let mut score = recency_score(record);
+        let Some(columns) = self.columns.get(&record.id) else {
+            return score;
+        };
         if self.pinned.contains(&record.id) {
             score += USER_PINNED;
         }
         for filter in &query.filters {
             if filter_kind_matches(filter, record.kind) {
                 score += kind_score(record.kind);
-            } else if filter.matches(record) {
+            } else if filter_matches_columns(filter, record, columns) {
                 score += KIND_MATCH / 3;
             }
         }
         for term in &query.terms {
-            score += capped_frequency(count_term(&normalize(&record.name), term), NAME_FREQUENCY);
-            score += capped_frequency(
-                count_term(&normalize_path(&record.path), term),
-                PATH_FREQUENCY,
-            );
+            score += capped_frequency(count_term(&columns.name, term), NAME_FREQUENCY);
+            score += capped_frequency(count_term(&columns.path, term), PATH_FREQUENCY);
             if pass.includes_deep() {
                 score +=
                     capped_frequency(self.content_frequency(record.id, term), CONTENT_FREQUENCY);
@@ -701,79 +715,68 @@ impl SearchIndex {
         })
     }
 
-    fn add_terms(&mut self, record: &FileRecord) {
-        let name = normalize(&record.name);
+    fn add_terms(&mut self, record: &FileRecord, columns: &RecordColumns) {
         self.name_exact
-            .entry(name.clone())
+            .entry(columns.name.clone())
             .or_default()
             .insert(record.id);
-        for token in tokenize(&name) {
-            let is_new = !self.name_terms.contains_key(&token);
+        for token in &columns.name_tokens {
+            let is_new = !self.name_terms.contains_key(token);
             self.name_terms
                 .entry(token.clone())
                 .or_default()
                 .insert(record.id);
             if is_new {
-                self.add_fuzzy_term(&token);
+                self.add_fuzzy_term(token);
             }
         }
-        for token in record
-            .path
-            .components()
-            .filter_map(|component| component.as_os_str().to_str())
-            .flat_map(|component| tokenize(&normalize(component)))
-        {
-            self.path_terms.entry(token).or_default().insert(record.id);
-        }
-        if let Some(ext) = record.extension() {
-            self.extension
-                .entry(normalize(ext))
+        for token in &columns.path_tokens {
+            self.path_terms
+                .entry(token.clone())
                 .or_default()
                 .insert(record.id);
         }
-        for tag in &record.tags {
-            let tag = normalize(tag);
-            if !tag.is_empty() {
-                self.tags.entry(tag).or_default().insert(record.id);
-            }
+        if let Some(ext) = &columns.extension {
+            self.extension
+                .entry(ext.clone())
+                .or_default()
+                .insert(record.id);
         }
-        if let Some(comment) = &record.finder_comment {
-            for token in tokenize(&normalize(comment)) {
-                self.metadata_terms
-                    .entry(token)
-                    .or_default()
-                    .insert(record.id);
-            }
+        for tag in &columns.tags {
+            self.tags.entry(tag.clone()).or_default().insert(record.id);
+        }
+        for token in &columns.metadata_tokens {
+            self.metadata_terms
+                .entry(token.clone())
+                .or_default()
+                .insert(record.id);
         }
     }
 
     fn remove_terms(&mut self, record: &FileRecord) {
-        let name = normalize(&record.name);
-        remove_id(&mut self.name_exact, &name, record.id);
-        for token in tokenize(&name) {
-            remove_id(&mut self.name_terms, &token, record.id);
-            if !self.name_terms.contains_key(&token) {
-                self.remove_fuzzy_term(&token);
+        let columns = self
+            .columns
+            .get(&record.id)
+            .cloned()
+            .unwrap_or_else(|| RecordColumns::from_record(record));
+        remove_id(&mut self.name_exact, &columns.name, record.id);
+        for token in &columns.name_tokens {
+            remove_id(&mut self.name_terms, token, record.id);
+            if !self.name_terms.contains_key(token) {
+                self.remove_fuzzy_term(token);
             }
         }
-        for token in record
-            .path
-            .components()
-            .filter_map(|component| component.as_os_str().to_str())
-            .flat_map(|component| tokenize(&normalize(component)))
-        {
-            remove_id(&mut self.path_terms, &token, record.id);
+        for token in &columns.path_tokens {
+            remove_id(&mut self.path_terms, token, record.id);
         }
-        if let Some(ext) = record.extension() {
-            remove_id(&mut self.extension, &normalize(ext), record.id);
+        if let Some(ext) = &columns.extension {
+            remove_id(&mut self.extension, ext, record.id);
         }
-        for tag in &record.tags {
-            remove_id(&mut self.tags, &normalize(tag), record.id);
+        for tag in &columns.tags {
+            remove_id(&mut self.tags, tag, record.id);
         }
-        if let Some(comment) = &record.finder_comment {
-            for token in tokenize(&normalize(comment)) {
-                remove_id(&mut self.metadata_terms, &token, record.id);
-            }
+        for token in &columns.metadata_tokens {
+            remove_id(&mut self.metadata_terms, token, record.id);
         }
         for positions in self.content_terms.values_mut() {
             positions.remove(&record.id);
@@ -807,6 +810,33 @@ impl SearchIndex {
             }
         }
     }
+
+    fn record_contains_term(&self, record: &FileRecord, term: &str) -> bool {
+        self.columns
+            .get(&record.id)
+            .is_some_and(|columns| columns.contains_term(term))
+    }
+
+    fn record_matches_phrase(&self, record: &FileRecord, phrase: &str) -> bool {
+        self.columns
+            .get(&record.id)
+            .is_some_and(|columns| columns.matches_phrase(phrase))
+    }
+
+    fn filter_matches(&self, record: &FileRecord, filter: &QueryFilter) -> bool {
+        self.columns
+            .get(&record.id)
+            .is_some_and(|columns| filter_matches_columns(filter, record, columns))
+    }
+
+    fn record_fuzzy_matches_term(&self, record: &FileRecord, term: &str) -> bool {
+        self.columns.get(&record.id).is_some_and(|columns| {
+            columns
+                .fuzzy_terms
+                .iter()
+                .any(|candidate| bounded_levenshtein(candidate, term, 2).is_some())
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -825,44 +855,8 @@ fn path_key(path: &std::path::Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn record_contains_term(record: &FileRecord, term: &str) -> bool {
-    normalize(&record.name).contains(term)
-        || normalize_path(&record.path).contains(term)
-        || record.tags.iter().any(|tag| normalize(tag).contains(term))
-        || record
-            .finder_comment
-            .as_deref()
-            .is_some_and(|comment| normalize(comment).contains(term))
-}
-
-fn record_matches_phrase(record: &FileRecord, phrase: &str) -> bool {
-    normalize(&record.name).contains(phrase)
-        || normalize_path(&record.path).contains(phrase)
-        || record
-            .finder_comment
-            .as_deref()
-            .is_some_and(|comment| normalize(comment).contains(phrase))
-}
-
-fn record_fuzzy_matches_term(record: &FileRecord, term: &str) -> bool {
-    fuzzy_record_terms(record)
-        .into_iter()
-        .any(|candidate| bounded_levenshtein(&candidate, term, 2).is_some())
-}
-
-fn fuzzy_record_terms(record: &FileRecord) -> BTreeSet<String> {
-    tokenize(&normalize(&record.name))
-        .into_iter()
-        .filter(|term| is_fuzzy_term(term))
-        .collect()
-}
-
 fn is_fuzzy_term(term: &str) -> bool {
     (FUZZY_MIN_TERM_LEN..=FUZZY_MAX_TERM_LEN).contains(&term.chars().count())
-}
-
-fn normalize_path(path: &std::path::Path) -> String {
-    normalize(&path.to_string_lossy())
 }
 
 fn expression_needs_universe(expression: &QueryExpr) -> bool {
