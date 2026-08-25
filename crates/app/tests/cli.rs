@@ -2070,6 +2070,42 @@ fn failed_operation_from_binary_still_journals_failure() {
 }
 
 #[test]
+fn copy_skip_from_binary_journals_skipped_without_overwrite() {
+    let root = unique_temp_dir("gfm-cli-ops-skip-root");
+    let journal = root.join("ops.journal");
+    let source = root.join("report.md");
+    let destination = root.join("destination.md");
+    fs::write(&source, "new report").unwrap();
+    fs::write(&destination, "old report").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            "--skip",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\tskipped"), "{stdout}");
+    assert_eq!(fs::read_to_string(&source).unwrap(), "new report");
+    assert_eq!(fs::read_to_string(&destination).unwrap(), "old report");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(journal_text.contains("\tskipped\t"), "{journal_text}");
+    assert!(!journal_text.contains("\tcompleted\t"), "{journal_text}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn copy_keep_both_from_binary_uses_actual_journal_destination() {
     let root = unique_temp_dir("gfm-cli-ops-keep-both-root");
     let journal = root.join("ops.journal");

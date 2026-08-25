@@ -14,6 +14,7 @@ pub enum ConflictPolicy {
     Replace,
     KeepBoth,
     Merge,
+    Skip,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +180,7 @@ impl OperationAccessGate {
 pub enum OperationStatus {
     Started,
     Completed,
+    Skipped,
     Paused,
     Cancelled,
     Failed,
@@ -447,6 +449,11 @@ impl Operator {
             let _ = self.append(entry);
             return Err(err);
         }
+        if should_skip_operation(&operation, self.context.conflict) {
+            let entry = JournalEntry::skipped(id, operation);
+            self.append(entry.clone())?;
+            return Ok(entry);
+        }
         let plan = match plan_operation_checked(&operation, &self.context.cancellation) {
             Ok(plan) => plan,
             Err(err) => {
@@ -630,6 +637,16 @@ impl JournalEntry {
             status: OperationStatus::Completed,
             operation,
             message: None,
+            timestamp_nanos: now_nanos(),
+        }
+    }
+
+    fn skipped(id: u128, operation: Operation) -> Self {
+        Self {
+            id,
+            status: OperationStatus::Skipped,
+            operation,
+            message: Some("operation skipped by conflict policy".to_string()),
             timestamp_nanos: now_nanos(),
         }
     }
@@ -1659,6 +1676,10 @@ fn resolve_operation_conflicts(
     }
 }
 
+fn should_skip_operation(operation: &Operation, conflict: ConflictPolicy) -> bool {
+    conflict == ConflictPolicy::Skip && operation.target_path().is_some_and(path_exists_or_symlink)
+}
+
 fn keep_both_path(path: &Path) -> Result<PathBuf> {
     if !path_exists_or_symlink(path) {
         return Ok(path.to_path_buf());
@@ -1721,6 +1742,10 @@ fn prepare_destination(path: &Path, conflict: ConflictPolicy) -> Result<()> {
         ConflictPolicy::Merge => Err(GfmError::Conflict {
             path: path.to_path_buf(),
             message: "merge requires source and destination directories".to_string(),
+        }),
+        ConflictPolicy::Skip => Err(GfmError::Conflict {
+            path: path.to_path_buf(),
+            message: "skip policy must be handled before mutation".to_string(),
         }),
     }
 }
@@ -1835,6 +1860,7 @@ fn encode_status(status: OperationStatus) -> &'static str {
     match status {
         OperationStatus::Started => "started",
         OperationStatus::Completed => "completed",
+        OperationStatus::Skipped => "skipped",
         OperationStatus::Paused => "paused",
         OperationStatus::Cancelled => "cancelled",
         OperationStatus::Failed => "failed",
@@ -1845,6 +1871,7 @@ fn decode_status(value: &str) -> std::result::Result<OperationStatus, String> {
     match value {
         "started" => Ok(OperationStatus::Started),
         "completed" => Ok(OperationStatus::Completed),
+        "skipped" => Ok(OperationStatus::Skipped),
         "paused" => Ok(OperationStatus::Paused),
         "cancelled" => Ok(OperationStatus::Cancelled),
         "failed" => Ok(OperationStatus::Failed),
@@ -2551,6 +2578,72 @@ mod tests {
         let journal_entries = operator.journal().unwrap();
         assert_eq!(journal_entries.len(), 2);
         assert_eq!(journal_entries[1].status, OperationStatus::Failed);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_skip_conflict_journals_skipped_without_mutation() {
+        let root = unique_temp_dir("gfm-ops-skip-copy");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "source").unwrap();
+        fs::write(&destination, "destination").unwrap();
+        let mut events = Vec::new();
+
+        let entry =
+            Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::Skip))
+                .execute_with_progress(
+                    Operation::Copy {
+                        from: source.clone(),
+                        to: destination.clone(),
+                    },
+                    |event| events.push(event),
+                )
+                .unwrap();
+
+        assert_eq!(entry.status, OperationStatus::Skipped);
+        assert!(events.is_empty());
+        assert_eq!(fs::read_to_string(&source).unwrap(), "source");
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "destination");
+        let journal_entries = read_journal(&journal).unwrap();
+        assert_eq!(journal_entries.len(), 2);
+        assert_eq!(journal_entries[0].status, OperationStatus::Started);
+        assert_eq!(journal_entries[1].status, OperationStatus::Skipped);
+        assert_eq!(
+            journal_entries[1].message.as_deref(),
+            Some("operation skipped by conflict policy")
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_ignores_skipped_operations_as_terminal() {
+        let root = unique_temp_dir("gfm-ops-recover-skipped");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "source").unwrap();
+        fs::write(&destination, "destination").unwrap();
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+        append_journal(&journal, &JournalEntry::started(48, operation.clone())).unwrap();
+        append_journal(&journal, &JournalEntry::skipped(48, operation)).unwrap();
+
+        let report = Operator::new(OperationContext::new(&journal))
+            .recover_with_policy(OperationRecoveryPolicy {
+                retry_failed: true,
+                max_attempts: 2,
+            })
+            .unwrap();
+
+        assert!(report.outcomes.is_empty());
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "destination");
+        assert_eq!(read_journal(&journal).unwrap().len(), 2);
 
         fs::remove_dir_all(root).unwrap();
     }

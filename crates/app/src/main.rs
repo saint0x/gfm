@@ -3280,6 +3280,7 @@ fn parse_operation_conflict_args(
             "--replace" => conflict = ConflictPolicy::Replace,
             "--keep-both" => conflict = ConflictPolicy::KeepBoth,
             "--merge" => conflict = ConflictPolicy::Merge,
+            "--skip" => conflict = ConflictPolicy::Skip,
             other => {
                 return Err(GfmError::Format(format!(
                     "unknown {command} conflict option `{other}`"
@@ -4762,6 +4763,7 @@ fn operation_status(status: gfm_ops::OperationStatus) -> &'static str {
     match status {
         gfm_ops::OperationStatus::Started => "started",
         gfm_ops::OperationStatus::Completed => "completed",
+        gfm_ops::OperationStatus::Skipped => "skipped",
         gfm_ops::OperationStatus::Paused => "paused",
         gfm_ops::OperationStatus::Cancelled => "cancelled",
         gfm_ops::OperationStatus::Failed => "failed",
@@ -5329,11 +5331,11 @@ fn print_usage() {
   gfm jobs-runtime-retry-probe <attempt-state> [<nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>]
   gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
   gfm watch-once <root>
-  gfm copy <source> <destination> [--replace|--keep-both|--merge]
-  gfm move <source> <destination> [--replace|--keep-both|--merge]
-  gfm rename <source> <destination> [--replace|--keep-both|--merge]
+  gfm copy <source> <destination> [--replace|--keep-both|--merge|--skip]
+  gfm move <source> <destination> [--replace|--keep-both|--merge|--skip]
+  gfm rename <source> <destination> [--replace|--keep-both|--merge|--skip]
   gfm delete <path>
   gfm trash <path>
-  gfm restore <trash-entry> [original-path] [--replace|--keep-both|--merge]"
+  gfm restore <trash-entry> [original-path] [--replace|--keep-both|--merge|--skip]"
     );
 }
