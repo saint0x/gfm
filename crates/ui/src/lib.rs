@@ -16,6 +16,7 @@ mod gallery;
 mod icon;
 mod list;
 mod menu;
+mod results;
 mod session;
 mod sidebar;
 mod titlebar;
@@ -45,6 +46,11 @@ pub use list::{
     ListSortMode, ListViewContract, ListViewOptions,
 };
 pub use menu::{MenuCommandSpec, MenuCommandState, MenuContract};
+pub use results::{
+    render as render_search_results_view, SearchResultRowSpec, SearchResultsBatch,
+    SearchResultsContract, SearchResultsGroupSpec, SearchResultsGrouping, SearchResultsOptions,
+    SearchResultsScope, SearchResultsStage,
+};
 pub use session::{
     ActivationPolicy, PlacementPolicy, RestorePolicy, TabPolicy, WindowPlacement,
     WindowSessionContract, WindowSessionStore, WindowSessionWriter,

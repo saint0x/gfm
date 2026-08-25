@@ -35,8 +35,9 @@ use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
-    MenuContract, SidebarContract, TitlebarContract, ToolbarContract, WindowLifecycleContract,
-    WindowSessionContract, WindowSessionStore,
+    MenuContract, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
+    SearchResultsStage, SidebarContract, TitlebarContract, ToolbarContract,
+    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::env;
 use std::path::PathBuf;
@@ -268,6 +269,40 @@ fn run() -> Result<()> {
             println!(
                 "{}",
                 GalleryViewContract::from_records(&page.entries, options).as_tsv()
+            );
+        }
+        Some("ui-search-results-contract") => {
+            let root = required_path(
+                args.next(),
+                "ui-search-results-contract requires a root path",
+            )?;
+            let query = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "ui-search-results-contract requires a query string".to_string(),
+                )
+            })?;
+            let viewport_rows = args
+                .next()
+                .map(|value| parse_u16(&value, "viewport-rows"))
+                .transpose()?
+                .unwrap_or(24);
+            let scroll_row = args
+                .next()
+                .map(|value| parse_u32(&value, "scroll-row"))
+                .transpose()?
+                .unwrap_or(0);
+            let snapshot = Indexer::default().build(root)?;
+            let batches = snapshot
+                .stream_search(&query, 50)?
+                .into_iter()
+                .map(|batch| SearchResultsBatch::new(search_results_stage(batch.stage), batch.hits))
+                .collect();
+            let options = SearchResultsOptions::new(query)
+                .with_viewport_rows(viewport_rows)
+                .with_scroll_row(scroll_row);
+            println!(
+                "{}",
+                SearchResultsContract::from_batches(batches, options).as_tsv()
             );
         }
         Some("list") => {
@@ -1183,6 +1218,13 @@ fn stream_stage(stage: SearchStreamStage) -> &'static str {
     match stage {
         SearchStreamStage::Hot => "hot",
         SearchStreamStage::Deep => "deep",
+    }
+}
+
+fn search_results_stage(stage: SearchStreamStage) -> SearchResultsStage {
+    match stage {
+        SearchStreamStage::Hot => SearchResultsStage::Hot,
+        SearchStreamStage::Deep => SearchResultsStage::Deep,
     }
 }
 

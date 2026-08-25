@@ -402,6 +402,42 @@ fn reports_ui_gallery_view_contract_from_binary() {
 }
 
 #[test]
+fn reports_ui_search_results_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-search-results-contract-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("Folder")).unwrap();
+    std::fs::write(root.join("PLAN.md"), "plan").unwrap();
+    std::fs::write(root.join("Folder").join("PLAN-notes.txt"), "notes").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-search-results-contract")
+        .arg(&root)
+        .args(["PLAN", "6", "0"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout
+        .starts_with("search-results\tquery=PLAN\tscope=this-mac\tgrouping=kind\trow-height=24px"));
+    assert!(stdout.contains("\ttotal=2\t"));
+    assert!(stdout.contains("group\tfile\tDocuments\tcount=2"));
+    assert!(stdout.contains("row\t0\t"));
+    assert!(stdout.contains("\tPLAN.md\t"));
+    assert!(stdout.contains("reason="));
+    assert!(stdout.contains("stage="));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_preview_security_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["preview-check", "/tmp/example.app", "quick-look"])
