@@ -886,6 +886,32 @@ fn supports_boolean_or_and_not_queries() {
 }
 
 #[test]
+fn anchored_boolean_not_expression_does_not_request_universe_scan() {
+    let query = SearchQuery::parse("client AND NOT draft");
+    let expression = query.expression.as_ref().unwrap();
+
+    assert!(!expression_needs_universe(expression));
+    assert!(expression_has_positive_anchor(expression));
+}
+
+#[test]
+fn unanchored_boolean_branches_still_request_universe_scan() {
+    let negative = SearchQuery::parse("NOT draft");
+    let filter_or_term = SearchQuery::parse("ext:md OR client");
+    let filter_and_negative = SearchQuery::parse("ext:md AND NOT draft");
+
+    assert!(expression_needs_universe(
+        negative.expression.as_ref().unwrap()
+    ));
+    assert!(expression_needs_universe(
+        filter_or_term.expression.as_ref().unwrap()
+    ));
+    assert!(expression_needs_universe(
+        filter_and_negative.expression.as_ref().unwrap()
+    ));
+}
+
+#[test]
 fn supports_boolean_or_between_filters() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/report.md", "report.md"));

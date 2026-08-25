@@ -1573,10 +1573,23 @@ fn is_substring_gram(value: &str) -> bool {
 fn expression_needs_universe(expression: &QueryExpr) -> bool {
     match expression {
         QueryExpr::Filter(_) | QueryExpr::Not(_) => true,
-        QueryExpr::And(expressions) | QueryExpr::Or(expressions) => {
-            expressions.iter().any(expression_needs_universe)
+        QueryExpr::And(expressions) => {
+            !expression_has_positive_anchor(expression)
+                || expressions.iter().all(expression_needs_universe)
         }
+        QueryExpr::Or(expressions) => expressions.iter().any(expression_needs_universe),
         QueryExpr::Term(_) | QueryExpr::Phrase(_) | QueryExpr::Proximity(_) => false,
+    }
+}
+
+fn expression_has_positive_anchor(expression: &QueryExpr) -> bool {
+    match expression {
+        QueryExpr::Term(_) | QueryExpr::Phrase(_) | QueryExpr::Proximity(_) => true,
+        QueryExpr::Filter(_) | QueryExpr::Not(_) => false,
+        QueryExpr::And(expressions) => expressions.iter().any(expression_has_positive_anchor),
+        QueryExpr::Or(expressions) => {
+            !expressions.is_empty() && expressions.iter().all(expression_has_positive_anchor)
+        }
     }
 }
 

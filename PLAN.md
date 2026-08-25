@@ -398,6 +398,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
    - Executed per volume with bounded per-shard and global top-k merge ordering so local, external, network, and iCloud volumes can fan out independently without unstable result ordering, whole-shard hit cloning, or whole-union sort pressure.
    - Finder-style intent ranking is preclassified once per query so ordinary name/path/content searches skip all-record intent scoring passes.
    - Hit ordering caches score/name/path/id sort keys during bounded top-k ranking so deterministic ordering does not repeatedly lowercase or stringify paths inside comparator churn.
+   - Boolean execution only opens the full-record universe for genuinely unanchored negative or filter-only branches; positive `AND` terms, phrases, or proximity clauses keep `NOT` and filter evaluation candidate-bounded.
 
 3. Metadata index
    - Kind, extension, UTI, size buckets, timestamps, tags, comments, author, app-origin metadata where available.
