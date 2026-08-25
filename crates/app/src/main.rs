@@ -4458,8 +4458,15 @@ fn run_content_job(
     let content_report = Arc::new(Mutex::new(None));
     let content_report_task = Arc::clone(&content_report);
     let mut scheduler = Scheduler::new();
-    let job =
-        scheduler.schedule_on_volume(Priority::Background, "background content index", volume);
+    let label = "background content index";
+    let job = scheduler.schedule_on_volume(Priority::Background, label, volume);
+    let runtime = RuntimeJobHandle::begin(
+        &job,
+        JobPayloadKind::Indexing,
+        label,
+        snapshot.records.len().max(1) as u64,
+        format!("index:{}", spec.root.display()),
+    )?;
     let tasks: Vec<_> = scheduler
         .drain_ready()
         .into_iter()
@@ -4469,7 +4476,9 @@ fn run_content_job(
             let content = spec.content_path.clone();
             let worker = worker.clone();
             let content_report_task = Arc::clone(&content_report_task);
+            let runtime = runtime.clone();
             RetriableTask::new(scheduled, move |cancellation| {
+                runtime.running()?;
                 let report = worker.run_and_compact(
                     &snapshot,
                     segment_dir.clone(),
@@ -4496,6 +4505,7 @@ fn run_content_job(
         .ok_or_else(|| {
             gfm_types::GfmError::Format("background content index job did not run".to_string())
         })?;
+    runtime.finish(&outcome.status)?;
     match &outcome.status {
         TaskStatus::Completed => {}
         TaskStatus::Started => {

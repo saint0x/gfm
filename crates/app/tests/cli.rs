@@ -3543,11 +3543,15 @@ fn runs_background_content_indexer_from_binary() {
     let content = unique_temp_path("gfm-cli-background-content", "gfmcontent");
     let journal = unique_temp_path("gfm-cli-background-jobs", "journal");
     let spec = unique_temp_path("gfm-cli-background-content", "job");
+    let catalog = unique_temp_path("gfm-cli-background-content", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-background-content", "gfmprogress");
     fs::write(root.join("worker.md"), "the body contains workermarker").unwrap();
 
     let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_JOB_JOURNAL", &journal)
         .env("GFM_CONTENT_JOB", &spec)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "index-content-background",
             root.to_str().unwrap(),
@@ -3588,6 +3592,21 @@ fn runs_background_content_indexer_from_binary() {
         .unwrap()
         .contains("gfm-content-job-v1"));
     assert!(fs::read_to_string(&spec).unwrap().contains("volume_id\t"));
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(catalog_text.contains("\tindexing\t"), "{catalog_text}");
+    assert!(
+        catalog_text.contains("background content index"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tbackground\tbackground\tbackground content index"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tcompleted\t2\t2\tcompleted\t"),
+        "{progress_text}"
+    );
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(segments).unwrap();
@@ -3595,6 +3614,8 @@ fn runs_background_content_indexer_from_binary() {
     fs::remove_file(content).unwrap();
     fs::remove_file(journal).unwrap();
     fs::remove_file(spec).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
 }
 
 #[test]
