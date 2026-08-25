@@ -150,21 +150,151 @@ fn email_text(input: &str) -> String {
             output.push_str(
                 line.split_once(':')
                     .map(|(_, value)| value)
-                    .unwrap_or(line)
+                    .unwrap_or(&line)
                     .trim(),
             );
             output.push(' ');
         }
     }
-    output.push_str(&decode_quoted_printable(body));
+    let mut budget = MimeTraversalBudget {
+        remaining_parts: 128,
+        remaining_depth: 8,
+    };
+    output.push_str(&extract_mime_text(headers, body, &mut budget));
     collapse_whitespace(&output)
 }
 
-fn unfolded_header_lines(headers: &str) -> Vec<&str> {
-    headers
-        .lines()
-        .filter(|line| !line.starts_with(char::is_whitespace))
-        .collect()
+#[derive(Debug, Clone, Copy)]
+struct MimeTraversalBudget {
+    remaining_parts: usize,
+    remaining_depth: usize,
+}
+
+fn extract_mime_text(headers: &str, body: &str, budget: &mut MimeTraversalBudget) -> String {
+    if budget.remaining_parts == 0 || budget.remaining_depth == 0 {
+        return String::new();
+    }
+    budget.remaining_parts -= 1;
+    let header_lines = unfolded_header_lines(headers);
+    if header_value(&header_lines, "content-disposition")
+        .is_some_and(|value| value.to_ascii_lowercase().contains("attachment"))
+    {
+        return String::new();
+    }
+
+    let content_type = header_value(&header_lines, "content-type")
+        .unwrap_or("text/plain")
+        .to_string();
+    let lower_content_type = content_type.to_ascii_lowercase();
+    if lower_content_type.starts_with("multipart/") {
+        let Some(boundary) = header_param(&content_type, "boundary") else {
+            return String::new();
+        };
+        budget.remaining_depth -= 1;
+        let mut output = String::new();
+        for part in multipart_parts(body, &boundary) {
+            output.push_str(&extract_mime_text(part.headers, part.body, budget));
+            output.push(' ');
+            if budget.remaining_parts == 0 {
+                break;
+            }
+        }
+        budget.remaining_depth += 1;
+        return output;
+    }
+
+    let transfer_encoding = header_value(&header_lines, "content-transfer-encoding")
+        .unwrap_or("7bit")
+        .to_ascii_lowercase();
+    let decoded = decode_transfer_body(body, &transfer_encoding);
+    if lower_content_type.starts_with("text/html") {
+        html_text(&decoded)
+    } else if lower_content_type.starts_with("text/")
+        || header_value(&header_lines, "content-type").is_none()
+    {
+        decoded
+    } else {
+        String::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MimePart<'a> {
+    headers: &'a str,
+    body: &'a str,
+}
+
+fn multipart_parts<'a>(body: &'a str, boundary: &str) -> Vec<MimePart<'a>> {
+    let marker = format!("--{boundary}");
+    let closing = format!("--{boundary}--");
+    let mut parts = Vec::new();
+    let mut current_start = None;
+    let mut cursor = 0usize;
+    for line in body.split_inclusive('\n') {
+        let line_start = cursor;
+        cursor += line.len();
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed == marker || trimmed == closing {
+            if let Some(start) = current_start {
+                push_mime_part(&mut parts, &body[start..line_start]);
+            }
+            if trimmed == closing {
+                return parts;
+            }
+            current_start = Some(cursor);
+        }
+    }
+    if let Some(start) = current_start {
+        push_mime_part(&mut parts, &body[start..]);
+    }
+    parts
+}
+
+fn push_mime_part<'a>(parts: &mut Vec<MimePart<'a>>, part: &'a str) {
+    let part = part.trim_matches('\n');
+    if let Some((headers, body)) = part.split_once("\n\n") {
+        parts.push(MimePart { headers, body });
+    }
+}
+
+fn unfolded_header_lines(headers: &str) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for line in headers.lines() {
+        if line.starts_with(char::is_whitespace) {
+            if let Some(previous) = lines.last_mut() {
+                previous.push(' ');
+                previous.push_str(line.trim());
+            }
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    lines
+}
+
+fn header_value<'a>(headers: &'a [String], name: &str) -> Option<&'a str> {
+    headers.iter().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.eq_ignore_ascii_case(name).then_some(value.trim())
+    })
+}
+
+fn header_param(header_value: &str, name: &str) -> Option<String> {
+    header_value.split(';').skip(1).find_map(|param| {
+        let (key, value) = param.trim().split_once('=')?;
+        if !key.trim().eq_ignore_ascii_case(name) {
+            return None;
+        }
+        Some(value.trim().trim_matches('"').to_string())
+    })
+}
+
+fn decode_transfer_body(body: &str, encoding: &str) -> String {
+    match encoding {
+        "quoted-printable" | "7bit" | "8bit" | "binary" => decode_quoted_printable(body),
+        "base64" => decode_base64(body),
+        _ => body.to_string(),
+    }
 }
 
 fn decode_quoted_printable(input: &str) -> String {
@@ -193,6 +323,42 @@ fn decode_quoted_printable(input: &str) -> String {
         index += 1;
     }
     String::from_utf8_lossy(&output).into_owned()
+}
+
+fn decode_base64(input: &str) -> String {
+    let mut output = Vec::with_capacity(input.len() * 3 / 4);
+    let mut quantum = [0u8; 4];
+    let mut quantum_len = 0usize;
+    for byte in input.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        let Some(value) = base64_value(byte) else {
+            continue;
+        };
+        quantum[quantum_len] = value;
+        quantum_len += 1;
+        if quantum_len == 4 {
+            output.push((quantum[0] << 2) | (quantum[1] >> 4));
+            if quantum[2] != 64 {
+                output.push((quantum[1] << 4) | (quantum[2] >> 2));
+            }
+            if quantum[3] != 64 {
+                output.push((quantum[2] << 6) | quantum[3]);
+            }
+            quantum_len = 0;
+        }
+    }
+    String::from_utf8_lossy(&output).into_owned()
+}
+
+fn base64_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        b'=' => Some(64),
+        _ => None,
+    }
 }
 
 fn decode_entity(entity: &str) -> &str {
@@ -254,5 +420,71 @@ mod tests {
             doc.text,
             "Ada <ada@example.com> Team Launch Body has mailneedle text"
         );
+    }
+
+    #[test]
+    fn extracts_multipart_email_text_without_attachments() {
+        let doc = extract_rich(
+            br#"From: Ada <ada@example.com>
+To: Team
+Subject: Launch
+Content-Type: multipart/mixed; boundary="outer"
+
+--outer
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+Plain part has multipartneedle=20text
+--outer
+Content-Type: text/html
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGJvZHk+PHA+SFRNTCBwYXJ0IGhhcyBodG1sbmVlZGxlPC9wPjwvYm9keT48L2h0bWw+
+--outer
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="secret.txt"
+
+attachmentneedle should not index
+--outer--
+"#,
+            RichKind::Email,
+        )
+        .unwrap();
+
+        assert!(doc.text.contains("multipartneedle text"), "{}", doc.text);
+        assert!(
+            doc.text.contains("HTML part has htmlneedle"),
+            "{}",
+            doc.text
+        );
+        assert!(!doc.text.contains("attachmentneedle"), "{}", doc.text);
+    }
+
+    #[test]
+    fn extracts_nested_multipart_alternative_email() {
+        let doc = extract_rich(
+            br#"Subject: Nested
+Content-Type: multipart/mixed; boundary=outer
+
+--outer
+Content-Type: multipart/alternative; boundary=inner
+
+--inner
+Content-Type: text/plain
+
+Nested plain nestedneedle
+--inner
+Content-Type: text/html
+
+<p>Nested html alternate</p>
+--inner--
+--outer--
+"#,
+            RichKind::Email,
+        )
+        .unwrap();
+
+        assert!(doc.text.contains("nestedneedle"), "{}", doc.text);
+        assert!(doc.text.contains("Nested html alternate"), "{}", doc.text);
     }
 }

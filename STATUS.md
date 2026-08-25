@@ -51,7 +51,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 32. Complete PDF extraction with sandboxed workers, compressed/encrypted PDF coverage, incremental updates, extractor-version invalidation, and corrupt-file quarantine beyond the bounded in-process text-stream extractor.
 33. Complete Office extraction beyond bounded OOXML with legacy binary format strategy, protected/encrypted document handling, sandboxed workers, extractor-version invalidation, and corrupt-package quarantine.
-34. Complete extraction policy depth beyond current UTF-8 text, HTML, RTF, email, ZIP metadata, JSON, CSV, and plist paths, including MIME multipart emails, richer archive formats, per-format invalidation, and corrupt-input quarantine.
+34. Complete extraction policy depth beyond current UTF-8 text, HTML, RTF, MIME multipart email, ZIP metadata, JSON, CSV, and plist paths, including richer archive formats, per-format invalidation, and corrupt-input quarantine.
 35. Implement OCR strategy for image-only PDFs and screenshots without blocking primary indexing.
 36. Complete hardened extraction-worker isolation with production read-deny Seatbelt feasibility, XPC/App Sandbox entitlement minimization, crash telemetry, and sandbox violation diagnostics beyond the implemented mutation-deny Seatbelt wrapper, timeout-supervised adaptive subprocess worker, and persistent worker-failure quarantine integration.
 

@@ -129,6 +129,17 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-multipart.eml",
+      "data": "From: Ada <ada@example.com>\nTo: Team\nSubject: Fozzy Multipart\nContent-Type: multipart/mixed; boundary=\"outer\"\n\n--outer\nContent-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: quoted-printable\n\nFozzy mail has fozzymultipartneedle=20inside\n--outer\nContent-Type: application/octet-stream\nContent-Disposition: attachment; filename=\"secret.txt\"\n\nattachmentneedle should not index\n--outer--\n"
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["search-content", "tmp", "fozzymultipartneedle"],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["index", ".", "/tmp/gfm-fozzy-host.gfmidx"],

@@ -1,3 +1,4 @@
+use gfm_content::EXTRACTOR_VERSION;
 use gfm_store::{
     content_manifest_promotion_journal_path, read_records, write_content_postings,
     ContentArchiveManifest, ContentArchiveManifestEntry, ContentManifestPromotionJournal,
@@ -2659,6 +2660,52 @@ fn adaptive_search_content_applies_pressure_budget_from_binary() {
 }
 
 #[test]
+fn searches_multipart_email_content_from_binary() {
+    let root = unique_temp_dir("gfm-cli-email-content-root");
+    fs::write(
+        root.join("message.eml"),
+        br#"From: Ada <ada@example.com>
+To: Team
+Subject: Multipart Search
+Content-Type: multipart/mixed; boundary="outer"
+
+--outer
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+Plain mail has emailmultipartneedle=20inside
+--outer
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="secret.txt"
+
+attachmentneedle should not appear
+--outer--
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content",
+            root.to_str().unwrap(),
+            "emailmultipartneedle",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("message.eml"), "{stdout}");
+    assert!(stdout.contains("[[emailmultipartneedle]]"), "{stdout}");
+    assert!(!stdout.contains("attachmentneedle"), "{stdout}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_pdf_content_from_binary() {
     let root = unique_temp_dir("gfm-cli-pdf-content-root");
     fs::write(root.join("brief.pdf"), minimal_pdf("pdfneedle lives here")).unwrap();
@@ -2803,7 +2850,10 @@ fn reports_compressed_pdf_extraction_from_binary() {
         stdout.contains("\tformat=pdf\tstatus=extracted\t"),
         "{stdout}"
     );
-    assert!(stdout.contains("\tversion=2\t"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("\tversion={EXTRACTOR_VERSION}\t")),
+        "{stdout}"
+    );
     assert!(stdout.contains("quarantine\tallow"), "{stdout}");
 
     fs::remove_dir_all(root).unwrap();
@@ -2962,7 +3012,10 @@ fn reports_extraction_cache_hits_from_binary() {
         lines[1].starts_with("extract-cache\tstatus=hit\t"),
         "{stdout}"
     );
-    assert!(stdout.contains("\tversion=2\t"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("\tversion={EXTRACTOR_VERSION}\t")),
+        "{stdout}"
+    );
     assert!(stdout.contains("\tmetadata-epoch="), "{stdout}");
 
     fs::remove_dir_all(root).unwrap();
