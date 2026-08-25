@@ -82,9 +82,12 @@ use gfm_ui::{
 use std::collections::BTreeMap;
 use std::env;
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod packaging;
 
@@ -3791,27 +3794,31 @@ fn run_content_search(
 }
 
 fn run_adaptive_extraction_worker(path: &Path, pressure: SchedulingPressure) -> Result<String> {
+    const WORKER_TIMEOUT: Duration = Duration::from_secs(10);
     let exe = env::current_exe().map_err(|err| {
         GfmError::Format(format!(
             "could not resolve current executable for extraction worker: {err}"
         ))
     })?;
-    let output = Command::new(exe)
-        .arg("extract-report-adaptive")
-        .arg(path)
-        .args(scheduling_pressure_args(pressure))
-        .output()
-        .map_err(|err| {
-            GfmError::Format(format!(
-                "could not launch adaptive extraction worker for {}: {err}",
-                path.display()
-            ))
-        })?;
+    let stdout_path = worker_temp_path("stdout");
+    let stderr_path = worker_temp_path("stderr");
+    std::fs::File::create(&stdout_path).map_err(|err| GfmError::io(&stdout_path, err))?;
+    std::fs::File::create(&stderr_path).map_err(|err| GfmError::io(&stderr_path, err))?;
+    let sandbox = WorkerSandbox::new(&exe, path, &stdout_path, &stderr_path)?;
+    let mut command = sandbox.command(&exe, path, pressure);
+    let output = run_supervised_worker(
+        &mut command,
+        path,
+        WORKER_TIMEOUT,
+        &stdout_path,
+        &stderr_path,
+    )?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(GfmError::Format(format!(
-            "adaptive extraction worker failed for {}: {}",
+            "adaptive extraction worker failed for {} with status {}: {}",
             path.display(),
+            output.status,
             stderr.trim()
         )));
     }
@@ -3821,6 +3828,181 @@ fn run_adaptive_extraction_worker(path: &Path, pressure: SchedulingPressure) -> 
             path.display()
         ))
     })
+}
+
+struct WorkerSandbox {
+    profile_path: Option<PathBuf>,
+}
+
+impl WorkerSandbox {
+    fn new(exe: &Path, input: &Path, stdout: &Path, stderr: &Path) -> Result<Self> {
+        let Some(sandbox_exec) = sandbox_exec_path() else {
+            return Ok(Self { profile_path: None });
+        };
+        let _ = sandbox_exec;
+        let profile = extraction_sandbox_profile(exe, input, stdout, stderr)?;
+        let profile_path = env::temp_dir().join(format!(
+            "gfm-extract-worker-{}-{}.sb",
+            std::process::id(),
+            monotonic_nanos()
+        ));
+        std::fs::write(&profile_path, profile).map_err(|err| GfmError::io(&profile_path, err))?;
+        Ok(Self {
+            profile_path: Some(profile_path),
+        })
+    }
+
+    fn command(&self, exe: &Path, input: &Path, pressure: SchedulingPressure) -> Command {
+        if let (Some(sandbox_exec), Some(profile_path)) = (sandbox_exec_path(), &self.profile_path)
+        {
+            let mut command = Command::new(sandbox_exec);
+            command
+                .arg("-f")
+                .arg(profile_path)
+                .arg(exe)
+                .arg("extract-report-adaptive")
+                .arg(input)
+                .args(scheduling_pressure_args(pressure));
+            command
+        } else {
+            let mut command = Command::new(exe);
+            command
+                .arg("extract-report-adaptive")
+                .arg(input)
+                .args(scheduling_pressure_args(pressure));
+            command
+        }
+    }
+}
+
+impl Drop for WorkerSandbox {
+    fn drop(&mut self) {
+        if let Some(path) = self.profile_path.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn run_supervised_worker(
+    command: &mut Command,
+    input: &Path,
+    timeout: Duration,
+    stdout_path: &Path,
+    stderr_path: &Path,
+) -> Result<std::process::Output> {
+    let stdout_file =
+        std::fs::File::create(stdout_path).map_err(|err| GfmError::io(stdout_path, err))?;
+    let stderr_file =
+        std::fs::File::create(stderr_path).map_err(|err| GfmError::io(stderr_path, err))?;
+    let mut child = command
+        .process_group(0)
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
+        .spawn()
+        .map_err(|err| {
+            GfmError::Format(format!(
+                "could not launch adaptive extraction worker for {}: {err}",
+                input.display()
+            ))
+        })?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout =
+                    std::fs::read(stdout_path).map_err(|err| GfmError::io(stdout_path, err))?;
+                let stderr =
+                    std::fs::read(stderr_path).map_err(|err| GfmError::io(stderr_path, err))?;
+                let _ = std::fs::remove_file(stdout_path);
+                let _ = std::fs::remove_file(stderr_path);
+                return Ok(std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) if start.elapsed() >= timeout => {
+                kill_process_group(child.id());
+                let _ = child.wait();
+                let _ = std::fs::remove_file(stdout_path);
+                let _ = std::fs::remove_file(stderr_path);
+                return Err(GfmError::Format(format!(
+                    "adaptive extraction worker timed out after {} ms for {}",
+                    timeout.as_millis(),
+                    input.display()
+                )));
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(5)),
+            Err(err) => {
+                kill_process_group(child.id());
+                let _ = child.wait();
+                let _ = std::fs::remove_file(stdout_path);
+                let _ = std::fs::remove_file(stderr_path);
+                return Err(GfmError::Format(format!(
+                    "could not supervise adaptive extraction worker for {}: {err}",
+                    input.display()
+                )));
+            }
+        }
+    }
+}
+
+fn kill_process_group(pid: u32) {
+    let _ = Command::new("/bin/kill")
+        .arg("-KILL")
+        .arg(format!("-{pid}"))
+        .status();
+}
+
+fn worker_temp_path(label: &str) -> PathBuf {
+    env::temp_dir().join(format!(
+        "gfm-extract-worker-{}-{}-{label}",
+        std::process::id(),
+        monotonic_nanos()
+    ))
+}
+
+fn sandbox_exec_path() -> Option<PathBuf> {
+    let path = PathBuf::from("/usr/bin/sandbox-exec");
+    path.is_file().then_some(path)
+}
+
+fn extraction_sandbox_profile(
+    exe: &Path,
+    input: &Path,
+    stdout: &Path,
+    stderr: &Path,
+) -> Result<String> {
+    let _ = canonical_or_self(exe)?;
+    let _ = canonical_or_self(input)?;
+    let stdout = canonical_or_self(stdout)?;
+    let stderr = canonical_or_self(stderr)?;
+    Ok(format!(
+        "(version 1)\n\
+         (allow default)\n\
+         (deny file-write*)\n\
+         (allow file-write-data (literal \"{}\"))\n\
+         (allow file-write-data (literal \"{}\"))\n",
+        sandbox_escape(&stdout),
+        sandbox_escape(&stderr)
+    ))
+}
+
+fn canonical_or_self(path: &Path) -> Result<PathBuf> {
+    path.canonicalize().map_err(|err| GfmError::io(path, err))
+}
+
+fn sandbox_escape(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
+
+fn monotonic_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
 }
 
 fn scheduling_pressure_args(pressure: SchedulingPressure) -> [&'static str; 4] {

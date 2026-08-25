@@ -277,7 +277,8 @@ gfm/
 - Applies the same extraction budget derivation when resumable background content jobs are restored from the durable job journal.
 - Applies the same extraction budget derivation to adaptive direct content search before live extraction and snippet generation.
 - Applies the same extraction budget derivation to adaptive persisted content search before foreground snippet extraction reopens source files.
-- Applies the same extraction budget derivation across a subprocess extraction worker boundary before worker-side file reads begin.
+- Applies the same extraction budget derivation across a subprocess extraction worker boundary before worker-side file reads begin, then runs the worker through a macOS Seatbelt wrapper that denies filesystem mutation while supervisor-owned output files remain writable.
+- Supervises adaptive extraction subprocesses with timeout-bounded process-group termination and explicit worker exit classification so wedged or crashing extractors cannot stall the foreground CLI path.
 - Applies the same adaptive scheduling policy to content segment maintenance before archive compaction, manifest promotion, or cleanup publication starts.
 - Applies the same adaptive scheduling policy to sidecar repair before derived sidecars are rebuilt or corrupt sidecars are quarantined.
 - Applies the same adaptive scheduling policy to persistent index repair before state rebuilds, record quarantine, or recovery publication starts.

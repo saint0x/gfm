@@ -53,7 +53,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 33. Complete Office extraction beyond bounded OOXML with legacy binary format strategy, protected/encrypted document handling, sandboxed workers, extractor-version invalidation, and corrupt-package quarantine.
 34. Complete extraction policy depth beyond current UTF-8 text, HTML, RTF, email, ZIP metadata, JSON, CSV, and plist paths, including MIME multipart emails, richer archive formats, per-format invalidation, and corrupt-input quarantine.
 35. Implement OCR strategy for image-only PDFs and screenshots without blocking primary indexing.
-36. Bind macOS sandbox profile enforcement, entitlement minimization, and crash/timeout supervision around the process-isolated adaptive extraction worker beyond the implemented budgeted subprocess worker boundary.
+36. Complete hardened extraction-worker isolation with production read-deny Seatbelt feasibility, XPC/App Sandbox entitlement minimization, crash telemetry, sandbox violation diagnostics, and quarantine integration beyond the implemented mutation-deny Seatbelt wrapper and timeout-supervised adaptive subprocess worker.
 
 ## Storage Engine
 
