@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 gfm-content = { path = "../content" }
 gfm-index = { path = "../index" }
+gfm-store = { path = "../store" }
 gfm-telemetry = { path = "../telemetry" }
 gfm-types = { path = "../types" }
 

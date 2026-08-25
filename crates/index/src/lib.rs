@@ -26,6 +26,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Mutex,
+};
 
 mod backpressure;
 mod cursor;
@@ -208,6 +212,14 @@ pub struct LiveIndex {
 pub struct SearchArchiveLookup {
     prefixes: MmapPrefixArchive,
     fuzzy: MmapFuzzyArchive,
+    prefix_cache: Mutex<HashMap<String, Vec<FileId>>>,
+    fuzzy_cache: Mutex<HashMap<String, Vec<String>>>,
+    prefix_requests: AtomicUsize,
+    prefix_hits: AtomicUsize,
+    prefix_misses: AtomicUsize,
+    fuzzy_requests: AtomicUsize,
+    fuzzy_hits: AtomicUsize,
+    fuzzy_misses: AtomicUsize,
 }
 
 impl SearchArchiveLookup {
@@ -218,6 +230,14 @@ impl SearchArchiveLookup {
         Ok(Self {
             prefixes: MmapPrefixArchive::open(prefixes)?,
             fuzzy: MmapFuzzyArchive::open(fuzzy)?,
+            prefix_cache: Mutex::new(HashMap::new()),
+            fuzzy_cache: Mutex::new(HashMap::new()),
+            prefix_requests: AtomicUsize::new(0),
+            prefix_hits: AtomicUsize::new(0),
+            prefix_misses: AtomicUsize::new(0),
+            fuzzy_requests: AtomicUsize::new(0),
+            fuzzy_hits: AtomicUsize::new(0),
+            fuzzy_misses: AtomicUsize::new(0),
         })
     }
 
@@ -232,11 +252,59 @@ impl SearchArchiveLookup {
 
 impl SearchLookup for SearchArchiveLookup {
     fn prefix_ids(&self, prefix: &str) -> Result<Vec<FileId>> {
-        self.prefixes.ids_for(prefix)
+        self.prefix_requests.fetch_add(1, Ordering::Relaxed);
+        if let Some(ids) = self
+            .prefix_cache
+            .lock()
+            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
+            .get(prefix)
+            .cloned()
+        {
+            self.prefix_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(ids);
+        }
+
+        self.prefix_misses.fetch_add(1, Ordering::Relaxed);
+        let ids = self.prefixes.ids_for(prefix)?;
+        self.prefix_cache
+            .lock()
+            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
+            .insert(prefix.to_string(), ids.clone());
+        Ok(ids)
     }
 
     fn fuzzy_terms(&self, key: &str) -> Result<Vec<String>> {
-        self.fuzzy.terms_for(key)
+        self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
+        if let Some(terms) = self
+            .fuzzy_cache
+            .lock()
+            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
+            .get(key)
+            .cloned()
+        {
+            self.fuzzy_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(terms);
+        }
+
+        self.fuzzy_misses.fetch_add(1, Ordering::Relaxed);
+        let terms = self.fuzzy.terms_for(key)?;
+        self.fuzzy_cache
+            .lock()
+            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
+            .insert(key.to_string(), terms.clone());
+        Ok(terms)
+    }
+
+    fn cache_telemetry(&self) -> SearchLookupTelemetry {
+        SearchLookupTelemetry {
+            prefix_lookup_requests: self.prefix_requests.load(Ordering::Relaxed),
+            prefix_cache_hits: self.prefix_hits.load(Ordering::Relaxed),
+            prefix_cache_misses: self.prefix_misses.load(Ordering::Relaxed),
+            fuzzy_lookup_requests: self.fuzzy_requests.load(Ordering::Relaxed),
+            fuzzy_cache_hits: self.fuzzy_hits.load(Ordering::Relaxed),
+            fuzzy_cache_misses: self.fuzzy_misses.load(Ordering::Relaxed),
+            ..SearchLookupTelemetry::default()
+        }
     }
 }
 
@@ -708,13 +776,17 @@ impl LiveIndex {
         lookup: &dyn SearchLookup,
         budget: SearchLookupBudget,
     ) -> Result<SearchQueryReport> {
-        self.index.query_structured_with_lookup_budget_cancellable(
+        let cache_before = lookup.cache_telemetry();
+        let mut report = self.index.query_structured_with_lookup_budget_cancellable(
             &SearchQuery::parse(query),
             limit,
             lookup,
             budget,
             &Cancellation::default(),
-        )
+        )?;
+        let cache_after = lookup.cache_telemetry();
+        report.lookup.merge_cache_delta(&cache_before, &cache_after);
+        Ok(report)
     }
 
     pub fn stream_search(&self, query: &str, limit: usize) -> Result<Vec<SearchStreamBatch>> {

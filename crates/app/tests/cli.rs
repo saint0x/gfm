@@ -1209,9 +1209,13 @@ fn searches_persisted_tags_from_binary() {
     assert!(
         sidecar_budget_stderr.contains("sidecar-budget")
             && sidecar_budget_stderr.contains("\tprefix-terms=2")
+            && sidecar_budget_stderr.contains("\tprefix-lookup-requests=")
             && sidecar_budget_stderr.contains("\tprefix-lookup-ids=")
             && sidecar_budget_stderr.contains("\tprefix-candidate-ids=")
+            && sidecar_budget_stderr.contains("\tprefix-cache-misses=")
             && sidecar_budget_stderr.contains("\tfuzzy-terms=2")
+            && sidecar_budget_stderr.contains("\tfuzzy-lookup-requests=")
+            && sidecar_budget_stderr.contains("\tfuzzy-cache-misses=")
             && sidecar_budget_stderr.contains("\tfuzzy-term-truncated-keys=2"),
         "{sidecar_budget_stderr}"
     );

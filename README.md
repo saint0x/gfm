@@ -96,7 +96,7 @@ The index is compact and incremental:
 - hot mutable buffers
 - progressive hot/deep result streaming with stable dedupe
 - delete-key fuzzy candidate indexes for typo tolerance without full-record scans
-- archive-backed prefix and fuzzy lookup with explicit candidate budgets, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
+- archive-backed prefix and fuzzy lookup with explicit candidate budgets, lookup cache telemetry, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
 - exact phrase and `near:N:alpha,beta` positional content retrieval
 - bounded snippets with highlighted content matches
 - binary-signature and control-byte classification before content extraction
@@ -266,7 +266,7 @@ cargo run -p gfm -- sidecar-recovery-plan records.gfmidx columns.gfmcols metadat
 cargo run -p gfm -- sidecar-recover records.gfmidx quarantine columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
 ```
 
-`regression-gate` materializes the benchmark indexes and fails on latency, index-density, prefix lookup, fuzzy lookup, and sidecar-truncation drift.
+`regression-gate` materializes benchmark indexes and real prefix/fuzzy sidecar archives, then fails on latency, index-density, prefix lookup, fuzzy lookup, cache-path, and sidecar-truncation drift.
 `diagnostics-index-recovery-plan` and `diagnostics-index-recover` classify persistent record/state health, rebuild missing or stale state, and quarantine corrupt record archives before rebuilding.
 `content-manifest-recovery-plan` and `content-manifest-recover` classify content manifest health, prune invalid archives, and quarantine corrupt manifests before rebuilding from mmap-validated archives.
 `sidecar-recovery-plan` and `sidecar-recover` validate, quarantine, and rebuild search sidecars from the durable record archive.

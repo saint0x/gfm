@@ -274,6 +274,27 @@ fn live_index_queries_prefix_and_fuzzy_archive_lookup_without_importing_sidecars
     assert_eq!(prefix_hits[0].reason, MatchReason::PrefixName);
     assert_eq!(fuzzy_hits.len(), 1);
     assert_eq!(fuzzy_hits[0].reason, MatchReason::FuzzyName);
+    let budget_lookup = SearchArchiveLookup::open(&prefixes, &fuzzy).unwrap();
+    let first_report = live
+        .search_with_lookup_budget(
+            "proj needle",
+            5,
+            &budget_lookup,
+            SearchLookupBudget::default(),
+        )
+        .unwrap();
+    let second_report = live
+        .search_with_lookup_budget(
+            "proj needle",
+            5,
+            &budget_lookup,
+            SearchLookupBudget::default(),
+        )
+        .unwrap();
+    assert!(first_report.lookup.prefix_cache_misses > 0);
+    assert!(first_report.lookup.fuzzy_cache_misses > 0);
+    assert!(second_report.lookup.prefix_cache_hits > 0);
+    assert!(second_report.lookup.fuzzy_cache_hits > 0);
 
     fs::remove_file(prefixes).unwrap();
     fs::remove_file(fuzzy).unwrap();

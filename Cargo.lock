@@ -1777,6 +1777,7 @@ version = "0.1.0"
 dependencies = [
  "gfm-content",
  "gfm-index",
+ "gfm-store",
  "gfm-telemetry",
  "gfm-types",
 ]

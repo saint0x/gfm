@@ -1,9 +1,13 @@
 use crate::{
     run_macrobench, MacrobenchOptions, MacrobenchReport, MacrobenchScenario, MacrobenchStage,
 };
-use gfm_index::{Indexer, SearchLookup, SearchLookupBudget, SearchLookupTelemetry};
+use gfm_index::{Indexer, SearchArchiveLookup, SearchLookupBudget, SearchLookupTelemetry};
+use gfm_store::{
+    fuzzy_postings_from_records, prefix_postings_from_records, write_fuzzy_postings,
+    write_prefix_postings,
+};
 use gfm_telemetry::{BudgetViolation, FrameTimingSummary, ResourceSummary};
-use gfm_types::{FileId, GfmError, Result};
+use gfm_types::{GfmError, Result};
 use std::fs;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -240,47 +244,35 @@ fn materialize_record_indexes(report: &MacrobenchReport) -> Result<u64> {
 
 fn measure_sidecar_lookup(report: &MacrobenchReport) -> Result<SearchLookupTelemetry> {
     let mut telemetry = SearchLookupTelemetry::default();
+    let sidecar_root = report.fixture_root.join("gate-sidecars");
+    if sidecar_root.exists() {
+        fs::remove_dir_all(&sidecar_root).map_err(|err| GfmError::io(&sidecar_root, err))?;
+    }
+    fs::create_dir_all(&sidecar_root).map_err(|err| GfmError::io(&sidecar_root, err))?;
+
     for scenario in MacrobenchScenario::ALL {
         let root = report.fixture_root.join(scenario.directory());
         let snapshot = Indexer::default().build(&root)?;
-        let ids = snapshot
-            .records
-            .iter()
-            .map(|record| record.id)
-            .collect::<Vec<_>>();
-        let lookup = GateLookup {
-            prefix_ids: ids,
-            fuzzy_terms: vec![
-                "project".to_string(),
-                "needle".to_string(),
-                "contentneedle".to_string(),
-            ],
-        };
-        let live = snapshot.into_live();
-        let report = live.search_with_lookup_budget(
-            "project needle",
-            50,
-            &lookup,
-            SearchLookupBudget::default(),
+        let prefix_path = sidecar_root.join(format!("{}.gfmprefix", scenario.directory()));
+        let fuzzy_path = sidecar_root.join(format!("{}.gfmfuzzy", scenario.directory()));
+        write_prefix_postings(
+            &prefix_path,
+            &prefix_postings_from_records(&snapshot.records),
         )?;
-        telemetry.merge(&report.lookup);
+        write_fuzzy_postings(&fuzzy_path, &fuzzy_postings_from_records(&snapshot.records))?;
+        let lookup = SearchArchiveLookup::open(&prefix_path, &fuzzy_path)?;
+        let live = snapshot.into_live();
+        for _ in 0..2 {
+            let report = live.search_with_lookup_budget(
+                "project",
+                50,
+                &lookup,
+                SearchLookupBudget::default(),
+            )?;
+            telemetry.merge(&report.lookup);
+        }
     }
     Ok(telemetry)
-}
-
-struct GateLookup {
-    prefix_ids: Vec<FileId>,
-    fuzzy_terms: Vec<String>,
-}
-
-impl SearchLookup for GateLookup {
-    fn prefix_ids(&self, _prefix: &str) -> Result<Vec<FileId>> {
-        Ok(self.prefix_ids.clone())
-    }
-
-    fn fuzzy_terms(&self, _key: &str) -> Result<Vec<String>> {
-        Ok(self.fuzzy_terms.clone())
-    }
 }
 
 #[cfg(test)]
@@ -454,6 +446,10 @@ mod tests {
         assert!(run.index_size_bytes > 0);
         assert!(run.sidecar_lookup.prefix_terms > 0);
         assert!(run.sidecar_lookup.prefix_candidate_ids > 0);
+        assert!(run.sidecar_lookup.prefix_cache_misses > 0);
+        assert!(run.sidecar_lookup.prefix_cache_hits > 0);
+        assert!(run.sidecar_lookup.fuzzy_cache_misses > 0);
+        assert!(run.sidecar_lookup.fuzzy_cache_hits > 0);
         assert!(run
             .macrobench
             .fixture_root

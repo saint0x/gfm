@@ -55,14 +55,20 @@ impl Default for SearchLookupBudget {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SearchLookupTelemetry {
     pub prefix_terms: usize,
+    pub prefix_lookup_requests: usize,
     pub prefix_lookup_ids: usize,
     pub prefix_candidate_ids: usize,
+    pub prefix_cache_hits: usize,
+    pub prefix_cache_misses: usize,
     pub prefix_truncated_terms: usize,
     pub fuzzy_terms: usize,
     pub fuzzy_keys: usize,
+    pub fuzzy_lookup_requests: usize,
     pub fuzzy_lookup_terms: usize,
     pub fuzzy_candidate_terms: usize,
     pub fuzzy_verified_candidates: usize,
+    pub fuzzy_cache_hits: usize,
+    pub fuzzy_cache_misses: usize,
     pub fuzzy_key_truncated_terms: usize,
     pub fuzzy_term_truncated_keys: usize,
     pub fuzzy_candidate_truncated_terms: usize,
@@ -71,17 +77,44 @@ pub struct SearchLookupTelemetry {
 impl SearchLookupTelemetry {
     pub fn merge(&mut self, other: &Self) {
         self.prefix_terms += other.prefix_terms;
+        self.prefix_lookup_requests += other.prefix_lookup_requests;
         self.prefix_lookup_ids += other.prefix_lookup_ids;
         self.prefix_candidate_ids += other.prefix_candidate_ids;
+        self.prefix_cache_hits += other.prefix_cache_hits;
+        self.prefix_cache_misses += other.prefix_cache_misses;
         self.prefix_truncated_terms += other.prefix_truncated_terms;
         self.fuzzy_terms += other.fuzzy_terms;
         self.fuzzy_keys += other.fuzzy_keys;
+        self.fuzzy_lookup_requests += other.fuzzy_lookup_requests;
         self.fuzzy_lookup_terms += other.fuzzy_lookup_terms;
         self.fuzzy_candidate_terms += other.fuzzy_candidate_terms;
         self.fuzzy_verified_candidates += other.fuzzy_verified_candidates;
+        self.fuzzy_cache_hits += other.fuzzy_cache_hits;
+        self.fuzzy_cache_misses += other.fuzzy_cache_misses;
         self.fuzzy_key_truncated_terms += other.fuzzy_key_truncated_terms;
         self.fuzzy_term_truncated_keys += other.fuzzy_term_truncated_keys;
         self.fuzzy_candidate_truncated_terms += other.fuzzy_candidate_truncated_terms;
+    }
+
+    pub fn merge_cache_delta(&mut self, before: &Self, after: &Self) {
+        self.prefix_lookup_requests += after
+            .prefix_lookup_requests
+            .saturating_sub(before.prefix_lookup_requests);
+        self.prefix_cache_hits += after
+            .prefix_cache_hits
+            .saturating_sub(before.prefix_cache_hits);
+        self.prefix_cache_misses += after
+            .prefix_cache_misses
+            .saturating_sub(before.prefix_cache_misses);
+        self.fuzzy_lookup_requests += after
+            .fuzzy_lookup_requests
+            .saturating_sub(before.fuzzy_lookup_requests);
+        self.fuzzy_cache_hits += after
+            .fuzzy_cache_hits
+            .saturating_sub(before.fuzzy_cache_hits);
+        self.fuzzy_cache_misses += after
+            .fuzzy_cache_misses
+            .saturating_sub(before.fuzzy_cache_misses);
     }
 }
 
@@ -112,6 +145,10 @@ pub struct SearchFuzzyPosting {
 pub trait SearchLookup: Sync {
     fn prefix_ids(&self, prefix: &str) -> gfm_types::Result<Vec<FileId>>;
     fn fuzzy_terms(&self, key: &str) -> gfm_types::Result<Vec<String>>;
+
+    fn cache_telemetry(&self) -> SearchLookupTelemetry {
+        SearchLookupTelemetry::default()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
