@@ -265,6 +265,35 @@ fn runs_regression_gate_from_binary() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn runs_large_sidecar_gate_from_binary() {
+    let root = unique_temp_dir("gfm-cli-large-sidecar-gate");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["large-sidecar-gate", root.to_str().unwrap(), "4096"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains("large-sidecar-gate\t"), "{stdout}");
+    assert!(stdout.contains("\trecords=4096\t"), "{stdout}");
+    assert!(stdout.contains("\tprefix-keys="), "{stdout}");
+    assert!(stdout.contains("\tfuzzy-keys="), "{stdout}");
+    assert!(stdout.contains("\tprefix-cache-hits="), "{stdout}");
+    assert!(stdout.contains("\tpassed=true"), "{stdout}");
+    assert!(root
+        .join("gfm-large-sidecar-gate")
+        .join("records.gfmprefix")
+        .exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

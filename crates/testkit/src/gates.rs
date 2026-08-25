@@ -1,14 +1,18 @@
 use crate::{
     run_macrobench, MacrobenchOptions, MacrobenchReport, MacrobenchScenario, MacrobenchStage,
 };
-use gfm_index::{Indexer, SearchArchiveLookup, SearchLookupBudget, SearchLookupTelemetry};
+use gfm_index::{
+    Indexer, LiveIndex, SearchArchiveLookup, SearchLookupBudget, SearchLookupTelemetry,
+};
 use gfm_store::{
     fuzzy_postings_from_records, prefix_postings_from_records, write_fuzzy_postings,
     write_prefix_postings,
 };
 use gfm_telemetry::{BudgetViolation, FrameTimingSummary, ResourceSummary};
-use gfm_types::{GfmError, Result};
+use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
 use std::fs;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegressionInputs<'a> {
@@ -101,6 +105,83 @@ impl RegressionGateRun {
     pub fn passed(&self) -> bool {
         self.gate.passed()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LargeSidecarGateOptions {
+    pub workspace: PathBuf,
+    pub records: usize,
+    pub query: String,
+    pub limit: usize,
+    pub budget: SearchLookupBudget,
+}
+
+impl LargeSidecarGateOptions {
+    pub fn new(workspace: impl Into<PathBuf>, records: usize) -> Self {
+        Self {
+            workspace: workspace.into(),
+            records,
+            query: "project".to_string(),
+            limit: 50,
+            budget: SearchLookupBudget::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LargeSidecarGateReport {
+    pub fixture_root: PathBuf,
+    pub records: usize,
+    pub prefix_keys: usize,
+    pub fuzzy_keys: usize,
+    pub prefix_bytes: u64,
+    pub fuzzy_bytes: u64,
+    pub lookup: SearchLookupTelemetry,
+    pub passed: bool,
+}
+
+pub fn run_large_sidecar_gate(options: &LargeSidecarGateOptions) -> Result<LargeSidecarGateReport> {
+    fs::create_dir_all(&options.workspace).map_err(|err| GfmError::io(&options.workspace, err))?;
+    let fixture_root = options.workspace.join("gfm-large-sidecar-gate");
+    if fixture_root.exists() {
+        fs::remove_dir_all(&fixture_root).map_err(|err| GfmError::io(&fixture_root, err))?;
+    }
+    fs::create_dir_all(&fixture_root).map_err(|err| GfmError::io(&fixture_root, err))?;
+
+    let records = realistic_large_records(options.records);
+    let prefix_path = fixture_root.join("records.gfmprefix");
+    let fuzzy_path = fixture_root.join("records.gfmfuzzy");
+    write_prefix_postings(&prefix_path, &prefix_postings_from_records(&records))?;
+    write_fuzzy_postings(&fuzzy_path, &fuzzy_postings_from_records(&records))?;
+    let lookup = SearchArchiveLookup::open(&prefix_path, &fuzzy_path)?;
+    let live = LiveIndex::from_records(records);
+    let mut telemetry = SearchLookupTelemetry::default();
+    for _ in 0..2 {
+        let report =
+            live.search_with_lookup_budget(&options.query, options.limit, &lookup, options.budget)?;
+        telemetry.merge(&report.lookup);
+    }
+
+    let passed = telemetry.prefix_candidate_ids <= options.budget.max_prefix_ids_per_term * 2
+        && telemetry.fuzzy_verified_candidates <= options.budget.max_fuzzy_candidates_per_term * 2
+        && telemetry.fuzzy_term_truncated_keys == 0
+        && telemetry.fuzzy_key_truncated_terms == 0
+        && telemetry.fuzzy_candidate_truncated_terms == 0;
+
+    Ok(LargeSidecarGateReport {
+        fixture_root,
+        records: options.records,
+        prefix_keys: lookup.indexed_prefixes(),
+        fuzzy_keys: lookup.indexed_fuzzy_keys(),
+        prefix_bytes: fs::metadata(&prefix_path)
+            .map_err(|err| GfmError::io(&prefix_path, err))?
+            .len(),
+        fuzzy_bytes: fs::metadata(&fuzzy_path)
+            .map_err(|err| GfmError::io(&fuzzy_path, err))?
+            .len(),
+        lookup: telemetry,
+        passed,
+    })
 }
 
 pub fn run_regression_gate(
@@ -273,6 +354,147 @@ fn measure_sidecar_lookup(report: &MacrobenchReport) -> Result<SearchLookupTelem
         }
     }
     Ok(telemetry)
+}
+
+fn realistic_large_records(count: usize) -> Vec<FileRecord> {
+    let mut records = Vec::with_capacity(count);
+    for index in 0..count {
+        let volume = match index % 6 {
+            0 => VolumeId(1),
+            1 => VolumeId(2),
+            2 => VolumeId(3),
+            3 => VolumeId(4),
+            4 => VolumeId(5),
+            _ => VolumeId(6),
+        };
+        let (path, name, kind, tags, comment) = realistic_record_shape(index);
+        records.push(FileRecord {
+            id: FileId::new(volume, index as u64 + 1),
+            parent: None,
+            path,
+            name,
+            kind,
+            len: 1_024 + (index % 65_536) as u64,
+            mode: 0o100644,
+            owner: 501,
+            group: 20,
+            xattrs_digest: index as u64 ^ 0x9e37_79b9,
+            created: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(index as u64)),
+            modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(index as u64 * 3)),
+            changed: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(index as u64 * 5)),
+            hidden: index % 97 == 0,
+            tags,
+            finder_comment: comment,
+        });
+    }
+    records
+}
+
+fn realistic_record_shape(
+    index: usize,
+) -> (PathBuf, String, FileKind, Vec<String>, Option<String>) {
+    match index % 8 {
+        0 => {
+            let name = format!("project-source-{index:08}.rs");
+            (
+                PathBuf::from(format!(
+                    "/Users/deepsaint/work/project-{}/src/{name}",
+                    index % 4096
+                )),
+                name,
+                FileKind::File,
+                vec!["code".to_string()],
+                Some("project implementation source".to_string()),
+            )
+        }
+        1 => {
+            let name = format!("Project Plan {index:08}.md");
+            (
+                PathBuf::from(format!(
+                    "/Users/deepsaint/Documents/Plans/{}/{name}",
+                    index % 512
+                )),
+                name,
+                FileKind::File,
+                vec!["important".to_string()],
+                Some("planning document project notes".to_string()),
+            )
+        }
+        2 => {
+            let name = format!("IMG_{index:08}.heic");
+            (
+                PathBuf::from(format!(
+                    "/Users/deepsaint/Pictures/Albums/{}/{name}",
+                    index % 2048
+                )),
+                name,
+                FileKind::File,
+                vec!["media".to_string()],
+                Some("media asset".to_string()),
+            )
+        }
+        3 => {
+            let name = format!("icloud-project-{index:08}.pages");
+            (
+                PathBuf::from(format!(
+                    "/Users/deepsaint/Library/Mobile Documents/com~apple~CloudDocs/{name}"
+                )),
+                name,
+                FileKind::File,
+                vec!["icloud".to_string()],
+                Some("icloud project placeholder".to_string()),
+            )
+        }
+        4 => {
+            let name = format!("external-project-{index:08}.mov");
+            (
+                PathBuf::from(format!(
+                    "/Volumes/External Raid/Video/{}/{name}",
+                    index % 256
+                )),
+                name,
+                FileKind::File,
+                vec!["external".to_string()],
+                Some("external volume media project".to_string()),
+            )
+        }
+        5 => {
+            let name = format!("network-project-{index:08}.xlsx");
+            (
+                PathBuf::from(format!(
+                    "/Volumes/Team Share/Reports/{}/{name}",
+                    index % 256
+                )),
+                name,
+                FileKind::File,
+                vec!["network".to_string()],
+                Some("network report project".to_string()),
+            )
+        }
+        6 => {
+            let name = format!("PackageProject{index:08}.app");
+            (
+                PathBuf::from(format!("/Applications/{name}")),
+                name,
+                FileKind::Directory,
+                vec!["application".to_string()],
+                Some("application bundle".to_string()),
+            )
+        }
+        _ => {
+            let name = format!("archive-project-{index:08}.zip");
+            (
+                PathBuf::from(format!(
+                    "/Users/deepsaint/Downloads/Archives/{}/{name}",
+                    index % 1024
+                )),
+                name,
+                FileKind::File,
+                vec!["archive".to_string()],
+                Some("download archive project".to_string()),
+            )
+        }
+    }
 }
 
 #[cfg(test)]
@@ -457,6 +679,26 @@ mod tests {
             .join("small.gfmidx")
             .exists());
         assert!(run.passed());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn large_sidecar_gate_materializes_realistic_records_and_lookup_sidecars() {
+        let root = unique_temp_dir("gfm-large-sidecar-gate");
+        let report = run_large_sidecar_gate(&LargeSidecarGateOptions::new(&root, 4_096)).unwrap();
+
+        assert_eq!(report.records, 4_096);
+        assert!(report.prefix_keys > 0);
+        assert!(report.fuzzy_keys > 0);
+        assert!(report.prefix_bytes > 0);
+        assert!(report.fuzzy_bytes > 0);
+        assert!(report.lookup.prefix_terms > 0);
+        assert!(report.lookup.prefix_cache_misses > 0);
+        assert!(report.lookup.prefix_cache_hits > 0);
+        assert!(report.passed);
+        assert!(report.fixture_root.join("records.gfmprefix").exists());
+        assert!(report.fixture_root.join("records.gfmfuzzy").exists());
 
         fs::remove_dir_all(root).unwrap();
     }

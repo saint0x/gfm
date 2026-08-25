@@ -51,11 +51,11 @@ use gfm_store::{
 };
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
-    run_macrobench, run_parity_gate_manifest, run_regression_gate,
-    write_parity_review_bundle_manifest, ColorProfile, DisplayScale, MacOsParityProfile,
-    MacrobenchOptions, MacrobenchScale, MacrobenchStage, ParityAppearance, ParityFixtureOptions,
-    ParityFixtureScale, ParitySurface, PixelDiffOptions, PixelDriftThreshold, PixelSize,
-    RegressionGateOptions,
+    run_large_sidecar_gate, run_macrobench, run_parity_gate_manifest, run_regression_gate,
+    write_parity_review_bundle_manifest, ColorProfile, DisplayScale, LargeSidecarGateOptions,
+    MacOsParityProfile, MacrobenchOptions, MacrobenchScale, MacrobenchStage, ParityAppearance,
+    ParityFixtureOptions, ParityFixtureScale, ParitySurface, PixelDiffOptions, PixelDriftThreshold,
+    PixelSize, RegressionGateOptions,
 };
 use gfm_types::{
     FileEvent, FileEventKind, FileId, FileKind, GfmError, Result, SearchHit, VolumeId,
@@ -2454,6 +2454,39 @@ fn run() -> Result<()> {
                 )));
             }
         }
+        Some("large-sidecar-gate") => {
+            let workspace =
+                required_path(args.next(), "large-sidecar-gate requires a workspace path")?;
+            let records = parse_usize_arg(
+                args.next(),
+                "large-sidecar-gate requires a synthetic record count",
+            )?;
+            let report = run_large_sidecar_gate(&LargeSidecarGateOptions::new(workspace, records))?;
+            println!(
+                "large-sidecar-gate\tfixture={}\trecords={}\tprefix-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tfuzzy-bytes={}\tprefix-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tfuzzy-truncated={}\tpassed={}",
+                report.fixture_root.display(),
+                report.records,
+                report.prefix_keys,
+                report.fuzzy_keys,
+                report.prefix_bytes,
+                report.fuzzy_bytes,
+                report.lookup.prefix_candidate_ids,
+                report.lookup.fuzzy_verified_candidates,
+                report.lookup.prefix_cache_hits,
+                report.lookup.fuzzy_cache_hits,
+                report.lookup.prefix_cutoff_terms,
+                report.lookup.prefix_truncated_terms,
+                report.lookup.fuzzy_term_truncated_keys
+                    + report.lookup.fuzzy_key_truncated_terms
+                    + report.lookup.fuzzy_candidate_truncated_terms,
+                report.passed
+            );
+            if !report.passed {
+                return Err(GfmError::Format(
+                    "large sidecar lookup gate failed".to_string(),
+                ));
+            }
+        }
         Some("release-policy") => packaging::release_policy()?,
         Some("release-validate") => packaging::release_validate(&mut args)?,
         Some("bundle-app") => packaging::bundle_app(&mut args)?,
@@ -3236,6 +3269,7 @@ fn print_usage() {
   gfm parity-review <manifest.tsv> <output-dir>
   gfm parity-profile <macos-build> [system|light|dark] [1x|2x|3x] [srgb|display-p3]
   gfm regression-gate <workspace> [smoke|standard]
+  gfm large-sidecar-gate <workspace> <synthetic-records>
   gfm release-policy
   gfm release-validate <GFM.app> [--allow-unsigned] [--skip-notarization] [--skip-gatekeeper]
   gfm bundle-app <executable> <GFM.icns> <output-dir> [--ad-hoc|--unsigned|developer-id]

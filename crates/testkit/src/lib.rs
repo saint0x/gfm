@@ -6,8 +6,9 @@ mod parity_profile;
 mod pixel;
 
 pub use gates::{
-    evaluate_regression_gate, run_regression_gate, RegressionGateOptions, RegressionGateReport,
-    RegressionGateRun, RegressionGateViolation, RegressionInputs,
+    evaluate_regression_gate, run_large_sidecar_gate, run_regression_gate, LargeSidecarGateOptions,
+    LargeSidecarGateReport, RegressionGateOptions, RegressionGateReport, RegressionGateRun,
+    RegressionGateViolation, RegressionInputs,
 };
 pub use macrobench::{
     materialize_macrobench_fixture, run_macrobench, MacrobenchMeasurement, MacrobenchOptions,

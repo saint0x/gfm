@@ -258,6 +258,7 @@ cargo run -p gfm -- parity-gate parity-gate.tsv
 cargo run -p gfm -- parity-review parity-gate.tsv /tmp/gfm-parity-review
 cargo run -p gfm -- parity-profile 25A354 dark 2x display-p3
 cargo run -p gfm -- regression-gate /tmp/gfm-bench smoke
+cargo run -p gfm -- large-sidecar-gate /tmp/gfm-bench 1000000
 cargo run -p gfm -- diagnostics-index-recovery-plan /tmp/root records.gfmidx state.gfmstate quarantine
 cargo run -p gfm -- diagnostics-index-recover /tmp/root records.gfmidx state.gfmstate quarantine
 cargo run -p gfm -- content-manifest-recovery-plan content.gfmmanifest hot:content.gfmcontent
@@ -267,6 +268,7 @@ cargo run -p gfm -- sidecar-recover records.gfmidx quarantine columns.gfmcols me
 ```
 
 `regression-gate` materializes benchmark indexes and real prefix/fuzzy sidecar archives, then fails on latency, index-density, prefix lookup, fuzzy lookup, cache-path, and sidecar-truncation drift.
+`large-sidecar-gate` synthesizes realistic record distributions, writes real prefix/fuzzy sidecars, and verifies bounded repeated lookup behavior at million-entry scale.
 `diagnostics-index-recovery-plan` and `diagnostics-index-recover` classify persistent record/state health, rebuild missing or stale state, and quarantine corrupt record archives before rebuilding.
 `content-manifest-recovery-plan` and `content-manifest-recover` classify content manifest health, prune invalid archives, and quarantine corrupt manifests before rebuilding from mmap-validated archives.
 `sidecar-recovery-plan` and `sidecar-recover` validate, quarantine, and rebuild search sidecars from the durable record archive.

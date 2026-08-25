@@ -438,7 +438,8 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - prefix ids, archive prefix length, fuzzy delete keys, fuzzy terms per key, and verified fuzzy candidates are capped by an explicit search lookup budget;
   - adaptive prefix cutoffs skip archive expansion for too-short prefixes and already-saturated local candidate sets before they can touch mmap sidecars;
   - search reports expose prefix/fuzzy lookup telemetry, cache-hit telemetry, cutoff telemetry, truncation counters, candidate counts, and verified-candidate counts;
-  - regression gates materialize real prefix/fuzzy sidecar archives from macrobench records, execute repeated sidecar-backed search probes, and fail on candidate-count overflow or lookup truncation before prefix/fuzzy expansion can become a machine-wide latency cliff.
+  - regression gates materialize real prefix/fuzzy sidecar archives from macrobench records, execute repeated sidecar-backed search probes, and fail on candidate-count overflow or lookup truncation before prefix/fuzzy expansion can become a machine-wide latency cliff;
+  - large sidecar gates synthesize realistic developer, document, media, iCloud, external-volume, network-volume, application, and archive record distributions, publish real mmap prefix/fuzzy sidecars from those records, and verify bounded repeated lookup behavior at user-selected record counts including million-entry CI runs.
 - Index footprint telemetry and maintenance scheduling:
   - record, column, metadata, prefix, fuzzy, content-manifest, and pending content-segment archives are measured from mmap readers and filesystem byte counts;
   - footprint reports include total bytes, bytes per record, sidecar key counts, content archive counts, segment postings, tombstones, and tombstone-bearing segment counts;

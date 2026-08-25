@@ -57,9 +57,9 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Storage Engine
 
-37. Finish benchmark-proven prefix/fuzzy lookup budgets for multi-million-entry indexes by adding realistic multi-million-entry fixtures around the enforced lookup caps and regression gates.
+37. Calibrate million-entry sidecar gate thresholds on production macOS hardware and wire the large gate into required CI artifacts with retained telemetry history.
 38. Complete storage durability beyond persistent record/state, content manifest, and search sidecar recovery by adding archive schema migrations, crash recovery for remaining manifest-like state, and rebuild plans across all archive types.
-39. Implement benchmark fixtures for millions of files and realistic developer, media, documents, and iCloud trees.
+39. Implement real filesystem benchmark fixtures for millions of materialized files across developer, media, documents, iCloud, external-volume, and network-volume trees.
 
 ## File Operations
 
