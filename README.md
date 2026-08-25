@@ -169,6 +169,7 @@ cargo run -p gfm -- ui-list-view-contract ~/Desktop 12 0
 cargo run -p gfm -- ui-column-view-contract ~/Desktop 12 0 Documents
 cargo run -p gfm -- ui-gallery-view-contract ~/Desktop 8 0 Screenshot.png
 cargo run -p gfm -- ui-search-results-contract ~ "invoice" 12 0
+cargo run -p gfm -- ui-trash-view-contract ~/.Trash restore.tsv 12 0
 ```
 
 Search directly:

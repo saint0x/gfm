@@ -438,6 +438,48 @@ fn reports_ui_search_results_contract_from_binary() {
 }
 
 #[test]
+fn reports_ui_trash_view_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-trash-view-contract-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("Note.txt"), "note").unwrap();
+    std::fs::write(root.join("Locked.txt"), "locked").unwrap();
+    let metadata = root.join("restore.tsv");
+    std::fs::write(
+        &metadata,
+        "Note.txt\t/Users/me/Documents/Note.txt\t200\ttrue\ttrue\t\nLocked.txt\t/Users/me/Desktop/Locked.txt\t100\tfalse\tfalse\tfull-disk-access-required\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-trash-view-contract")
+        .arg(&root)
+        .arg(&metadata)
+        .args(["6", "0"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("trash-view\tsort=deleted-newest\trow-height=24px"));
+    assert!(stdout.contains("\ttotal=3\t"));
+    assert!(stdout.contains(
+        "command\tempty-trash\tEmpty Trash\tenabled=false\tdestructive=true\tdisabled-reason=permission-blocked"
+    ));
+    assert!(stdout.contains("row\t0\t"));
+    assert!(stdout.contains("\tNote.txt\t"));
+    assert!(stdout.contains("original=/Users/me/Documents/Note.txt\tdeleted-at=200"));
+    assert!(stdout.contains("\tLocked.txt\t"));
+    assert!(stdout.contains("restore=false\tdelete=false\tpermission=full-disk-access-required"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_preview_security_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["preview-check", "/tmp/example.app", "quick-look"])

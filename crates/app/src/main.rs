@@ -36,9 +36,11 @@ use gfm_ui::{
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
     MenuContract, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
-    SearchResultsStage, SidebarContract, TitlebarContract, ToolbarContract,
-    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    SearchResultsStage, SidebarContract, TitlebarContract, ToolbarContract, TrashEntryMetadata,
+    TrashViewContract, TrashViewOptions, WindowLifecycleContract, WindowSessionContract,
+    WindowSessionStore,
 };
+use std::collections::BTreeMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -303,6 +305,39 @@ fn run() -> Result<()> {
             println!(
                 "{}",
                 SearchResultsContract::from_batches(batches, options).as_tsv()
+            );
+        }
+        Some("ui-trash-view-contract") => {
+            let path = required_path(
+                args.next(),
+                "ui-trash-view-contract requires a trash directory path",
+            )?;
+            let metadata_path = args
+                .next()
+                .and_then(|value| (value != "-").then(|| PathBuf::from(value)));
+            let viewport_rows = args
+                .next()
+                .map(|value| parse_u16(&value, "viewport-rows"))
+                .transpose()?
+                .unwrap_or(24);
+            let scroll_row = args
+                .next()
+                .map(|value| parse_u32(&value, "scroll-row"))
+                .transpose()?
+                .unwrap_or(0);
+            let page = read_directory(&path)?;
+            let metadata = metadata_path
+                .as_ref()
+                .map(read_trash_restore_metadata)
+                .transpose()?
+                .unwrap_or_default();
+            let options = TrashViewOptions::default()
+                .with_metadata(metadata)
+                .with_viewport_rows(viewport_rows)
+                .with_scroll_row(scroll_row);
+            println!(
+                "{}",
+                TrashViewContract::from_records(&page.entries, options).as_tsv()
             );
         }
         Some("list") => {
@@ -989,6 +1024,41 @@ fn parse_bool(value: &str, name: &str) -> Result<bool> {
         "false" => Ok(false),
         _ => Err(GfmError::Format(format!("{name} must be true or false"))),
     }
+}
+
+fn read_trash_restore_metadata(path: &PathBuf) -> Result<BTreeMap<String, TrashEntryMetadata>> {
+    let text = std::fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+    let mut metadata = BTreeMap::new();
+    for (line_index, line) in text.lines().enumerate() {
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() != 6 {
+            return Err(GfmError::Format(format!(
+                "{}:{} expected 6 tab-separated fields: name, original_path, deleted_at, can_restore, can_delete_permanently, permission_issue",
+                path.display(),
+                line_index + 1
+            )));
+        }
+        let name = fields[0].to_string();
+        let original_path = (!fields[1].is_empty()).then(|| PathBuf::from(fields[1]));
+        let deleted_at = (!fields[2].is_empty()).then(|| fields[2].to_string());
+        let can_restore = parse_bool(fields[3], "can_restore")?;
+        let can_delete_permanently = parse_bool(fields[4], "can_delete_permanently")?;
+        let permission_issue = (!fields[5].is_empty()).then(|| fields[5].to_string());
+        metadata.insert(
+            name,
+            TrashEntryMetadata {
+                original_path,
+                deleted_at,
+                can_restore,
+                can_delete_permanently,
+                permission_issue,
+            },
+        );
+    }
+    Ok(metadata)
 }
 
 fn config_store(value: Option<String>) -> Result<ConfigStore> {
