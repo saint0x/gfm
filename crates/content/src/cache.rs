@@ -1,4 +1,4 @@
-use crate::{ExtractionReport, Extractor, EXTRACTOR_VERSION};
+use crate::{extractor_version_for_path, ExtractionReport, Extractor};
 use gfm_types::{FileId, FileRecord, GfmError, Result};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
@@ -55,7 +55,7 @@ impl ExtractionCacheKey {
         let modified_ns = system_time_ns(record.modified);
         Ok(Self {
             file_id: record.id,
-            extractor_version: EXTRACTOR_VERSION,
+            extractor_version: extractor_version_for_path(&record.path),
             content: ExtractionContentSignature::for_path(&record.path, record.len, modified_ns)?,
             metadata_epoch: metadata_epoch(record),
         })

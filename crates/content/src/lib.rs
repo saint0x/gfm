@@ -25,7 +25,19 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use structured::{extract_structured, StructuredExtractStatus, StructuredKind};
 
-pub const EXTRACTOR_VERSION: u32 = 5;
+pub const TEXT_EXTRACTOR_VERSION: u32 = 3;
+pub const PDF_EXTRACTOR_VERSION: u32 = 3;
+pub const OFFICE_EXTRACTOR_VERSION: u32 = 3;
+pub const RICH_EXTRACTOR_VERSION: u32 = 4;
+pub const ARCHIVE_EXTRACTOR_VERSION: u32 = 5;
+pub const STRUCTURED_EXTRACTOR_VERSION: u32 = 3;
+pub const UNSUPPORTED_EXTRACTOR_VERSION: u32 = 1;
+pub const EXTRACTOR_VERSION: u32 = ARCHIVE_EXTRACTOR_VERSION;
+const TEXT_EXTENSION_LIST: &[&str] = &[
+    "bash", "c", "cc", "conf", "cpp", "css", "csv", "go", "h", "hpp", "html", "java", "js", "json",
+    "jsx", "log", "md", "mjs", "plist", "py", "rb", "rs", "sh", "sql", "swift", "toml", "ts",
+    "tsx", "txt", "xml", "yaml", "yml", "zsh",
+];
 
 #[derive(Debug, Clone)]
 pub struct ExtractionPolicy {
@@ -261,14 +273,14 @@ pub struct ExtractionFingerprint {
 }
 
 impl ExtractionFingerprint {
-    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+    fn from_metadata(metadata: &std::fs::Metadata, extractor_version: u32) -> Self {
         let modified_ns = metadata
             .modified()
             .ok()
             .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|duration| duration.as_nanos());
         Self {
-            extractor_version: EXTRACTOR_VERSION,
+            extractor_version,
             len: metadata.len(),
             modified_ns,
         }
@@ -276,7 +288,10 @@ impl ExtractionFingerprint {
 
     pub fn for_path(path: &Path) -> Result<Self> {
         let metadata = std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?;
-        Ok(Self::from_metadata(&metadata))
+        Ok(Self::from_metadata(
+            &metadata,
+            extractor_version_for_path(path),
+        ))
     }
 
     pub fn cache_key(&self, path: &Path) -> String {
@@ -390,7 +405,8 @@ impl Extractor {
             ));
         }
         let metadata = std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?;
-        let fingerprint = ExtractionFingerprint::from_metadata(&metadata);
+        let extractor_version = extractor_version_for_path(path);
+        let fingerprint = ExtractionFingerprint::from_metadata(&metadata, extractor_version);
         let office = office_kind(path);
         let rich = rich_kind(path);
         let archive = archive_kind(path);
@@ -525,6 +541,24 @@ impl Extractor {
     }
 }
 
+pub fn extractor_version_for_path(path: &Path) -> u32 {
+    if path_is_pdf(path) {
+        PDF_EXTRACTOR_VERSION
+    } else if office_kind(path).is_some() {
+        OFFICE_EXTRACTOR_VERSION
+    } else if archive_kind(path).is_some() {
+        ARCHIVE_EXTRACTOR_VERSION
+    } else if rich_kind(path).is_some() {
+        RICH_EXTRACTOR_VERSION
+    } else if structured_kind(path).is_some() {
+        STRUCTURED_EXTRACTOR_VERSION
+    } else if path_is_known_text(path) {
+        TEXT_EXTRACTOR_VERSION
+    } else {
+        UNSUPPORTED_EXTRACTOR_VERSION
+    }
+}
+
 fn extraction_format(
     is_pdf: bool,
     office: Option<OoxmlKind>,
@@ -607,7 +641,7 @@ fn report_without_metadata(
         format,
         status,
         fingerprint: ExtractionFingerprint {
-            extractor_version: EXTRACTOR_VERSION,
+            extractor_version: extractor_version_for_path(path),
             len: 0,
             modified_ns: None,
         },
@@ -658,6 +692,18 @@ fn path_is_pdf(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+}
+
+fn path_is_known_text(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(text_extension_is_known)
+}
+
+fn text_extension_is_known(extension: &str) -> bool {
+    TEXT_EXTENSION_LIST
+        .iter()
+        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
 }
 
 fn build_snippet(
@@ -780,14 +826,10 @@ fn has_binary_signature(bytes: &[u8]) -> bool {
 }
 
 fn text_extensions() -> BTreeSet<String> {
-    [
-        "bash", "c", "cc", "conf", "cpp", "css", "csv", "go", "h", "hpp", "html", "java", "js",
-        "json", "jsx", "log", "md", "mjs", "plist", "py", "rb", "rs", "sh", "sql", "swift", "toml",
-        "ts", "tsx", "txt", "xml", "yaml", "yml", "zsh",
-    ]
-    .into_iter()
-    .map(ToOwned::to_owned)
-    .collect()
+    TEXT_EXTENSION_LIST
+        .iter()
+        .map(|ext| (*ext).to_owned())
+        .collect()
 }
 
 #[cfg(test)]
@@ -1034,11 +1076,11 @@ mod tests {
 
         assert_eq!(report.format, ExtractionFormat::Pdf);
         assert_eq!(report.status, ExtractionStatus::Extracted);
-        assert_eq!(report.fingerprint.extractor_version, EXTRACTOR_VERSION);
+        assert_eq!(report.fingerprint.extractor_version, PDF_EXTRACTOR_VERSION);
         assert!(report
             .fingerprint
             .cache_key(&path)
-            .starts_with(&format!("v{EXTRACTOR_VERSION}:")));
+            .starts_with(&format!("v{PDF_EXTRACTOR_VERSION}:")));
         assert!(report.as_tsv().contains("\tstatus=extracted\t"));
         assert!(report
             .document
@@ -1046,6 +1088,40 @@ mod tests {
             .text
             .contains("versioned pdfneedle"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extractor_versions_are_scoped_by_extraction_format() {
+        assert_eq!(
+            extractor_version_for_path(Path::new("note.txt")),
+            TEXT_EXTRACTOR_VERSION
+        );
+        assert_eq!(
+            extractor_version_for_path(Path::new("brief.pdf")),
+            PDF_EXTRACTOR_VERSION
+        );
+        assert_eq!(
+            extractor_version_for_path(Path::new("deck.pptx")),
+            OFFICE_EXTRACTOR_VERSION
+        );
+        assert_eq!(
+            extractor_version_for_path(Path::new("message.eml")),
+            RICH_EXTRACTOR_VERSION
+        );
+        assert_eq!(
+            extractor_version_for_path(Path::new("bundle.tar.gz")),
+            ARCHIVE_EXTRACTOR_VERSION
+        );
+        assert_eq!(
+            extractor_version_for_path(Path::new("data.json")),
+            STRUCTURED_EXTRACTOR_VERSION
+        );
+        assert_eq!(
+            extractor_version_for_path(Path::new("binary.unknown")),
+            UNSUPPORTED_EXTRACTOR_VERSION
+        );
+        assert_ne!(TEXT_EXTRACTOR_VERSION, ARCHIVE_EXTRACTOR_VERSION);
+        assert_ne!(RICH_EXTRACTOR_VERSION, ARCHIVE_EXTRACTOR_VERSION);
     }
 
     #[test]
@@ -1281,9 +1357,31 @@ endobj",
 
         assert_eq!(first.status, ExtractionCacheStatus::Miss);
         assert_eq!(second.status, ExtractionCacheStatus::Hit);
+        assert_eq!(first.key.extractor_version, TEXT_EXTRACTOR_VERSION);
         assert_eq!(first.key, second.key);
         assert_eq!(cached.cache_len(), 1);
         assert!(second.as_tsv().contains("status=hit"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extraction_cache_keys_use_format_scoped_versions() {
+        let root = unique_temp_dir("gfm-content-cache-format-versions");
+        let text_path = root.join("cache.md");
+        let archive_path = root.join("bundle.zip");
+        fs::write(&text_path, "cached text needle").unwrap();
+        fs::write(
+            &archive_path,
+            zip_package(&[("docs/cacheneedle.txt", "payload")]),
+        )
+        .unwrap();
+
+        let text_key = ExtractionCacheKey::for_record(&record_for_path(&text_path)).unwrap();
+        let archive_key = ExtractionCacheKey::for_record(&record_for_path(&archive_path)).unwrap();
+
+        assert_eq!(text_key.extractor_version, TEXT_EXTRACTOR_VERSION);
+        assert_eq!(archive_key.extractor_version, ARCHIVE_EXTRACTOR_VERSION);
+        assert_ne!(text_key.extractor_version, archive_key.extractor_version);
         fs::remove_dir_all(root).unwrap();
     }
 

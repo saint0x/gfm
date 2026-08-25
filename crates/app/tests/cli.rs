@@ -1,5 +1,5 @@
 use flate2::{write::GzEncoder, Compression};
-use gfm_content::EXTRACTOR_VERSION;
+use gfm_content::extractor_version_for_path;
 use gfm_store::{
     content_manifest_promotion_journal_path, read_records, write_content_postings,
     ContentArchiveManifest, ContentArchiveManifestEntry, ContentManifestPromotionJournal,
@@ -2927,7 +2927,10 @@ fn reports_compressed_pdf_extraction_from_binary() {
         "{stdout}"
     );
     assert!(
-        stdout.contains(&format!("\tversion={EXTRACTOR_VERSION}\t")),
+        stdout.contains(&format!(
+            "\tversion={}\t",
+            extractor_version_for_path(&path)
+        )),
         "{stdout}"
     );
     assert!(stdout.contains("quarantine\tallow"), "{stdout}");
@@ -3089,7 +3092,10 @@ fn reports_extraction_cache_hits_from_binary() {
         "{stdout}"
     );
     assert!(
-        stdout.contains(&format!("\tversion={EXTRACTOR_VERSION}\t")),
+        stdout.contains(&format!(
+            "\tversion={}\t",
+            extractor_version_for_path(&path)
+        )),
         "{stdout}"
     );
     assert!(stdout.contains("\tmetadata-epoch="), "{stdout}");

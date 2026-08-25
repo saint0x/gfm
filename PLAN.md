@@ -410,6 +410,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
    - DOCX/XLSX/PPTX extraction reads bounded OOXML ZIP packages, selected XML content parts, and capped decoded text output without blocking unrelated content indexing.
    - HTML, RTF, MIME multipart email, and ZIP/TAR/TAR.GZ archive metadata take format-specific extraction paths, including PAX and GNU TAR long-name headers, so markup, transport headers, MIME body parts, control words, and archive entry names become searchable without indexing binary payloads.
    - JSON, CSV, XML plist, and binary plist extraction exposes searchable structural keys, cells, primitive values, and plist dictionaries under explicit text-output budgets.
+   - Format-scoped extractor versions feed content fingerprints and cache keys so archive, rich-text, PDF, Office, structured-data, text, and unsupported-path parser upgrades do not evict unrelated hot search caches.
    - Positional postings support exact quoted phrases and explicit `near:N:alpha,beta` proximity windows after durable reload.
 
 5. Recency and usage index
