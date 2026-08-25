@@ -3,6 +3,72 @@
   "name": "gfm-cli-host",
   "steps": [
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-cleanup-active.gfmcontent",
+      "data": "active archive placeholder\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-cleanup-retired.gfmcontent",
+      "data": "retired archive placeholder\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-write",
+        "tmp/gfm-fozzy-cleanup.gfmmanifest",
+        "hot:gfm-fozzy-cleanup-active.gfmcontent"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "content-manifest\tarchives=1\n",
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-write",
+        "tmp/gfm-fozzy-cleanup.gfmmanifest",
+        "hot:gfm-fozzy-cleanup-active.gfmcontent"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-cleanup-plan",
+        "tmp/gfm-fozzy-cleanup.gfmmanifest",
+        "1",
+        "0",
+        "1",
+        "gfm-fozzy-cleanup-retired.gfmcontent",
+        "gfm-fozzy-cleanup-active.gfmcontent",
+        "gfm-fozzy-cleanup-missing.gfmcontent"
+      ],
+      "exit_code": 0,
+      "stdout": "cleanup\ttmp/gfm-fozzy-cleanup-retired.gfmcontent\nactive\ttmp/gfm-fozzy-cleanup-active.gfmcontent\nmissing\ttmp/gfm-fozzy-cleanup-missing.gfmcontent\n",
+      "stderr": "content-cleanup-plan\taction=Cleanup\tcleanup=1\tdeferred=0\tactive=1\tmissing=1\tactive-bytes=27\tcleanup-bytes=28\tdeferred-bytes=0\n",
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-cleanup-plan",
+        "tmp/gfm-fozzy-cleanup.gfmmanifest",
+        "1",
+        "0",
+        "1",
+        "gfm-fozzy-cleanup-retired.gfmcontent",
+        "gfm-fozzy-cleanup-active.gfmcontent",
+        "gfm-fozzy-cleanup-missing.gfmcontent"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["search", ".", "PLAN"],

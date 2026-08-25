@@ -12,8 +12,8 @@ use gfm_fs::{
 };
 use gfm_index::{
     comment_query_terms, content_query_terms, parse_volume_indexing_policy, tag_query_terms,
-    BackgroundContentIndexer, BatteryState, CompactionPressure, ContentArchiveManifest,
-    ContentArchiveManifestEntry, ContentIndexJobSpec, ContentIndexReport,
+    BackgroundContentIndexer, BatteryState, CompactionPressure, ContentArchiveCleanupPolicy,
+    ContentArchiveManifest, ContentArchiveManifestEntry, ContentIndexJobSpec, ContentIndexReport,
     ContentMaintenanceOptions, ContentMergePolicy, ContentMergeTier, EventBackpressureQueue,
     EventPriority, FseventsCursor, FseventsCursorHealth, IndexFootprintSpec, IndexMountState,
     IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState, Indexer, IoPressure, LiveIndex,
@@ -833,6 +833,56 @@ fn run() -> Result<()> {
                 println!("active\t{}", path.display());
             }
             for path in report.missing_archives {
+                println!("missing\t{}", path.display());
+            }
+        }
+        Some("content-cleanup-plan") => {
+            let manifest_path =
+                required_path(args.next(), "content-cleanup-plan requires a manifest path")?;
+            let min_retired_archives = parse_usize_arg(
+                args.next(),
+                "content-cleanup-plan requires min-retired-archives",
+            )?;
+            let min_retired_bytes = parse_u64_arg(
+                args.next(),
+                "content-cleanup-plan requires min-retired-bytes",
+            )?;
+            let max_cleanup_archives = parse_usize_arg(
+                args.next(),
+                "content-cleanup-plan requires max-cleanup-archives",
+            )?;
+            let candidates = args.map(PathBuf::from).collect::<Vec<_>>();
+            let manifest = ContentArchiveManifest::read(&manifest_path)?;
+            let plan = manifest.plan_inactive_archive_cleanup(
+                &manifest_path,
+                &candidates,
+                &ContentArchiveCleanupPolicy {
+                    min_retired_archives,
+                    min_retired_bytes,
+                    max_cleanup_archives,
+                },
+            )?;
+            eprintln!(
+                "content-cleanup-plan\taction={:?}\tcleanup={}\tdeferred={}\tactive={}\tmissing={}\tactive-bytes={}\tcleanup-bytes={}\tdeferred-bytes={}",
+                plan.action,
+                plan.cleanup_archives.len(),
+                plan.deferred_archives.len(),
+                plan.active_archives.len(),
+                plan.missing_archives.len(),
+                plan.active_bytes,
+                plan.cleanup_bytes,
+                plan.deferred_bytes
+            );
+            for path in plan.cleanup_archives {
+                println!("cleanup\t{}", path.display());
+            }
+            for path in plan.deferred_archives {
+                println!("defer\t{}", path.display());
+            }
+            for path in plan.active_archives {
+                println!("active\t{}", path.display());
+            }
+            for path in plan.missing_archives {
                 println!("missing\t{}", path.display());
             }
         }
@@ -2790,6 +2840,7 @@ fn print_usage() {
   gfm content-manifest-inspect <manifest.gfmmanifest>
   gfm content-manifest-promote <manifest.gfmmanifest> <hot|warm|cold:path> [retired-archive...]
   gfm content-manifest-cleanup <manifest.gfmmanifest> <candidate-archive...>
+  gfm content-cleanup-plan <manifest.gfmmanifest> <min-retired-archives> <min-retired-bytes> <max-cleanup-archives> <candidate-archive...>
   gfm content-maintain-segments <manifest.gfmmanifest> <output.gfmcontent> <segments.gfmseg...>
   gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent>
   gfm resume-content-background [content.job] [jobs.journal]

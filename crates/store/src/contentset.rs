@@ -32,6 +32,41 @@ pub struct ContentArchiveCleanupReport {
     pub missing_archives: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentArchiveCleanupPolicy {
+    pub min_retired_archives: usize,
+    pub min_retired_bytes: u64,
+    pub max_cleanup_archives: usize,
+}
+
+impl Default for ContentArchiveCleanupPolicy {
+    fn default() -> Self {
+        Self {
+            min_retired_archives: 1,
+            min_retired_bytes: 0,
+            max_cleanup_archives: 64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentArchiveCleanupAction {
+    Skip,
+    Cleanup,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentArchiveCleanupPlan {
+    pub action: ContentArchiveCleanupAction,
+    pub cleanup_archives: Vec<PathBuf>,
+    pub deferred_archives: Vec<PathBuf>,
+    pub active_archives: Vec<PathBuf>,
+    pub missing_archives: Vec<PathBuf>,
+    pub active_bytes: u64,
+    pub cleanup_bytes: u64,
+    pub deferred_bytes: u64,
+}
+
 impl ContentArchiveManifest {
     pub fn new(archives: Vec<ContentArchiveManifestEntry>) -> Result<Self> {
         if archives.is_empty() {
@@ -183,6 +218,83 @@ impl ContentArchiveManifest {
             missing_archives,
         })
     }
+
+    pub fn plan_inactive_archive_cleanup(
+        &self,
+        manifest_path: impl AsRef<Path>,
+        candidates: &[impl AsRef<Path>],
+        policy: &ContentArchiveCleanupPolicy,
+    ) -> Result<ContentArchiveCleanupPlan> {
+        let manifest_path = manifest_path.as_ref();
+        let active = self
+            .resolved_archive_paths(manifest_path)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let active_bytes =
+            active.iter().try_fold(
+                0u64,
+                |total, path| Ok(total.saturating_add(file_len(path)?)),
+            )?;
+        let mut retired = BTreeMap::new();
+        let mut active_archives = Vec::new();
+        let mut missing_archives = Vec::new();
+
+        for candidate in candidates {
+            let path = resolve_manifest_path(manifest_path, candidate.as_ref());
+            if active.contains(&path) {
+                active_archives.push(path);
+                continue;
+            }
+            match std::fs::metadata(&path) {
+                Ok(metadata) => {
+                    retired.insert(path, metadata.len());
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    missing_archives.push(path);
+                }
+                Err(err) => return Err(GfmError::io(&path, err)),
+            }
+        }
+
+        let max_cleanup_archives = policy.max_cleanup_archives.max(1);
+        let retired_count = retired.len();
+        let retired_bytes = retired.values().copied().fold(0u64, u64::saturating_add);
+        let should_cleanup = retired_count >= policy.min_retired_archives.max(1)
+            || retired_bytes >= policy.min_retired_bytes;
+        let selected_count = if should_cleanup {
+            retired_count.min(max_cleanup_archives)
+        } else {
+            0
+        };
+        let mut cleanup_archives = Vec::new();
+        let mut deferred_archives = Vec::new();
+        let mut cleanup_bytes = 0u64;
+        let mut deferred_bytes = 0u64;
+        for (index, (path, bytes)) in retired.into_iter().enumerate() {
+            if index < selected_count {
+                cleanup_bytes = cleanup_bytes.saturating_add(bytes);
+                cleanup_archives.push(path);
+            } else {
+                deferred_bytes = deferred_bytes.saturating_add(bytes);
+                deferred_archives.push(path);
+            }
+        }
+
+        Ok(ContentArchiveCleanupPlan {
+            action: if cleanup_archives.is_empty() {
+                ContentArchiveCleanupAction::Skip
+            } else {
+                ContentArchiveCleanupAction::Cleanup
+            },
+            cleanup_archives,
+            deferred_archives,
+            active_archives,
+            missing_archives,
+            active_bytes,
+            cleanup_bytes,
+            deferred_bytes,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -310,6 +422,24 @@ pub fn cleanup_inactive_content_archives(
     let manifest_path = manifest_path.as_ref();
     let manifest = ContentArchiveManifest::read(manifest_path)?;
     manifest.cleanup_inactive_archives(manifest_path, candidates)
+}
+
+pub fn plan_inactive_content_archive_cleanup(
+    manifest_path: impl AsRef<Path>,
+    candidates: &[impl AsRef<Path>],
+    policy: &ContentArchiveCleanupPolicy,
+) -> Result<ContentArchiveCleanupPlan> {
+    let manifest_path = manifest_path.as_ref();
+    let manifest = ContentArchiveManifest::read(manifest_path)?;
+    manifest.plan_inactive_archive_cleanup(manifest_path, candidates, policy)
+}
+
+fn file_len(path: &Path) -> Result<u64> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(err) => Err(GfmError::io(path, err)),
+    }
 }
 
 fn canonical_term(term: &str) -> String {
@@ -617,6 +747,78 @@ mod tests {
         );
         assert!(!inactive.exists());
         assert!(active.exists());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn content_archive_cleanup_plan_batches_retired_archives() {
+        let dir = temp_dir("gfm-content-manifest-cleanup-plan");
+        let manifest_path = dir.join("content.gfmmanifest");
+        let active = dir.join("active.gfmcontent");
+        let first_retired = dir.join("a-retired.gfmcontent");
+        let second_retired = dir.join("b-retired.gfmcontent");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_content_postings(&active, &[]).unwrap();
+        write_content_postings(&first_retired, &[]).unwrap();
+        write_content_postings(&second_retired, &[]).unwrap();
+
+        ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Hot,
+            path: PathBuf::from("active.gfmcontent"),
+        }])
+        .unwrap()
+        .write(&manifest_path)
+        .unwrap();
+
+        let manifest = ContentArchiveManifest::read(&manifest_path).unwrap();
+        let skipped = manifest
+            .plan_inactive_archive_cleanup(
+                &manifest_path,
+                &[
+                    PathBuf::from("a-retired.gfmcontent"),
+                    PathBuf::from("b-retired.gfmcontent"),
+                    PathBuf::from("active.gfmcontent"),
+                    PathBuf::from("missing.gfmcontent"),
+                ],
+                &ContentArchiveCleanupPolicy {
+                    min_retired_archives: 3,
+                    min_retired_bytes: u64::MAX,
+                    max_cleanup_archives: 1,
+                },
+            )
+            .unwrap();
+        assert_eq!(skipped.action, ContentArchiveCleanupAction::Skip);
+        assert!(skipped.cleanup_archives.is_empty());
+        assert_eq!(skipped.deferred_archives.len(), 2);
+
+        let scheduled = manifest
+            .plan_inactive_archive_cleanup(
+                &manifest_path,
+                &[
+                    PathBuf::from("a-retired.gfmcontent"),
+                    PathBuf::from("b-retired.gfmcontent"),
+                    PathBuf::from("active.gfmcontent"),
+                    PathBuf::from("missing.gfmcontent"),
+                ],
+                &ContentArchiveCleanupPolicy {
+                    min_retired_archives: 2,
+                    min_retired_bytes: u64::MAX,
+                    max_cleanup_archives: 1,
+                },
+            )
+            .unwrap();
+        assert_eq!(scheduled.action, ContentArchiveCleanupAction::Cleanup);
+        assert_eq!(scheduled.cleanup_archives, vec![first_retired]);
+        assert_eq!(scheduled.deferred_archives, vec![second_retired]);
+        assert_eq!(scheduled.active_archives, vec![active]);
+        assert_eq!(
+            scheduled.missing_archives,
+            vec![dir.join("missing.gfmcontent")]
+        );
+        assert!(scheduled.active_bytes > 0);
+        assert!(scheduled.cleanup_bytes > 0);
+        assert!(scheduled.deferred_bytes > 0);
 
         std::fs::remove_dir_all(dir).unwrap();
     }

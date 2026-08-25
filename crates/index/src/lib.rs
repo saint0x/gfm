@@ -13,6 +13,7 @@ use gfm_store::{
     MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
 };
 pub use gfm_store::{
+    ContentArchiveCleanupAction, ContentArchiveCleanupPlan, ContentArchiveCleanupPolicy,
     ContentArchiveCleanupReport, ContentArchiveManifest, ContentArchiveManifestEntry,
     ContentManifestPromotion, ContentMergeOutcome, ContentMergePolicy, ContentMergeTier,
 };
@@ -859,6 +860,7 @@ pub struct ContentIndexReport {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContentMaintenanceOptions {
     pub merge_policy: ContentMergePolicy,
+    pub cleanup_policy: ContentArchiveCleanupPolicy,
     pub cleanup_retired_archives: bool,
 }
 
@@ -876,6 +878,10 @@ pub struct ContentMaintenanceReport {
     pub removed_archives: Vec<PathBuf>,
     pub active_archives: Vec<PathBuf>,
     pub missing_archives: Vec<PathBuf>,
+    pub cleanup_action: ContentArchiveCleanupAction,
+    pub cleanup_bytes: u64,
+    pub deferred_archives: Vec<PathBuf>,
+    pub deferred_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1080,6 +1086,10 @@ impl BackgroundContentIndexer {
                 removed_archives: Vec::new(),
                 active_archives: Vec::new(),
                 missing_archives: Vec::new(),
+                cleanup_action: ContentArchiveCleanupAction::Skip,
+                cleanup_bytes: 0,
+                deferred_archives: Vec::new(),
+                deferred_bytes: 0,
             });
         }
 
@@ -1098,11 +1108,17 @@ impl BackgroundContentIndexer {
             &[] as &[PathBuf],
         )?;
         promotion.manifest.write(manifest_path)?;
-        let cleanup = if options.cleanup_retired_archives && !promotion.retired_archives.is_empty()
+        let cleanup_plan = promotion.manifest.plan_inactive_archive_cleanup(
+            manifest_path,
+            &promotion.retired_archives,
+            &options.cleanup_policy,
+        )?;
+        let cleanup = if options.cleanup_retired_archives
+            && cleanup_plan.action == ContentArchiveCleanupAction::Cleanup
         {
             promotion
                 .manifest
-                .cleanup_inactive_archives(manifest_path, &promotion.retired_archives)?
+                .cleanup_inactive_archives(manifest_path, &cleanup_plan.cleanup_archives)?
         } else {
             gfm_store::ContentArchiveCleanupReport {
                 removed_archives: Vec::new(),
@@ -1123,6 +1139,10 @@ impl BackgroundContentIndexer {
             removed_archives: cleanup.removed_archives,
             active_archives: cleanup.active_archives,
             missing_archives: cleanup.missing_archives,
+            cleanup_action: cleanup_plan.action,
+            cleanup_bytes: cleanup_plan.cleanup_bytes,
+            deferred_archives: cleanup_plan.deferred_archives,
+            deferred_bytes: cleanup_plan.deferred_bytes,
         })
     }
 }

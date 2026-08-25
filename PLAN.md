@@ -417,7 +417,8 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - search and id lookup can consume the manifest directly instead of requiring manually supplied archive lists;
   - promotion replaces retired active archives with a newly published tier archive through the same atomic manifest writer;
   - promotion reports retired archives and missing retirement requests explicitly for deterministic cleanup scheduling;
-  - physical archive cleanup refuses to remove manifest-active archives, reports already-missing candidates, and only deletes inactive files.
+  - inactive archive cleanup is planned before removal with deterministic active/retired/missing classification, byte-pressure accounting, configurable cleanup thresholds, and bounded cleanup batches;
+  - physical archive cleanup refuses to remove manifest-active archives, reports already-missing candidates, and only deletes inactive files selected by the cadence plan.
 - Scheduled content segment maintenance:
   - pending hot segments are planned with the same tiered merge policy used by manual compaction;
   - maintenance is a no-op until merge thresholds are met;

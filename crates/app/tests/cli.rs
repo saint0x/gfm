@@ -1955,6 +1955,43 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{promoted_ids_stdout}"
     );
 
+    let cleanup_plan_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-cleanup-plan",
+            manifest.to_str().unwrap(),
+            "1",
+            "0",
+            "1",
+            first_content.to_str().unwrap(),
+            second_content.to_str().unwrap(),
+            &format!("{}.missing", first_content.display()),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        cleanup_plan_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleanup_plan_output.stderr)
+    );
+    let cleanup_plan_stderr = String::from_utf8(cleanup_plan_output.stderr).unwrap();
+    assert!(
+        cleanup_plan_stderr.contains("content-cleanup-plan")
+            && cleanup_plan_stderr.contains("action=Cleanup")
+            && cleanup_plan_stderr.contains("cleanup=1")
+            && cleanup_plan_stderr.contains("active=1")
+            && cleanup_plan_stderr.contains("missing=1"),
+        "{cleanup_plan_stderr}"
+    );
+    let cleanup_plan_stdout = String::from_utf8(cleanup_plan_output.stdout).unwrap();
+    assert!(
+        cleanup_plan_stdout.contains(&format!("cleanup\t{}", first_content.display()))
+            && cleanup_plan_stdout.contains(&format!("active\t{}", second_content.display()))
+            && cleanup_plan_stdout.contains("missing\t"),
+        "{cleanup_plan_stdout}"
+    );
+    assert!(first_content.exists());
+    assert!(second_content.exists());
+
     let cleanup_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "content-manifest-cleanup",
