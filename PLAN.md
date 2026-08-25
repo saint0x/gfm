@@ -222,6 +222,7 @@ gfm/
 - Public API is narrow, typed Rust.
 - Defines and evaluates the target support matrix: primary support for Apple Silicon on macOS 15 or newer, compatibility support down to macOS 14, Intel x86_64 compatibility where hardware budgets are met, an 8 GiB memory floor, and a 4 logical CPU floor.
 - Probes the current host through macOS system tools and returns an explicit primary, compatible, or unsupported tier with reasons suitable for release validation and operator diagnostics.
+- Probes first-run permission readiness for Finder-relevant protected roots, preserves Finder parity by default by deferring prompts until needed, and emits degraded-mode onboarding decisions for machine-wide search.
 
 `fs`
 

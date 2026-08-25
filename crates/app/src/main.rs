@@ -12,7 +12,9 @@ use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
     WorkerPool,
 };
-use gfm_mac::{current_host_profile, FileEventStream, SupportMatrix, WatchRoot};
+use gfm_mac::{
+    current_host_profile, current_permission_onboarding, FileEventStream, SupportMatrix, WatchRoot,
+};
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_store::ContentArchive;
 use gfm_testkit::{
@@ -347,6 +349,24 @@ fn run() -> Result<()> {
             );
             for reason in evaluation.reasons {
                 eprintln!("unsupported\t{reason}");
+            }
+        }
+        Some("permission-onboarding") => {
+            let plan = current_permission_onboarding()?;
+            println!(
+                "{}\t{}\t{}",
+                plan.action.as_str(),
+                plan.policy.prompt_mode.as_str(),
+                plan.finder_parity_default
+            );
+            for item in plan.readiness {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    item.scope.as_str(),
+                    item.state.as_str(),
+                    item.path.display(),
+                    escape_output_field(&item.reason)
+                );
             }
         }
         Some("macrobench") => {
@@ -697,6 +717,7 @@ fn print_usage() {
   gfm diagnostics-parity-baseline <config.toml> <baseline-root> <macos-build>
   gfm diagnostics-storage-inspect <records.gfmidx|content.gfmcontent>
   gfm support-check
+  gfm permission-onboarding
   gfm macrobench <workspace> [smoke|standard]
   gfm regression-gate <workspace> [smoke|standard]
   gfm release-policy

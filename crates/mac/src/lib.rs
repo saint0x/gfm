@@ -5,6 +5,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 
+mod permissions;
+
+pub use permissions::{
+    current_permission_onboarding, PermissionAction, PermissionOnboardingPlan, PermissionPolicy,
+    PermissionPromptMode, PermissionReadiness, PermissionScope, PermissionState,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MacOsVersion {
     pub major: u16,

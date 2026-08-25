@@ -51,7 +51,7 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 
 - `crates/app`: native application startup, GPUI composition, windows, menus, and command routing.
 - `crates/ui`: Finder-parity components, visual tokens, layout primitives, virtualized views, and screenshot-test surfaces.
-- `crates/mac`: narrow typed bridges to AppKit, Foundation, CoreServices, QuickLook, Spotlight, FSEvents, Security, DiskArbitration, APFS, FileProvider, host support detection, and target matrix policy.
+- `crates/mac`: narrow typed bridges to AppKit, Foundation, CoreServices, QuickLook, Spotlight, FSEvents, Security, DiskArbitration, APFS, FileProvider, host support detection, first-run permission readiness, and target matrix policy.
 - `crates/fs`: filesystem enumeration, identity, permissions, package detection, aliases, symlinks, hidden files, volume behavior, and metadata reads.
 - `crates/ops`: APFS-aware file operations, clone fast paths, copy/move/delete/trash semantics, conflict handling, operation journaling, recovery, and retries.
 - `crates/index`: initial crawl, FSEvents ingestion, background metadata/content pipelines, per-volume state, and repair scheduling.
@@ -196,6 +196,12 @@ Check the current host against the supported macOS and hardware matrix:
 
 ```sh
 cargo run -p gfm -- support-check
+```
+
+Inspect first-run permission readiness without forcing Full Disk Access:
+
+```sh
+cargo run -p gfm -- permission-onboarding
 ```
 
 Inspect the validated release policy:

@@ -116,7 +116,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Packaging
 
-81. Implement first-run permission onboarding that remains Finder-parity by default.
+81. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
 
 ## Documentation
 
