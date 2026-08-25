@@ -757,6 +757,7 @@ fn reports_finder_metadata_from_binary() {
 #[test]
 fn searches_persisted_tags_from_binary() {
     let index = unique_temp_path("gfm-cli-tags", "gfmidx");
+    let metadata = unique_temp_path("gfm-cli-tags", "gfmmeta");
     fs::write(
         &index,
         "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\tImportant,Client\t/tmp/tagged.md\n2\t2\t0\tf\t5\t0\t0\t0\t0\tLater\t/tmp/other.md\n",
@@ -777,7 +778,38 @@ fn searches_persisted_tags_from_binary() {
     assert!(stdout.contains("tagged.md"), "{stdout}");
     assert!(!stdout.contains("other.md"), "{stdout}");
 
+    let metadata_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-metadata",
+            index.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        metadata_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&metadata_output.stderr)
+    );
+
+    let ids_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "metadata-ids-mmap",
+            metadata.to_str().unwrap(),
+            "tag",
+            "Important",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        ids_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ids_output.stderr)
+    );
+    assert_eq!(String::from_utf8(ids_output.stdout).unwrap(), "1\t1\n");
+
     fs::remove_file(index).unwrap();
+    fs::remove_file(metadata).unwrap();
 }
 
 #[test]

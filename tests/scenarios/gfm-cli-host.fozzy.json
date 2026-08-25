@@ -57,6 +57,32 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-metadata-records.gfmidx",
+      "data": "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\tImportant,Client\ttmp/gfm-fozzy-tagged.md\n2\t2\t0\tf\t5\t0\t0\t0\t0\tLater\ttmp/gfm-fozzy-other.md\n"
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-metadata",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-metadata.gfmmeta"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "metadata-ids-mmap",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "tag",
+        "Important"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

@@ -1,11 +1,16 @@
 mod content;
 mod durable;
+mod metadata;
 
 pub use content::{
     compact_content_segments, read_content_postings, read_content_segment, write_content_postings,
     write_content_segment, ContentArchive, MmapContentArchive,
 };
 pub use durable::{atomic_write, DurableCommit};
+pub use metadata::{
+    metadata_postings_from_records, read_metadata_postings, write_metadata_postings, MetadataField,
+    MetadataPosting, MmapMetadataArchive,
+};
 
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
 use memmap2::{Mmap, MmapOptions};

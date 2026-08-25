@@ -33,7 +33,10 @@ use gfm_preview::{
     PreviewSchedulingPolicy, PreviewSecurityPolicy, PreviewTask, QuickLookSessionContract,
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
-use gfm_store::{ContentArchive, MmapContentArchive, MmapRecordArchive};
+use gfm_store::{
+    metadata_postings_from_records, write_metadata_postings, ContentArchive, MetadataField,
+    MmapContentArchive, MmapMetadataArchive, MmapRecordArchive,
+};
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
     run_macrobench, run_parity_gate_manifest, run_regression_gate,
@@ -811,6 +814,34 @@ fn run() -> Result<()> {
                 print_hit(&hit);
             }
         }
+        Some("index-metadata") => {
+            let records = required_path(args.next(), "index-metadata requires a records path")?;
+            let output = required_path(
+                args.next(),
+                "index-metadata requires an output metadata path",
+            )?;
+            let archive = MmapRecordArchive::open(records)?;
+            let postings = metadata_postings_from_records(&archive.records()?);
+            write_metadata_postings(output, &postings)?;
+            eprintln!("metadata-indexed {} terms", postings.len());
+        }
+        Some("metadata-ids-mmap") => {
+            let metadata =
+                required_path(args.next(), "metadata-ids-mmap requires a metadata path")?;
+            let field = parse_metadata_field(
+                args.next().as_deref().ok_or_else(|| {
+                    GfmError::Format("metadata-ids-mmap requires a field".to_string())
+                })?,
+                "metadata field",
+            )?;
+            let term = args
+                .next()
+                .ok_or_else(|| GfmError::Format("metadata-ids-mmap requires a term".to_string()))?;
+            let archive = MmapMetadataArchive::open(metadata)?;
+            for id in archive.ids_for(field, &term)? {
+                println!("{}\t{}", id.volume.0, id.node);
+            }
+        }
         Some("search-content-index") => {
             let records =
                 required_path(args.next(), "search-content-index requires a records path")?;
@@ -1468,6 +1499,10 @@ fn parse_quarantine_failure_kind(value: &str, name: &str) -> Result<QuarantineFa
         .ok_or_else(|| GfmError::Format(format!("invalid {name}: {value}")))
 }
 
+fn parse_metadata_field(value: &str, name: &str) -> Result<MetadataField> {
+    MetadataField::parse(value).ok_or_else(|| GfmError::Format(format!("invalid {name}: {value}")))
+}
+
 fn parse_u16(value: &str, name: &str) -> Result<u16> {
     value
         .parse()
@@ -1935,6 +1970,8 @@ fn print_usage() {
   gfm search-content <root> <query>
   gfm search-index <index.gfmidx> <query>
   gfm search-index-mmap <index.gfmidx> <query>
+  gfm index-metadata <records.gfmidx> <metadata.gfmmeta>
+  gfm metadata-ids-mmap <metadata.gfmmeta> <tag|comment> <term>
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>
   gfm content-ids <content.gfmcontent> <term>
   gfm content-ids-mmap <content.gfmcontent> <term>
