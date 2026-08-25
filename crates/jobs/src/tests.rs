@@ -109,6 +109,49 @@ fn fairness_planner_honors_dependencies_and_reports_blocked_jobs() {
 }
 
 #[test]
+fn progress_store_round_trips_and_restores_active_snapshots() {
+    let path = temp_path("gfm-job-progress", "gfmprogress");
+    let store = JobProgressStore::new(&path);
+    let running = JobProgressSnapshot::new(
+        JobId::from_raw(7),
+        JobClass::Foreground,
+        Priority::Interactive,
+        "copy user selection",
+        Some(VolumeId(2)),
+        10,
+    )
+    .with_progress(JobProgressState::Running, 4, "copied\nwith\ttab", 101);
+    let completed = JobProgressSnapshot::new(
+        JobId::from_raw(8),
+        JobClass::Maintenance,
+        Priority::Background,
+        "compact content",
+        None,
+        3,
+    )
+    .with_progress(JobProgressState::Completed, 3, "done", 102);
+
+    store
+        .write_all(&[running.clone(), completed.clone()])
+        .unwrap();
+    assert_eq!(store.read().unwrap(), [running.clone(), completed]);
+    assert_eq!(store.restorable().unwrap(), vec![running.clone()]);
+    assert!(running.as_tsv().contains("\\nwith\\ttab"));
+
+    let paused =
+        running
+            .clone()
+            .with_progress(JobProgressState::Paused, 6, "waiting for volume", 103);
+    store.upsert(paused.clone()).unwrap();
+    let snapshots = store.read().unwrap();
+    assert_eq!(snapshots.len(), 2);
+    assert_eq!(snapshots[0], paused);
+    assert_eq!(store.restorable().unwrap().len(), 1);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn scheduling_pressure_defers_background_under_saturated_io() {
     let pressure = SchedulingPressure {
         io: JobIoPressure::Saturated,

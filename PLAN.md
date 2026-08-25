@@ -269,6 +269,7 @@ gfm/
 - Provides volume-isolated worker admission that caps concurrent work per `VolumeId` while unrelated volumes and unscoped interactive jobs keep running.
 - Persists a schema-checked typed job payload catalog for operation, indexing, extraction, thumbnail, preview, and repair jobs, with job id, payload kind, label, payload path, volume id, and summary records.
 - Provides a dependency-aware fair planner across foreground, visible, background, maintenance, and repair job classes, with weighted quotas, deterministic ordering, blocked-dependency reporting, and producer-ready scheduling APIs for classed volume-scoped work.
+- Persists atomic job progress snapshots with typed job id, class, priority, label, volume id, state, completed units, total units, detail, and update timestamp records, and filters restorable planned/running/paused work after restart.
 - Classifies retriable job failures as transient, permission, missing-file, corrupt-file, offline-volume, or permanent before recovery admission, applies bounded exponential backoff only to retryable classes, and exposes the decision through an operator CLI report.
 - Admits foreground copy, move, rename, delete, and trash operation CLI jobs through the volume-isolated worker path before they enter the operation engine.
 - Admits interactive live content extraction/search jobs through the same volume-isolated worker path before they crawl, extract, and snippet candidate files.

@@ -10,7 +10,9 @@ use std::thread;
 use std::time::Duration;
 
 mod isolated;
+mod progress;
 use isolated::{IsolatedRetriableTaskQueue, IsolatedTaskQueue};
+pub use progress::{JobProgressSnapshot, JobProgressState, JobProgressStore};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JobId(u64);
@@ -31,6 +33,27 @@ pub enum Priority {
     Normal,
     Visible,
     Interactive,
+}
+
+impl Priority {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Background => "background",
+            Self::Normal => "normal",
+            Self::Visible => "visible",
+            Self::Interactive => "interactive",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "background" => Some(Self::Background),
+            "normal" => Some(Self::Normal),
+            "visible" => Some(Self::Visible),
+            "interactive" => Some(Self::Interactive),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,6 +81,17 @@ impl JobClass {
             Priority::Interactive => Self::Foreground,
             Priority::Visible => Self::Visible,
             Priority::Normal | Priority::Background => Self::Background,
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "foreground" => Some(Self::Foreground),
+            "visible" => Some(Self::Visible),
+            "background" => Some(Self::Background),
+            "maintenance" => Some(Self::Maintenance),
+            "repair" => Some(Self::Repair),
+            _ => None,
         }
     }
 }

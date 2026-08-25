@@ -25,9 +25,10 @@ use gfm_index::{
 };
 use gfm_jobs::{
     Cancellation, JobBatteryState, JobClass, JobFairnessPlanner, JobFairnessPolicy, JobIoPressure,
-    JobJournal, JobPayloadCatalog, JobPayloadKind, JobPayloadRecord, JobThermalState,
-    JobUserActivity, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler,
-    SchedulingAction, SchedulingPressure, Task, TaskStatus, VolumeConcurrencyPolicy, WorkerPool,
+    JobJournal, JobPayloadCatalog, JobPayloadKind, JobPayloadRecord, JobProgressSnapshot,
+    JobProgressState, JobProgressStore, JobThermalState, JobUserActivity, Priority, RecoveryReason,
+    RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, Task, TaskStatus,
+    VolumeConcurrencyPolicy, WorkerPool,
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, parse_spotlight_fixture, AccessIntent,
@@ -3088,6 +3089,19 @@ fn run() -> Result<()> {
                 );
             }
         }
+        Some("jobs-progress-snapshot") => {
+            let path = required_path(
+                args.next(),
+                "jobs-progress-snapshot requires a progress path",
+            )?;
+            let store = JobProgressStore::new(&path);
+            for snapshot in sample_progress_snapshots() {
+                store.upsert(snapshot)?;
+            }
+            for snapshot in store.restorable()? {
+                println!("{}", snapshot.as_tsv());
+            }
+        }
         Some("ops-recover") => {
             let (journal, policy) = parse_ops_recover_args(&mut args)?;
             let report =
@@ -4577,13 +4591,45 @@ fn sample_fairness_plan() -> gfm_jobs::JobFairnessPlan {
     .plan(scheduler.drain_ready())
 }
 
+fn sample_progress_snapshots() -> Vec<JobProgressSnapshot> {
+    vec![
+        JobProgressSnapshot::new(
+            gfm_jobs::JobId::from_raw(1),
+            JobClass::Foreground,
+            Priority::Interactive,
+            "copy selected files",
+            Some(VolumeId(1)),
+            100,
+        )
+        .with_progress(
+            JobProgressState::Running,
+            42,
+            "copy:/source->/target",
+            1_000,
+        ),
+        JobProgressSnapshot::new(
+            gfm_jobs::JobId::from_raw(2),
+            JobClass::Background,
+            Priority::Background,
+            "index content",
+            Some(VolumeId(1)),
+            250,
+        )
+        .with_progress(JobProgressState::Paused, 128, "pressure:throttled", 1_001),
+        JobProgressSnapshot::new(
+            gfm_jobs::JobId::from_raw(3),
+            JobClass::Maintenance,
+            Priority::Background,
+            "compact content segments",
+            None,
+            7,
+        )
+        .with_progress(JobProgressState::Completed, 7, "done", 1_002),
+    ]
+}
+
 fn priority_name(priority: Priority) -> &'static str {
-    match priority {
-        Priority::Background => "background",
-        Priority::Normal => "normal",
-        Priority::Visible => "visible",
-        Priority::Interactive => "interactive",
-    }
+    priority.as_str()
 }
 
 fn stream_stage(stage: SearchStreamStage) -> &'static str {
@@ -4876,6 +4922,7 @@ fn print_usage() {
   gfm jobs-retry-plan <max-attempts> <attempts> <failure-message...>
   gfm jobs-payload-catalog <catalog.gfmjobs>
   gfm jobs-fairness-plan
+  gfm jobs-progress-snapshot <progress.gfmprogress>
   gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
   gfm watch-once <root>
   gfm copy <source> <destination>

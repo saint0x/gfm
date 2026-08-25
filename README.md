@@ -148,6 +148,8 @@ The jobs layer also persists a typed payload catalog for operation, indexing, ex
 
 The scheduler plans foreground, visible, background, maintenance, and repair work through explicit job classes, dependency edges, and weighted fairness quotas. Foreground and visible work keep first-class latency while background indexing, compaction, and repair queues continue making deterministic progress instead of starving behind endless user-visible churn.
 
+Job progress is persisted through atomic typed snapshots that record job id, class, priority, label, volume id, state, completed units, total units, detail text, and update timestamp. On restart, planned, running, and paused snapshots are restored for user-visible progress surfaces while completed, cancelled, and failed terminal work stays out of the active restoration set.
+
 Job retries classify failures as transient, permission, missing-file, corrupt-file, offline-volume, or permanent before recovery admission. Transient and offline-volume failures receive bounded exponential backoff; permission, missing-file, corrupt-file, and permanent failures are surfaced without retry churn.
 
 Background content indexing also consumes explicit runtime pressure signals: saturated I/O or critical thermal pressure defers the durable job before extraction starts, while elevated pressure, low power, or active user input throttles worker admission.
@@ -463,6 +465,7 @@ cargo run -p gfm -- index-content-background . /tmp/gfm-segments /tmp/gfm.gfmidx
 cargo run -p gfm -- jobs-recover /tmp/gfm-jobs.journal
 cargo run -p gfm -- jobs-payload-catalog /tmp/gfm-jobs.gfmjobs
 cargo run -p gfm -- jobs-fairness-plan
+cargo run -p gfm -- jobs-progress-snapshot /tmp/gfm-jobs.gfmprogress
 ```
 
 Watch and operate on files:

@@ -3988,6 +3988,29 @@ fn reports_job_fairness_plan_from_binary() {
     );
 }
 
+#[test]
+fn reports_restorable_job_progress_from_binary() {
+    let progress = unique_temp_path("gfm-cli-job-progress", "gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["jobs-progress-snapshot", progress.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("progress\t1\tforeground\tinteractive\tcopy selected files\t1\trunning\t42\t100\tcopy:/source->/target\t1000"), "{stdout}");
+    assert!(stdout.contains("progress\t2\tbackground\tbackground\tindex content\t1\tpaused\t128\t250\tpressure:throttled\t1001"), "{stdout}");
+    assert!(!stdout.contains("compact content segments"), "{stdout}");
+    assert!(progress.is_file());
+
+    fs::remove_file(progress).unwrap();
+}
+
 fn run_gfm<const N: usize>(journal: &std::path::Path, args: [&str; N]) {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_OPS_JOURNAL", journal)
