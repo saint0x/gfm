@@ -1770,6 +1770,8 @@ fn link_existing_hard_link(
 #[cfg(test)]
 fn copy_file_bytes(from: &Path, to: &Path) -> Result<u64> {
     let mut source = File::open(from).map_err(|err| GfmError::io(from, err))?;
+    let source_metadata = source.metadata().map_err(|err| GfmError::io(from, err))?;
+    let preserve_sparse_holes = metadata_has_sparse_holes(&source_metadata);
     let mut destination = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1786,7 +1788,8 @@ fn copy_file_bytes(from: &Path, to: &Path) -> Result<u64> {
         if read == 0 {
             break Ok(written);
         }
-        if let Err(err) = write_sparse_chunk(&mut destination, &buffer[..read]) {
+        if let Err(err) = write_copy_chunk(&mut destination, &buffer[..read], preserve_sparse_holes)
+        {
             break Err(GfmError::io(to, err));
         }
         written += read as u64;
@@ -1812,6 +1815,8 @@ fn copy_file_bytes_tracked(
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<u64> {
     let mut source = File::open(from).map_err(|err| GfmError::io(from, err))?;
+    let source_metadata = source.metadata().map_err(|err| GfmError::io(from, err))?;
+    let preserve_sparse_holes = metadata_has_sparse_holes(&source_metadata);
     let mut destination = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1829,7 +1834,8 @@ fn copy_file_bytes_tracked(
         if read == 0 {
             break Ok(written);
         }
-        if let Err(err) = write_sparse_chunk(&mut destination, &buffer[..read]) {
+        if let Err(err) = write_copy_chunk(&mut destination, &buffer[..read], preserve_sparse_holes)
+        {
             break Err(GfmError::io(to, err));
         }
         written += read as u64;
@@ -1851,6 +1857,18 @@ fn copy_file_bytes_tracked(
     result
 }
 
+fn write_copy_chunk(
+    destination: &mut File,
+    chunk: &[u8],
+    preserve_sparse_holes: bool,
+) -> io::Result<()> {
+    if preserve_sparse_holes {
+        write_sparse_chunk(destination, chunk)
+    } else {
+        destination.write_all(chunk)
+    }
+}
+
 fn write_sparse_chunk(destination: &mut File, chunk: &[u8]) -> io::Result<()> {
     let mut cursor = 0;
     while cursor < chunk.len() {
@@ -1868,6 +1886,21 @@ fn write_sparse_chunk(destination: &mut File, chunk: &[u8]) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn metadata_has_sparse_holes(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        metadata.len() > 0 && metadata.blocks().saturating_mul(512) < metadata.len()
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        false
+    }
 }
 
 fn verify_copy(from: &Path, to: &Path, policy: VerificationPolicy) -> Result<()> {
@@ -2849,6 +2882,29 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn sparse_metadata_detects_zero_block_holes() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = unique_temp_dir("gfm-ops-sparse-metadata");
+        let source = root.join("source.bin");
+        let logical_len = COPY_BUFFER_BYTES as u64 * 4;
+        {
+            let file = File::create(&source).unwrap();
+            file.set_len(logical_len).unwrap();
+        }
+
+        let metadata = fs::metadata(&source).unwrap();
+        if metadata.blocks().saturating_mul(512) >= metadata.len() {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+
+        assert!(metadata_has_sparse_holes(&metadata));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn byte_copy_preserves_sparse_holes_when_host_reports_blocks() {
         use std::os::unix::fs::MetadataExt;
 
@@ -2863,8 +2919,7 @@ mod tests {
             file.write_all(b"tail").unwrap();
         }
         let source_metadata = fs::metadata(&source).unwrap();
-        if source_metadata.blocks() == 0 || source_metadata.blocks() * 512 >= source_metadata.len()
-        {
+        if source_metadata.blocks() * 512 >= source_metadata.len() {
             fs::remove_dir_all(root).unwrap();
             return;
         }
