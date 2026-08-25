@@ -51,7 +51,9 @@ pub use prefix::{
     PrefixPosting,
 };
 pub use schema::{
-    inspect_archive_schema, ArchiveSchemaKind, ArchiveSchemaReport, ArchiveSchemaStatus,
+    inspect_archive_schema, migrate_record_archive, plan_record_archive_migration,
+    ArchiveSchemaKind, ArchiveSchemaReport, ArchiveSchemaStatus, RecordArchiveMigration,
+    RecordArchiveMigrationAction, RecordArchiveMigrationPlan,
 };
 pub use sidecar::{
     plan_sidecar_recovery, recover_sidecars, sidecar_kind_name, sidecar_recovery_action_name,

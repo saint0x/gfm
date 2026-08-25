@@ -1,12 +1,13 @@
 use crate::{
-    ContentArchiveManifest, MmapContentArchive, MmapDictionary, MmapFuzzyArchive,
-    MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
+    read_records, write_records, ContentArchiveManifest, MmapContentArchive, MmapDictionary,
+    MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
 };
-use gfm_types::Result;
+use gfm_types::{GfmError, Result};
 use std::fmt;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const RECORD_CURRENT: &str = "gfm-store-v3";
 const RECORD_LEGACY: &[&str] = &["gfm-store-v1", "gfm-store-v2"];
@@ -111,6 +112,68 @@ pub struct ArchiveSchemaReport {
     pub detail: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordArchiveMigrationAction {
+    Ready,
+    Migrate,
+    CannotMigrate,
+}
+
+impl RecordArchiveMigrationAction {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Migrate => "migrate",
+            Self::CannotMigrate => "cannot-migrate",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordArchiveMigrationPlan {
+    pub action: RecordArchiveMigrationAction,
+    pub before: ArchiveSchemaReport,
+    pub detail: Option<String>,
+}
+
+impl RecordArchiveMigrationPlan {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "record-archive-migration-plan\taction={}\tstatus={}\tschema={}\tcurrent={}\tpath={}\tdetail={}",
+            self.action.as_str(),
+            self.before.status.as_str(),
+            self.before.schema.as_deref().unwrap_or("-"),
+            self.before.current_schema,
+            escape_field(&self.before.path.display().to_string()),
+            self.detail.as_deref().map(escape_field).unwrap_or("-".to_string())
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordArchiveMigration {
+    pub before: RecordArchiveMigrationPlan,
+    pub after: ArchiveSchemaReport,
+    pub migrated_records: usize,
+    pub backup_path: Option<PathBuf>,
+}
+
+impl RecordArchiveMigration {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "record-archive-migration\tmigrated-records={}\tbefore-status={}\tafter-status={}\tbackup={}\tpath={}",
+            self.migrated_records,
+            self.before.before.status.as_str(),
+            self.after.status.as_str(),
+            self.backup_path
+                .as_ref()
+                .map(|path| escape_field(&path.display().to_string()))
+                .unwrap_or("-".to_string()),
+            escape_field(&self.after.path.display().to_string())
+        )
+    }
+}
+
 impl ArchiveSchemaReport {
     pub fn as_tsv(&self) -> String {
         format!(
@@ -144,6 +207,85 @@ pub fn inspect_archive_schema(
             detail: Some(detail.to_string()),
         },
     }
+}
+
+pub fn plan_record_archive_migration(path: impl AsRef<Path>) -> RecordArchiveMigrationPlan {
+    let before = inspect_archive_schema(ArchiveSchemaKind::Records, path);
+    let (action, detail) = match before.status {
+        ArchiveSchemaStatus::Current => (
+            RecordArchiveMigrationAction::Ready,
+            Some("record archive is already current".to_string()),
+        ),
+        ArchiveSchemaStatus::Legacy => (
+            RecordArchiveMigrationAction::Migrate,
+            Some("legacy record archive can be rewritten as current gfm-store-v3".to_string()),
+        ),
+        ArchiveSchemaStatus::Missing => (
+            RecordArchiveMigrationAction::CannotMigrate,
+            Some("missing record archive must be rebuilt from filesystem scan".to_string()),
+        ),
+        ArchiveSchemaStatus::Unsupported => (
+            RecordArchiveMigrationAction::CannotMigrate,
+            Some("unsupported record archive schema cannot be migrated".to_string()),
+        ),
+        ArchiveSchemaStatus::Unreadable => (
+            RecordArchiveMigrationAction::CannotMigrate,
+            Some("unreadable record archive must be quarantined and rebuilt".to_string()),
+        ),
+    };
+    RecordArchiveMigrationPlan {
+        action,
+        before,
+        detail,
+    }
+}
+
+pub fn migrate_record_archive(
+    path: impl AsRef<Path>,
+    backup_dir: impl AsRef<Path>,
+) -> Result<RecordArchiveMigration> {
+    let path = path.as_ref();
+    let backup_dir = backup_dir.as_ref();
+    let before = plan_record_archive_migration(path);
+    match before.action {
+        RecordArchiveMigrationAction::Ready => {
+            return Ok(RecordArchiveMigration {
+                after: before.before.clone(),
+                before,
+                migrated_records: 0,
+                backup_path: None,
+            });
+        }
+        RecordArchiveMigrationAction::CannotMigrate => {
+            return Err(GfmError::Format(format!(
+                "{} cannot be migrated: {}",
+                path.display(),
+                before
+                    .detail
+                    .as_deref()
+                    .unwrap_or("unsupported migration state")
+            )));
+        }
+        RecordArchiveMigrationAction::Migrate => {}
+    }
+
+    let records = read_records(path)?;
+    let backup_path = backup_archive(path, backup_dir, "legacy")?;
+    write_records(path, &records)?;
+    let after = inspect_archive_schema(ArchiveSchemaKind::Records, path);
+    if after.status != ArchiveSchemaStatus::Current {
+        return Err(GfmError::Format(format!(
+            "{} migration produced {} instead of current schema",
+            path.display(),
+            after.status.as_str()
+        )));
+    }
+    Ok(RecordArchiveMigration {
+        before,
+        after,
+        migrated_records: records.len(),
+        backup_path: Some(backup_path),
+    })
 }
 
 fn inspect_archive_schema_result(
@@ -320,6 +462,27 @@ fn report(
     }
 }
 
+fn backup_archive(path: &Path, backup_dir: &Path, label: &str) -> Result<PathBuf> {
+    fs::create_dir_all(backup_dir).map_err(|err| GfmError::io(backup_dir, err))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("records.gfmidx");
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let backup_path = backup_dir.join(format!("{name}.{label}.{}.{}", std::process::id(), nanos));
+    fs::copy(path, &backup_path).map_err(|err| GfmError::io(path, err))?;
+    if let Ok(file) = File::open(&backup_path) {
+        let _ = file.sync_all();
+    }
+    if let Ok(dir) = File::open(backup_dir) {
+        let _ = dir.sync_all();
+    }
+    Ok(backup_path)
+}
+
 fn escape_field(value: &str) -> String {
     value.replace(['\t', '\n', '\r'], " ")
 }
@@ -434,6 +597,52 @@ mod tests {
         std::fs::remove_file(corrupt).unwrap();
     }
 
+    #[test]
+    fn migrates_legacy_record_archive_to_current_schema_with_backup() {
+        let dir = temp_dir("gfm-schema-record-migration");
+        let records = dir.join("legacy.gfmidx");
+        let backup = dir.join("backup");
+        std::fs::write(
+            &records,
+            "gfm-store-v1\n1\t2\t0\tf\t1\t0\t0\t0\t0\t/tmp/legacy.txt\n",
+        )
+        .unwrap();
+
+        let plan = plan_record_archive_migration(&records);
+        assert_eq!(plan.action, RecordArchiveMigrationAction::Migrate);
+
+        let migration = migrate_record_archive(&records, &backup).unwrap();
+
+        assert_eq!(migration.migrated_records, 1);
+        assert_eq!(migration.after.status, ArchiveSchemaStatus::Current);
+        assert_eq!(read_records(&records).unwrap()[0].name, "legacy.txt");
+        let backup_path = migration.backup_path.unwrap();
+        assert!(backup_path.exists());
+        assert_eq!(
+            inspect_archive_schema(ArchiveSchemaKind::Records, &backup_path).status,
+            ArchiveSchemaStatus::Legacy
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn current_record_archive_migration_is_noop() {
+        let dir = temp_dir("gfm-schema-record-migration-current");
+        let records = dir.join("current.gfmidx");
+        let backup = dir.join("backup");
+        write_records(&records, &[record()]).unwrap();
+
+        let migration = migrate_record_archive(&records, &backup).unwrap();
+
+        assert_eq!(migration.migrated_records, 0);
+        assert_eq!(migration.after.status, ArchiveSchemaStatus::Current);
+        assert!(migration.backup_path.is_none());
+        assert!(!backup.exists());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     fn record() -> FileRecord {
         FileRecord {
             id: FileId::new(VolumeId(1), 2),
@@ -462,6 +671,17 @@ mod tests {
             .unwrap()
             .as_nanos();
         path.push(format!("{prefix}-{nanos}.{extension}"));
+        path
+    }
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        path.push(format!("{prefix}-{nanos}"));
+        std::fs::create_dir_all(&path).unwrap();
         path
     }
 }

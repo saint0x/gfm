@@ -450,6 +450,10 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - records, columns, metadata, prefix, fuzzy, dictionary, content, and content-manifest archives are classified before migration or recovery work as current, legacy, unsupported, missing, or unreadable;
   - current and legacy known schemas are validated through the same production mmap readers used by search and diagnostics, so a header-only or checksum-corrupt archive is reported as unreadable instead of trusted;
   - the operator-facing `archive-schema` command emits deterministic TSV for CI gates, recovery audits, and future archive migration execution.
+- Record archive migration:
+  - legacy record archives are planned before mutation, copied byte-for-byte into an operator-supplied backup directory, and rewritten through the production current-schema record encoder;
+  - migrated archives are reclassified after publication and must reopen as current checksummed `gfm-store-v3` before the migration is reported successful;
+  - current archives are treated as deterministic no-ops, while missing, unsupported, or unreadable records route to rebuild/quarantine recovery rather than unsafe migration.
 - Persistent index recovery:
   - record archives and volume-state files are classified before startup use as ready, missing, unreadable, schema-mismatched, root-mismatched, path-mismatched, or count-mismatched;
   - valid records with missing, stale, unreadable, or migratable state rebuild the state file without rescanning the volume;

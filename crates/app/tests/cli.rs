@@ -150,6 +150,68 @@ fn inspects_archive_schema_from_binary() {
 }
 
 #[test]
+fn migrates_legacy_record_archive_from_binary() {
+    let records = unique_temp_path("gfm-cli-records-migrate", "gfmidx");
+    let backup = unique_temp_dir("gfm-cli-records-migrate-backup");
+    fs::write(
+        &records,
+        "gfm-store-v1\n1\t2\t0\tf\t1\t0\t0\t0\t0\t/tmp/legacy.txt\n",
+    )
+    .unwrap();
+
+    let plan = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["records-migration-plan", records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let plan_stdout = String::from_utf8(plan.stdout).unwrap();
+    assert!(
+        plan_stdout.contains("record-archive-migration-plan\taction=migrate"),
+        "{plan_stdout}"
+    );
+
+    let migration = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "records-migrate",
+            records.to_str().unwrap(),
+            backup.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        migration.status.success(),
+        "{}",
+        String::from_utf8_lossy(&migration.stderr)
+    );
+    let migration_stdout = String::from_utf8(migration.stdout).unwrap();
+    assert!(
+        migration_stdout.contains(
+            "record-archive-migration\tmigrated-records=1\tbefore-status=legacy\tafter-status=current"
+        ),
+        "{migration_stdout}"
+    );
+
+    let schema = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["archive-schema", "records", records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(schema.status.success());
+    let schema_stdout = String::from_utf8(schema.stdout).unwrap();
+    assert!(
+        schema_stdout.contains("\tstatus=current\tschema=gfm-store-v3"),
+        "{schema_stdout}"
+    );
+    assert!(backup.read_dir().unwrap().next().is_some());
+
+    fs::remove_file(records).unwrap();
+    fs::remove_dir_all(backup).unwrap();
+}
+
+#[test]
 fn persists_volume_index_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-index-state-root");
     let index = unique_temp_path("gfm-cli-index-state-records", "gfmidx");

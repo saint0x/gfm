@@ -58,7 +58,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 ## Storage Engine
 
 37. Calibrate million-entry sidecar gate thresholds on production macOS hardware and wire the large gate into required CI artifacts with retained telemetry history.
-38. Complete storage durability beyond persistent record/state, content manifest, search sidecar recovery, and archive schema inspection by executing archive schema migrations, adding crash recovery for remaining manifest-like state, and producing rebuild plans across all archive types.
+38. Complete storage durability beyond persistent record/state, content manifest, search sidecar recovery, archive schema inspection, and legacy record archive migration by executing non-record archive schema migrations, adding crash recovery for remaining manifest-like state, and producing rebuild plans across all archive types.
 39. Implement real filesystem benchmark fixtures for millions of materialized files across developer, media, documents, iCloud, external-volume, and network-volume trees.
 
 ## File Operations
