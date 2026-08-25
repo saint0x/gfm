@@ -418,6 +418,11 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - promotion replaces retired active archives with a newly published tier archive through the same atomic manifest writer;
   - promotion reports retired archives and missing retirement requests explicitly for deterministic cleanup scheduling;
   - physical archive cleanup refuses to remove manifest-active archives, reports already-missing candidates, and only deletes inactive files.
+- Scheduled content segment maintenance:
+  - pending hot segments are planned with the same tiered merge policy used by manual compaction;
+  - maintenance is a no-op until merge thresholds are met;
+  - selected segments compact into a new immutable archive and atomically promote into the active manifest;
+  - retained segments are reported for the next pass so background workers can keep latency bounded.
 - Query-time content archive sets:
   - multiple immutable mmap content archives are opened as one logical search surface;
   - each query term performs binary directory lookup inside each archive instead of hydrating all postings;

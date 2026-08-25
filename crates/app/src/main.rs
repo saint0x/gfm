@@ -13,11 +13,12 @@ use gfm_fs::{
 use gfm_index::{
     comment_query_terms, content_query_terms, fuzzy_query_keys, parse_volume_indexing_policy,
     prefix_query_terms, tag_query_terms, BackgroundContentIndexer, ContentArchiveManifest,
-    ContentArchiveManifestEntry, ContentIndexJobSpec, ContentIndexReport, ContentMergePolicy,
-    ContentMergeTier, EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
-    IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState, Indexer, LiveIndex,
-    SearchFuzzyPosting, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
-    SearchRecordColumns, SearchStreamStage, VolumeIndexPolicy,
+    ContentArchiveManifestEntry, ContentIndexJobSpec, ContentIndexReport,
+    ContentMaintenanceOptions, ContentMergePolicy, ContentMergeTier, EventBackpressureQueue,
+    EventPriority, FseventsCursor, FseventsCursorHealth, IndexMountState, IndexVolumeClass,
+    IndexVolumeDescriptor, IndexVolumeState, Indexer, LiveIndex, SearchFuzzyPosting,
+    SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting, SearchRecordColumns,
+    SearchStreamStage, VolumeIndexPolicy,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -833,6 +834,49 @@ fn run() -> Result<()> {
             }
             for path in report.missing_archives {
                 println!("missing\t{}", path.display());
+            }
+        }
+        Some("content-maintain-segments") => {
+            let manifest_path = required_path(
+                args.next(),
+                "content-maintain-segments requires a manifest path",
+            )?;
+            let output_archive = required_path(
+                args.next(),
+                "content-maintain-segments requires an output archive path",
+            )?;
+            let segments = args.map(PathBuf::from).collect::<Vec<_>>();
+            if segments.is_empty() {
+                return Err(GfmError::Format(
+                    "content-maintain-segments requires at least one segment".to_string(),
+                ));
+            }
+            let worker = BackgroundContentIndexer::default();
+            let report = worker.maintain_segments(
+                &manifest_path,
+                &output_archive,
+                &segments,
+                &ContentMaintenanceOptions::default(),
+            )?;
+            eprintln!(
+                "content-maintenance\tscheduled={}\tterms={}\tmerged={}\tretained={}\tmanifest-archives={}\ttier={:?}\tbytes={}\ttombstone-segments={}",
+                report.scheduled,
+                report.terms,
+                report.merged_segments.len(),
+                report.retained_segments.len(),
+                report.manifest_archives,
+                report.tier,
+                report.merge_bytes,
+                report.tombstone_segments
+            );
+            if let Some(path) = report.published_archive {
+                println!("published\t{}", path.display());
+            }
+            for path in report.merged_segments {
+                println!("merged-segment\t{}", path.display());
+            }
+            for path in report.retained_segments {
+                println!("retain-segment\t{}", path.display());
             }
         }
         Some("index-content-background") => {
@@ -2570,6 +2614,7 @@ fn print_usage() {
   gfm content-manifest-inspect <manifest.gfmmanifest>
   gfm content-manifest-promote <manifest.gfmmanifest> <hot|warm|cold:path> [retired-archive...]
   gfm content-manifest-cleanup <manifest.gfmmanifest> <candidate-archive...>
+  gfm content-maintain-segments <manifest.gfmmanifest> <output.gfmcontent> <segments.gfmseg...>
   gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent>
   gfm resume-content-background [content.job] [jobs.journal]
   gfm search <root> <query>

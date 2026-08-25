@@ -58,7 +58,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 ## Storage Engine
 
 37. Implement dictionary compression for terms, paths, extensions, tags, kinds, metadata keys, and repeated path prefixes.
-38. Finish large-index merge policy by wiring hot buffer flush triggers, tiered compaction scheduling, and tombstone cleanup cadence across active manifests.
+38. Finish tombstone cleanup cadence across active content manifests.
 39. Implement prefix/fuzzy lookup structures suitable for machine-wide scale.
 40. Implement checksums, schema migration, crash recovery, corruption detection, and rebuild plans.
 41. Implement index size telemetry and compaction scheduling heuristics.

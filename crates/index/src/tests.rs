@@ -812,6 +812,70 @@ fn background_content_indexer_batches_segments_and_compacts() {
 }
 
 #[test]
+fn background_content_maintenance_compacts_segments_and_updates_manifest() {
+    let root = unique_temp_dir("gfm-background-content-maintenance-root");
+    let records = unique_temp_path("gfm-background-content-maintenance-records", "gfmidx");
+    let initial_content =
+        unique_temp_path("gfm-background-content-maintenance-initial", "gfmcontent");
+    let output_content =
+        unique_temp_path("gfm-background-content-maintenance-output", "gfmcontent");
+    let manifest = unique_temp_path("gfm-background-content-maintenance", "gfmmanifest");
+    let segments = unique_temp_dir("gfm-background-content-maintenance-segments");
+    fs::write(root.join("maintained.md"), "body contains maintenancetoken").unwrap();
+
+    let indexer = Indexer::default();
+    let snapshot = indexer.build(&root).unwrap();
+    snapshot
+        .save_with_content(&records, &initial_content, &Extractor::default())
+        .unwrap();
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Warm,
+        path: initial_content.clone(),
+    }])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    fs::create_dir_all(&segments).unwrap();
+    let segment_paths = (0..4)
+        .map(|index| segments.join(format!("hot-{index}.gfmseg")))
+        .collect::<Vec<_>>();
+    for segment in &segment_paths {
+        snapshot
+            .save_content_segment(segment, &Extractor::default(), Vec::new())
+            .unwrap();
+    }
+
+    let report = BackgroundContentIndexer::default()
+        .maintain_segments(
+            &manifest,
+            &output_content,
+            &segment_paths,
+            &ContentMaintenanceOptions::default(),
+        )
+        .unwrap();
+    let (live, keys) = indexer
+        .load_live_with_content_manifest(&records, &manifest, "maintenancetoken")
+        .unwrap();
+    let hits = live.search("maintenancetoken", 5);
+
+    assert!(report.scheduled);
+    assert_eq!(report.merged_segments.len(), 4);
+    assert_eq!(report.retained_segments.len(), 0);
+    assert_eq!(report.manifest_archives, 2);
+    assert_eq!(report.published_archive, Some(output_content.clone()));
+    assert_eq!(keys, 1);
+    assert_eq!(hits.len(), 1);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(initial_content).unwrap();
+    fs::remove_file(output_content).unwrap();
+    fs::remove_file(manifest).unwrap();
+}
+
+#[test]
 fn content_index_job_spec_round_trips() {
     let path = unique_temp_path("gfm-content-job", "job");
     let spec = ContentIndexJobSpec {

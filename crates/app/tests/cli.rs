@@ -2061,6 +2061,51 @@ fn compacts_content_segments_from_binary() {
             && tiered_stderr.contains("retained 0"),
         "{tiered_stderr}"
     );
+    let manifest = unique_temp_path("gfm-cli-segment-maintenance", "gfmmanifest");
+    let maintained_content = unique_temp_path("gfm-cli-segment-maintained", "gfmcontent");
+    let manifest_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-write",
+            manifest.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        manifest_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&manifest_output.stderr)
+    );
+    let maintenance_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-maintain-segments",
+            manifest.to_str().unwrap(),
+            maintained_content.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        maintenance_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&maintenance_output.stderr)
+    );
+    let maintenance_stderr = String::from_utf8(maintenance_output.stderr).unwrap();
+    assert!(
+        maintenance_stderr.contains("content-maintenance")
+            && maintenance_stderr.contains("scheduled=true")
+            && maintenance_stderr.contains("merged=4")
+            && maintenance_stderr.contains("manifest-archives=2"),
+        "{maintenance_stderr}"
+    );
+    let maintenance_stdout = String::from_utf8(maintenance_output.stdout).unwrap();
+    assert!(
+        maintenance_stdout.contains(&format!("published\t{}", maintained_content.display())),
+        "{maintenance_stdout}"
+    );
 
     let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -2079,12 +2124,30 @@ fn compacts_content_segments_from_binary() {
 
     let stdout = String::from_utf8(search_output.stdout).unwrap();
     assert!(stdout.contains("segment.md"), "{stdout}");
+    let manifest_search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index-manifest",
+            records.to_str().unwrap(),
+            manifest.to_str().unwrap(),
+            "segmentmarker",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        manifest_search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&manifest_search_output.stderr)
+    );
+    let manifest_stdout = String::from_utf8(manifest_search_output.stdout).unwrap();
+    assert!(manifest_stdout.contains("segment.md"), "{manifest_stdout}");
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(segment).unwrap();
     fs::remove_file(content).unwrap();
     fs::remove_file(tiered_content).unwrap();
+    fs::remove_file(maintained_content).unwrap();
+    fs::remove_file(manifest).unwrap();
 }
 
 #[test]

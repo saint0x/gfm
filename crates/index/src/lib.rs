@@ -7,8 +7,9 @@ pub use gfm_search::{
 };
 use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
-    compact_content_segments, compact_content_segments_with_policy, read_content_postings,
-    read_records, write_content_postings, write_content_segment, write_records, MmapContentSet,
+    compact_content_segments, compact_content_segments_with_policy, plan_content_segment_merge,
+    read_content_postings, read_records, write_content_postings, write_content_segment,
+    write_records, MmapContentSet,
 };
 pub use gfm_store::{
     ContentArchiveCleanupReport, ContentArchiveManifest, ContentArchiveManifestEntry,
@@ -476,6 +477,28 @@ pub struct ContentIndexReport {
     pub segments: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContentMaintenanceOptions {
+    pub merge_policy: ContentMergePolicy,
+    pub cleanup_retired_archives: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentMaintenanceReport {
+    pub scheduled: bool,
+    pub terms: usize,
+    pub merged_segments: Vec<PathBuf>,
+    pub retained_segments: Vec<PathBuf>,
+    pub published_archive: Option<PathBuf>,
+    pub tier: ContentMergeTier,
+    pub merge_bytes: u64,
+    pub tombstone_segments: usize,
+    pub manifest_archives: usize,
+    pub removed_archives: Vec<PathBuf>,
+    pub active_archives: Vec<PathBuf>,
+    pub missing_archives: Vec<PathBuf>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentIndexJobSpec {
     pub root: PathBuf,
@@ -652,6 +675,76 @@ impl BackgroundContentIndexer {
         cancellation.check()?;
         report.terms = compact_content_segments(content_path, &report.segments)?.len();
         Ok(report)
+    }
+
+    pub fn maintain_segments(
+        &self,
+        manifest_path: impl AsRef<Path>,
+        output_archive: impl AsRef<Path>,
+        segments: &[impl AsRef<Path>],
+        options: &ContentMaintenanceOptions,
+    ) -> Result<ContentMaintenanceReport> {
+        let manifest_path = manifest_path.as_ref();
+        let output_archive = output_archive.as_ref();
+        let plan = plan_content_segment_merge(segments, &options.merge_policy)?;
+        if plan.merge_segments.is_empty() {
+            return Ok(ContentMaintenanceReport {
+                scheduled: false,
+                terms: 0,
+                merged_segments: Vec::new(),
+                retained_segments: plan.retained_segments,
+                published_archive: None,
+                tier: plan.tier,
+                merge_bytes: plan.merge_bytes,
+                tombstone_segments: plan.tombstone_segments,
+                manifest_archives: ContentArchiveManifest::read(manifest_path)?.archives.len(),
+                removed_archives: Vec::new(),
+                active_archives: Vec::new(),
+                missing_archives: Vec::new(),
+            });
+        }
+
+        let outcome = compact_content_segments_with_policy(
+            output_archive,
+            &plan.merge_segments,
+            &options.merge_policy,
+        )?;
+        let manifest = ContentArchiveManifest::read(manifest_path)?;
+        let promotion = manifest.promote_archive(
+            manifest_path,
+            ContentArchiveManifestEntry {
+                tier: outcome.tier,
+                path: output_archive.to_path_buf(),
+            },
+            &[] as &[PathBuf],
+        )?;
+        promotion.manifest.write(manifest_path)?;
+        let cleanup = if options.cleanup_retired_archives && !promotion.retired_archives.is_empty()
+        {
+            promotion
+                .manifest
+                .cleanup_inactive_archives(manifest_path, &promotion.retired_archives)?
+        } else {
+            gfm_store::ContentArchiveCleanupReport {
+                removed_archives: Vec::new(),
+                active_archives: Vec::new(),
+                missing_archives: Vec::new(),
+            }
+        };
+        Ok(ContentMaintenanceReport {
+            scheduled: true,
+            terms: outcome.postings.len(),
+            merged_segments: outcome.merged_segments,
+            retained_segments: outcome.retained_segments,
+            published_archive: Some(output_archive.to_path_buf()),
+            tier: outcome.tier,
+            merge_bytes: outcome.merge_bytes,
+            tombstone_segments: outcome.tombstone_segments,
+            manifest_archives: promotion.manifest.archives.len(),
+            removed_archives: cleanup.removed_archives,
+            active_archives: cleanup.active_archives,
+            missing_archives: cleanup.missing_archives,
+        })
     }
 }
 
