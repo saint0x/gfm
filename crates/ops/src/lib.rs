@@ -194,6 +194,73 @@ pub enum CopyMethod {
 }
 
 const COPY_BUFFER_BYTES: usize = 256 * 1024;
+const EXTERNAL_COPY_BUFFER_BYTES: usize = 128 * 1024;
+const SLOW_COPY_BUFFER_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationVolumeClass {
+    Local,
+    External,
+    Network,
+    Slow,
+}
+
+impl OperationVolumeClass {
+    const fn copy_buffer_bytes(self) -> usize {
+        match self {
+            Self::Local => COPY_BUFFER_BYTES,
+            Self::External => EXTERNAL_COPY_BUFFER_BYTES,
+            Self::Network | Self::Slow => SLOW_COPY_BUFFER_BYTES,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationVolumeCopyPolicy {
+    default_class: OperationVolumeClass,
+    root_classes: BTreeMap<PathBuf, OperationVolumeClass>,
+}
+
+impl Default for OperationVolumeCopyPolicy {
+    fn default() -> Self {
+        Self {
+            default_class: OperationVolumeClass::Local,
+            root_classes: BTreeMap::new(),
+        }
+    }
+}
+
+impl OperationVolumeCopyPolicy {
+    pub fn new(default_class: OperationVolumeClass) -> Self {
+        Self {
+            default_class,
+            root_classes: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_root(mut self, root: impl Into<PathBuf>, class: OperationVolumeClass) -> Self {
+        self.root_classes.insert(root.into(), class);
+        self
+    }
+
+    fn class_for(&self, path: &Path) -> OperationVolumeClass {
+        self.root_classes
+            .iter()
+            .filter(|(root, _)| path.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .map(|(_, class)| *class)
+            .unwrap_or(self.default_class)
+    }
+
+    fn copy_buffer_bytes_for(&self, from: &Path, to: &Path) -> usize {
+        let source = self.class_for(from);
+        let destination = self.class_for(to);
+        source
+            .copy_buffer_bytes()
+            .min(destination.copy_buffer_bytes())
+            .max(1)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CopyExistingMode {
@@ -325,6 +392,7 @@ pub struct OperationContext {
     pub pause: OperationPause,
     pub verification: VerificationPolicy,
     pub access_gate: OperationAccessGate,
+    pub volume_copy_policy: OperationVolumeCopyPolicy,
 }
 
 impl OperationContext {
@@ -337,6 +405,7 @@ impl OperationContext {
             pause: OperationPause::default(),
             verification: VerificationPolicy::Bytes,
             access_gate: OperationAccessGate::default(),
+            volume_copy_policy: OperationVolumeCopyPolicy::default(),
         }
     }
 
@@ -367,6 +436,11 @@ impl OperationContext {
 
     pub fn with_access_gate(mut self, access_gate: OperationAccessGate) -> Self {
         self.access_gate = access_gate;
+        self
+    }
+
+    pub fn with_volume_copy_policy(mut self, policy: OperationVolumeCopyPolicy) -> Self {
+        self.volume_copy_policy = policy;
         self
     }
 }
@@ -577,6 +651,7 @@ impl Operator {
                 to,
                 self.context.conflict,
                 self.context.verification,
+                &self.context.volume_copy_policy,
                 resuming,
                 progress,
             ),
@@ -585,6 +660,7 @@ impl Operator {
                 to,
                 self.context.conflict,
                 self.context.verification,
+                &self.context.volume_copy_policy,
                 resuming,
                 progress,
             ),
@@ -596,6 +672,7 @@ impl Operator {
                 from,
                 to,
                 self.context.conflict,
+                &self.context.volume_copy_policy,
                 self.context.trash_metadata_path.as_deref(),
                 progress,
             ),
@@ -903,6 +980,7 @@ fn copy_path(
     to: &Path,
     conflict: ConflictPolicy,
     verification: VerificationPolicy,
+    volume_copy_policy: &OperationVolumeCopyPolicy,
     resuming: bool,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
@@ -915,6 +993,7 @@ fn copy_path(
             to,
             &metadata,
             verification,
+            volume_copy_policy,
             CopyExistingMode::Resume,
             progress,
         );
@@ -925,6 +1004,7 @@ fn copy_path(
             to,
             &metadata,
             verification,
+            volume_copy_policy,
             CopyExistingMode::Merge,
             progress,
         );
@@ -933,9 +1013,16 @@ fn copy_path(
     if metadata.file_type().is_symlink() {
         copy_symlink(from, to, progress)
     } else if metadata.is_dir() {
-        copy_directory(from, to, verification, CopyExistingMode::Fresh, progress)
+        copy_directory(
+            from,
+            to,
+            verification,
+            volume_copy_policy,
+            CopyExistingMode::Fresh,
+            progress,
+        )
     } else {
-        copy_file_tracked(from, to, verification, progress)?;
+        copy_file_tracked(from, to, verification, volume_copy_policy, progress)?;
         Ok(())
     }
 }
@@ -945,6 +1032,7 @@ fn move_path(
     to: &Path,
     conflict: ConflictPolicy,
     verification: VerificationPolicy,
+    volume_copy_policy: &OperationVolumeCopyPolicy,
     resuming: bool,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
@@ -957,6 +1045,7 @@ fn move_path(
             to,
             &metadata,
             verification,
+            volume_copy_policy,
             CopyExistingMode::Resume,
             progress,
         )?;
@@ -970,6 +1059,7 @@ fn move_path(
             to,
             &metadata,
             verification,
+            volume_copy_policy,
             CopyExistingMode::Merge,
             progress,
         )?;
@@ -988,6 +1078,7 @@ fn move_path(
                 to,
                 ConflictPolicy::Replace,
                 verification,
+                volume_copy_policy,
                 false,
                 progress,
             )?;
@@ -1046,6 +1137,7 @@ fn restore_path(
     from: &Path,
     to: &Path,
     conflict: ConflictPolicy,
+    volume_copy_policy: &OperationVolumeCopyPolicy,
     metadata_path: Option<&Path>,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
@@ -1055,6 +1147,7 @@ fn restore_path(
         to,
         conflict,
         VerificationPolicy::Bytes,
+        volume_copy_policy,
         false,
         progress,
     )?;
@@ -1225,6 +1318,7 @@ fn copy_directory(
     from: &Path,
     to: &Path,
     verification: VerificationPolicy,
+    volume_copy_policy: &OperationVolumeCopyPolicy,
     mode: CopyExistingMode,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
@@ -1261,6 +1355,7 @@ fn copy_directory(
                     &destination,
                     &child_metadata,
                     verification,
+                    volume_copy_policy,
                     CopyExistingMode::Resume,
                     progress,
                 )?;
@@ -1270,6 +1365,7 @@ fn copy_directory(
                     &destination,
                     &child_metadata,
                     verification,
+                    volume_copy_policy,
                     CopyExistingMode::Merge,
                     progress,
                 )?;
@@ -1277,13 +1373,21 @@ fn copy_directory(
                 copy_symlink(&source, &destination, progress)?;
             }
         } else if child_metadata.is_dir() {
-            copy_directory(&source, &destination, verification, mode, progress)?;
+            copy_directory(
+                &source,
+                &destination,
+                verification,
+                volume_copy_policy,
+                mode,
+                progress,
+            )?;
         } else if mode == CopyExistingMode::Resume && path_exists_or_symlink(&destination) {
             copy_path_existing(
                 &source,
                 &destination,
                 &child_metadata,
                 verification,
+                volume_copy_policy,
                 CopyExistingMode::Resume,
                 progress,
             )?;
@@ -1293,11 +1397,18 @@ fn copy_directory(
                 &destination,
                 &child_metadata,
                 verification,
+                volume_copy_policy,
                 CopyExistingMode::Merge,
                 progress,
             )?;
         } else {
-            let _ = copy_file_tracked(&source, &destination, verification, progress)?;
+            let _ = copy_file_tracked(
+                &source,
+                &destination,
+                verification,
+                volume_copy_policy,
+                progress,
+            )?;
         }
     }
     Ok(())
@@ -1308,6 +1419,7 @@ fn copy_path_existing(
     to: &Path,
     metadata: &fs::Metadata,
     verification: VerificationPolicy,
+    volume_copy_policy: &OperationVolumeCopyPolicy,
     mode: CopyExistingMode,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
@@ -1324,7 +1436,7 @@ fn copy_path_existing(
                 message: "merge destination package already exists".to_string(),
             });
         }
-        copy_directory(from, to, verification, mode, progress)
+        copy_directory(from, to, verification, volume_copy_policy, mode, progress)
     } else if mode == CopyExistingMode::Merge {
         Err(GfmError::Conflict {
             path: to.to_path_buf(),
@@ -1435,6 +1547,7 @@ fn copy_file_tracked(
     from: &Path,
     to: &Path,
     verification: VerificationPolicy,
+    volume_copy_policy: &OperationVolumeCopyPolicy,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<CopyMethod> {
     progress.check_cancelled()?;
@@ -1451,7 +1564,7 @@ fn copy_file_tracked(
         }
         Err(err) if clone_fallback_allowed(&err) => {
             remove_failed_clone_destination(to)?;
-            copy_file_bytes_tracked(from, to, progress)?;
+            copy_file_bytes_tracked(from, to, volume_copy_policy, progress)?;
             preserve_metadata(from, to, &metadata)?;
             verify_copy(from, to, verification)?;
             progress.finish_current_item()?;
@@ -1495,6 +1608,7 @@ fn copy_file_bytes(from: &Path, to: &Path) -> Result<u64> {
 fn copy_file_bytes_tracked(
     from: &Path,
     to: &Path,
+    volume_copy_policy: &OperationVolumeCopyPolicy,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<u64> {
     let mut source = File::open(from).map_err(|err| GfmError::io(from, err))?;
@@ -1503,7 +1617,7 @@ fn copy_file_bytes_tracked(
         .create_new(true)
         .open(to)
         .map_err(|err| GfmError::io(to, err))?;
-    let mut buffer = vec![0; COPY_BUFFER_BYTES];
+    let mut buffer = vec![0; volume_copy_policy.copy_buffer_bytes_for(from, to)];
     let mut written = 0_u64;
 
     let result = loop {
@@ -2383,7 +2497,13 @@ mod tests {
         let mut callback = |event| events.push(event);
         let mut tracker = ProgressTracker::new(plan, &cancellation, &pause, &mut callback);
 
-        let copied = copy_file_bytes_tracked(&source, &destination, &mut tracker).unwrap();
+        let copied = copy_file_bytes_tracked(
+            &source,
+            &destination,
+            &OperationVolumeCopyPolicy::default(),
+            &mut tracker,
+        )
+        .unwrap();
         tracker.finish_current_item().unwrap();
 
         assert_eq!(copied, bytes.len() as u64);
@@ -2395,6 +2515,49 @@ mod tests {
         let last = events.last().unwrap();
         assert_eq!(last.progress.completed_items, 1);
         assert_eq!(last.progress.completed_bytes, bytes.len() as u64);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn byte_copy_uses_slow_volume_checkpoint_chunks() {
+        let root = unique_temp_dir("gfm-ops-byte-copy-slow-volume");
+        let source_root = root.join("network-source");
+        let destination_root = root.join("network-destination");
+        let source = source_root.join("source.bin");
+        let destination = destination_root.join("destination.bin");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&destination_root).unwrap();
+        let bytes = vec![5_u8; SLOW_COPY_BUFFER_BYTES + 11];
+        fs::write(&source, &bytes).unwrap();
+        let policy = OperationVolumeCopyPolicy::default()
+            .with_root(&source_root, OperationVolumeClass::Network)
+            .with_root(&destination_root, OperationVolumeClass::Network);
+        let cancellation = OperationCancellation::default();
+        let pause = OperationPause::default();
+        let plan = OperationProgress {
+            total_items: 1,
+            total_bytes: bytes.len() as u64,
+            completed_items: 0,
+            completed_bytes: 0,
+        };
+        let mut events = Vec::new();
+        let mut callback = |event| events.push(event);
+        let mut tracker = ProgressTracker::new(plan, &cancellation, &pause, &mut callback);
+
+        let copied = copy_file_bytes_tracked(&source, &destination, &policy, &mut tracker).unwrap();
+        tracker.finish_current_item().unwrap();
+
+        assert_eq!(copied, bytes.len() as u64);
+        assert_eq!(fs::read(&destination).unwrap(), bytes);
+        assert!(events
+            .iter()
+            .any(|event| event.phase == OperationProgressPhase::Advanced
+                && event.progress.completed_items == 0
+                && event.progress.completed_bytes == SLOW_COPY_BUFFER_BYTES as u64));
+        assert!(!events
+            .iter()
+            .any(|event| event.progress.completed_bytes == COPY_BUFFER_BYTES as u64));
+
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2424,7 +2587,13 @@ mod tests {
         };
         let mut tracker = ProgressTracker::new(plan, &cancellation, &pause, &mut callback);
 
-        let err = copy_file_bytes_tracked(&source, &destination, &mut tracker).unwrap_err();
+        let err = copy_file_bytes_tracked(
+            &source,
+            &destination,
+            &OperationVolumeCopyPolicy::default(),
+            &mut tracker,
+        )
+        .unwrap_err();
 
         assert!(matches!(err, GfmError::Cancelled));
         assert!(!destination.exists());
