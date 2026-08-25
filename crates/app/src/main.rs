@@ -27,6 +27,7 @@ use gfm_testkit::{
     RegressionGateOptions,
 };
 use gfm_types::{FileId, FileKind, Result, SearchHit, VolumeId};
+use gfm_ui::{AppLaunchSpec, WindowLifecycleContract};
 use std::env;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -43,6 +44,20 @@ fn main() {
 fn run() -> Result<()> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
+        Some("app") => {
+            let spec = match args.next() {
+                Some(path) => AppLaunchSpec::new(path),
+                None => AppLaunchSpec::default(),
+            };
+            gfm_ui::run_native(spec)?;
+        }
+        Some("ui-contract") => {
+            let spec = match args.next() {
+                Some(path) => AppLaunchSpec::new(path),
+                None => AppLaunchSpec::default(),
+            };
+            println!("{}", WindowLifecycleContract::from_spec(&spec)?.as_tsv());
+        }
         Some("list") => {
             let path = args
                 .next()
@@ -773,6 +788,8 @@ fn preview_decision_priority(decision: &gfm_preview::PreviewTaskDecision) -> &'s
 fn print_usage() {
     println!(
         "gfm commands:
+  gfm app [path]
+  gfm ui-contract [path]
   gfm list [path]
   gfm index <root> <output.gfmidx>
   gfm index-content <root> <records.gfmidx> <content.gfmcontent>

@@ -17,6 +17,7 @@ members = [
     "crates/testkit",
     "crates/telemetry",
     "crates/types",
+    "crates/ui",
 ]
 
 [workspace.package]

@@ -49,8 +49,8 @@ GFM keeps the trust and replaces the machinery:
 
 GFM is a multi-crate Rust workspace with strict ownership boundaries.
 
-- `crates/app`: native application startup, GPUI composition, windows, menus, and command routing.
-- `crates/ui`: Finder-parity components, visual tokens, layout primitives, virtualized views, and screenshot-test surfaces.
+- `crates/app`: native binary entrypoint, command routing, and operator-facing inspection commands.
+- `crates/ui`: GPUI application startup, production window lifecycle, root surface, titlebar contract, activation, tab grouping, Finder-parity components, visual tokens, layout primitives, virtualized views, and screenshot-test surfaces.
 - `crates/mac`: narrow typed bridges to AppKit, Foundation, CoreServices, QuickLook, Spotlight, FSEvents, Security, DiskArbitration, APFS, FileProvider, host support detection, first-run permission readiness, and target matrix policy.
 - `crates/fs`: filesystem enumeration, identity, permissions, package detection, aliases, symlinks, hidden files, volume behavior, and metadata reads.
 - `crates/ops`: APFS-aware file operations, clone fast paths, copy/move/delete/trash semantics, conflict handling, operation journaling, recovery, and retries.
@@ -155,6 +155,8 @@ List a directory:
 
 ```sh
 cargo run -p gfm -- list .
+cargo run -p gfm -- app ~/Desktop
+cargo run -p gfm -- ui-contract ~/Desktop
 ```
 
 Search directly:

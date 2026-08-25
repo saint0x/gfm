@@ -18,6 +18,7 @@ gfm-preview = { path = "../preview" }
 gfm-store = { path = "../store" }
 gfm-testkit = { path = "../testkit" }
 gfm-types = { path = "../types" }
+gfm-ui = { path = "../ui" }
 
 [dev-dependencies]
 zip = { version = "4.3.0", default-features = false, features = ["deflate"] }

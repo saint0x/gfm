@@ -174,8 +174,8 @@ The application should be a multi-crate Rust workspace with a thin native macOS 
 gfm/
   Cargo.toml
   crates/
-    app/          GPUI app composition, window lifecycle, command routing
-    ui/           Finder-parity components, layout tokens, view renderers
+    app/          binary entrypoint, command routing, operator inspection
+    ui/           GPUI app composition, production window lifecycle, root surface, Finder-parity components, layout tokens, view renderers
     mac/          Objective-C/Swift/CoreServices/AppKit/QuickLook bridges
     fs/           enumeration, stat, permissions, aliases, packages, volumes
     ops/          copy, move, rename, delete, trash, clone, conflict handling
