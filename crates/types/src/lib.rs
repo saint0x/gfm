@@ -153,6 +153,7 @@ pub enum GfmError {
     Cancelled,
     Paused,
     Conflict { path: PathBuf, message: String },
+    Permission { path: PathBuf, message: String },
 }
 
 impl GfmError {
@@ -172,6 +173,7 @@ impl fmt::Display for GfmError {
             Self::Cancelled => f.write_str("operation was cancelled"),
             Self::Paused => f.write_str("operation was paused"),
             Self::Conflict { path, message } => write!(f, "{}: {}", path.display(), message),
+            Self::Permission { path, message } => write!(f, "{}: {}", path.display(), message),
         }
     }
 }

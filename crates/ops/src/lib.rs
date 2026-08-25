@@ -36,6 +36,143 @@ impl Operation {
             Self::Delete { .. } | Self::Trash { .. } => None,
         }
     }
+
+    pub fn access_requirements(&self) -> Vec<OperationAccessRequirement> {
+        match self {
+            Self::Copy { from, to }
+            | Self::Move { from, to }
+            | Self::Rename { from, to }
+            | Self::Restore { from, to } => vec![
+                OperationAccessRequirement {
+                    path: from.clone(),
+                    role: OperationAccessRole::Source,
+                },
+                OperationAccessRequirement {
+                    path: destination_probe_path(to),
+                    role: OperationAccessRole::DestinationParent,
+                },
+            ],
+            Self::Delete { path } | Self::Trash { path } => vec![OperationAccessRequirement {
+                path: path.clone(),
+                role: OperationAccessRole::Target,
+            }],
+        }
+    }
+}
+
+fn destination_probe_path(path: &Path) -> PathBuf {
+    path.parent().unwrap_or(path).to_path_buf()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationAccessRole {
+    Source,
+    DestinationParent,
+    Target,
+}
+
+impl OperationAccessRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::DestinationParent => "destination-parent",
+            Self::Target => "target",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationAccessRequirement {
+    pub path: PathBuf,
+    pub role: OperationAccessRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationAccessAction {
+    Allow,
+    Prompt,
+    Deny,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationAccessDecision {
+    pub action: OperationAccessAction,
+    pub reason: String,
+}
+
+impl OperationAccessDecision {
+    pub fn allow(reason: impl Into<String>) -> Self {
+        Self {
+            action: OperationAccessAction::Allow,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn prompt(reason: impl Into<String>) -> Self {
+        Self {
+            action: OperationAccessAction::Prompt,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn deny(reason: impl Into<String>) -> Self {
+        Self {
+            action: OperationAccessAction::Deny,
+            reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OperationAccessGate {
+    decisions: BTreeMap<PathBuf, OperationAccessDecision>,
+}
+
+impl OperationAccessGate {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_decision(
+        mut self,
+        path: impl Into<PathBuf>,
+        decision: OperationAccessDecision,
+    ) -> Self {
+        self.decisions.insert(path.into(), decision);
+        self
+    }
+
+    fn check(&self, operation: &Operation) -> Result<()> {
+        for requirement in operation.access_requirements() {
+            let Some(decision) = self.decisions.get(&requirement.path) else {
+                continue;
+            };
+            match decision.action {
+                OperationAccessAction::Allow => {}
+                OperationAccessAction::Prompt => {
+                    return Err(GfmError::Permission {
+                        path: requirement.path,
+                        message: format!(
+                            "{} requires a permission prompt before mutation: {}",
+                            requirement.role.as_str(),
+                            decision.reason
+                        ),
+                    });
+                }
+                OperationAccessAction::Deny => {
+                    return Err(GfmError::Permission {
+                        path: requirement.path,
+                        message: format!(
+                            "{} is not accessible for mutation: {}",
+                            requirement.role.as_str(),
+                            decision.reason
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +271,7 @@ pub struct OperationContext {
     pub cancellation: OperationCancellation,
     pub pause: OperationPause,
     pub verification: VerificationPolicy,
+    pub access_gate: OperationAccessGate,
 }
 
 impl OperationContext {
@@ -145,6 +283,7 @@ impl OperationContext {
             cancellation: OperationCancellation::default(),
             pause: OperationPause::default(),
             verification: VerificationPolicy::Bytes,
+            access_gate: OperationAccessGate::default(),
         }
     }
 
@@ -170,6 +309,11 @@ impl OperationContext {
 
     pub fn with_verification(mut self, verification: VerificationPolicy) -> Self {
         self.verification = verification;
+        self
+    }
+
+    pub fn with_access_gate(mut self, access_gate: OperationAccessGate) -> Self {
+        self.access_gate = access_gate;
         self
     }
 }
@@ -298,6 +442,11 @@ impl Operator {
         resuming: bool,
         on_progress: &mut impl FnMut(OperationProgressEvent),
     ) -> Result<JournalEntry> {
+        if let Err(err) = self.context.access_gate.check(&operation) {
+            let entry = JournalEntry::from_error(id, operation, &err);
+            let _ = self.append(entry);
+            return Err(err);
+        }
         let plan = match plan_operation_checked(&operation, &self.context.cancellation) {
             Ok(plan) => plan,
             Err(err) => {
@@ -2689,6 +2838,76 @@ mod tests {
         assert_eq!(fs::read_to_string(&destination).unwrap(), "destination");
         assert_eq!(read_journal(&journal).unwrap().len(), 2);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn access_gate_prompts_before_mutating_destination_parent() {
+        let root = unique_temp_dir("gfm-ops-access-prompt");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let protected = root.join("Documents");
+        let destination = protected.join("destination.txt");
+        fs::create_dir_all(&protected).unwrap();
+        fs::write(&source, "source").unwrap();
+        let gate = OperationAccessGate::new().with_decision(
+            &protected,
+            OperationAccessDecision::prompt("security-scoped bookmark required"),
+        );
+
+        let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
+            .execute(Operation::Copy {
+                from: source,
+                to: destination.clone(),
+            })
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(!destination.exists());
+        let entries = read_journal(&journal).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].status, OperationStatus::Started);
+        assert_eq!(entries[1].status, OperationStatus::Failed);
+        assert!(entries[1]
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("permission prompt"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_does_not_retry_permission_prompt_failures() {
+        let root = unique_temp_dir("gfm-ops-retry-permission");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "source").unwrap();
+        let operation = Operation::Copy {
+            from: source,
+            to: destination.clone(),
+        };
+        append_journal(&journal, &JournalEntry::started(47, operation.clone())).unwrap();
+        append_journal(
+            &journal,
+            &JournalEntry::failed(
+                47,
+                operation,
+                "destination-parent requires a permission prompt before mutation".to_string(),
+            ),
+        )
+        .unwrap();
+
+        let report = Operator::new(OperationContext::new(&journal))
+            .recover_with_policy(OperationRecoveryPolicy {
+                retry_failed: true,
+                max_attempts: 2,
+            })
+            .unwrap();
+
+        assert!(report.outcomes.is_empty());
+        assert!(!destination.exists());
+        assert_eq!(read_journal(&journal).unwrap().len(), 2);
         fs::remove_dir_all(root).unwrap();
     }
 

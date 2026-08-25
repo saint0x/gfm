@@ -33,12 +33,13 @@ use gfm_jobs::{
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, parse_spotlight_fixture, AccessIntent,
     FileEventStream, FileProviderStateReport, MacBridgeContract, MountState, NativeIconDescriptor,
-    SecurityScopedAccessReport, SpotlightMetadataReader, SpotlightReconciliationReport,
-    SupportMatrix, VolumeDescriptor, VolumeDiscoveryReport, VolumeKind, WatchRoot,
+    SecurityDecisionAction, SecurityScopedAccessReport, SpotlightMetadataReader,
+    SpotlightReconciliationReport, SupportMatrix, VolumeDescriptor, VolumeDiscoveryReport,
+    VolumeKind, WatchRoot,
 };
 use gfm_ops::{
-    read_trash_metadata, ConflictPolicy, Operation, OperationContext, OperationRecoveryPolicy,
-    Operator,
+    read_trash_metadata, ConflictPolicy, Operation, OperationAccessDecision, OperationAccessGate,
+    OperationAccessRole, OperationContext, OperationRecoveryPolicy, Operator,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path,
@@ -3754,6 +3755,7 @@ fn parity_fixture_options(
 fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<()> {
     let journal = default_journal_path();
     let trash_metadata = default_trash_metadata_path();
+    let access_gate = operation_access_gate(&operation);
     let entry_slot = Arc::new(Mutex::new(None));
     let entry_slot_task = Arc::clone(&entry_slot);
     let mut scheduler = Scheduler::new();
@@ -3776,7 +3778,8 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
         let operator = Operator::new(
             OperationContext::new(journal)
                 .with_conflict(conflict)
-                .with_trash_metadata_path(trash_metadata),
+                .with_trash_metadata_path(trash_metadata)
+                .with_access_gate(access_gate),
         );
         let entry = operator.execute(operation)?;
         *entry_slot_task
@@ -3810,6 +3813,54 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
         .ok_or_else(|| GfmError::Format("operation completed without journal entry".to_string()))?;
     println!("{}\t{}", entry.id, operation_status(entry.status));
     Ok(())
+}
+
+fn operation_access_gate(operation: &Operation) -> OperationAccessGate {
+    let mut gate = OperationAccessGate::new();
+    for requirement in operation.access_requirements() {
+        let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        let report = SecurityScopedAccessReport::evaluate(&probe_path, AccessIntent::Operate);
+        if matches!(report.action, SecurityDecisionAction::Deny)
+            && matches!(report.probe, gfm_mac::AccessProbeState::Missing)
+            && !matches!(requirement.role, OperationAccessRole::DestinationParent)
+        {
+            continue;
+        }
+        let reason = format!(
+            "{}; scope={}; mode={}; role={}; probe={}",
+            report.reason,
+            report.scope.as_str(),
+            report.mode.as_str(),
+            requirement.role.as_str(),
+            probe_path.display()
+        );
+        let decision = match report.action {
+            SecurityDecisionAction::Allow => OperationAccessDecision::allow(reason),
+            SecurityDecisionAction::Prompt => OperationAccessDecision::prompt(reason),
+            SecurityDecisionAction::Degrade | SecurityDecisionAction::Deny => {
+                OperationAccessDecision::deny(reason)
+            }
+        };
+        gate = gate.with_decision(requirement.path, decision);
+    }
+    gate
+}
+
+fn operation_access_probe_path(path: &Path, role: OperationAccessRole) -> PathBuf {
+    if !matches!(role, OperationAccessRole::DestinationParent) {
+        return path.to_path_buf();
+    }
+    let mut candidate = path.to_path_buf();
+    while !candidate.exists() {
+        let Some(parent) = candidate.parent() else {
+            break;
+        };
+        if parent == candidate {
+            break;
+        }
+        candidate = parent.to_path_buf();
+    }
+    candidate
 }
 
 fn operation_volume(operation: &Operation) -> Option<VolumeId> {
