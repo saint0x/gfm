@@ -33,7 +33,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 19. Finish search results view by binding the implemented scope, grouping, metadata-column, ranking-display, progressive-stage, selection, snippet, and virtualization contract to captured Finder search scope controls, grouping presentation, metadata columns, ranking disclosure behavior, progressive refinement timing, and pixel baselines.
 20. Finish Trash view by binding the implemented restore-location metadata, permanent-delete, empty-trash, selection, permission-failure, command-state, and virtualization contract to captured Finder Trash restore metadata sources, destructive confirmation flows, permission prompts, empty-trash behavior, and pixel baselines.
 21. Finish package traversal by binding the implemented package classification and opaque-vs-traverse scan policy to LaunchServices UTType/package metadata, Finder package exceptions, user override UI, indexing/search/preview/package-icon behavior, and captured Finder pixel baselines.
-22. Implement virtualized rendering that keeps interaction latency stable in directories with hundreds of thousands of entries.
+22. Finish huge-directory virtualization by binding the implemented shared visible-window contract to GPUI scroll containers, lazy row/cell materialization, incremental sort/filter sources, thumbnail/icon backpressure, measured hundred-thousand-entry latency budgets, and captured Finder pixel baselines.
 
 ## macOS Integration
 

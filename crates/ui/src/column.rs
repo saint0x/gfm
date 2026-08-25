@@ -3,6 +3,8 @@ use gpui::{div, prelude::*, px, rgb, IntoElement, Styled};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use crate::VirtualWindow;
+
 const DEFAULT_COLUMN_WIDTH: u16 = 220;
 const DEFAULT_MIN_COLUMN_WIDTH: u16 = 160;
 const DEFAULT_ROW_HEIGHT: u16 = 24;
@@ -218,10 +220,9 @@ impl ColumnSpec {
         *hidden_filtered += original_len.saturating_sub(records.len());
         sort_records(&mut records, options.sort);
 
-        let visible_start = (scroll_row as usize).min(records.len());
-        let visible_end = visible_start
-            .saturating_add(usize::from(options.viewport_rows.max(1)))
-            .min(records.len());
+        let window = VirtualWindow::rows(records.len(), scroll_row, options.viewport_rows);
+        let visible_start = window.start;
+        let visible_end = window.end;
         let selected = source
             .selected
             .into_iter()

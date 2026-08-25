@@ -290,6 +290,52 @@ fn reports_ui_icon_view_contract_from_binary() {
 }
 
 #[test]
+fn reports_ui_virtualization_contract_from_binary() {
+    let list = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-virtualization-contract",
+            "list-rows",
+            "250000",
+            "32",
+            "199990",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        list.status.success(),
+        "{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let list_stdout = String::from_utf8(list.stdout).unwrap();
+    assert_eq!(
+        list_stdout.trim(),
+        "virtualization\tlist-rows\tunit=row\ttotal=250000\tvisible=199990..200022\trendered=32\tcapacity=32\tbounded=true"
+    );
+
+    let icon = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-virtualization-contract",
+            "icon-grid",
+            "400000",
+            "4",
+            "40000",
+            "6",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        icon.status.success(),
+        "{}",
+        String::from_utf8_lossy(&icon.stderr)
+    );
+    let icon_stdout = String::from_utf8(icon.stdout).unwrap();
+    assert_eq!(
+        icon_stdout.trim(),
+        "virtualization\ticon-grid\tunit=cell\ttotal=400000\tvisible=240000..240024\trendered=24\tcapacity=24\tbounded=true"
+    );
+}
+
+#[test]
 fn reports_ui_list_view_contract_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-list-view-contract-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

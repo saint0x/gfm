@@ -3,6 +3,8 @@ use gpui::{div, prelude::*, px, rgb, IntoElement, Styled};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use crate::VirtualWindow;
+
 const DEFAULT_ROW_HEIGHT: u16 = 24;
 const DEFAULT_VIEWPORT_ROWS: u16 = 24;
 
@@ -182,10 +184,10 @@ impl SearchResultsContract {
                 .then_with(|| left.record.path.cmp(&right.record.path))
         });
 
-        let visible_start = (options.scroll_row as usize).min(hits.len());
-        let visible_end = visible_start
-            .saturating_add(usize::from(options.viewport_rows.max(1)))
-            .min(hits.len());
+        let viewport_rows = options.viewport_rows.max(1);
+        let window = VirtualWindow::rows(hits.len(), options.scroll_row, viewport_rows);
+        let visible_start = window.start;
+        let visible_end = window.end;
         let rows = hits[visible_start..visible_end]
             .iter()
             .enumerate()
@@ -210,7 +212,7 @@ impl SearchResultsContract {
             scope: options.scope,
             grouping: options.grouping,
             row_height_px: options.row_height_px.max(1),
-            viewport_rows: options.viewport_rows.max(1),
+            viewport_rows,
             scroll_row: options.scroll_row,
             progressive: options.progressive,
             stage,

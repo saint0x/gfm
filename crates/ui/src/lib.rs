@@ -22,6 +22,7 @@ mod sidebar;
 mod titlebar;
 mod toolbar;
 mod trash;
+mod virtualize;
 
 pub use column::{
     render as render_column_view, ColumnKeyboardFlow, ColumnRowSpec, ColumnSortMode, ColumnSource,
@@ -65,6 +66,7 @@ pub use trash::{
     render as render_trash_view, TrashCommandSpec, TrashEntryMetadata, TrashRowSpec, TrashSortMode,
     TrashViewContract, TrashViewOptions,
 };
+pub use virtualize::{VirtualSurface, VirtualWindow, VirtualizationContract};
 
 const DEFAULT_WIDTH: f32 = 1040.0;
 const DEFAULT_HEIGHT: f32 = 720.0;

@@ -3,6 +3,8 @@ use gpui::{div, prelude::*, px, rgb, IntoElement, Styled};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use crate::VirtualWindow;
+
 const DEFAULT_ROW_HEIGHT: u16 = 24;
 const DEFAULT_VIEWPORT_ROWS: u16 = 24;
 
@@ -154,10 +156,10 @@ impl TrashViewContract {
             row.y_px = (index as u32).saturating_mul(u32::from(options.row_height_px.max(1)));
         }
 
-        let visible_start = (options.scroll_row as usize).min(rows.len());
-        let visible_end = visible_start
-            .saturating_add(usize::from(options.viewport_rows.max(1)))
-            .min(rows.len());
+        let viewport_rows = options.viewport_rows.max(1);
+        let window = VirtualWindow::rows(rows.len(), options.scroll_row, viewport_rows);
+        let visible_start = window.start;
+        let visible_end = window.end;
         let visible_rows = rows[visible_start..visible_end].to_vec();
         let has_permission_block = rows.iter().any(|row| row.permission_issue.is_some());
         let empty_enabled =
@@ -166,7 +168,7 @@ impl TrashViewContract {
         Self {
             sort: options.sort,
             row_height_px: options.row_height_px.max(1),
-            viewport_rows: options.viewport_rows.max(1),
+            viewport_rows,
             scroll_row: options.scroll_row,
             total_rows: rows.len(),
             visible_start,

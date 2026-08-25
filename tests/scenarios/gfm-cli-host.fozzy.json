@@ -300,6 +300,18 @@
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-virtualization-contract",
+        "list-rows",
+        "250000",
+        "32",
+        "199990"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["ui-list-view-contract", "tmp", "6", "0"],
       "expect_exit": 0
     },

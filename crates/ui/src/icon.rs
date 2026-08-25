@@ -3,6 +3,8 @@ use gpui::{div, prelude::*, px, rgb, IntoElement, Styled};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use crate::VirtualWindow;
+
 const DEFAULT_ICON_SIZE: u16 = 64;
 const DEFAULT_CELL_WIDTH: u16 = 112;
 const DEFAULT_CELL_HEIGHT: u16 = 104;
@@ -114,12 +116,9 @@ impl IconViewContract {
         let columns = options.columns.max(1);
         let viewport_rows = options.viewport_rows.max(1);
         let total_rows = rows_for(records.len(), columns);
-        let visible_start = usize::from(options.scroll_row)
-            .saturating_mul(usize::from(columns))
-            .min(records.len());
-        let visible_end = visible_start
-            .saturating_add(usize::from(columns) * usize::from(viewport_rows))
-            .min(records.len());
+        let window = VirtualWindow::grid(records.len(), options.scroll_row, viewport_rows, columns);
+        let visible_start = window.start;
+        let visible_end = window.end;
         let cells = records[visible_start..visible_end]
             .iter()
             .enumerate()

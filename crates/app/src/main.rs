@@ -39,8 +39,8 @@ use gfm_ui::{
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
     MenuContract, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
     SearchResultsStage, SidebarContract, TitlebarContract, ToolbarContract, TrashEntryMetadata,
-    TrashViewContract, TrashViewOptions, WindowLifecycleContract, WindowSessionContract,
-    WindowSessionStore,
+    TrashViewContract, TrashViewOptions, VirtualSurface, VirtualizationContract,
+    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -349,6 +349,39 @@ fn run() -> Result<()> {
             let page = scan_tree(&root, options.clone())?;
             let report = PackageTraversalReport::from_page(&page, &options.package_policy);
             println!("{}", report.as_tsv());
+        }
+        Some("ui-virtualization-contract") => {
+            let surface = parse_virtual_surface(args.next().as_deref())?;
+            let total = parse_usize_arg(
+                args.next(),
+                "ui-virtualization-contract requires a total row/item count",
+            )?;
+            let viewport = parse_u16_arg(
+                args.next(),
+                "ui-virtualization-contract requires a viewport row/item count",
+            )?;
+            let scroll = parse_u32_arg(
+                args.next(),
+                "ui-virtualization-contract requires a scroll row/item",
+            )?;
+            let contract = if surface == VirtualSurface::IconGrid {
+                let columns = args
+                    .next()
+                    .map(|value| parse_u16(&value, "columns"))
+                    .transpose()?
+                    .unwrap_or(6);
+                VirtualizationContract::grid(
+                    total,
+                    scroll.min(u32::from(u16::MAX)) as u16,
+                    viewport,
+                    columns,
+                )
+            } else if surface == VirtualSurface::GalleryFilmstrip {
+                VirtualizationContract::items(surface, total, scroll, viewport)
+            } else {
+                VirtualizationContract::rows(surface, total, scroll, viewport)
+            };
+            println!("{}", contract.as_tsv());
         }
         Some("list") => {
             let path = args
@@ -1028,11 +1061,40 @@ fn parse_u32_arg(value: Option<String>, message: &str) -> Result<u32> {
         .map_err(|_| GfmError::Format(format!("{message}; got `{value}`")))
 }
 
+fn parse_usize_arg(value: Option<String>, message: &str) -> Result<usize> {
+    let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
+    value
+        .parse()
+        .map_err(|_| GfmError::Format(format!("{message}; got `{value}`")))
+}
+
+fn parse_u16_arg(value: Option<String>, message: &str) -> Result<u16> {
+    let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
+    parse_u16(&value, message)
+}
+
 fn parse_bool(value: &str, name: &str) -> Result<bool> {
     match value {
         "true" => Ok(true),
         "false" => Ok(false),
         _ => Err(GfmError::Format(format!("{name} must be true or false"))),
+    }
+}
+
+fn parse_virtual_surface(value: Option<&str>) -> Result<VirtualSurface> {
+    match value {
+        Some("icon-grid") => Ok(VirtualSurface::IconGrid),
+        Some("list-rows") => Ok(VirtualSurface::ListRows),
+        Some("column-rows") => Ok(VirtualSurface::ColumnRows),
+        Some("gallery-filmstrip") => Ok(VirtualSurface::GalleryFilmstrip),
+        Some("search-results") => Ok(VirtualSurface::SearchResults),
+        Some("trash-rows") => Ok(VirtualSurface::TrashRows),
+        Some(other) => Err(GfmError::Format(format!(
+            "virtual surface must be icon-grid, list-rows, column-rows, gallery-filmstrip, search-results, or trash-rows; got `{other}`"
+        ))),
+        None => Err(GfmError::Format(
+            "ui-virtualization-contract requires a virtual surface".to_string(),
+        )),
     }
 }
 
@@ -1392,6 +1454,7 @@ fn print_usage() {
   gfm ui-toolbar-contract [path]
   gfm ui-sidebar-contract [path]
   gfm ui-icon-view-contract <path> [columns] [viewport-rows] [scroll-row]
+  gfm ui-virtualization-contract <icon-grid|list-rows|column-rows|gallery-filmstrip|search-results|trash-rows> <total> <viewport> <scroll> [columns]
   gfm package-traversal <root> [opaque|traverse]
   gfm list [path]
   gfm index <root> <output.gfmidx>

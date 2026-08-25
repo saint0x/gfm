@@ -2,6 +2,8 @@ use gfm_types::{FileId, FileKind, FileRecord};
 use gpui::{div, prelude::*, px, rgb, IntoElement, Styled};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+
+use crate::VirtualWindow;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_PREVIEW_WIDTH: u16 = 720;
@@ -106,10 +108,10 @@ impl GalleryViewContract {
 
         let selected_index = selected_index(&records, options.selected);
         let selected_record = selected_index.and_then(|index| records.get(index));
-        let visible_start = (options.scroll_item as usize).min(records.len());
-        let visible_end = visible_start
-            .saturating_add(usize::from(options.viewport_items.max(1)))
-            .min(records.len());
+        let viewport_items = options.viewport_items.max(1);
+        let window = VirtualWindow::items(records.len(), options.scroll_item, viewport_items);
+        let visible_start = window.start;
+        let visible_end = window.end;
         let selected_ids = selected_record
             .map(|record| BTreeSet::from([record.id]))
             .unwrap_or_default();
@@ -146,7 +148,7 @@ impl GalleryViewContract {
             preview_height_px: options.preview_height_px.max(1),
             filmstrip_item_width_px: options.filmstrip_item_width_px.max(1),
             filmstrip_item_height_px: options.filmstrip_item_height_px.max(1),
-            viewport_items: options.viewport_items.max(1),
+            viewport_items,
             scroll_item: options.scroll_item,
             total_items: records.len(),
             visible_start,

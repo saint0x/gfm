@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::VirtualWindow;
+
 const DEFAULT_ROW_HEIGHT: u16 = 22;
 const DEFAULT_VIEWPORT_ROWS: u16 = 24;
 
@@ -169,10 +171,10 @@ impl ListViewContract {
         let hidden_filtered = original_len.saturating_sub(records.len());
         sort_records(&mut records, options.sort);
 
-        let visible_start = (options.scroll_row as usize).min(records.len());
-        let visible_end = visible_start
-            .saturating_add(usize::from(options.viewport_rows.max(1)))
-            .min(records.len());
+        let viewport_rows = options.viewport_rows.max(1);
+        let window = VirtualWindow::rows(records.len(), options.scroll_row, viewport_rows);
+        let visible_start = window.start;
+        let visible_end = window.end;
         let rows = records[visible_start..visible_end]
             .iter()
             .enumerate()
@@ -193,7 +195,7 @@ impl ListViewContract {
         Self {
             sort: options.sort,
             row_height_px: options.row_height_px.max(1),
-            viewport_rows: options.viewport_rows.max(1),
+            viewport_rows,
             scroll_row: options.scroll_row,
             total_rows: records.len(),
             visible_start,
