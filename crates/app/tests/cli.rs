@@ -758,6 +758,7 @@ fn reports_finder_metadata_from_binary() {
 fn searches_persisted_tags_from_binary() {
     let index = unique_temp_path("gfm-cli-tags", "gfmidx");
     let metadata = unique_temp_path("gfm-cli-tags", "gfmmeta");
+    let dictionary = unique_temp_path("gfm-cli-tags", "gfmdict");
     fs::write(
         &index,
         "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\tImportant,Client\t/tmp/tagged.md\n2\t2\t0\tf\t5\t0\t0\t0\t0\tLater\t/tmp/other.md\n",
@@ -808,8 +809,42 @@ fn searches_persisted_tags_from_binary() {
     );
     assert_eq!(String::from_utf8(ids_output.stdout).unwrap(), "1\t1\n");
 
+    let dictionary_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-dictionary",
+            index.to_str().unwrap(),
+            dictionary.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        dictionary_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dictionary_output.stderr)
+    );
+
+    let lookup_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "dictionary-lookup",
+            dictionary.to_str().unwrap(),
+            "Important",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        lookup_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lookup_output.stderr)
+    );
+    let lookup_stdout = String::from_utf8(lookup_output.stdout).unwrap();
+    assert!(
+        lookup_stdout.starts_with("dictionary\tfound\t"),
+        "{lookup_stdout}"
+    );
+
     fs::remove_file(index).unwrap();
     fs::remove_file(metadata).unwrap();
+    fs::remove_file(dictionary).unwrap();
 }
 
 #[test]

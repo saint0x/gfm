@@ -1,10 +1,14 @@
 mod content;
+mod dictionary;
 mod durable;
 mod metadata;
 
 pub use content::{
     compact_content_segments, read_content_postings, read_content_segment, write_content_postings,
     write_content_segment, ContentArchive, MmapContentArchive,
+};
+pub use dictionary::{
+    dictionary_terms_from_records, read_dictionary, write_dictionary, MmapDictionary,
 };
 pub use durable::{atomic_write, DurableCommit};
 pub use metadata::{

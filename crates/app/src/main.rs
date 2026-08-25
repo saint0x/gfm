@@ -34,8 +34,9 @@ use gfm_preview::{
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
 use gfm_store::{
-    metadata_postings_from_records, write_metadata_postings, ContentArchive, MetadataField,
-    MmapContentArchive, MmapMetadataArchive, MmapRecordArchive,
+    dictionary_terms_from_records, metadata_postings_from_records, write_dictionary,
+    write_metadata_postings, ContentArchive, MetadataField, MmapContentArchive, MmapDictionary,
+    MmapMetadataArchive, MmapRecordArchive,
 };
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
@@ -824,6 +825,29 @@ fn run() -> Result<()> {
             let postings = metadata_postings_from_records(&archive.records()?);
             write_metadata_postings(output, &postings)?;
             eprintln!("metadata-indexed {} terms", postings.len());
+        }
+        Some("index-dictionary") => {
+            let records = required_path(args.next(), "index-dictionary requires a records path")?;
+            let output = required_path(
+                args.next(),
+                "index-dictionary requires an output dictionary path",
+            )?;
+            let archive = MmapRecordArchive::open(records)?;
+            let terms = dictionary_terms_from_records(&archive.records()?);
+            write_dictionary(output, &terms)?;
+            eprintln!("dictionary-indexed {} terms", terms.len());
+        }
+        Some("dictionary-lookup") => {
+            let dictionary =
+                required_path(args.next(), "dictionary-lookup requires a dictionary path")?;
+            let term = args
+                .next()
+                .ok_or_else(|| GfmError::Format("dictionary-lookup requires a term".to_string()))?;
+            let archive = MmapDictionary::open(dictionary)?;
+            match archive.find(&term)? {
+                Some(index) => println!("dictionary\tfound\tindex={index}\tterm={term}"),
+                None => println!("dictionary\tmissing\tterm={term}"),
+            }
         }
         Some("metadata-ids-mmap") => {
             let metadata =
@@ -1971,6 +1995,8 @@ fn print_usage() {
   gfm search-index <index.gfmidx> <query>
   gfm search-index-mmap <index.gfmidx> <query>
   gfm index-metadata <records.gfmidx> <metadata.gfmmeta>
+  gfm index-dictionary <records.gfmidx> <dictionary.gfmdict>
+  gfm dictionary-lookup <dictionary.gfmdict> <term>
   gfm metadata-ids-mmap <metadata.gfmmeta> <tag|comment> <term>
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>
   gfm content-ids <content.gfmcontent> <term>
