@@ -38,6 +38,20 @@ impl IndexSnapshot {
         index.query(query, limit)
     }
 
+    pub fn search_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchHit>> {
+        let mut index = SearchIndex::new();
+        for record in self.records.iter().cloned() {
+            cancellation.check()?;
+            index.insert(record);
+        }
+        index.query_cancellable(query, limit, cancellation)
+    }
+
     pub fn search_with_content(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
         let mut live = self.clone().into_live();
         live.index_content(&Extractor::default())?;
@@ -110,6 +124,15 @@ impl LiveIndex {
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
         self.index.query(query, limit)
+    }
+
+    pub fn search_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchHit>> {
+        self.index.query_cancellable(query, limit, cancellation)
     }
 
     pub fn index_content(&mut self, extractor: &Extractor) -> Result<usize> {
@@ -559,6 +582,21 @@ mod tests {
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].record.name, "notes.md");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn live_search_honors_cancellation() {
+        let root = unique_temp_dir("gfm-cancelled-search-root");
+        fs::write(root.join("notes.md"), "needle").unwrap();
+        let snapshot = Indexer::default().build(&root).unwrap();
+        let live = snapshot.into_live();
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = live.search_cancellable("needle", 5, &cancellation);
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
         fs::remove_dir_all(root).unwrap();
     }
 

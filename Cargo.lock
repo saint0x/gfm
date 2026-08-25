@@ -189,6 +189,7 @@ dependencies = [
 name = "gfm-search"
 version = "0.1.0"
 dependencies = [
+ "gfm-jobs",
  "gfm-types",
 ]
 

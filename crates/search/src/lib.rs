@@ -1,11 +1,16 @@
+mod fuzzy;
 mod query;
+mod session;
 
+use fuzzy::bounded_levenshtein;
 use query::{normalize, tokenize};
 pub use query::{
     DateComparison, DateField, QueryExpr, QueryFilter, QueryKind, QueryScope, SearchQuery,
     SizeComparison,
 };
+pub use session::SearchSupersession;
 
+use gfm_jobs::Cancellation;
 use gfm_types::{ContentPositions, ContentPosting, FileId, FileRecord, MatchReason, SearchHit};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -163,8 +168,28 @@ impl SearchIndex {
     }
 
     pub fn query_structured(&self, query: &SearchQuery, limit: usize) -> Vec<SearchHit> {
+        self.query_structured_cancellable(query, limit, &Cancellation::default())
+            .unwrap_or_default()
+    }
+
+    pub fn query_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<Vec<SearchHit>> {
+        self.query_structured_cancellable(&SearchQuery::parse(query), limit, cancellation)
+    }
+
+    pub fn query_structured_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<Vec<SearchHit>> {
+        cancellation.check()?;
         if query.is_empty() || limit == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let mut scores: HashMap<FileId, (i64, MatchReason)> = HashMap::new();
@@ -178,6 +203,7 @@ impl SearchIndex {
 
         if !text.is_empty() {
             for (term, ids) in self.name_terms.range(text.clone()..) {
+                cancellation.check()?;
                 if !term.starts_with(&text) {
                     break;
                 }
@@ -186,6 +212,7 @@ impl SearchIndex {
         }
 
         for term in &query.terms {
+            cancellation.check()?;
             if let Some(ids) = self.name_terms.get(term) {
                 add_scores(&mut scores, ids, 500, MatchReason::SubstringName);
             }
@@ -204,10 +231,12 @@ impl SearchIndex {
         }
 
         for phrase in &query.phrases {
+            cancellation.check()?;
             for record in self.records.values().filter(|record| {
                 record_matches_phrase(record, phrase)
                     || self.content_matches_phrase(record.id, phrase)
             }) {
+                cancellation.check()?;
                 scores
                     .entry(record.id)
                     .and_modify(|(score, _)| *score += 450)
@@ -223,6 +252,7 @@ impl SearchIndex {
 
         if scores.len() < limit {
             for record in self.records.values() {
+                cancellation.check()?;
                 let name = normalize(&record.name);
                 if !text.is_empty() && name.contains(&text) {
                     scores
@@ -245,6 +275,7 @@ impl SearchIndex {
             || (scores.is_empty() && (!query.filters.is_empty() || !query.phrases.is_empty()))
         {
             for record in self.records.values() {
+                cancellation.check()?;
                 scores
                     .entry(record.id)
                     .or_insert((0, MatchReason::PathComponent));
@@ -254,6 +285,9 @@ impl SearchIndex {
         let mut hits: Vec<_> = scores
             .into_iter()
             .filter_map(|(id, (score, reason))| {
+                if cancellation.check().is_err() {
+                    return None;
+                }
                 self.records
                     .get(&id)
                     .filter(|record| self.record_matches_query(record, query))
@@ -274,7 +308,8 @@ impl SearchIndex {
             })
         });
         hits.truncate(limit);
-        hits
+        cancellation.check()?;
+        Ok(hits)
     }
 
     fn record_matches_query(&self, record: &FileRecord, query: &SearchQuery) -> bool {
@@ -492,36 +527,10 @@ fn recency_score(record: &FileRecord) -> i64 {
         .unwrap_or(0)
 }
 
-fn bounded_levenshtein(left: &str, right: &str, max: usize) -> Option<usize> {
-    if left.len().abs_diff(right.len()) > max {
-        return None;
-    }
-    let mut previous: Vec<usize> = (0..=right.len()).collect();
-    let mut current = vec![0; right.len() + 1];
-
-    for (i, left_ch) in left.chars().enumerate() {
-        current[0] = i + 1;
-        let mut row_min = current[0];
-        for (j, right_ch) in right.chars().enumerate() {
-            let cost = usize::from(left_ch != right_ch);
-            current[j + 1] = (previous[j + 1] + 1)
-                .min(current[j] + 1)
-                .min(previous[j] + cost);
-            row_min = row_min.min(current[j + 1]);
-        }
-        if row_min > max {
-            return None;
-        }
-        std::mem::swap(&mut previous, &mut current);
-    }
-
-    (previous[right.len()] <= max).then_some(previous[right.len()])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gfm_types::{FileId, FileKind, FileRecord, VolumeId};
+    use gfm_types::{FileId, FileKind, FileRecord, GfmError, VolumeId};
     use std::path::PathBuf;
     use std::time::{Duration, UNIX_EPOCH};
 
@@ -579,6 +588,42 @@ mod tests {
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].reason, MatchReason::Content);
+    }
+
+    #[test]
+    fn cancelled_queries_stop_before_returning_hits() {
+        let mut index = SearchIndex::new();
+        index.insert(record(1, "/tmp/needle.txt", "needle.txt"));
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = index.query_cancellable("needle", 10, &cancellation);
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn supersession_cancels_stale_query_tokens() {
+        let supersession = SearchSupersession::new();
+        let first = supersession.begin();
+        assert!(first.check().is_ok());
+
+        let second = supersession.begin();
+
+        assert!(matches!(first.check(), Err(GfmError::Cancelled)));
+        assert!(second.check().is_ok());
+    }
+
+    #[test]
+    fn superseding_query_runs_latest_search() {
+        let mut index = SearchIndex::new();
+        index.insert(record(1, "/tmp/report.md", "report.md"));
+        let supersession = SearchSupersession::new();
+
+        let hits = supersession.query(&index, "report", 10).unwrap();
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.name, "report.md");
     }
 
     #[test]

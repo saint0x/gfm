@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+gfm-jobs = { path = "../jobs" }
 gfm-types = { path = "../types" }
 
 [lints]
 workspace = true
-

@@ -55,7 +55,7 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 - `crates/fs`: filesystem enumeration, identity, permissions, package detection, aliases, symlinks, hidden files, volume behavior, and metadata reads.
 - `crates/ops`: APFS-aware file operations, clone fast paths, copy/move/delete/trash semantics, conflict handling, operation journaling, recovery, and retries.
 - `crates/index`: initial crawl, FSEvents ingestion, background metadata/content pipelines, per-volume state, and repair scheduling.
-- `crates/search`: query parsing, ranking, streaming results, filename/path/content/metadata retrieval, fuzzy matching, and recency scoring.
+- `crates/search`: query parsing, ranking, streaming results, filename/path/content/metadata retrieval, fuzzy matching, cancellation, supersession, and recency scoring.
 - `crates/store`: mmap segment store, dictionaries, compressed postings, appendable content segments, tombstones, merge policy, and compaction.
 - `crates/preview`: icons, thumbnails, Quick Look previews, preview cache, and extraction budgets.
 - `crates/jobs`: scheduling, cancellation, prioritization, fairness, progress, and backpressure.
