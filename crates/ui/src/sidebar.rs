@@ -1,0 +1,636 @@
+use gpui::{div, prelude::*, px, rgb, IntoElement, Styled};
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+const SIDEBAR_WIDTH: f32 = 188.0;
+const ROW_HEIGHT: f32 = 28.0;
+const SECTION_HEADER_HEIGHT: f32 = 26.0;
+
+const SECTIONS: [&str; 4] = ["Favorites", "iCloud", "Locations", "Tags"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarItemKind {
+    Favorite,
+    Cloud,
+    Location,
+    Tag,
+}
+
+impl SidebarItemKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Favorite => "favorite",
+            Self::Cloud => "cloud",
+            Self::Location => "location",
+            Self::Tag => "tag",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarItemSpec {
+    pub section: &'static str,
+    pub id: String,
+    pub label: String,
+    pub role: &'static str,
+    pub kind: SidebarItemKind,
+    pub path: Option<PathBuf>,
+    pub icon: &'static str,
+    pub depth: u8,
+    pub enabled: bool,
+    pub selected: bool,
+    pub ejectable: bool,
+    pub virtual_item: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarVolumeSpec {
+    pub id: String,
+    pub label: String,
+    pub path: PathBuf,
+    pub ejectable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SidebarEnvironment {
+    home: PathBuf,
+    icloud_drive: Option<PathBuf>,
+    volumes: Vec<SidebarVolumeSpec>,
+}
+
+impl SidebarEnvironment {
+    pub fn discover() -> Self {
+        let home = env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| PathBuf::from("/"));
+        let icloud_drive = existing_path(home.join("Library/Mobile Documents/com~apple~CloudDocs"));
+        let volumes = discover_volumes();
+
+        Self {
+            home,
+            icloud_drive,
+            volumes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarContract {
+    pub width_px: u16,
+    pub row_height_px: u16,
+    pub section_header_height_px: u16,
+    pub sections: Vec<&'static str>,
+    pub rows: Vec<SidebarItemSpec>,
+}
+
+impl SidebarContract {
+    pub fn discover(current_path: impl AsRef<Path>) -> Self {
+        Self::from_environment(current_path, SidebarEnvironment::discover())
+    }
+
+    fn from_environment(current_path: impl AsRef<Path>, environment: SidebarEnvironment) -> Self {
+        let current_path = current_path.as_ref();
+        let mut rows = Vec::new();
+
+        rows.extend(favorite_rows(&environment.home, current_path));
+        rows.push(icloud_row(
+            environment.icloud_drive.as_deref(),
+            current_path,
+        ));
+        rows.extend(location_rows(&environment.volumes, current_path));
+        rows.extend(tag_rows());
+
+        Self {
+            width_px: SIDEBAR_WIDTH as u16,
+            row_height_px: ROW_HEIGHT as u16,
+            section_header_height_px: SECTION_HEADER_HEIGHT as u16,
+            sections: SECTIONS.to_vec(),
+            rows,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let mut lines = Vec::with_capacity(self.rows.len() + 1);
+        lines.push(format!(
+            "sidebar\twidth={}\trow-height={}\tsection-header-height={}\tsections={}",
+            self.width_px,
+            self.row_height_px,
+            self.section_header_height_px,
+            self.sections.join(",")
+        ));
+        lines.extend(self.rows.iter().map(|row| {
+            format!(
+                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}",
+                row.section,
+                row.id,
+                row.label,
+                row.role,
+                row.kind.as_str(),
+                row.path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                row.depth,
+                row.enabled,
+                row.selected,
+                row.ejectable,
+                row.virtual_item
+            )
+        }));
+        lines.join("\n")
+    }
+}
+
+pub fn render(contract: &SidebarContract) -> impl IntoElement {
+    div()
+        .id("gfm-sidebar")
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .w(px(SIDEBAR_WIDTH))
+        .h_full()
+        .pt(px(10.0))
+        .px_2()
+        .bg(rgb(0x242424))
+        .text_color(rgb(0xd0d0d0))
+        .child(render_section("Favorites", &contract.rows))
+        .child(render_section("iCloud", &contract.rows))
+        .child(render_section("Locations", &contract.rows))
+        .child(render_section("Tags", &contract.rows))
+}
+
+fn render_section(section: &'static str, rows: &[SidebarItemSpec]) -> gpui::Div {
+    let mut container = div().flex().flex_col().w_full().mb_2();
+    container = container.child(
+        div()
+            .flex()
+            .items_center()
+            .h(px(SECTION_HEADER_HEIGHT))
+            .pl(px(8.0))
+            .text_xs()
+            .text_color(rgb(0x8b8b8b))
+            .child(section),
+    );
+
+    for row in rows.iter().filter(|row| row.section == section) {
+        container = container.child(render_row(row));
+    }
+
+    container
+}
+
+fn render_row(row: &SidebarItemSpec) -> gpui::Div {
+    let background = if row.selected {
+        rgb(0x4a4a4a)
+    } else {
+        rgb(0x242424)
+    };
+    let text_color = if row.enabled {
+        rgb(0xd8d8d8)
+    } else {
+        rgb(0x777777)
+    };
+
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .w_full()
+        .h(px(ROW_HEIGHT))
+        .pl(px(8.0 + f32::from(row.depth) * 12.0))
+        .pr(px(6.0))
+        .gap_2()
+        .rounded(px(6.0))
+        .bg(background)
+        .text_color(text_color)
+        .child(icon_cell(row))
+        .child(div().flex_1().truncate().text_sm().child(row.label.clone()))
+        .child(eject_cell(row))
+}
+
+fn icon_cell(row: &SidebarItemSpec) -> gpui::Div {
+    let color = match row.kind {
+        SidebarItemKind::Favorite => rgb(0x8f8f8f),
+        SidebarItemKind::Cloud => rgb(0x8f8f8f),
+        SidebarItemKind::Location => rgb(0x8f8f8f),
+        SidebarItemKind::Tag => tag_color(&row.id),
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(16.0))
+        .rounded(px(8.0))
+        .bg(color)
+        .text_xs()
+}
+
+fn eject_cell(row: &SidebarItemSpec) -> gpui::Div {
+    if row.ejectable {
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(14.0))
+            .h(px(ROW_HEIGHT))
+            .text_xs()
+            .text_color(rgb(0x8b8b8b))
+            .child("^")
+    } else {
+        div().w(px(14.0)).h(px(ROW_HEIGHT))
+    }
+}
+
+fn favorite_rows(home: &Path, current_path: &Path) -> Vec<SidebarItemSpec> {
+    vec![
+        row(RowDescriptor::new(
+            "Favorites",
+            "macintosh-hd",
+            "Macintosh HD",
+            "filesystem-root",
+            SidebarItemKind::Favorite,
+            "internal-disk",
+        )
+        .path(PathBuf::from("/"))
+        .state(RowState::path(true, current_path == Path::new("/")))),
+        row(RowDescriptor::new(
+            "Favorites",
+            "home",
+            home.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Home"),
+            "home-folder",
+            SidebarItemKind::Favorite,
+            "home",
+        )
+        .path(home.to_path_buf())
+        .state(RowState::path(
+            path_exists(home),
+            same_path(home, current_path),
+        ))),
+        row(RowDescriptor::new(
+            "Favorites",
+            "recents",
+            "Recents",
+            "recents",
+            SidebarItemKind::Favorite,
+            "clock",
+        )
+        .state(RowState::virtual_item(true, false))),
+        favorite_path(
+            "desktop",
+            "Desktop",
+            "desktop-folder",
+            home.join("Desktop"),
+            current_path,
+        ),
+        favorite_path(
+            "applications",
+            "Applications",
+            "applications-folder",
+            PathBuf::from("/Applications"),
+            current_path,
+        ),
+        favorite_path(
+            "documents",
+            "Documents",
+            "documents-folder",
+            home.join("Documents"),
+            current_path,
+        ),
+        favorite_path(
+            "downloads",
+            "Downloads",
+            "downloads-folder",
+            home.join("Downloads"),
+            current_path,
+        ),
+    ]
+}
+
+fn favorite_path(
+    id: &'static str,
+    label: &'static str,
+    role: &'static str,
+    path: PathBuf,
+    current_path: &Path,
+) -> SidebarItemSpec {
+    let enabled = path_exists(&path);
+    let selected = enabled && same_path(&path, current_path);
+    row(
+        RowDescriptor::new("Favorites", id, label, role, SidebarItemKind::Favorite, id)
+            .path(path)
+            .state(RowState::path(enabled, selected)),
+    )
+}
+
+fn icloud_row(icloud_drive: Option<&Path>, current_path: &Path) -> SidebarItemSpec {
+    let path = icloud_drive.map(Path::to_path_buf);
+    let selected = path
+        .as_ref()
+        .is_some_and(|path| same_path(path, current_path));
+    row(RowDescriptor::new(
+        "iCloud",
+        "icloud-drive",
+        "iCloud Drive",
+        "icloud-drive",
+        SidebarItemKind::Cloud,
+        "icloud",
+    )
+    .optional_path(path)
+    .state(RowState::path(icloud_drive.is_some(), selected)))
+}
+
+fn location_rows(volumes: &[SidebarVolumeSpec], current_path: &Path) -> Vec<SidebarItemSpec> {
+    let mut rows = vec![row(RowDescriptor::new(
+        "Locations",
+        "computer",
+        "Computer",
+        "computer",
+        SidebarItemKind::Location,
+        "computer",
+    )
+    .state(RowState::virtual_item(true, false)))];
+
+    rows.extend(volumes.iter().map(|volume| {
+        row(RowDescriptor::new(
+            "Locations",
+            volume.id.clone(),
+            volume.label.clone(),
+            "mounted-volume",
+            SidebarItemKind::Location,
+            "external-disk",
+        )
+        .path(volume.path.clone())
+        .state(RowState {
+            enabled: path_exists(&volume.path),
+            selected: same_path(&volume.path, current_path),
+            ejectable: volume.ejectable,
+            virtual_item: false,
+        }))
+    }));
+
+    rows
+}
+
+fn tag_rows() -> Vec<SidebarItemSpec> {
+    [
+        ("tag-red", "Red"),
+        ("tag-orange", "Orange"),
+        ("tag-yellow", "Yellow"),
+        ("tag-green", "Green"),
+        ("tag-blue", "Blue"),
+        ("tag-purple", "Purple"),
+        ("tag-gray", "Gray"),
+        ("tag-all", "All Tags..."),
+    ]
+    .into_iter()
+    .map(|(id, label)| {
+        row(
+            RowDescriptor::new("Tags", id, label, "finder-tag", SidebarItemKind::Tag, "tag")
+                .state(RowState::virtual_item(true, false)),
+        )
+    })
+    .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RowState {
+    enabled: bool,
+    selected: bool,
+    ejectable: bool,
+    virtual_item: bool,
+}
+
+impl RowState {
+    const fn path(enabled: bool, selected: bool) -> Self {
+        Self {
+            enabled,
+            selected,
+            ejectable: false,
+            virtual_item: false,
+        }
+    }
+
+    const fn virtual_item(enabled: bool, selected: bool) -> Self {
+        Self {
+            enabled,
+            selected,
+            ejectable: false,
+            virtual_item: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RowDescriptor {
+    section: &'static str,
+    id: String,
+    label: String,
+    role: &'static str,
+    kind: SidebarItemKind,
+    icon: &'static str,
+    path: Option<PathBuf>,
+    state: RowState,
+}
+
+impl RowDescriptor {
+    fn new(
+        section: &'static str,
+        id: impl Into<String>,
+        label: impl Into<String>,
+        role: &'static str,
+        kind: SidebarItemKind,
+        icon: &'static str,
+    ) -> Self {
+        Self {
+            section,
+            id: id.into(),
+            label: label.into(),
+            role,
+            kind,
+            icon,
+            path: None,
+            state: RowState::path(true, false),
+        }
+    }
+
+    fn path(mut self, path: PathBuf) -> Self {
+        self.path = Some(path);
+        self
+    }
+
+    fn optional_path(mut self, path: Option<PathBuf>) -> Self {
+        self.path = path;
+        self
+    }
+
+    fn state(mut self, state: RowState) -> Self {
+        self.state = state;
+        self
+    }
+}
+
+fn row(descriptor: RowDescriptor) -> SidebarItemSpec {
+    SidebarItemSpec {
+        section: descriptor.section,
+        id: descriptor.id,
+        label: descriptor.label,
+        role: descriptor.role,
+        kind: descriptor.kind,
+        path: descriptor.path,
+        icon: descriptor.icon,
+        depth: 0,
+        enabled: descriptor.state.enabled,
+        selected: descriptor.state.selected,
+        ejectable: descriptor.state.ejectable,
+        virtual_item: descriptor.state.virtual_item,
+    }
+}
+
+fn discover_volumes() -> Vec<SidebarVolumeSpec> {
+    let mut volumes = fs::read_dir("/Volumes")
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_dir() {
+                return None;
+            }
+            let label = path.file_name()?.to_str()?.to_string();
+            if label.is_empty() || is_system_volume_label(&label) {
+                return None;
+            }
+            Some(SidebarVolumeSpec {
+                id: stable_id("volume", &label),
+                label,
+                path,
+                ejectable: true,
+            })
+        })
+        .collect::<Vec<_>>();
+    volumes.sort_by(|left, right| left.label.cmp(&right.label));
+    volumes
+}
+
+fn is_system_volume_label(label: &str) -> bool {
+    matches!(label, "Macintosh HD" | "Recovery" | "Preboot" | "VM")
+}
+
+fn stable_id(prefix: &str, label: &str) -> String {
+    let mut id = String::with_capacity(prefix.len() + label.len() + 1);
+    id.push_str(prefix);
+    id.push('-');
+    for ch in label.chars() {
+        if ch.is_ascii_alphanumeric() {
+            id.push(ch.to_ascii_lowercase());
+        } else if !id.ends_with('-') {
+            id.push('-');
+        }
+    }
+    id.trim_end_matches('-').to_string()
+}
+
+fn existing_path(path: PathBuf) -> Option<PathBuf> {
+    path_exists(&path).then_some(path)
+}
+
+fn path_exists(path: &Path) -> bool {
+    fs::metadata(path).is_ok()
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    left == right
+        || match (fs::canonicalize(left), fs::canonicalize(right)) {
+            (Ok(left), Ok(right)) => left == right,
+            _ => false,
+        }
+}
+
+fn tag_color(id: &str) -> gpui::Rgba {
+    match id {
+        "tag-red" => rgb(0xff453a),
+        "tag-orange" => rgb(0xff9f0a),
+        "tag-yellow" => rgb(0xffd60a),
+        "tag-green" => rgb(0x32d74b),
+        "tag-blue" => rgb(0x0a84ff),
+        "tag-purple" => rgb(0xbf5af2),
+        _ => rgb(0x8e8e93),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contract_contains_finder_sidebar_sections_and_rows() {
+        let contract = SidebarContract::from_environment(
+            "/Users/tester/Desktop",
+            SidebarEnvironment {
+                home: PathBuf::from("/Users/tester"),
+                icloud_drive: Some(PathBuf::from(
+                    "/Users/tester/Library/Mobile Documents/com~apple~CloudDocs",
+                )),
+                volumes: vec![SidebarVolumeSpec {
+                    id: "volume-work".to_string(),
+                    label: "Work".to_string(),
+                    path: PathBuf::from("/Volumes/Work"),
+                    ejectable: true,
+                }],
+            },
+        );
+        let ids: Vec<_> = contract.rows.iter().map(|row| row.id.as_str()).collect();
+
+        assert_eq!(contract.width_px, 188);
+        assert_eq!(contract.row_height_px, 28);
+        assert_eq!(contract.sections, SECTIONS);
+        assert!(ids.contains(&"home"));
+        assert!(ids.contains(&"icloud-drive"));
+        assert!(ids.contains(&"volume-work"));
+        assert!(ids.contains(&"tag-red"));
+    }
+
+    #[test]
+    fn contract_output_is_stable_for_cli_and_fozzy() {
+        let contract = SidebarContract::from_environment(
+            "/Users/tester",
+            SidebarEnvironment {
+                home: PathBuf::from("/Users/tester"),
+                icloud_drive: None,
+                volumes: Vec::new(),
+            },
+        );
+        let output = contract.as_tsv();
+
+        assert!(output.starts_with(
+            "sidebar\twidth=188\trow-height=28\tsection-header-height=26\tsections=Favorites,iCloud,Locations,Tags"
+        ));
+        assert!(output.contains(
+            "row\tFavorites\thome\ttester\thome-folder\tfavorite\t/Users/tester\tdepth=0"
+        ));
+        assert!(output.contains(
+            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false"
+        ));
+        assert!(output.contains(
+            "row\tTags\ttag-all\tAll Tags...\tfinder-tag\ttag\t-\tdepth=0\tenabled=true"
+        ));
+    }
+
+    #[test]
+    fn stable_volume_ids_are_ascii_and_deterministic() {
+        assert_eq!(stable_id("volume", "Work Drive"), "volume-work-drive");
+        assert_eq!(stable_id("volume", "Media+Backup"), "volume-media-backup");
+    }
+
+    #[test]
+    fn system_volumes_are_not_reported_as_ejectable_locations() {
+        assert!(is_system_volume_label("Macintosh HD"));
+        assert!(is_system_volume_label("Recovery"));
+        assert!(!is_system_volume_label("Hex"));
+    }
+}

@@ -129,6 +129,33 @@ fn reports_ui_toolbar_contract_from_binary() {
 }
 
 #[test]
+fn reports_ui_sidebar_contract_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["ui-sidebar-contract", "/tmp/gfm"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let mut lines = stdout.lines();
+
+    assert_eq!(
+        lines.next(),
+        Some(
+            "sidebar\twidth=188\trow-height=28\tsection-header-height=26\tsections=Favorites,iCloud,Locations,Tags"
+        )
+    );
+    assert!(stdout.contains("row\tFavorites\thome\t"));
+    assert!(stdout.contains("row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud"));
+    assert!(stdout.contains("row\tLocations\tcomputer\tComputer\tcomputer\tlocation"));
+    assert!(stdout.contains("row\tTags\ttag-red\tRed\tfinder-tag\ttag"));
+    assert!(stdout.contains("row\tTags\ttag-all\tAll Tags...\tfinder-tag\ttag"));
+}
+
+#[test]
 fn reports_preview_security_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["preview-check", "/tmp/example.app", "quick-look"])

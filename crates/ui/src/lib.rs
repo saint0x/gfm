@@ -6,9 +6,11 @@ use gpui::{
 use std::path::PathBuf;
 
 mod menu;
+mod sidebar;
 mod toolbar;
 
 pub use menu::{MenuCommandSpec, MenuCommandState, MenuContract};
+pub use sidebar::{SidebarContract, SidebarItemKind, SidebarItemSpec, SidebarVolumeSpec};
 pub use toolbar::{ToolbarContract, ToolbarControlKind, ToolbarControlSpec};
 
 const DEFAULT_WIDTH: f32 = 1040.0;
@@ -141,6 +143,7 @@ fn open_main_window(cx: &mut App, spec: AppLaunchSpec) -> anyhow::Result<()> {
     let activate = spec.activate_on_launch;
     cx.open_window(options, |_, cx| {
         cx.new(|_| RootView {
+            sidebar: sidebar::SidebarContract::discover(&spec.initial_path),
             initial_path: spec.initial_path,
         })
     })?;
@@ -185,6 +188,7 @@ fn window_options(cx: &App, spec: &AppLaunchSpec) -> WindowOptions {
 }
 
 struct RootView {
+    sidebar: SidebarContract,
     initial_path: PathBuf,
 }
 
@@ -196,7 +200,15 @@ impl Render for RootView {
             .flex_col()
             .bg(rgb(0x1e1e1e))
             .child(toolbar::render(&self.initial_path))
-            .child(div().flex_1().w_full().bg(rgb(0x1e1e1e)))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_1()
+                    .w_full()
+                    .child(sidebar::render(&self.sidebar))
+                    .child(div().flex_1().h_full().bg(rgb(0x1e1e1e))),
+            )
     }
 }
 
