@@ -68,6 +68,19 @@ pub struct SearchHit {
     pub record: FileRecord,
     pub score: i64,
     pub reason: MatchReason,
+    pub snippet: Option<SearchSnippet>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchSnippet {
+    pub text: String,
+    pub highlights: Vec<SnippetHighlight>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnippetHighlight {
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -8,7 +8,7 @@ use gfm_jobs::{
 use gfm_mac::{FileEventStream, WatchRoot};
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_store::ContentArchive;
-use gfm_types::{FileKind, Result};
+use gfm_types::{FileKind, Result, SearchHit};
 use std::env;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -152,13 +152,7 @@ fn run() -> Result<()> {
             })?;
             let snapshot = Indexer::default().build(root)?;
             for hit in snapshot.search(&query, 50) {
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    hit.score,
-                    marker(hit.record.kind),
-                    hit.record.len,
-                    hit.record.path.display()
-                );
+                print_hit(&hit);
             }
         }
         Some("search-content") => {
@@ -170,14 +164,8 @@ fn run() -> Result<()> {
             let mut live = snapshot.into_live();
             let indexed = live.index_content(&Extractor::default())?;
             eprintln!("content-indexed {indexed} files");
-            for hit in live.search(&query, 50) {
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    hit.score,
-                    marker(hit.record.kind),
-                    hit.record.len,
-                    hit.record.path.display()
-                );
+            for hit in live.search_with_snippets(&query, 50, &Extractor::default(), 96)? {
+                print_hit(&hit);
             }
         }
         Some("search-index") => {
@@ -187,13 +175,7 @@ fn run() -> Result<()> {
             })?;
             let snapshot = Indexer::default().load(index_path)?;
             for hit in snapshot.search(&query, 50) {
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    hit.score,
-                    marker(hit.record.kind),
-                    hit.record.len,
-                    hit.record.path.display()
-                );
+                print_hit(&hit);
             }
         }
         Some("search-content-index") => {
@@ -207,14 +189,8 @@ fn run() -> Result<()> {
                 )
             })?;
             let live = Indexer::default().load_live_with_content(records, content)?;
-            for hit in live.search(&query, 50) {
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    hit.score,
-                    marker(hit.record.kind),
-                    hit.record.len,
-                    hit.record.path.display()
-                );
+            for hit in live.search_with_snippets(&query, 50, &Extractor::default(), 96)? {
+                print_hit(&hit);
             }
         }
         Some("content-ids") => {
@@ -395,6 +371,49 @@ fn marker(kind: FileKind) -> &'static str {
         FileKind::Symlink => "link",
         FileKind::Other => "other",
     }
+}
+
+fn print_hit(hit: &SearchHit) {
+    print!(
+        "{}\t{}\t{}\t{}",
+        hit.score,
+        marker(hit.record.kind),
+        hit.record.len,
+        hit.record.path.display()
+    );
+    if let Some(snippet) = &hit.snippet {
+        print!("\t{}", escape_output_field(&highlight_snippet(snippet)));
+    }
+    println!();
+}
+
+fn highlight_snippet(snippet: &gfm_types::SearchSnippet) -> String {
+    let Some(highlight) = snippet.highlights.first() else {
+        return snippet.text.clone();
+    };
+    if highlight.start > highlight.end
+        || highlight.end > snippet.text.len()
+        || !snippet.text.is_char_boundary(highlight.start)
+        || !snippet.text.is_char_boundary(highlight.end)
+    {
+        return snippet.text.clone();
+    }
+    format!(
+        "{}[[{}]]{}",
+        &snippet.text[..highlight.start],
+        &snippet.text[highlight.start..highlight.end],
+        &snippet.text[highlight.end..]
+    )
+}
+
+fn escape_output_field(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| match ch {
+            '\t' | '\n' | '\r' => ' ',
+            other => other,
+        })
+        .collect()
 }
 
 fn event_marker(kind: &gfm_types::FileEventKind) -> &'static str {

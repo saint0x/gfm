@@ -67,94 +67,93 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 44. Implement metadata ranking that cleanly composes exact, prefix, substring, fuzzy, path, recency, frequency, kind, user-pinned, tag, and content signals.
 45. Implement typo-tolerant fuzzy retrieval that avoids full-record scans at machine scale.
 46. Implement phrase and proximity search for content.
-47. Implement snippet extraction with highlighted matches and bounded IO.
-48. Implement per-volume search shards with parallel fanout and deterministic merge ordering.
-49. Implement user-intent ranking for Applications, Recents, Downloads, Desktop, project folders, screenshots, and recently touched files.
+47. Implement per-volume search shards with parallel fanout and deterministic merge ordering.
+48. Implement user-intent ranking for Applications, Recents, Downloads, Desktop, project folders, screenshots, and recently touched files.
 
 ## Content Extraction
 
-50. Implement PDF text extraction with sandboxing, page limits, incremental updates, and corrupt-file isolation.
-51. Implement Office document extraction for DOCX, XLSX, PPTX, and legacy formats where practical.
-52. Implement rich text, HTML, Markdown, source code, plist, JSON, CSV, log, email, and archive metadata extraction policies.
-53. Implement OCR strategy for image-only PDFs and screenshots without blocking primary indexing.
-54. Implement binary type detection beyond extension heuristics.
-55. Implement extraction budgets by file type, size, volume class, thermal state, battery state, and user activity.
-56. Implement extraction caching keyed by file identity, content signature, extractor version, and metadata epoch.
-57. Implement failure quarantine for repeatedly crashing or timing-out extractors.
+49. Implement PDF text extraction with sandboxing, page limits, incremental updates, and corrupt-file isolation.
+50. Implement Office document extraction for DOCX, XLSX, PPTX, and legacy formats where practical.
+51. Implement rich text, HTML, Markdown, source code, plist, JSON, CSV, log, email, and archive metadata extraction policies.
+52. Implement OCR strategy for image-only PDFs and screenshots without blocking primary indexing.
+53. Implement binary type detection beyond extension heuristics.
+54. Implement extraction budgets by file type, size, volume class, thermal state, battery state, and user activity.
+55. Implement extraction caching keyed by file identity, content signature, extractor version, and metadata epoch.
+56. Implement failure quarantine for repeatedly crashing or timing-out extractors.
 
 ## Storage Engine
 
-58. Implement mmap-backed immutable archive readers for records, dictionaries, metadata postings, and content postings.
-59. Implement dictionary compression for terms, paths, extensions, tags, kinds, metadata keys, and repeated path prefixes.
-60. Implement block-level compression policy with fast random access and bounded decompression windows.
-61. Implement large-index merge policy across hot buffers, immutable segments, compacted tiers, and tombstone cleanup.
-62. Implement record column stores for high-cardinality fields and cache-friendly scan/rank passes.
-63. Implement prefix/fuzzy lookup structures suitable for machine-wide scale.
-64. Implement checksums, schema migration, crash recovery, corruption detection, and rebuild plans.
-65. Implement index size telemetry and compaction scheduling heuristics.
-66. Implement benchmark fixtures for millions of files and realistic developer, media, documents, and iCloud trees.
+57. Implement mmap-backed immutable archive readers for records, dictionaries, metadata postings, and content postings.
+58. Implement dictionary compression for terms, paths, extensions, tags, kinds, metadata keys, and repeated path prefixes.
+59. Implement block-level compression policy with fast random access and bounded decompression windows.
+60. Implement large-index merge policy across hot buffers, immutable segments, compacted tiers, and tombstone cleanup.
+61. Implement record column stores for high-cardinality fields and cache-friendly scan/rank passes.
+62. Implement prefix/fuzzy lookup structures suitable for machine-wide scale.
+63. Implement checksums, schema migration, crash recovery, corruption detection, and rebuild plans.
+64. Implement index size telemetry and compaction scheduling heuristics.
+65. Implement benchmark fixtures for millions of files and realistic developer, media, documents, and iCloud trees.
 
 ## File Operations
 
-67. Implement APFS clone fast paths using platform-native clone semantics.
-68. Implement copyfile/Finder-compatible metadata preservation, xattrs, ACLs, resource forks, quarantine attributes, package behavior, and symlink policies.
-69. Implement operation pause, resume, cancellation, retry, and crash recovery replay.
-70. Implement progress accounting for recursive operations before and during execution.
-71. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
-72. Implement Trash restore metadata and restore operation.
-73. Implement privileged-operation flow for protected paths.
-74. Implement network-volume fallbacks and slow-volume throttling.
-75. Implement post-operation verification policy for high-risk moves/copies.
+66. Implement APFS clone fast paths using platform-native clone semantics.
+67. Implement copyfile/Finder-compatible metadata preservation, xattrs, ACLs, resource forks, quarantine attributes, package behavior, and symlink policies.
+68. Implement operation pause, resume, cancellation, retry, and crash recovery replay.
+69. Implement progress accounting for recursive operations before and during execution.
+70. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
+71. Implement Trash restore metadata and restore operation.
+72. Implement privileged-operation flow for protected paths.
+73. Implement network-volume fallbacks and slow-volume throttling.
+74. Implement post-operation verification policy for high-risk moves/copies.
 
 ## Jobs And Runtime
 
-76. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
-77. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
-78. Implement persistent progress snapshots and user-visible progress restoration after restart.
-79. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
-80. Implement per-volume concurrency limits and operation isolation.
-81. Implement structured cancellation propagation across nested jobs and subprocess extractors.
-82. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
+75. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
+76. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
+77. Implement persistent progress snapshots and user-visible progress restoration after restart.
+78. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
+79. Implement per-volume concurrency limits and operation isolation.
+80. Implement structured cancellation propagation across nested jobs and subprocess extractors.
+81. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
 
 ## Preview And Thumbnails
 
-83. Build preview cache with memory and disk tiers.
-84. Implement icon, thumbnail, and Quick Look request coalescing.
-85. Implement visible-window prioritization and cancellation for offscreen preview work.
-86. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
-87. Implement preview security policy for untrusted files.
-88. Implement thumbnail invalidation on content, metadata, tag, and iCloud state changes.
+82. Build preview cache with memory and disk tiers.
+83. Implement icon, thumbnail, and Quick Look request coalescing.
+84. Implement visible-window prioritization and cancellation for offscreen preview work.
+85. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
+86. Implement preview security policy for untrusted files.
+87. Implement thumbnail invalidation on content, metadata, tag, and iCloud state changes.
 
 ## Configuration
 
-89. Define target macOS version matrix and supported hardware profiles.
-90. Implement config crate for parity profiles, user settings, feature flags, and diagnostics toggles.
-91. Implement persistent settings storage with schema versioning and migration.
-92. Implement hidden/internal performance controls without exposing non-Finder UI by default.
-93. Implement operator diagnostics commands for index rebuild, trace export, parity baseline selection, and storage inspection.
+88. Define target macOS version matrix and supported hardware profiles.
+89. Implement config crate for parity profiles, user settings, feature flags, and diagnostics toggles.
+90. Implement persistent settings storage with schema versioning and migration.
+91. Implement hidden/internal performance controls without exposing non-Finder UI by default.
+92. Implement operator diagnostics commands for index rebuild, trace export, parity baseline selection, and storage inspection.
 
 ## Telemetry And Performance
 
-94. Implement latency histograms for navigation, selection, rename, search keystrokes, result streaming, thumbnail display, preview open, copy start, cancel, and window render.
-95. Implement frame timing and UI-thread stall detection.
-96. Implement IO, CPU, memory, allocation, queue-depth, and compaction telemetry.
-97. Implement local-only diagnostics export with privacy review.
-98. Define hard budgets for p50, p95, p99, cold start, warm start, first result, full result, directory open, and visible thumbnail completion.
-99. Build repeatable macrobenchmarks against small, medium, huge, developer, media, iCloud, external, and network-volume trees.
-100. Add regression gates that fail on latency, memory, index size, or frame-time drift.
+93. Implement latency histograms for navigation, selection, rename, search keystrokes, result streaming, thumbnail display, preview open, copy start, cancel, and window render.
+94. Implement frame timing and UI-thread stall detection.
+95. Implement IO, CPU, memory, allocation, queue-depth, and compaction telemetry.
+96. Implement local-only diagnostics export with privacy review.
+97. Define hard budgets for p50, p95, p99, cold start, warm start, first result, full result, directory open, and visible thumbnail completion.
+98. Build repeatable macrobenchmarks against small, medium, huge, developer, media, iCloud, external, and network-volume trees.
+99. Add regression gates that fail on latency, memory, index size, or frame-time drift.
 
 ## Packaging
 
-101. Build signed `.app` bundle with icons, entitlements, Info.plist, launch services registration, and document associations.
-102. Implement hardened runtime settings.
-103. Implement notarization pipeline.
-104. Implement first-run permission onboarding that remains Finder-parity by default.
-105. Implement update, rollback, crash-report, and diagnostics policy.
-106. Implement release artifact validation on clean macOS machines.
+100. Build signed `.app` bundle with icons, entitlements, Info.plist, launch services registration, and document associations.
+101. Implement hardened runtime settings.
+102. Implement notarization pipeline.
+103. Implement first-run permission onboarding that remains Finder-parity by default.
+104. Implement update, rollback, crash-report, and diagnostics policy.
+105. Implement release artifact validation on clean macOS machines.
 
 ## Documentation
 
-107. Expand `PLAN.md` when architectural decisions change materially.
-108. Keep `README.md` written as the completed product contract.
-109. Keep this file limited to unfinished work only.
-110. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+106. Expand `PLAN.md` when architectural decisions change materially.
+107. Keep `README.md` written as the completed product contract.
+108. Keep this file limited to unfinished work only.
+109. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

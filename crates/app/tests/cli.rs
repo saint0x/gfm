@@ -256,6 +256,7 @@ fn searches_text_content_from_binary() {
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("journal.md"), "{stdout}");
+    assert!(stdout.contains("[[superneedle]]"), "{stdout}");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -353,6 +354,7 @@ fn searches_persisted_content_phrases_from_binary() {
     let stdout = String::from_utf8(search_output.stdout).unwrap();
     assert!(stdout.contains("keep.md"), "{stdout}");
     assert!(!stdout.contains("skip.md"), "{stdout}");
+    assert!(stdout.contains("[[durable phrase marker]]"), "{stdout}");
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();

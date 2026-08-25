@@ -1,4 +1,4 @@
-use gfm_types::{FileKind, FileRecord, GfmError, Result};
+use gfm_types::{FileKind, FileRecord, GfmError, Result, SearchSnippet, SnippetHighlight};
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
@@ -45,6 +45,24 @@ impl Extractor {
         self.extract_path(&record.path)
     }
 
+    pub fn snippet_for_record(
+        &self,
+        record: &FileRecord,
+        terms: &[String],
+        phrases: &[String],
+        context_bytes: usize,
+    ) -> Result<Option<SearchSnippet>> {
+        let Some(document) = self.extract_record(record)? else {
+            return Ok(None);
+        };
+        Ok(build_snippet(
+            &document.text,
+            terms,
+            phrases,
+            context_bytes.max(1),
+        ))
+    }
+
     pub fn extract_path(&self, path: impl AsRef<Path>) -> Result<Option<ContentDocument>> {
         let path = path.as_ref();
         if !self.accepts_path(path) {
@@ -83,6 +101,59 @@ impl Extractor {
             .map(|extension| self.policy.extensions.contains(&extension.to_lowercase()))
             .unwrap_or(false)
     }
+}
+
+fn build_snippet(
+    text: &str,
+    terms: &[String],
+    phrases: &[String],
+    context_bytes: usize,
+) -> Option<SearchSnippet> {
+    let normalized = text.to_lowercase();
+    let mut needles: Vec<_> = phrases
+        .iter()
+        .chain(terms.iter())
+        .filter_map(|needle| {
+            let needle = needle.trim().to_lowercase();
+            (!needle.is_empty()).then_some(needle)
+        })
+        .collect();
+    needles.sort_by_key(|needle| std::cmp::Reverse(needle.len()));
+
+    let (match_start, match_end) = needles.iter().find_map(|needle| {
+        normalized
+            .find(needle)
+            .map(|start| (start, start + needle.len()))
+    })?;
+    let snippet_start = floor_char_boundary(text, match_start.saturating_sub(context_bytes));
+    let snippet_end = ceil_char_boundary(text, (match_end + context_bytes).min(text.len()));
+    let snippet_text = text[snippet_start..snippet_end].to_string();
+    let highlight_start = match_start.saturating_sub(snippet_start);
+    let highlight_end = match_end.saturating_sub(snippet_start);
+
+    Some(SearchSnippet {
+        text: snippet_text,
+        highlights: vec![SnippetHighlight {
+            start: highlight_start,
+            end: highlight_end,
+        }],
+    })
+}
+
+fn floor_char_boundary(text: &str, mut index: usize) -> usize {
+    index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn ceil_char_boundary(text: &str, mut index: usize) -> usize {
+    index = index.min(text.len());
+    while index < text.len() && !text.is_char_boundary(index) {
+        index += 1;
+    }
+    index
 }
 
 impl Default for Extractor {
@@ -165,6 +236,43 @@ mod tests {
         let doc = Extractor::default().extract_path(&path).unwrap();
 
         assert!(doc.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_bounded_snippet_with_highlight() {
+        let root = unique_temp_dir("gfm-content-snippet");
+        let path = root.join("note.md");
+        fs::write(
+            &path,
+            "before before before exact snippet marker after after after",
+        )
+        .unwrap();
+        let record = FileRecord {
+            id: FileId::new(VolumeId(1), 1),
+            parent: None,
+            path: path.clone(),
+            name: "note.md".to_string(),
+            kind: FileKind::File,
+            len: 57,
+            created: None,
+            modified: None,
+            changed: None,
+            hidden: false,
+            tags: Vec::new(),
+        };
+
+        let snippet = Extractor::default()
+            .snippet_for_record(&record, &[], &["exact snippet".to_string()], 8)
+            .unwrap()
+            .unwrap();
+
+        assert!(snippet.text.contains("exact snippet"));
+        assert!(snippet.text.len() < 57);
+        assert_eq!(
+            &snippet.text[snippet.highlights[0].start..snippet.highlights[0].end],
+            "exact snippet"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

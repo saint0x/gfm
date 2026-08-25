@@ -1,7 +1,7 @@
 use gfm_content::Extractor;
 use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
-use gfm_search::SearchIndex;
+use gfm_search::{SearchIndex, SearchQuery};
 use gfm_store::{
     compact_content_segments, read_content_postings, read_records, write_content_postings,
     write_content_segment, write_records,
@@ -56,6 +56,18 @@ impl IndexSnapshot {
         let mut live = self.clone().into_live();
         live.index_content(&Extractor::default())?;
         Ok(live.search(query, limit))
+    }
+
+    pub fn search_with_content_snippets(
+        &self,
+        query: &str,
+        limit: usize,
+        extractor: &Extractor,
+        context_bytes: usize,
+    ) -> Result<Vec<SearchHit>> {
+        let mut live = self.clone().into_live();
+        live.index_content(extractor)?;
+        live.search_with_snippets(query, limit, extractor, context_bytes)
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -133,6 +145,28 @@ impl LiveIndex {
         cancellation: &Cancellation,
     ) -> Result<Vec<SearchHit>> {
         self.index.query_cancellable(query, limit, cancellation)
+    }
+
+    pub fn search_with_snippets(
+        &self,
+        query: &str,
+        limit: usize,
+        extractor: &Extractor,
+        context_bytes: usize,
+    ) -> Result<Vec<SearchHit>> {
+        let parsed = SearchQuery::parse(query);
+        let mut hits = self.index.query_structured(&parsed, limit);
+        for hit in &mut hits {
+            if matches!(hit.reason, gfm_types::MatchReason::Content) {
+                hit.snippet = extractor.snippet_for_record(
+                    &hit.record,
+                    &parsed.terms,
+                    &parsed.phrases,
+                    context_bytes,
+                )?;
+            }
+        }
+        Ok(hits)
     }
 
     pub fn index_content(&mut self, extractor: &Extractor) -> Result<usize> {
@@ -582,6 +616,30 @@ mod tests {
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].record.name, "notes.md");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn snapshot_can_search_text_content_with_snippets() {
+        let root = unique_temp_dir("gfm-content-snippet-index-root");
+        fs::write(
+            root.join("notes.md"),
+            "intro intro bounded snippet marker outro outro",
+        )
+        .unwrap();
+
+        let snapshot = Indexer::default().build(&root).unwrap();
+        let hits = snapshot
+            .search_with_content_snippets(r#""snippet marker""#, 5, &Extractor::default(), 8)
+            .unwrap();
+
+        let snippet = hits[0].snippet.as_ref().unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(snippet.text.contains("snippet marker"));
+        assert_eq!(
+            &snippet.text[snippet.highlights[0].start..snippet.highlights[0].end],
+            "snippet marker"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

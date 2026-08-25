@@ -295,6 +295,7 @@ impl SearchIndex {
                         record: record.clone(),
                         score: score + recency_score(record),
                         reason,
+                        snippet: None,
                     })
             })
             .collect();
