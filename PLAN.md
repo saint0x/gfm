@@ -266,6 +266,7 @@ gfm/
 
 - Owns priority queues, cancellation tokens, backpressure, progress accounting, and worker pools.
 - UI-visible jobs and invisible background jobs share one scheduler.
+- Provides volume-isolated worker admission that caps concurrent work per `VolumeId` while unrelated volumes and unscoped interactive jobs keep running.
 
 `config`
 
@@ -576,7 +577,7 @@ All operations go through a scheduler:
 
 Scheduler properties:
 
-- Per-volume queues.
+- Per-volume queues backed by worker admission limits so one hot volume cannot monopolize all runtime workers or destroy interactive I/O latency.
 - Operation dependencies.
 - Priority inheritance from visible UI.
 - Exact preflight item/byte totals and completion-backed progress aggregation.

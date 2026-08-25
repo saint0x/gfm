@@ -1,11 +1,11 @@
-use gfm_types::{GfmError, Result};
+use gfm_types::{GfmError, Result, VolumeId};
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashSet, VecDeque};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,6 +34,7 @@ pub struct Job {
     pub id: JobId,
     pub priority: Priority,
     pub label: String,
+    pub volume: Option<VolumeId>,
     cancel: Cancellation,
 }
 
@@ -77,11 +78,30 @@ impl Scheduler {
     }
 
     pub fn schedule(&mut self, priority: Priority, label: impl Into<String>) -> Job {
+        self.schedule_with_volume(priority, label, None)
+    }
+
+    pub fn schedule_on_volume(
+        &mut self,
+        priority: Priority,
+        label: impl Into<String>,
+        volume: VolumeId,
+    ) -> Job {
+        self.schedule_with_volume(priority, label, Some(volume))
+    }
+
+    fn schedule_with_volume(
+        &mut self,
+        priority: Priority,
+        label: impl Into<String>,
+        volume: Option<VolumeId>,
+    ) -> Job {
         let id = JobId(self.next.fetch_add(1, AtomicOrdering::SeqCst) + 1);
         let job = Job {
             id,
             priority,
             label: label.into(),
+            volume,
             cancel: Cancellation::default(),
         };
         self.queue.push(QueuedJob(job.clone()));
@@ -184,6 +204,39 @@ impl WorkerReport {
             .iter()
             .filter(|outcome| matches!(outcome.status, TaskStatus::Failed(_)))
             .count()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeConcurrencyPolicy {
+    default_limit: usize,
+    overrides: HashMap<VolumeId, usize>,
+}
+
+impl VolumeConcurrencyPolicy {
+    pub fn new(default_limit: usize) -> Self {
+        Self {
+            default_limit: default_limit.max(1),
+            overrides: HashMap::new(),
+        }
+    }
+
+    pub fn with_volume_limit(mut self, volume: VolumeId, limit: usize) -> Self {
+        self.overrides.insert(volume, limit.max(1));
+        self
+    }
+
+    fn limit_for(&self, volume: VolumeId) -> usize {
+        self.overrides
+            .get(&volume)
+            .copied()
+            .unwrap_or(self.default_limit)
+    }
+}
+
+impl Default for VolumeConcurrencyPolicy {
+    fn default() -> Self {
+        Self::new(1)
     }
 }
 
@@ -408,6 +461,55 @@ impl WorkerPool {
         WorkerReport { outcomes }
     }
 
+    pub fn run_isolated(&self, tasks: Vec<Task>, policy: VolumeConcurrencyPolicy) -> WorkerReport {
+        if tasks.is_empty() {
+            return WorkerReport {
+                outcomes: Vec::new(),
+            };
+        }
+
+        let task_count = tasks.len();
+        let queue = Arc::new(IsolatedTaskQueue::new(tasks, policy));
+        let outcomes = Arc::new(Mutex::new(Vec::with_capacity(task_count)));
+        let threads = self.threads.min(task_count);
+
+        thread::scope(|scope| {
+            for _ in 0..threads {
+                let queue = Arc::clone(&queue);
+                let outcomes = Arc::clone(&outcomes);
+                scope.spawn(move || loop {
+                    let Some(mut lease) = queue.next() else {
+                        break;
+                    };
+                    let cancellation = lease.task.job.cancellation();
+                    let result =
+                        lease.task.work.take().expect("worker task missing work")(cancellation);
+                    let status = match result {
+                        Ok(()) => TaskStatus::Completed,
+                        Err(GfmError::Cancelled) => TaskStatus::Cancelled,
+                        Err(err) => TaskStatus::Failed(err.to_string()),
+                    };
+                    let job = lease.finish();
+                    outcomes
+                        .lock()
+                        .expect("worker outcome list poisoned")
+                        .push(TaskOutcome {
+                            id: job.id,
+                            label: job.label,
+                            status,
+                        });
+                });
+            }
+        });
+
+        let mut outcomes = Arc::try_unwrap(outcomes)
+            .expect("worker outcomes still shared")
+            .into_inner()
+            .expect("worker outcome list poisoned");
+        outcomes.sort_by_key(|outcome| outcome.id.value());
+        WorkerReport { outcomes }
+    }
+
     pub fn run_retriable(
         &self,
         tasks: Vec<RetriableTask>,
@@ -498,6 +600,117 @@ impl WorkerPool {
             .expect("worker outcome list poisoned");
         outcomes.sort_by_key(|outcome| outcome.id.value());
         WorkerReport { outcomes }
+    }
+}
+
+struct IsolatedTaskQueue {
+    state: Mutex<IsolatedTaskQueueState>,
+    wake: Condvar,
+    policy: VolumeConcurrencyPolicy,
+}
+
+impl IsolatedTaskQueue {
+    fn new(tasks: Vec<Task>, policy: VolumeConcurrencyPolicy) -> Self {
+        Self {
+            state: Mutex::new(IsolatedTaskQueueState {
+                pending: VecDeque::from(tasks),
+                active_by_volume: HashMap::new(),
+            }),
+            wake: Condvar::new(),
+            policy,
+        }
+    }
+
+    fn next(self: &Arc<Self>) -> Option<TaskLease> {
+        let mut state = self.state.lock().expect("isolated task queue poisoned");
+        loop {
+            if let Some((index, volume)) = state.next_admissible(&self.policy) {
+                let task = state
+                    .pending
+                    .remove(index)
+                    .expect("admissible task vanished");
+                if let Some(volume) = volume {
+                    *state.active_by_volume.entry(volume).or_insert(0) += 1;
+                }
+                return Some(TaskLease {
+                    queue: Arc::clone(self),
+                    task,
+                    volume,
+                    finished: false,
+                });
+            }
+            if state.pending.is_empty() {
+                return None;
+            }
+            state = self
+                .wake
+                .wait(state)
+                .expect("isolated task queue poisoned while waiting");
+        }
+    }
+
+    fn release(&self, volume: Option<VolumeId>) {
+        let mut state = self.state.lock().expect("isolated task queue poisoned");
+        if let Some(volume) = volume {
+            let active = state
+                .active_by_volume
+                .get_mut(&volume)
+                .expect("volume lease released without active count");
+            *active -= 1;
+            if *active == 0 {
+                state.active_by_volume.remove(&volume);
+            }
+        }
+        self.wake.notify_all();
+    }
+}
+
+struct IsolatedTaskQueueState {
+    pending: VecDeque<Task>,
+    active_by_volume: HashMap<VolumeId, usize>,
+}
+
+impl IsolatedTaskQueueState {
+    fn next_admissible(
+        &self,
+        policy: &VolumeConcurrencyPolicy,
+    ) -> Option<(usize, Option<VolumeId>)> {
+        self.pending
+            .iter()
+            .enumerate()
+            .find_map(|(index, task)| match task.job.volume {
+                Some(volume)
+                    if self.active_by_volume.get(&volume).copied().unwrap_or(0)
+                        < policy.limit_for(volume) =>
+                {
+                    Some((index, Some(volume)))
+                }
+                Some(_) => None,
+                None => Some((index, None)),
+            })
+    }
+}
+
+struct TaskLease {
+    queue: Arc<IsolatedTaskQueue>,
+    task: Task,
+    volume: Option<VolumeId>,
+    finished: bool,
+}
+
+impl TaskLease {
+    fn finish(mut self) -> Job {
+        self.finished = true;
+        self.queue.release(self.volume);
+        self.task.job.clone()
+    }
+}
+
+impl Drop for TaskLease {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.queue.release(self.volume);
+        }
     }
 }
 
@@ -606,201 +819,4 @@ fn unescape(input: &str) -> std::result::Result<String, String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn pops_highest_priority_first() {
-        let mut scheduler = Scheduler::new();
-        scheduler.schedule(Priority::Background, "crawl");
-        scheduler.schedule(Priority::Interactive, "open folder");
-
-        assert_eq!(scheduler.pop_next().unwrap().label, "open folder");
-        assert_eq!(scheduler.pop_next().unwrap().label, "crawl");
-    }
-
-    #[test]
-    fn drains_ready_jobs_in_priority_order() {
-        let mut scheduler = Scheduler::new();
-        scheduler.schedule(Priority::Background, "background");
-        scheduler.schedule(Priority::Interactive, "interactive");
-        scheduler.schedule(Priority::Visible, "visible");
-
-        let labels: Vec<_> = scheduler
-            .drain_ready()
-            .into_iter()
-            .map(|job| job.label)
-            .collect();
-
-        assert_eq!(labels, ["interactive", "visible", "background"]);
-    }
-
-    #[test]
-    fn worker_pool_runs_tasks_and_reports_outcomes() {
-        let mut scheduler = Scheduler::new();
-        let first = scheduler.schedule(Priority::Background, "first");
-        let second = scheduler.schedule(Priority::Background, "second");
-        second.cancel();
-
-        let report = WorkerPool::new(2).run(vec![
-            Task::new(first, |_| Ok(())),
-            Task::new(second, |cancellation| cancellation.check()),
-        ]);
-
-        assert_eq!(report.completed(), 1);
-        assert_eq!(report.cancelled(), 1);
-        assert_eq!(report.failed(), 0);
-    }
-
-    #[test]
-    fn retriable_worker_journals_attempts_until_success() {
-        let path = temp_path("gfm-job-journal", "journal");
-        let journal = JobJournal::new(&path);
-        let mut scheduler = Scheduler::new();
-        let job = scheduler.schedule(Priority::Background, "retry content");
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let attempts_task = Arc::clone(&attempts);
-
-        let report = WorkerPool::new(1).run_retriable(
-            vec![RetriableTask::new(job, move |_| {
-                if attempts_task.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
-                    Err(GfmError::Format("temporary failure".to_string()))
-                } else {
-                    Ok(())
-                }
-            })],
-            &journal,
-            RetryPolicy { max_attempts: 2 },
-        );
-        let entries = journal.read().unwrap();
-
-        assert_eq!(report.completed(), 1);
-        assert_eq!(attempts.load(AtomicOrdering::SeqCst), 2);
-        assert_eq!(entries.len(), 4);
-        assert_eq!(entries[0].status, TaskStatus::Started);
-        assert!(matches!(entries[1].status, TaskStatus::Failed(_)));
-        assert_eq!(entries[2].status, TaskStatus::Started);
-        assert_eq!(entries[3].status, TaskStatus::Completed);
-
-        std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn journal_identifies_interrupted_and_retryable_jobs() {
-        let path = temp_path("gfm-job-recovery", "journal");
-        let journal = JobJournal::new(&path);
-        let interrupted = JobId::from_raw(10);
-        let failed = JobId::from_raw(11);
-        let completed = JobId::from_raw(12);
-
-        journal
-            .append(&JournalEntry {
-                id: interrupted,
-                label: "interrupted".to_string(),
-                attempt: 1,
-                status: TaskStatus::Started,
-            })
-            .unwrap();
-        journal
-            .append(&JournalEntry {
-                id: failed,
-                label: "failed".to_string(),
-                attempt: 1,
-                status: TaskStatus::Started,
-            })
-            .unwrap();
-        journal
-            .append(&JournalEntry {
-                id: failed,
-                label: "failed".to_string(),
-                attempt: 1,
-                status: TaskStatus::Failed("transient".to_string()),
-            })
-            .unwrap();
-        journal
-            .append(&JournalEntry {
-                id: completed,
-                label: "completed".to_string(),
-                attempt: 1,
-                status: TaskStatus::Started,
-            })
-            .unwrap();
-        journal
-            .append(&JournalEntry {
-                id: completed,
-                label: "completed".to_string(),
-                attempt: 1,
-                status: TaskStatus::Completed,
-            })
-            .unwrap();
-
-        let recoverable = journal
-            .recoverable(RetryPolicy { max_attempts: 2 })
-            .unwrap();
-
-        assert_eq!(
-            recoverable,
-            vec![
-                RecoveryJob {
-                    id: interrupted,
-                    label: "interrupted".to_string(),
-                    attempts: 1,
-                    reason: RecoveryReason::Interrupted,
-                },
-                RecoveryJob {
-                    id: failed,
-                    label: "failed".to_string(),
-                    attempts: 1,
-                    reason: RecoveryReason::RetryableFailure,
-                },
-            ]
-        );
-
-        std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn journal_does_not_recover_exhausted_failures() {
-        let path = temp_path("gfm-job-recovery-exhausted", "journal");
-        let journal = JobJournal::new(&path);
-        let failed = JobId::from_raw(21);
-
-        journal
-            .append(&JournalEntry {
-                id: failed,
-                label: "failed".to_string(),
-                attempt: 1,
-                status: TaskStatus::Started,
-            })
-            .unwrap();
-        journal
-            .append(&JournalEntry {
-                id: failed,
-                label: "failed".to_string(),
-                attempt: 1,
-                status: TaskStatus::Failed("permanent".to_string()),
-            })
-            .unwrap();
-
-        assert!(journal
-            .recoverable(RetryPolicy { max_attempts: 1 })
-            .unwrap()
-            .is_empty());
-
-        std::fs::remove_file(path).unwrap();
-    }
-
-    fn temp_path(prefix: &str, extension: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "{}-{}.{}",
-            prefix,
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-            extension
-        ))
-    }
-}
+mod tests;

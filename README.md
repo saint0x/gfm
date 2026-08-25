@@ -58,7 +58,7 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 - `crates/search`: query parsing, ranking, streaming results, filename/path/content/metadata retrieval, fuzzy matching, snippets, cancellation, supersession, and recency scoring.
 - `crates/store`: mmap segment store, dictionaries, compressed postings, appendable content segments, tombstones, merge policy, and compaction.
 - `crates/preview`: icons, thumbnails, Quick Look preview policy, memory/disk preview cache, request coalescing, visible-window prioritization, cancellation, security decisions, invalidation, and extraction budgets.
-- `crates/jobs`: scheduling, cancellation, prioritization, fairness, progress, and backpressure.
+- `crates/jobs`: scheduling, cancellation, prioritization, fairness, progress, volume-isolated worker admission, and backpressure.
 - `crates/config`: versioned TOML config, Finder parity profiles, user settings, feature flags, hidden performance controls, diagnostics toggles, validation, and atomic persistence.
 - `crates/telemetry`: bounded latency histograms, hard performance budgets, frame timing, UI-thread stall detection, IO/CPU/memory/allocation/queue/compaction summaries, counters, traces, and local-only diagnostics export with privacy review.
 - `crates/diagnostics`: operator commands for index rebuilds, privacy-reviewed trace export, parity baseline selection, and persisted storage inspection.
@@ -133,6 +133,8 @@ GFM supports:
 - checksummed verification where needed
 
 The operation engine is journaled. A crash, power loss, unmount, permission denial, cancellation, or network failure leaves an inspectable recovery path instead of mystery state. File copies preserve symlink objects, try the native macOS `fclonefileat` path first for regular files, report whether the host used the APFS clone fast path or byte-copy fallback in tests, preserve permissions, access/modified timestamps, and copyable xattrs, then verify copied regular-file output with the configured size or streaming byte policy before reporting success. Recursive copy, move, rename, delete, and trash operations preflight exact item/byte totals, honor cancellation checkpoints during planning and execution, emit completion-backed progress during execution, replay interrupted started operations from the journal with the original operation id, and retry classified transient failed operations only under an explicit capped recovery policy.
+
+Runtime workers admit volume-scoped jobs through explicit per-volume limits. Heavy work on one disk, external drive, iCloud subtree, or network mount cannot consume every worker and starve visible work on another volume.
 
 ## UI Parity
 
