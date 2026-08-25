@@ -29,6 +29,7 @@ pub struct RegressionGateOptions {
     pub max_peak_memory_bytes: u64,
     pub max_index_bytes_per_record: u64,
     pub max_sidecar_prefix_candidate_ids: usize,
+    pub max_sidecar_substring_candidate_ids: usize,
     pub max_sidecar_fuzzy_verified_candidates: usize,
     pub fail_on_sidecar_truncation: bool,
     pub fail_on_frame_stalls: bool,
@@ -40,6 +41,7 @@ impl Default for RegressionGateOptions {
             max_peak_memory_bytes: 512 * 1024 * 1024,
             max_index_bytes_per_record: 512,
             max_sidecar_prefix_candidate_ids: 8_192,
+            max_sidecar_substring_candidate_ids: 8_192,
             max_sidecar_fuzzy_verified_candidates: 8_192,
             fail_on_sidecar_truncation: true,
             fail_on_frame_stalls: true,
@@ -79,6 +81,10 @@ pub enum RegressionGateViolation {
         stalls: u64,
     },
     SidecarPrefixCandidatesExceeded {
+        observed: usize,
+        budget: usize,
+    },
+    SidecarSubstringCandidatesExceeded {
         observed: usize,
         budget: usize,
     },
@@ -425,11 +431,13 @@ pub fn evaluate_regression_gate(
                 budget: options.max_sidecar_fuzzy_verified_candidates,
             });
         }
-        if sidecar.substring_candidate_ids > options.max_sidecar_prefix_candidate_ids {
-            violations.push(RegressionGateViolation::SidecarPrefixCandidatesExceeded {
-                observed: sidecar.substring_candidate_ids,
-                budget: options.max_sidecar_prefix_candidate_ids,
-            });
+        if sidecar.substring_candidate_ids > options.max_sidecar_substring_candidate_ids {
+            violations.push(
+                RegressionGateViolation::SidecarSubstringCandidatesExceeded {
+                    observed: sidecar.substring_candidate_ids,
+                    budget: options.max_sidecar_substring_candidate_ids,
+                },
+            );
         }
         if options.fail_on_sidecar_truncation
             && (sidecar.prefix_truncated_terms > 0
@@ -855,6 +863,7 @@ mod tests {
                 index_size_bytes: Some(20_000),
                 sidecar_lookup: Some(SearchLookupTelemetry {
                     prefix_candidate_ids: 999,
+                    substring_candidate_ids: 999,
                     fuzzy_verified_candidates: 999,
                     prefix_truncated_terms: 1,
                     fuzzy_term_truncated_keys: 1,
@@ -867,6 +876,7 @@ mod tests {
                 max_peak_memory_bytes: 512,
                 max_index_bytes_per_record: 128,
                 max_sidecar_prefix_candidate_ids: 128,
+                max_sidecar_substring_candidate_ids: 128,
                 max_sidecar_fuzzy_verified_candidates: 128,
                 fail_on_sidecar_truncation: true,
                 fail_on_frame_stalls: true,
@@ -902,6 +912,12 @@ mod tests {
         assert!(gate.violations.iter().any(|violation| {
             matches!(
                 violation,
+                RegressionGateViolation::SidecarSubstringCandidatesExceeded { .. }
+            )
+        }));
+        assert!(gate.violations.iter().any(|violation| {
+            matches!(
+                violation,
                 RegressionGateViolation::SidecarFuzzyCandidatesExceeded { .. }
             )
         }));
@@ -911,6 +927,42 @@ mod tests {
                 RegressionGateViolation::SidecarLookupTruncated { .. }
             )
         }));
+    }
+
+    #[test]
+    fn sidecar_substring_candidates_use_their_own_gate_budget() {
+        let report = macrobench_report(Vec::new(), 100);
+        let gate = evaluate_regression_gate(
+            &RegressionInputs {
+                macrobench: &report,
+                resources: None,
+                frame_timing: None,
+                index_size_bytes: None,
+                sidecar_lookup: Some(SearchLookupTelemetry {
+                    prefix_candidate_ids: 32,
+                    substring_candidate_ids: 129,
+                    fuzzy_verified_candidates: 32,
+                    ..SearchLookupTelemetry::default()
+                }),
+            },
+            RegressionGateOptions {
+                max_sidecar_prefix_candidate_ids: 64,
+                max_sidecar_substring_candidate_ids: 128,
+                max_sidecar_fuzzy_verified_candidates: 64,
+                fail_on_sidecar_truncation: false,
+                ..RegressionGateOptions::default()
+            },
+        );
+
+        assert_eq!(
+            gate.violations,
+            vec![
+                RegressionGateViolation::SidecarSubstringCandidatesExceeded {
+                    observed: 129,
+                    budget: 128,
+                }
+            ]
+        );
     }
 
     #[test]
@@ -953,6 +1005,7 @@ mod tests {
                 max_peak_memory_bytes: u64::MAX,
                 max_index_bytes_per_record: u64::MAX,
                 max_sidecar_prefix_candidate_ids: usize::MAX,
+                max_sidecar_substring_candidate_ids: usize::MAX,
                 max_sidecar_fuzzy_verified_candidates: usize::MAX,
                 fail_on_sidecar_truncation: false,
                 fail_on_frame_stalls: true,
