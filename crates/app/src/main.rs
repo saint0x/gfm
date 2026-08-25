@@ -35,8 +35,8 @@ use gfm_preview::{
 };
 use gfm_store::{
     dictionary_terms_from_records, metadata_postings_from_records, write_dictionary,
-    write_metadata_postings, ContentArchive, MetadataField, MmapContentArchive, MmapDictionary,
-    MmapMetadataArchive, MmapRecordArchive,
+    write_metadata_postings, write_record_columns, ContentArchive, MetadataField,
+    MmapContentArchive, MmapDictionary, MmapMetadataArchive, MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
@@ -828,6 +828,48 @@ fn run() -> Result<()> {
                     "legacy"
                 }
             );
+        }
+        Some("index-columns") => {
+            let records = required_path(args.next(), "index-columns requires a records path")?;
+            let output =
+                required_path(args.next(), "index-columns requires an output columns path")?;
+            let archive = MmapRecordArchive::open(records)?;
+            let records = archive.records()?;
+            write_record_columns(output, &records)?;
+            eprintln!("columns-indexed {} records", records.len());
+        }
+        Some("columns-verify") => {
+            let columns = required_path(args.next(), "columns-verify requires a columns path")?;
+            let archive = MmapRecordColumns::open(columns)?;
+            println!(
+                "columns-verify\trecords={}\tbytes={}\tchecksum={}",
+                archive.len(),
+                archive.mapped_len(),
+                if archive.is_checksummed() {
+                    "verified"
+                } else {
+                    "legacy"
+                }
+            );
+        }
+        Some("columns-lookup") => {
+            let columns = required_path(args.next(), "columns-lookup requires a columns path")?;
+            let volume = parse_u64_arg(args.next(), "columns-lookup requires a volume id")?;
+            let node = parse_u64_arg(args.next(), "columns-lookup requires a node id")?;
+            let archive = MmapRecordColumns::open(columns)?;
+            match archive.find(FileId::new(VolumeId(volume), node))? {
+                Some(column) => println!(
+                    "columns\tfound\tid={}:{}\tname={}\text={}\ttags={}\tcomment={}\tpath={}",
+                    column.id.volume.0,
+                    column.id.node,
+                    column.name,
+                    column.extension.as_deref().unwrap_or(""),
+                    column.tags.join(","),
+                    column.comment.as_deref().unwrap_or(""),
+                    column.path
+                ),
+                None => println!("columns\tmissing\tid={volume}:{node}"),
+            }
         }
         Some("index-metadata") => {
             let records = required_path(args.next(), "index-metadata requires a records path")?;
@@ -2096,6 +2138,9 @@ fn print_usage() {
   gfm search-index <index.gfmidx> <query>
   gfm search-index-mmap <index.gfmidx> <query>
   gfm records-verify <index.gfmidx>
+  gfm index-columns <records.gfmidx> <columns.gfmcols>
+  gfm columns-verify <columns.gfmcols>
+  gfm columns-lookup <columns.gfmcols> <volume-id> <node-id>
   gfm index-metadata <records.gfmidx> <metadata.gfmmeta>
   gfm index-dictionary <records.gfmidx> <dictionary.gfmdict>
   gfm dictionary-lookup <dictionary.gfmdict> <term>

@@ -1,3 +1,4 @@
+mod columns;
 mod content;
 mod dictionary;
 mod durable;
@@ -5,6 +6,7 @@ mod ids;
 mod integrity;
 mod metadata;
 
+pub use columns::{write_record_columns, MmapRecordColumns, RecordColumn};
 pub use content::{
     compact_content_segments, read_content_postings, read_content_segment, write_content_postings,
     write_content_segment, ContentArchive, MmapContentArchive,

@@ -774,6 +774,7 @@ fn searches_persisted_tags_from_binary() {
     let index = unique_temp_path("gfm-cli-tags", "gfmidx");
     let metadata = unique_temp_path("gfm-cli-tags", "gfmmeta");
     let dictionary = unique_temp_path("gfm-cli-tags", "gfmdict");
+    let columns = unique_temp_path("gfm-cli-tags", "gfmcols");
     fs::write(
         &index,
         "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\tImportant,Client\t/tmp/tagged.md\n2\t2\t0\tf\t5\t0\t0\t0\t0\tLater\t/tmp/other.md\n",
@@ -904,9 +905,58 @@ fn searches_persisted_tags_from_binary() {
         "{dictionary_verify_stdout}"
     );
 
+    let columns_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-columns",
+            index.to_str().unwrap(),
+            columns.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        columns_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&columns_output.stderr)
+    );
+
+    let columns_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["columns-verify", columns.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        columns_verify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&columns_verify.stderr)
+    );
+    let columns_verify_stdout = String::from_utf8(columns_verify.stdout).unwrap();
+    assert!(
+        columns_verify_stdout.contains("\tchecksum=verified"),
+        "{columns_verify_stdout}"
+    );
+
+    let columns_lookup = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["columns-lookup", columns.to_str().unwrap(), "1", "1"])
+        .output()
+        .unwrap();
+    assert!(
+        columns_lookup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&columns_lookup.stderr)
+    );
+    let columns_lookup_stdout = String::from_utf8(columns_lookup.stdout).unwrap();
+    assert!(
+        columns_lookup_stdout.contains("\tname=tagged.md\t"),
+        "{columns_lookup_stdout}"
+    );
+    assert!(
+        columns_lookup_stdout.contains("\ttags=client,important\t"),
+        "{columns_lookup_stdout}"
+    );
+
     fs::remove_file(index).unwrap();
     fs::remove_file(metadata).unwrap();
     fs::remove_file(dictionary).unwrap();
+    fs::remove_file(columns).unwrap();
 }
 
 #[test]
