@@ -212,6 +212,16 @@
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "content-ids-mmap",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "performance-critical"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "index-content-background",
         ".",
         "/tmp/gfm-fozzy-host-segments",

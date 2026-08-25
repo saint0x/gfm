@@ -33,7 +33,7 @@ use gfm_preview::{
     PreviewSchedulingPolicy, PreviewSecurityPolicy, PreviewTask, QuickLookSessionContract,
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
-use gfm_store::ContentArchive;
+use gfm_store::{ContentArchive, MmapContentArchive};
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
     run_macrobench, run_parity_gate_manifest, run_regression_gate,
@@ -821,6 +821,16 @@ fn run() -> Result<()> {
                 gfm_types::GfmError::Format("content-ids requires a term".to_string())
             })?;
             let mut archive = ContentArchive::open(content)?;
+            for id in archive.ids_for_term(&term)? {
+                println!("{}\t{}", id.volume.0, id.node);
+            }
+        }
+        Some("content-ids-mmap") => {
+            let content = required_path(args.next(), "content-ids-mmap requires a content path")?;
+            let term = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format("content-ids-mmap requires a term".to_string())
+            })?;
+            let archive = MmapContentArchive::open(content)?;
             for id in archive.ids_for_term(&term)? {
                 println!("{}\t{}", id.volume.0, id.node);
             }
@@ -1915,6 +1925,7 @@ fn print_usage() {
   gfm search-index <index.gfmidx> <query>
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>
   gfm content-ids <content.gfmcontent> <term>
+  gfm content-ids-mmap <content.gfmcontent> <term>
   gfm config-path
   gfm config-init [config.toml]
   gfm config-check [config.toml]

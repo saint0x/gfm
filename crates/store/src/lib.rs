@@ -3,7 +3,7 @@ mod durable;
 
 pub use content::{
     compact_content_segments, read_content_postings, read_content_segment, write_content_postings,
-    write_content_segment, ContentArchive,
+    write_content_segment, ContentArchive, MmapContentArchive,
 };
 pub use durable::{atomic_write, DurableCommit};
 

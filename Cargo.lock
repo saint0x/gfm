@@ -1764,6 +1764,7 @@ name = "gfm-store"
 version = "0.1.0"
 dependencies = [
  "gfm-types",
+ "memmap2",
 ]
 
 [[package]]

@@ -2,9 +2,10 @@ use crate::durable;
 use gfm_types::{
     ContentPositions, ContentPosting, ContentSegment, FileId, GfmError, Result, VolumeId,
 };
+use memmap2::{Mmap, MmapOptions};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 const CONTENT_MAGIC_V1: &[u8] = b"gfm-content-v1\n";
@@ -14,6 +15,13 @@ const CONTENT_SEGMENT_MAGIC: &[u8] = b"gfm-content-segment-v1\n";
 const CONTENT_SEGMENT_MAGIC_V2: &[u8] = b"gfm-content-segment-v2\n";
 const CONTENT_INDEX_FOOTER: &[u8] = b"gfm-content-index-v1\n";
 const CONTENT_FOOTER_LEN: u64 = 8 + CONTENT_INDEX_FOOTER.len() as u64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContentStoreVersion {
+    Legacy,
+    IndexedIds,
+    IndexedPositions,
+}
 
 pub fn write_content_postings(path: impl AsRef<Path>, postings: &[ContentPosting]) -> Result<()> {
     let path = path.as_ref();
@@ -87,6 +95,14 @@ pub struct ContentArchive {
     path: PathBuf,
     file: File,
     directory: ContentArchiveDirectory,
+    uses_positions: bool,
+}
+
+#[derive(Debug)]
+pub struct MmapContentArchive {
+    path: PathBuf,
+    mmap: Mmap,
+    directory: Vec<ContentDirectoryEntry>,
     uses_positions: bool,
 }
 
@@ -169,6 +185,84 @@ impl ContentArchive {
             ContentArchiveDirectory::Indexed(directory) => directory.len(),
             ContentArchiveDirectory::Legacy(postings) => postings.len(),
         }
+    }
+}
+
+impl MmapContentArchive {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+        let mmap = {
+            // SAFETY: The returned map is read-only, owns no mutable aliases, and the
+            // file handle is kept alive until map creation completes. GFM's archive
+            // writers publish immutable segments via atomic rename, so readers never
+            // mutate the mapped file through this API.
+            unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
+        };
+        let version = mmap_content_version(&mmap, path)?;
+        if version == ContentStoreVersion::Legacy {
+            return Err(content_format_error(
+                path,
+                "legacy content archives are not mmap indexed",
+            ));
+        }
+        let directory = read_content_directory_from_slice(&mmap, path)?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            mmap,
+            directory,
+            uses_positions: version == ContentStoreVersion::IndexedPositions,
+        })
+    }
+
+    pub fn ids_for_term(&self, term: &str) -> Result<Vec<FileId>> {
+        Ok(self
+            .posting_for_term(term)?
+            .map(|posting| posting.ids)
+            .unwrap_or_default())
+    }
+
+    pub fn posting_for_term(&self, term: &str) -> Result<Option<ContentPosting>> {
+        let term = term.trim().to_lowercase();
+        if term.is_empty() {
+            return Ok(None);
+        }
+        let Some(entry) = self
+            .directory
+            .binary_search_by(|entry| entry.term.as_str().cmp(term.as_str()))
+            .ok()
+            .map(|index| &self.directory[index])
+        else {
+            return Ok(None);
+        };
+        let start = usize::try_from(entry.offset)
+            .map_err(|_| content_format_error(&self.path, "posting offset overflow"))?;
+        let len = usize::try_from(entry.len)
+            .map_err(|_| content_format_error(&self.path, "posting length overflow"))?;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| content_format_error(&self.path, "posting range overflow"))?;
+        let bytes = self
+            .mmap
+            .get(start..end)
+            .ok_or_else(|| content_format_error(&self.path, "posting range out of bounds"))?;
+        let posting = read_content_posting(Cursor::new(bytes), &self.path, self.uses_positions)?;
+        if posting.term.trim().to_lowercase() == term {
+            Ok(Some(posting))
+        } else {
+            Err(content_format_error(
+                &self.path,
+                "content directory points at the wrong term",
+            ))
+        }
+    }
+
+    pub fn indexed_terms(&self) -> usize {
+        self.directory.len()
+    }
+
+    pub fn mapped_len(&self) -> usize {
+        self.mmap.len()
     }
 }
 
@@ -370,6 +464,66 @@ fn read_content_directory(file: &mut File, path: &Path) -> Result<Vec<ContentDir
     let mut directory = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
         directory.push(read_directory_entry(&mut *file, path)?);
+    }
+    Ok(directory)
+}
+
+fn mmap_content_version(bytes: &[u8], path: &Path) -> Result<ContentStoreVersion> {
+    if bytes.starts_with(CONTENT_MAGIC_V3) {
+        Ok(ContentStoreVersion::IndexedPositions)
+    } else if bytes.starts_with(CONTENT_MAGIC_V2) {
+        Ok(ContentStoreVersion::IndexedIds)
+    } else if bytes.starts_with(CONTENT_MAGIC_V1) {
+        Ok(ContentStoreVersion::Legacy)
+    } else {
+        Err(GfmError::Format(format!(
+            "unsupported content store header in {}",
+            path.display()
+        )))
+    }
+}
+
+fn read_content_directory_from_slice(
+    bytes: &[u8],
+    path: &Path,
+) -> Result<Vec<ContentDirectoryEntry>> {
+    if bytes.len() < CONTENT_MAGIC_V2.len() + CONTENT_FOOTER_LEN as usize {
+        return Err(content_format_error(
+            path,
+            "missing content directory footer",
+        ));
+    }
+    let footer_offset = bytes
+        .len()
+        .checked_sub(CONTENT_FOOTER_LEN as usize)
+        .ok_or_else(|| content_format_error(path, "missing content directory footer"))?;
+    let offset_bytes = bytes
+        .get(footer_offset..footer_offset + 8)
+        .ok_or_else(|| content_format_error(path, "missing content directory footer"))?;
+    let mut offset = [0u8; 8];
+    offset.copy_from_slice(offset_bytes);
+    let directory_offset = usize::try_from(u64::from_le_bytes(offset))
+        .map_err(|_| content_format_error(path, "invalid content directory offset"))?;
+    let footer = bytes
+        .get(footer_offset + 8..)
+        .ok_or_else(|| content_format_error(path, "missing content directory footer"))?;
+    if footer != CONTENT_INDEX_FOOTER {
+        return Err(content_format_error(
+            path,
+            "missing content directory footer",
+        ));
+    }
+    if directory_offset >= footer_offset {
+        return Err(content_format_error(
+            path,
+            "invalid content directory offset",
+        ));
+    }
+    let mut cursor = Cursor::new(&bytes[directory_offset..footer_offset]);
+    let count = read_varint(&mut cursor).map_err(|err| GfmError::io(path, err))?;
+    let mut directory = Vec::with_capacity(count.min(1_000_000) as usize);
+    for _ in 0..count {
+        directory.push(read_directory_entry(&mut cursor, path)?);
     }
     Ok(directory)
 }
@@ -640,6 +794,45 @@ mod tests {
 
         assert_eq!(archive.indexed_terms(), 2);
         assert_eq!(archive.ids_for_term("beta").unwrap(), vec![beta]);
+        assert!(archive.ids_for_term("missing").unwrap().is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_content_archive_reads_terms_without_file_seeks() {
+        let path = temp_path("gfm-content-mmap-archive", "gfmcontent");
+        let alpha = FileId::new(VolumeId(4), 12);
+        let beta = FileId::new(VolumeId(4), 15);
+        write_content_postings(
+            &path,
+            &[
+                ContentPosting {
+                    term: "alpha".to_string(),
+                    ids: vec![alpha],
+                    positions: vec![ContentPositions {
+                        id: alpha,
+                        positions: vec![1, 2],
+                    }],
+                },
+                ContentPosting {
+                    term: "beta".to_string(),
+                    ids: vec![beta],
+                    positions: vec![ContentPositions {
+                        id: beta,
+                        positions: vec![8],
+                    }],
+                },
+            ],
+        )
+        .unwrap();
+
+        let archive = MmapContentArchive::open(&path).unwrap();
+        let posting = archive.posting_for_term("beta").unwrap().unwrap();
+
+        assert_eq!(archive.indexed_terms(), 2);
+        assert!(archive.mapped_len() > 0);
+        assert_eq!(archive.ids_for_term("beta").unwrap(), vec![beta]);
+        assert_eq!(posting.positions[0].positions, vec![8]);
         assert!(archive.ids_for_term("missing").unwrap().is_empty());
         std::fs::remove_file(path).unwrap();
     }

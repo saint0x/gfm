@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 gfm-types = { path = "../types" }
+memmap2 = "0.9"
 
 [lints]
-workspace = true
-
+rust.unsafe_code = "allow"
