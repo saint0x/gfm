@@ -27,6 +27,36 @@ fn runs_macrobench_from_binary() {
 }
 
 #[test]
+fn materializes_macrobench_fixture_from_binary() {
+    let root = unique_temp_dir("gfm-cli-macrobench-fixture");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["macrobench-fixture", root.to_str().unwrap(), "smoke"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let fixture = root.join("gfm-macrobench-fixture");
+
+    assert!(stdout.contains("fixture\t"), "{stdout}");
+    assert!(stdout.contains("\tfiles\t201\t"), "{stdout}");
+    assert!(stdout.contains("\tscenarios\t9"), "{stdout}");
+    assert!(stdout.contains("documents\t"), "{stdout}");
+    assert!(fixture.join("manifest.tsv").exists());
+    assert!(fixture
+        .join("documents")
+        .join("year-2020")
+        .join("Briefing Project 00000000.md")
+        .exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn materializes_parity_fixture_from_binary() {
     let root = unique_temp_dir("gfm-cli-parity-fixture");
 

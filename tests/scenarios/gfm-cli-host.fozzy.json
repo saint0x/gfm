@@ -987,6 +987,12 @@
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["macrobench-fixture", "tmp/gfm-fozzy-macrobench-fixture", "smoke"],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["parity-fixture", "tmp/gfm-fozzy-parity", "smoke"],
       "expect_exit": 0
     },

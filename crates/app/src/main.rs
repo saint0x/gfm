@@ -56,12 +56,12 @@ use gfm_store::{
     SidecarHealth, SidecarKind, SidecarPaths,
 };
 use gfm_testkit::{
-    diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
-    run_large_sidecar_gate, run_macrobench, run_parity_gate_manifest, run_regression_gate,
-    write_parity_review_bundle_manifest, ColorProfile, DisplayScale, LargeSidecarGateOptions,
-    MacOsParityProfile, MacrobenchOptions, MacrobenchScale, MacrobenchStage, ParityAppearance,
-    ParityFixtureOptions, ParityFixtureScale, ParitySurface, PixelDiffOptions, PixelDriftThreshold,
-    PixelSize, RegressionGateOptions,
+    diff_rgba_files, evaluate_pixel_threshold, materialize_macrobench_fixture_report,
+    materialize_parity_fixture, read_mask_file, run_large_sidecar_gate, run_macrobench,
+    run_parity_gate_manifest, run_regression_gate, write_parity_review_bundle_manifest,
+    ColorProfile, DisplayScale, LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions,
+    MacrobenchScale, MacrobenchStage, ParityAppearance, ParityFixtureOptions, ParityFixtureScale,
+    ParitySurface, PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
 };
 use gfm_types::{
     FileEvent, FileEventKind, FileId, FileKind, GfmError, Result, SearchHit, VolumeId,
@@ -2413,6 +2413,28 @@ fn run() -> Result<()> {
                 eprintln!("budget-violation\t{violation:?}");
             }
         }
+        Some("macrobench-fixture") => {
+            let (root, scale) =
+                macrobench_fixture_options(args.next(), args.next(), "macrobench-fixture")?;
+            let report = materialize_macrobench_fixture_report(root, scale)?;
+            println!(
+                "fixture\t{}\tmanifest\t{}\tfiles\t{}\tdirectories\t{}\tscenarios\t{}",
+                report.fixture_root.display(),
+                report.manifest_path.display(),
+                report.files_materialized(),
+                report.directories_materialized(),
+                report.scenarios.len()
+            );
+            for scenario in report.scenarios {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    scenario.scenario.directory(),
+                    scenario.root.display(),
+                    scenario.files,
+                    scenario.directories
+                );
+            }
+        }
         Some("parity-fixture") => {
             let options = parity_fixture_options(args.next(), args.next(), "parity-fixture")?;
             let report = materialize_parity_fixture(&options)?;
@@ -3018,6 +3040,25 @@ fn macrobench_options(
     Ok(options)
 }
 
+fn macrobench_fixture_options(
+    root: Option<String>,
+    scale: Option<String>,
+    command: &str,
+) -> Result<(PathBuf, MacrobenchScale)> {
+    let root = required_path(root, &format!("{command} requires a workspace path"))?;
+    let scale = match scale.as_deref() {
+        Some("standard") => MacrobenchScale::standard(),
+        Some("million") => MacrobenchScale::million_files(),
+        Some("smoke") | None => MacrobenchScale::smoke(),
+        Some(other) => {
+            return Err(gfm_types::GfmError::Format(format!(
+                "{command} scale must be `smoke`, `standard`, or `million`, got `{other}`"
+            )));
+        }
+    };
+    Ok((root, scale))
+}
+
 fn parity_fixture_options(
     root: Option<String>,
     scale: Option<String>,
@@ -3472,6 +3513,7 @@ fn print_usage() {
   gfm thumbnail-generation <path>
   gfm preview-schedule
   gfm macrobench <workspace> [smoke|standard]
+  gfm macrobench-fixture <workspace> [smoke|standard|million]
   gfm parity-fixture <workspace> [smoke|standard]
   gfm pixel-diff <expected.rgba> <actual.rgba> <width> <height> [mask.tsv]
   gfm pixel-threshold-check <layout|text|icon|selection|focus|hover|toolbar|thumbnail|preview> <expected.rgba> <actual.rgba> <width> <height> [mask.tsv]

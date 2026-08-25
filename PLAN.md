@@ -294,7 +294,8 @@ gfm/
 
 `testkit`
 
-- Owns deterministic filesystem fixture generation and repeatable macrobenchmarks for small, medium, huge, developer, media, iCloud, external-volume, and network-volume shaped trees.
+- Owns deterministic filesystem fixture generation and repeatable macrobenchmarks for small, medium, huge, developer, documents, media, iCloud, external-volume, and network-volume shaped trees.
+- Materializes real benchmark trees with manifest-reported file and directory counts, including an explicit one-million-file fixture scale that can be generated independently from the full benchmark loop.
 - Runs macrobenchmarks through the real index build, hot search, streaming search, and content search paths, then evaluates observations against telemetry budgets.
 - Provides regression gates that fail on latency budget violations, peak memory drift, index-size density drift, and frame-time/stall drift.
 

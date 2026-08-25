@@ -57,7 +57,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Storage Engine
 
-37. Implement real filesystem benchmark fixtures for millions of materialized files across developer, media, documents, iCloud, external-volume, and network-volume trees.
+37. Run and retain production macOS telemetry for the million-file materialized filesystem fixture across developer, media, documents, iCloud, external-volume, and network-volume trees.
 
 ## File Operations
 

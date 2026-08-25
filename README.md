@@ -251,6 +251,7 @@ Run repeatable macrobenchmarks:
 ```sh
 cargo run -p gfm -- macrobench /tmp/gfm-bench smoke
 cargo run -p gfm -- macrobench /tmp/gfm-bench standard
+cargo run -p gfm -- macrobench-fixture /tmp/gfm-bench million
 cargo run -p gfm -- parity-fixture /tmp/gfm-parity smoke
 cargo run -p gfm -- pixel-diff expected.rgba actual.rgba 3024 1890 masks.tsv
 cargo run -p gfm -- pixel-threshold-check toolbar expected.rgba actual.rgba 3024 1890 masks.tsv
@@ -282,6 +283,7 @@ cargo run -p gfm -- derived-sidecar-rebuild-plan records.gfmidx prefixes prefixe
 cargo run -p gfm -- derived-sidecar-rebuild records.gfmidx prefixes prefixes.gfmprefix quarantine
 ```
 
+`macrobench-fixture` materializes real filesystem benchmark trees for developer projects, documents, media, iCloud-shaped files, external-volume-shaped files, network-volume-shaped files, huge directories, and nested trees, then writes a manifest with exact file and directory counts; the `million` scale materializes a one-million-file fixture without running the full benchmark loop.
 `regression-gate` materializes benchmark indexes and real prefix/fuzzy sidecar archives, then fails on latency, index-density, prefix lookup, fuzzy lookup, cache-path, and sidecar-truncation drift.
 `large-sidecar-gate` synthesizes realistic record distributions, writes real prefix/fuzzy sidecars, verifies bounded repeated lookup behavior at million-entry scale, skips digit-run-heavy tokens in fuzzy sidecars, probes full sidecars with a bounded live record set, and retains `thresholds.tsv` plus `gfm-large-sidecar-history.tsv` artifacts using the `production-macos-million-v1` calibration profile.
 `diagnostics-index-recovery-plan` and `diagnostics-index-recover` classify persistent record/state health, rebuild missing or stale state, and quarantine corrupt record archives before rebuilding.

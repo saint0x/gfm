@@ -12,8 +12,9 @@ pub use gates::{
     RegressionInputs,
 };
 pub use macrobench::{
-    materialize_macrobench_fixture, run_macrobench, MacrobenchMeasurement, MacrobenchOptions,
-    MacrobenchReport, MacrobenchScale, MacrobenchScenario, MacrobenchStage,
+    materialize_macrobench_fixture, materialize_macrobench_fixture_report, run_macrobench,
+    MacrobenchFixtureReport, MacrobenchFixtureScenarioReport, MacrobenchMeasurement,
+    MacrobenchOptions, MacrobenchReport, MacrobenchScale, MacrobenchScenario, MacrobenchStage,
 };
 pub use parity::{
     materialize_parity_fixture, ParityFixtureOptions, ParityFixtureReport, ParityFixtureScale,
