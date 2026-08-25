@@ -459,9 +459,9 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - maintenance is a no-op until merge thresholds are met;
   - selected segments compact into a new immutable archive and atomically promote into the active manifest;
   - retained segments are reported for the next pass so background workers can keep latency bounded.
-- Query-time content archive sets:
-  - multiple immutable mmap content archives are opened as one logical search surface;
-  - each query term performs binary directory lookup inside each archive instead of hydrating all postings;
+- Query-time content archive loading:
+  - single immutable mmap content archives and archive sets are opened as query-scoped search surfaces;
+  - each query term performs binary directory lookup inside each archive instead of hydrating all postings before the active query is known;
   - budgeted content-term loads decode only the bounded compressed ID prefix and matching bounded positional prefix needed by the active lookup budget, then union per-archive heads deterministically before import;
   - duplicate file ids and positional offsets are merged deterministically through ordered sets;
   - this lets background compaction publish new tier files while retained archives remain searchable.

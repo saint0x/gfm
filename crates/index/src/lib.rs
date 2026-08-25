@@ -15,8 +15,8 @@ use gfm_store::{
     compact_content_postings_with_segments, compact_content_segments,
     compact_content_segments_with_policy, plan_content_segment_merge, read_content_postings,
     read_records, summarize_content_segment, write_content_postings, write_content_segment,
-    write_records, MmapContentSet, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
-    MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
+    write_records, MmapContentArchive, MmapContentSet, MmapFuzzyArchive, MmapMetadataArchive,
+    MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
 pub use gfm_store::{
     ContentArchiveCleanupAction, ContentArchiveCleanupPlan, ContentArchiveCleanupPolicy,
@@ -1176,6 +1176,22 @@ impl LiveIndex {
         Ok(terms)
     }
 
+    pub fn load_content_postings_with_budget(
+        &mut self,
+        path: impl AsRef<Path>,
+        query: &str,
+        budget: SearchLookupBudget,
+    ) -> Result<usize> {
+        let content = MmapContentArchive::open(path)?;
+        let postings = content.postings_for_terms_limit(
+            content_query_terms(query),
+            budget.max_content_ids_per_term,
+        )?;
+        let terms = postings.len();
+        self.index.import_content_postings(&postings);
+        Ok(terms)
+    }
+
     pub fn load_content_set_postings(
         &mut self,
         paths: &[impl AsRef<Path>],
@@ -2052,6 +2068,32 @@ impl Indexer {
         let mut live = self.load(records_path)?.into_live();
         live.load_content_postings(content_path)?;
         Ok(live)
+    }
+
+    pub fn load_live_with_content_for_query(
+        &self,
+        records_path: impl AsRef<Path>,
+        content_path: impl AsRef<Path>,
+        query: &str,
+    ) -> Result<(LiveIndex, usize)> {
+        self.load_live_with_content_for_query_with_budget(
+            records_path,
+            content_path,
+            query,
+            SearchLookupBudget::default(),
+        )
+    }
+
+    pub fn load_live_with_content_for_query_with_budget(
+        &self,
+        records_path: impl AsRef<Path>,
+        content_path: impl AsRef<Path>,
+        query: &str,
+        budget: SearchLookupBudget,
+    ) -> Result<(LiveIndex, usize)> {
+        let mut live = self.load(records_path)?.into_live();
+        let terms = live.load_content_postings_with_budget(content_path, query, budget)?;
+        Ok((live, terms))
     }
 
     pub fn load_live_with_content_set(

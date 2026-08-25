@@ -36,6 +36,18 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-promotion-recovery-plan",
+        "tmp/gfm-fozzy-cleanup.gfmmanifest"
+      ],
+      "exit_code": 0,
+      "stdout": "content-manifest-promotion-recovery-plan\taction=ready\tmanifest=tmp/gfm-fozzy-cleanup.gfmmanifest\tjournal=tmp/.gfm-fozzy-cleanup.gfmmanifest.promotion-journal\tdetail=no pending promotion journal\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -43,6 +55,18 @@
         "tmp/gfm-fozzy-cleanup.gfmmanifest"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-promotion-recover",
+        "tmp/gfm-fozzy-cleanup.gfmmanifest"
+      ],
+      "exit_code": 0,
+      "stdout": "content-manifest-promotion-recovery-plan\taction=ready\tmanifest=tmp/gfm-fozzy-cleanup.gfmmanifest\tjournal=tmp/.gfm-fozzy-cleanup.gfmmanifest.promotion-journal\tdetail=no pending promotion journal\ncontent-manifest-promotion-recovery\tcompleted-promotion=false\tremoved-journal=false\ncontent-manifest-promotion-recovery-plan\taction=ready\tmanifest=tmp/gfm-fozzy-cleanup.gfmmanifest\tjournal=tmp/.gfm-fozzy-cleanup.gfmmanifest.promotion-journal\tdetail=no pending promotion journal\n",
+      "stderr": "",
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -87,45 +111,150 @@
       "expect_exit": 0
     },
     {
-      "type": "proc_spawn",
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["search", ".", "PLAN"],
-      "expect_exit": 0
+      "args": [
+        "search",
+        ".",
+        "PLAN"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["search", ".", "PLAN kind:file ext:md size:>1b"],
+      "args": [
+        "search",
+        ".",
+        "PLAN"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search",
+        ".",
+        "PLAN kind:file ext:md size:>1b"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["search", ".", "PLAN modified:>=2020-01-01"],
+      "args": [
+        "search",
+        ".",
+        "PLAN kind:file ext:md size:>1b"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search",
+        ".",
+        "PLAN modified:>=2020-01-01"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["search", ".", "(PLAN OR README) NOT draft kind:file"],
+      "args": [
+        "search",
+        ".",
+        "PLAN modified:>=2020-01-01"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search",
+        ".",
+        "(PLAN OR README) NOT draft kind:file"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["search", ".", "tag:Important kind:file"],
+      "args": [
+        "search",
+        ".",
+        "(PLAN OR README) NOT draft kind:file"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search",
+        ".",
+        "tag:Important kind:file"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["search", ".", "PLAN scope:/Users/deepsaint/Desktop/gfm"],
+      "args": [
+        "search",
+        ".",
+        "tag:Important kind:file"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search",
+        ".",
+        "PLAN scope:/Users/deepsaint/Desktop/gfm"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["search-content", ".", "performance-critical"],
+      "args": [
+        "search",
+        ".",
+        "PLAN scope:/Users/deepsaint/Desktop/gfm"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-content",
+        ".",
+        "performance-critical"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-content",
+        ".",
+        "performance-critical"
+      ],
       "expect_exit": 0
     },
     {
@@ -134,33 +263,102 @@
       "data": "From: Ada <ada@example.com>\nTo: Team\nSubject: Fozzy Multipart\nContent-Type: multipart/mixed; boundary=\"outer\"\n\n--outer\nContent-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: quoted-printable\n\nFozzy mail has fozzymultipartneedle=20inside\n--outer\nContent-Type: application/octet-stream\nContent-Disposition: attachment; filename=\"secret.txt\"\n\nattachmentneedle should not index\n--outer--\n"
     },
     {
-      "type": "proc_spawn",
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["search-content", "tmp", "fozzymultipartneedle"],
-      "expect_exit": 0
+      "args": [
+        "search-content",
+        "tmp",
+        "fozzymultipartneedle"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["index", ".", "/tmp/gfm-fozzy-host.gfmidx"],
+      "args": [
+        "search-content",
+        "tmp",
+        "fozzymultipartneedle"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index",
+        ".",
+        "/tmp/gfm-fozzy-host.gfmidx"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["search-index-mmap", "/tmp/gfm-fozzy-host.gfmidx", "PLAN"],
+      "args": [
+        "index",
+        ".",
+        "/tmp/gfm-fozzy-host.gfmidx"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-index-mmap",
+        "/tmp/gfm-fozzy-host.gfmidx",
+        "PLAN"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["records-verify", "/tmp/gfm-fozzy-host.gfmidx"],
+      "args": [
+        "search-index-mmap",
+        "/tmp/gfm-fozzy-host.gfmidx",
+        "PLAN"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "records-verify",
+        "/tmp/gfm-fozzy-host.gfmidx"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "records-verify",
+        "/tmp/gfm-fozzy-host.gfmidx"
+      ],
       "expect_exit": 0
     },
     {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-metadata-records.gfmidx",
       "data": "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\tImportant,Client\ttmp/gfm-fozzy-tagged.md\n2\t2\t0\tf\t5\t0\t0\t0\t0\tLater\ttmp/gfm-fozzy-other.md\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-columns",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -173,6 +371,16 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "columns-verify",
+        "/tmp/gfm-fozzy-columns.gfmcols"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -180,6 +388,18 @@
         "/tmp/gfm-fozzy-columns.gfmcols"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "columns-lookup",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "1",
+        "1"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -193,6 +413,18 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-index-columns",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "tag:Important"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -202,6 +434,17 @@
         "tag:Important"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-metadata",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-metadata.gfmmeta"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -214,6 +457,18 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "metadata-ids-mmap",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "tag",
+        "Important"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -223,6 +478,19 @@
         "Important"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "metadata-id-block-mmap",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "tag",
+        "Important",
+        "0"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -237,6 +505,16 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "metadata-verify",
+        "/tmp/gfm-fozzy-metadata.gfmmeta"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -244,6 +522,17 @@
         "/tmp/gfm-fozzy-metadata.gfmmeta"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-dictionary",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-dictionary.gfmdict"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -256,6 +545,17 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "dictionary-lookup",
+        "/tmp/gfm-fozzy-dictionary.gfmdict",
+        "Important"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -266,6 +566,16 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "dictionary-verify",
+        "/tmp/gfm-fozzy-dictionary.gfmdict"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -273,6 +583,17 @@
         "/tmp/gfm-fozzy-dictionary.gfmdict"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-prefixes",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -285,6 +606,17 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "prefix-ids-mmap",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "tag"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -293,6 +625,18 @@
         "tag"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "prefix-id-block-mmap",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "tag",
+        "0"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -306,6 +650,16 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "prefix-verify",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -313,6 +667,17 @@
         "/tmp/gfm-fozzy-prefixes.gfmprefix"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-substrings",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -325,6 +690,17 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "substring-ids-mmap",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "agg"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -333,6 +709,18 @@
         "agg"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "substring-id-block-mmap",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "agg",
+        "0"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -346,6 +734,16 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "substring-verify",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -353,6 +751,18 @@
         "/tmp/gfm-fozzy-substrings.gfmsubstr"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "derived-sidecar-rebuild-plan",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "prefixes",
+        "/tmp/gfm-fozzy-derived-prefixes.gfmprefix"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -364,6 +774,19 @@
         "/tmp/gfm-fozzy-derived-prefixes.gfmprefix"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "derived-sidecar-rebuild",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "prefixes",
+        "/tmp/gfm-fozzy-derived-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-derived-backups"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -378,6 +801,16 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "prefix-verify",
+        "/tmp/gfm-fozzy-derived-prefixes.gfmprefix"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -385,6 +818,17 @@
         "/tmp/gfm-fozzy-derived-prefixes.gfmprefix"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-fuzzy",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -397,6 +841,17 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fuzzy-terms-mmap",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "tagge"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -407,6 +862,16 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fuzzy-verify",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -414,6 +879,18 @@
         "/tmp/gfm-fozzy-fuzzy.gfmfuzzy"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-state",
+        ".",
+        "/tmp/gfm-fozzy-host-state.gfmidx",
+        "/tmp/gfm-fozzy-host.gfmstate"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -427,10 +904,35 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-state-inspect",
+        "/tmp/gfm-fozzy-host.gfmstate"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["index-state-inspect", "/tmp/gfm-fozzy-host.gfmstate"],
+      "args": [
+        "index-state-inspect",
+        "/tmp/gfm-fozzy-host.gfmstate"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "scan-progress",
+        ".",
+        "/tmp/gfm-fozzy-progress.gfmidx",
+        "/tmp/gfm-fozzy-progress.gfmprogress"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -444,21 +946,62 @@
       "expect_exit": 0
     },
     {
-      "type": "proc_spawn",
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["scan-progress-inspect", "/tmp/gfm-fozzy-progress.gfmprogress"],
-      "expect_exit": 0
+      "args": [
+        "scan-progress-inspect",
+        "/tmp/gfm-fozzy-progress.gfmprogress"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["fair-scan", ".", "8", "crates/index"],
+      "args": [
+        "scan-progress-inspect",
+        "/tmp/gfm-fozzy-progress.gfmprogress"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fair-scan",
+        ".",
+        "8",
+        "crates/index"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fair-scan",
+        ".",
+        "8",
+        "crates/index"
+      ],
       "expect_exit": 0
     },
     {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-rename-old.md",
       "data": "rename identity"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "rename-correlation",
+        "tmp/gfm-fozzy-rename-old.md",
+        "tmp/gfm-fozzy-rename-new.md"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -476,6 +1019,17 @@
       "data": "metadata"
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "metadata-update",
+        "tmp/gfm-fozzy-metadata.md",
+        " appended"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -486,10 +1040,41 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "event-backpressure",
+        "5",
+        "2",
+        "8",
+        "2"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["event-backpressure", "5", "2", "8", "2"],
+      "args": [
+        "event-backpressure",
+        "5",
+        "2",
+        "8",
+        "2"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fsevents-cursor-checkpoint",
+        "/tmp/gfm-fozzy-host.gfmstate",
+        "/tmp/gfm-fozzy-host.gfmcursor",
+        "123"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -503,6 +1088,17 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fsevents-cursor-resume",
+        "/tmp/gfm-fozzy-host.gfmstate",
+        "/tmp/gfm-fozzy-host.gfmcursor"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -511,6 +1107,20 @@
         "/tmp/gfm-fozzy-host.gfmcursor"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fsevents-repair-schedule",
+        "/tmp/gfm-fozzy-host.gfmstate",
+        "/tmp/gfm-fozzy-host.gfmcursor",
+        "124,127",
+        "kernel-dropped",
+        "crates/index"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -526,10 +1136,36 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-content-segment",
+        ".",
+        "/tmp/gfm-fozzy-host.gfmseg"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["index-content-segment", ".", "/tmp/gfm-fozzy-host.gfmseg"],
+      "args": [
+        "index-content-segment",
+        ".",
+        "/tmp/gfm-fozzy-host.gfmseg"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "compact-content",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "/tmp/gfm-fozzy-host.gfmseg"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -540,6 +1176,25 @@
         "/tmp/gfm-fozzy-host.gfmseg"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "archive-rebuild-plan",
+        "/tmp/gfm-fozzy-host.gfmidx",
+        "/tmp/gfm-fozzy-archive-plan.gfmcols",
+        "/tmp/gfm-fozzy-archive-plan.gfmmeta",
+        "/tmp/gfm-fozzy-archive-plan.gfmprefix",
+        "/tmp/gfm-fozzy-archive-plan.gfmsubstr",
+        "/tmp/gfm-fozzy-archive-plan.gfmfuzzy",
+        "/tmp/gfm-fozzy-archive-plan.gfmdict",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "/tmp/gfm-fozzy-host.gfmmanifest",
+        "hot:/tmp/gfm-fozzy-host.gfmcontent"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -560,6 +1215,18 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-content-index",
+        "/tmp/gfm-fozzy-host.gfmidx",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "performance-critical"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -569,6 +1236,18 @@
         "performance-critical"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-content-index",
+        "/tmp/gfm-fozzy-host.gfmidx",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "\"performance-critical systems\""
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -582,6 +1261,17 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-ids",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "performance-critical"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -592,6 +1282,17 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-ids-mmap",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "performance-critical"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -600,6 +1301,18 @@
         "performance-critical"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-id-block-mmap",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "performance-critical",
+        "0"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -613,6 +1326,16 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-verify",
+        "/tmp/gfm-fozzy-host.gfmcontent"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -620,6 +1343,23 @@
         "/tmp/gfm-fozzy-host.gfmcontent"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-index-sidecars",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "tag:Important"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -636,6 +1376,30 @@
         "tag:Important"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-index-sidecars-budget",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "tag"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -661,6 +1425,19 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-content-background",
+        ".",
+        "/tmp/gfm-fozzy-host-segments",
+        "/tmp/gfm-fozzy-background.gfmidx",
+        "/tmp/gfm-fozzy-background.gfmcontent"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -673,15 +1450,41 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-recover",
+        "/tmp/gfm-jobs.journal"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["jobs-recover", "/tmp/gfm-jobs.journal"],
+      "args": [
+        "jobs-recover",
+        "/tmp/gfm-jobs.journal"
+      ],
       "expect_exit": 0
     },
     {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-host.icns",
       "data": "icns-test"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "bundle-app",
+        "target/aarch64-apple-darwin/debug/gfm",
+        "tmp/gfm-fozzy-host.icns",
+        "tmp/gfm-fozzy-dist",
+        "--unsigned"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -696,6 +1499,17 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "notarize-app",
+        "tmp/gfm-fozzy-dist/GFM.app",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -704,6 +1518,19 @@
         "tmp/gfm-fozzy-dist"
       ],
       "expect_exit": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "release-validate",
+        "tmp/gfm-fozzy-dist/GFM.app",
+        "--allow-unsigned",
+        "--skip-notarization",
+        "--skip-gatekeeper"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -718,27 +1545,83 @@
       "expect_exit": 0
     },
     {
-      "type": "proc_spawn",
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["package-traversal", "tmp/gfm-fozzy-dist", "opaque"],
-      "expect_exit": 0
+      "args": [
+        "package-traversal",
+        "tmp/gfm-fozzy-dist",
+        "opaque"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["package-traversal", "tmp/gfm-fozzy-dist", "traverse"],
+      "args": [
+        "package-traversal",
+        "tmp/gfm-fozzy-dist",
+        "opaque"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "package-traversal",
+        "tmp/gfm-fozzy-dist",
+        "traverse"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["finder-metadata", "tmp/gfm-fozzy-dist/GFM.app"],
+      "args": [
+        "package-traversal",
+        "tmp/gfm-fozzy-dist",
+        "traverse"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "finder-metadata",
+        "tmp/gfm-fozzy-dist/GFM.app"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["native-icon", "tmp/gfm-fozzy-dist/GFM.app"],
+      "args": [
+        "finder-metadata",
+        "tmp/gfm-fozzy-dist/GFM.app"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "native-icon",
+        "tmp/gfm-fozzy-dist/GFM.app"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "native-icon",
+        "tmp/gfm-fozzy-dist/GFM.app"
+      ],
       "expect_exit": 0
     },
     {
@@ -747,9 +1630,22 @@
       "data": "icloud downloaded"
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-state",
+        "tmp/gfm-fozzy-downloaded.icloud.md"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["fileprovider-state", "tmp/gfm-fozzy-downloaded.icloud.md"],
+      "args": [
+        "fileprovider-state",
+        "tmp/gfm-fozzy-downloaded.icloud.md"
+      ],
       "expect_exit": 0
     },
     {
@@ -758,10 +1654,35 @@
       "data": "external-removable\n"
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-discovery",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["volume-discovery", "tmp/gfm-fozzy-dist"],
+      "args": [
+        "volume-discovery",
+        "tmp/gfm-fozzy-dist"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-index-policy",
+        "enabled",
+        "opt-in",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -773,6 +1694,17 @@
         "tmp/gfm-fozzy-dist"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "resume-content-background",
+        "/tmp/gfm-content.job",
+        "/tmp/gfm-jobs.journal"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -790,6 +1722,18 @@
       "data": "diagnostics needle"
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-index-rebuild",
+        "tmp",
+        "tmp/gfm-fozzy-diagnostics.gfmidx",
+        "tmp/gfm-fozzy-diagnostics.gfmcontent"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -801,6 +1745,16 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-storage-inspect",
+        "tmp/gfm-fozzy-diagnostics.gfmidx"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -808,6 +1762,16 @@
         "tmp/gfm-fozzy-diagnostics.gfmidx"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-storage-inspect",
+        "tmp/gfm-fozzy-diagnostics.gfmcontent"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -819,6 +1783,16 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-trace-export",
+        "tmp/gfm-fozzy-diagnostics-trace.json"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -828,15 +1802,37 @@
       "expect_exit": 0
     },
     {
-      "type": "proc_spawn",
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["support-check"],
-      "expect_exit": 0
+      "args": [
+        "support-check"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["permission-onboarding"],
+      "args": [
+        "support-check"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "permission-onboarding"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "permission-onboarding"
+      ],
       "expect_exit": 0
     },
     {
@@ -845,28 +1841,92 @@
       "data": "security scoped probe"
     },
     {
-      "type": "proc_spawn",
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["security-scope", "tmp/gfm-fozzy-security.md", "read"],
-      "expect_exit": 0
+      "args": [
+        "security-scope",
+        "tmp/gfm-fozzy-security.md",
+        "read"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["mac-bridges"],
+      "args": [
+        "security-scope",
+        "tmp/gfm-fozzy-security.md",
+        "read"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "mac-bridges"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["ui-contract", "/tmp/gfm"],
+      "args": [
+        "mac-bridges"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-contract",
+        "/tmp/gfm"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["ui-menu-contract"],
+      "args": [
+        "ui-contract",
+        "/tmp/gfm"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-menu-contract"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-menu-contract"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-context-menu-contract",
+        "search-result",
+        "1",
+        "true",
+        "false",
+        "true"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -882,16 +1942,53 @@
       "expect_exit": 0
     },
     {
-      "type": "proc_spawn",
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["ui-dialog-contract", "conflict"],
-      "expect_exit": 0
+      "args": [
+        "ui-dialog-contract",
+        "conflict"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["ui-titlebar-contract", "/tmp/gfm"],
+      "args": [
+        "ui-dialog-contract",
+        "conflict"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-titlebar-contract",
+        "/tmp/gfm"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-titlebar-contract",
+        "/tmp/gfm"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-session-contract",
+        "/tmp/gfm",
+        "/tmp/gfm-fozzy-missing-window-session.tsv"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -904,22 +2001,80 @@
       "expect_exit": 0
     },
     {
-      "type": "proc_spawn",
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["ui-toolbar-contract", "/tmp/gfm"],
-      "expect_exit": 0
+      "args": [
+        "ui-toolbar-contract",
+        "/tmp/gfm"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["ui-sidebar-contract", "/tmp/gfm"],
+      "args": [
+        "ui-toolbar-contract",
+        "/tmp/gfm"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-sidebar-contract",
+        "/tmp/gfm"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["ui-icon-view-contract", "tmp", "4", "2", "0"],
+      "args": [
+        "ui-sidebar-contract",
+        "/tmp/gfm"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-icon-view-contract",
+        "tmp",
+        "4",
+        "2",
+        "0"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-icon-view-contract",
+        "tmp",
+        "4",
+        "2",
+        "0"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-virtualization-contract",
+        "list-rows",
+        "250000",
+        "32",
+        "199990"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -934,39 +2089,143 @@
       "expect_exit": 0
     },
     {
-      "type": "proc_spawn",
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["ui-list-view-contract", "tmp", "6", "0"],
-      "expect_exit": 0
+      "args": [
+        "ui-list-view-contract",
+        "tmp",
+        "6",
+        "0"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["ui-column-view-contract", "tmp", "6", "0"],
+      "args": [
+        "ui-list-view-contract",
+        "tmp",
+        "6",
+        "0"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-column-view-contract",
+        "tmp",
+        "6",
+        "0"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["ui-gallery-view-contract", "tmp", "6", "0"],
+      "args": [
+        "ui-column-view-contract",
+        "tmp",
+        "6",
+        "0"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-gallery-view-contract",
+        "tmp",
+        "6",
+        "0"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["ui-search-results-contract", ".", "PLAN", "6", "0"],
+      "args": [
+        "ui-gallery-view-contract",
+        "tmp",
+        "6",
+        "0"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-search-results-contract",
+        ".",
+        "PLAN",
+        "6",
+        "0"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["ui-trash-view-contract", "tmp", "-", "6", "0"],
+      "args": [
+        "ui-search-results-contract",
+        ".",
+        "PLAN",
+        "6",
+        "0"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-trash-view-contract",
+        "tmp",
+        "-",
+        "6",
+        "0"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["preview-check", "/tmp/example.app", "quick-look"],
+      "args": [
+        "ui-trash-view-contract",
+        "tmp",
+        "-",
+        "6",
+        "0"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "preview-check",
+        "/tmp/example.app",
+        "quick-look"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "preview-check",
+        "/tmp/example.app",
+        "quick-look"
+      ],
       "expect_exit": 0
     },
     {
@@ -975,22 +2234,74 @@
       "data": "%PDF-1.7\n"
     },
     {
-      "type": "proc_spawn",
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["quicklook-session", "tmp/gfm-fozzy-preview.pdf"],
-      "expect_exit": 0
+      "args": [
+        "quicklook-session",
+        "tmp/gfm-fozzy-preview.pdf"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["extract-report", "tmp/gfm-fozzy-preview.pdf"],
+      "args": [
+        "quicklook-session",
+        "tmp/gfm-fozzy-preview.pdf"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "extract-report",
+        "tmp/gfm-fozzy-preview.pdf"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["extract-cache", "tmp/gfm-fozzy-preview.pdf"],
+      "args": [
+        "extract-report",
+        "tmp/gfm-fozzy-preview.pdf"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "extract-cache",
+        "tmp/gfm-fozzy-preview.pdf"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "extract-cache",
+        "tmp/gfm-fozzy-preview.pdf"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "extract-quarantine",
+        "tmp/gfm-fozzy-preview.pdf",
+        "/tmp/gfm-fozzy-extract.gfmquarantine",
+        "timeout",
+        "2"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -1010,9 +2321,22 @@
       "data": "png"
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "thumbnail-generation",
+        "tmp/gfm-fozzy-thumbnail.png"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["thumbnail-generation", "tmp/gfm-fozzy-thumbnail.png"],
+      "args": [
+        "thumbnail-generation",
+        "tmp/gfm-fozzy-thumbnail.png"
+      ],
       "expect_exit": 0
     },
     {
@@ -1026,6 +2350,17 @@
       "data": "kMDItemDisplayName\tStale.md\nkMDItemKind\tMarkdown Document\nkMDItemFinderComment\tclient handoff\n"
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "spotlight-reconcile",
+        "tmp/gfm-fozzy-spotlight.md",
+        "tmp/gfm-fozzy-spotlight.tsv"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -1036,21 +2371,62 @@
       "expect_exit": 0
     },
     {
-      "type": "proc_spawn",
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["preview-schedule"],
-      "expect_exit": 0
+      "args": [
+        "preview-schedule"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["macrobench-fixture", "tmp/gfm-fozzy-macrobench-fixture", "smoke"],
+      "args": [
+        "preview-schedule"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "macrobench-fixture",
+        "tmp/gfm-fozzy-macrobench-fixture",
+        "smoke"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["parity-fixture", "tmp/gfm-fozzy-parity", "smoke"],
+      "args": [
+        "macrobench-fixture",
+        "tmp/gfm-fozzy-macrobench-fixture",
+        "smoke"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "parity-fixture",
+        "tmp/gfm-fozzy-parity",
+        "smoke"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "parity-fixture",
+        "tmp/gfm-fozzy-parity",
+        "smoke"
+      ],
       "expect_exit": 0
     },
     {
@@ -1069,6 +2445,20 @@
       "data": "1\t0\t1\t1\n"
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "pixel-diff",
+        "tmp/gfm-pixel-expected.rgba",
+        "tmp/gfm-pixel-actual.rgba",
+        "3",
+        "1",
+        "tmp/gfm-pixel-mask.tsv"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -1080,6 +2470,21 @@
         "tmp/gfm-pixel-mask.tsv"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "pixel-threshold-check",
+        "toolbar",
+        "tmp/gfm-pixel-expected.rgba",
+        "tmp/gfm-pixel-actual.rgba",
+        "3",
+        "1",
+        "tmp/gfm-pixel-mask.tsv"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -1101,10 +2506,34 @@
       "data": "toolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-mask.tsv\n"
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "parity-gate",
+        "tmp/gfm-parity-gate.tsv"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["parity-gate", "tmp/gfm-parity-gate.tsv"],
+      "args": [
+        "parity-gate",
+        "tmp/gfm-parity-gate.tsv"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "parity-review",
+        "tmp/gfm-parity-gate.tsv",
+        "tmp/gfm-parity-review"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
@@ -1117,22 +2546,79 @@
       "expect_exit": 0
     },
     {
-      "type": "proc_spawn",
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["parity-profile", "25A354", "dark", "2x", "display-p3"],
-      "expect_exit": 0
+      "args": [
+        "parity-profile",
+        "25A354",
+        "dark",
+        "2x",
+        "display-p3"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["large-sidecar-gate", "tmp/gfm-fozzy-large-sidecar", "512"],
+      "args": [
+        "parity-profile",
+        "25A354",
+        "dark",
+        "2x",
+        "display-p3"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "large-sidecar-gate",
+        "tmp/gfm-fozzy-large-sidecar",
+        "512"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
-      "args": ["release-policy"],
+      "args": [
+        "large-sidecar-gate",
+        "tmp/gfm-fozzy-large-sidecar",
+        "512"
+      ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "release-policy"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "release-policy"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-parity-baseline",
+        "tmp/gfm-fozzy-config.toml",
+        "tmp/baselines",
+        "25A354"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_spawn",

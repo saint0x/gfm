@@ -1006,6 +1006,60 @@ fn budgeted_content_set_loading_imports_bounded_postings() {
 }
 
 #[test]
+fn budgeted_content_archive_loading_imports_bounded_query_postings() {
+    let root = unique_temp_dir("gfm-budgeted-content-archive-root");
+    let records = unique_temp_path("gfm-budgeted-content-archive-records", "gfmidx");
+    let content = unique_temp_path("gfm-budgeted-content-archive-postings", "gfmcontent");
+    for node in 1..=8 {
+        fs::write(root.join(format!("{node:03}.md")), "plain file").unwrap();
+    }
+
+    let indexer = Indexer::default();
+    let snapshot = indexer.build(&root).unwrap();
+    snapshot.save(&records).unwrap();
+    let ids = snapshot
+        .records
+        .iter()
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+    write_content_postings(
+        &content,
+        &[ContentPosting {
+            term: "archiveneedle".to_string(),
+            ids: ids.clone(),
+            positions: ids
+                .iter()
+                .map(|id| ContentPositions {
+                    id: *id,
+                    positions: vec![1],
+                })
+                .collect(),
+        }],
+    )
+    .unwrap();
+
+    let mut live = indexer.load(&records).unwrap().into_live();
+    let terms = live
+        .load_content_postings_with_budget(
+            &content,
+            "archiveneedle",
+            SearchLookupBudget {
+                max_content_ids_per_term: 3,
+                ..SearchLookupBudget::default()
+            },
+        )
+        .unwrap();
+    let hits = live.search("archiveneedle", 10);
+
+    assert_eq!(terms, 1);
+    assert_eq!(hits.len(), 3);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+}
+
+#[test]
 fn content_set_search_loader_uses_default_bounded_budget() {
     let root = unique_temp_dir("gfm-default-budgeted-content-root");
     let records = unique_temp_path("gfm-default-budgeted-content-records", "gfmidx");
@@ -1042,6 +1096,58 @@ fn content_set_search_loader_uses_default_bounded_budget() {
         .load_live_with_content_set(&records, &[&content], "defaultbudgetneedle")
         .unwrap();
     let hits = live.search("defaultbudgetneedle", 5000);
+
+    assert_eq!(terms, 1);
+    assert_eq!(
+        hits.len(),
+        SearchLookupBudget::default().max_content_ids_per_term
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+}
+
+#[test]
+fn content_archive_search_loader_uses_default_bounded_budget() {
+    let root = unique_temp_dir("gfm-default-budgeted-content-archive-root");
+    let records = unique_temp_path("gfm-default-budgeted-content-archive-records", "gfmidx");
+    let content = unique_temp_path(
+        "gfm-default-budgeted-content-archive-postings",
+        "gfmcontent",
+    );
+    for node in 1..=4100 {
+        fs::write(root.join(format!("{node:04}.md")), "plain file").unwrap();
+    }
+
+    let indexer = Indexer::default();
+    let snapshot = indexer.build(&root).unwrap();
+    snapshot.save(&records).unwrap();
+    let ids = snapshot
+        .records
+        .iter()
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+    write_content_postings(
+        &content,
+        &[ContentPosting {
+            term: "defaultarchivebudgetneedle".to_string(),
+            ids: ids.clone(),
+            positions: ids
+                .iter()
+                .map(|id| ContentPositions {
+                    id: *id,
+                    positions: vec![1],
+                })
+                .collect(),
+        }],
+    )
+    .unwrap();
+
+    let (live, terms) = indexer
+        .load_live_with_content_for_query(&records, &content, "defaultarchivebudgetneedle")
+        .unwrap();
+    let hits = live.search("defaultarchivebudgetneedle", 5000);
 
     assert_eq!(terms, 1);
     assert_eq!(

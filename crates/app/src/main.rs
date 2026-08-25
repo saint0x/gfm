@@ -2321,7 +2321,9 @@ fn run() -> Result<()> {
                     "search-content-index requires a query string".to_string(),
                 )
             })?;
-            let live = Indexer::default().load_live_with_content(records, content)?;
+            let (live, content_keys) =
+                Indexer::default().load_live_with_content_for_query(records, content, &query)?;
+            eprintln!("content-keys {content_keys}");
             for hit in live.search_with_snippets(&query, 50, &Extractor::default(), 96)? {
                 print_hit(&hit);
             }
@@ -2347,7 +2349,9 @@ fn run() -> Result<()> {
                 .unwrap_or_else(|| PathBuf::from("."));
             let extractor =
                 Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
-            let live = Indexer::default().load_live_with_content(records, content)?;
+            let (live, content_keys) =
+                Indexer::default().load_live_with_content_for_query(records, content, &query)?;
+            eprintln!("content-keys {content_keys}");
             for hit in live.search_with_snippets(&query, 50, &extractor, 96)? {
                 print_hit(&hit);
             }

@@ -3177,7 +3177,9 @@ fn searches_persisted_text_content_from_binary() {
     );
 
     let stdout = String::from_utf8(search_output.stdout).unwrap();
+    let stderr = String::from_utf8(search_output.stderr).unwrap();
     assert!(stdout.contains("archive.md"), "{stdout}");
+    assert!(stderr.contains("content-keys 1"), "{stderr}");
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
