@@ -23,9 +23,9 @@ use gfm_preview::{
 };
 use gfm_store::ContentArchive;
 use gfm_testkit::{
-    materialize_parity_fixture, run_macrobench, run_regression_gate, MacrobenchOptions,
-    MacrobenchScale, MacrobenchStage, ParityFixtureOptions, ParityFixtureScale,
-    RegressionGateOptions,
+    diff_rgba_files, materialize_parity_fixture, read_mask_file, run_macrobench,
+    run_regression_gate, MacrobenchOptions, MacrobenchScale, MacrobenchStage, ParityFixtureOptions,
+    ParityFixtureScale, PixelDiffOptions, PixelSize, RegressionGateOptions,
 };
 use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
 use gfm_ui::{
@@ -563,6 +563,51 @@ fn run() -> Result<()> {
                 );
             }
         }
+        Some("pixel-diff") => {
+            let expected = required_path(args.next(), "pixel-diff requires an expected RGBA path")?;
+            let actual = required_path(args.next(), "pixel-diff requires an actual RGBA path")?;
+            let width = parse_u32_arg(args.next(), "pixel-diff requires a width")?;
+            let height = parse_u32_arg(args.next(), "pixel-diff requires a height")?;
+            let size = PixelSize::new(width, height);
+            let masks = args
+                .next()
+                .map(|path| read_mask_file(path, size))
+                .transpose()?
+                .unwrap_or_default();
+            let options = PixelDiffOptions::strict(size).with_masks(masks);
+            let report = diff_rgba_files(expected, actual, &options)?;
+            println!(
+                "pixel-diff\t{}x{}\ttotal={}\tmismatched={}\tunmasked={}\tmasked={}\tpassed={}",
+                report.size.width,
+                report.size.height,
+                report.total_pixels,
+                report.mismatched_pixels,
+                report.unmasked_mismatches,
+                report.masked_mismatches,
+                report.passed()
+            );
+            if let Some(mismatch) = report.first_unmasked_mismatch {
+                println!(
+                    "first-unmasked\t{}\t{}\t{:02x}{:02x}{:02x}{:02x}\t{:02x}{:02x}{:02x}{:02x}",
+                    mismatch.x,
+                    mismatch.y,
+                    mismatch.expected[0],
+                    mismatch.expected[1],
+                    mismatch.expected[2],
+                    mismatch.expected[3],
+                    mismatch.actual[0],
+                    mismatch.actual[1],
+                    mismatch.actual[2],
+                    mismatch.actual[3]
+                );
+            }
+            if !report.passed() {
+                return Err(GfmError::Format(format!(
+                    "pixel diff failed with {} unmasked mismatch(es)",
+                    report.unmasked_mismatches
+                )));
+            }
+        }
         Some("regression-gate") => {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
             let run = run_regression_gate(&options, RegressionGateOptions::default())?;
@@ -649,6 +694,13 @@ fn parse_u16(value: &str, name: &str) -> Result<u16> {
     value
         .parse()
         .map_err(|_| GfmError::Format(format!("{name} must be an unsigned 16-bit integer")))
+}
+
+fn parse_u32_arg(value: Option<String>, message: &str) -> Result<u32> {
+    let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
+    value
+        .parse()
+        .map_err(|_| GfmError::Format(format!("{message}; got `{value}`")))
 }
 
 fn parse_bool(value: &str, name: &str) -> Result<bool> {
@@ -968,6 +1020,7 @@ fn print_usage() {
   gfm preview-schedule
   gfm macrobench <workspace> [smoke|standard]
   gfm parity-fixture <workspace> [smoke|standard]
+  gfm pixel-diff <expected.rgba> <actual.rgba> <width> <height> [mask.tsv]
   gfm regression-gate <workspace> [smoke|standard]
   gfm release-policy
   gfm release-validate <GFM.app> [--allow-unsigned] [--skip-notarization] [--skip-gatekeeper]

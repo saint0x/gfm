@@ -232,6 +232,7 @@ Run repeatable macrobenchmarks:
 cargo run -p gfm -- macrobench /tmp/gfm-bench smoke
 cargo run -p gfm -- macrobench /tmp/gfm-bench standard
 cargo run -p gfm -- parity-fixture /tmp/gfm-parity smoke
+cargo run -p gfm -- pixel-diff expected.rgba actual.rgba 3024 1890 masks.tsv
 cargo run -p gfm -- regression-gate /tmp/gfm-bench smoke
 ```
 

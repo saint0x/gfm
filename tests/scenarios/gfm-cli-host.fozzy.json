@@ -298,6 +298,34 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-pixel-expected.rgba",
+      "data": "abcdefghijkl"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-pixel-actual.rgba",
+      "data": "abcdzzzzijkl"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-pixel-mask.tsv",
+      "data": "1\t0\t1\t1\n"
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "pixel-diff",
+        "tmp/gfm-pixel-expected.rgba",
+        "tmp/gfm-pixel-actual.rgba",
+        "3",
+        "1",
+        "tmp/gfm-pixel-mask.tsv"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["release-policy"],
