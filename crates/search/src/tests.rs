@@ -651,6 +651,48 @@ fn content_term_scoring_uses_bounded_top_hits_without_id_materialization() {
 }
 
 #[test]
+fn simple_content_term_search_keeps_deterministic_top_hits() {
+    let mut index = SearchIndex::new();
+    for node in (1..=96).rev() {
+        let item = record(
+            node,
+            &format!("/tmp/content/{node:03}.txt"),
+            &format!("{node:03}.txt"),
+        );
+        index.insert(item.clone());
+        index.insert_content(item.id, "needle body text");
+    }
+
+    let hits = index.query("needle", 3);
+    let paths: Vec<_> = hits.into_iter().map(|hit| hit.record.path).collect();
+
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/tmp/content/001.txt"),
+            PathBuf::from("/tmp/content/002.txt"),
+            PathBuf::from("/tmp/content/003.txt")
+        ]
+    );
+}
+
+#[test]
+fn simple_content_term_search_combines_exact_and_content_scores() {
+    let mut index = SearchIndex::new();
+    let exact_and_content = record(1, "/tmp/a/needle", "needle");
+    let exact_only = record(2, "/tmp/b/needle", "needle");
+    index.insert(exact_and_content.clone());
+    index.insert(exact_only);
+    index.insert_content(exact_and_content.id, "needle body text");
+
+    let hits = index.query("needle", 2);
+
+    assert_eq!(hits[0].record.id, exact_and_content.id);
+    assert_eq!(hits[0].reason, MatchReason::ExactName);
+    assert!(hits[0].score > hits[1].score);
+}
+
+#[test]
 fn content_proximity_uses_rarest_posting_candidates_without_id_sets() {
     let mut index = SearchIndex::new();
     for node in 1..=64 {
