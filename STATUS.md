@@ -67,29 +67,28 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 41. Implement Trash restore metadata and restore operation.
 42. Implement privileged-operation flow for protected paths.
 43. Implement network-volume fallbacks and slow-volume throttling.
-44. Implement post-operation verification policy for high-risk moves/copies.
 
 ## Jobs And Runtime
 
-45. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
-46. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
-47. Implement persistent progress snapshots and user-visible progress restoration after restart.
-48. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
-49. Implement per-volume concurrency limits and operation isolation.
-50. Implement structured cancellation propagation across nested jobs and subprocess extractors.
-51. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
+44. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
+45. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
+46. Implement persistent progress snapshots and user-visible progress restoration after restart.
+47. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
+48. Implement per-volume concurrency limits and operation isolation.
+49. Implement structured cancellation propagation across nested jobs and subprocess extractors.
+50. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
 
 ## Preview And Thumbnails
 
-52. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
+51. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
 
 ## Packaging
 
-53. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
+52. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
 
 ## Documentation
 
-54. Expand `PLAN.md` when architectural decisions change materially.
-55. Keep `README.md` written as the completed product contract.
-56. Keep this file limited to unfinished work only.
-57. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+53. Expand `PLAN.md` when architectural decisions change materially.
+54. Keep `README.md` written as the completed product contract.
+55. Keep this file limited to unfinished work only.
+56. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

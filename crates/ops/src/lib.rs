@@ -1,7 +1,7 @@
 use gfm_types::{GfmError, Result};
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
@@ -43,6 +43,13 @@ pub enum OperationStatus {
 pub enum CopyMethod {
     ApfsClone,
     ByteCopy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerificationPolicy {
+    None,
+    Size,
+    Bytes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +114,7 @@ pub struct OperationContext {
     pub conflict: ConflictPolicy,
     pub journal_path: PathBuf,
     pub cancellation: OperationCancellation,
+    pub verification: VerificationPolicy,
 }
 
 impl OperationContext {
@@ -115,6 +123,7 @@ impl OperationContext {
             conflict: ConflictPolicy::Fail,
             journal_path: journal_path.into(),
             cancellation: OperationCancellation::default(),
+            verification: VerificationPolicy::Bytes,
         }
     }
 
@@ -125,6 +134,11 @@ impl OperationContext {
 
     pub fn with_cancellation(mut self, cancellation: OperationCancellation) -> Self {
         self.cancellation = cancellation;
+        self
+    }
+
+    pub fn with_verification(mut self, verification: VerificationPolicy) -> Self {
+        self.verification = verification;
         self
     }
 }
@@ -246,10 +260,20 @@ impl Operator {
         progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
     ) -> Result<()> {
         match operation {
-            Operation::Copy { from, to } => copy_path(from, to, self.context.conflict, progress),
-            Operation::Move { from, to } | Operation::Rename { from, to } => {
-                move_path(from, to, self.context.conflict, progress)
-            }
+            Operation::Copy { from, to } => copy_path(
+                from,
+                to,
+                self.context.conflict,
+                self.context.verification,
+                progress,
+            ),
+            Operation::Move { from, to } | Operation::Rename { from, to } => move_path(
+                from,
+                to,
+                self.context.conflict,
+                self.context.verification,
+                progress,
+            ),
             Operation::Delete { path } => delete_path(path, progress),
             Operation::Trash { path } => trash_path(path, progress),
         }
@@ -500,6 +524,7 @@ fn copy_path(
     from: &Path,
     to: &Path,
     conflict: ConflictPolicy,
+    verification: VerificationPolicy,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
@@ -509,9 +534,9 @@ fn copy_path(
     if metadata.file_type().is_symlink() {
         copy_symlink(from, to, progress)
     } else if metadata.is_dir() {
-        copy_directory(from, to, progress)
+        copy_directory(from, to, verification, progress)
     } else {
-        copy_file(from, to)?;
+        copy_file(from, to, verification)?;
         progress.advance(&metadata)
     }
 }
@@ -520,6 +545,7 @@ fn move_path(
     from: &Path,
     to: &Path,
     conflict: ConflictPolicy,
+    verification: VerificationPolicy,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
@@ -531,7 +557,7 @@ fn move_path(
     match fs::rename(from, to) {
         Ok(()) => progress.complete(),
         Err(rename_err) => {
-            copy_path(from, to, ConflictPolicy::Replace, progress)?;
+            copy_path(from, to, ConflictPolicy::Replace, verification, progress)?;
             delete_path_untracked(from).map_err(|delete_err| {
                 GfmError::Format(format!(
                     "moved copy to {} but failed to remove source {}: {}; original rename error: {}",
@@ -582,6 +608,7 @@ fn trash_path(
 fn copy_directory(
     from: &Path,
     to: &Path,
+    verification: VerificationPolicy,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
@@ -600,9 +627,9 @@ fn copy_directory(
         if child_metadata.file_type().is_symlink() {
             copy_symlink(&source, &destination, progress)?;
         } else if child_metadata.is_dir() {
-            copy_directory(&source, &destination, progress)?;
+            copy_directory(&source, &destination, verification, progress)?;
         } else {
-            let _ = copy_file(&source, &destination)?;
+            let _ = copy_file(&source, &destination, verification)?;
             progress.advance(&child_metadata)?;
         }
     }
@@ -625,7 +652,7 @@ fn copy_symlink(
     progress.advance(&metadata)
 }
 
-fn copy_file(from: &Path, to: &Path) -> Result<CopyMethod> {
+fn copy_file(from: &Path, to: &Path, verification: VerificationPolicy) -> Result<CopyMethod> {
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
@@ -633,15 +660,85 @@ fn copy_file(from: &Path, to: &Path) -> Result<CopyMethod> {
     match clone_file(from, to) {
         Ok(()) => {
             preserve_metadata(from, to, &metadata)?;
+            verify_copy(from, to, verification)?;
             Ok(CopyMethod::ApfsClone)
         }
         Err(err) if clone_fallback_allowed(&err) => {
             remove_failed_clone_destination(to)?;
             fs::copy(from, to).map_err(|err| GfmError::io(from, err))?;
             preserve_metadata(from, to, &metadata)?;
+            verify_copy(from, to, verification)?;
             Ok(CopyMethod::ByteCopy)
         }
         Err(err) => Err(GfmError::io(from, err)),
+    }
+}
+
+fn verify_copy(from: &Path, to: &Path, policy: VerificationPolicy) -> Result<()> {
+    match policy {
+        VerificationPolicy::None => Ok(()),
+        VerificationPolicy::Size => verify_copy_size(from, to),
+        VerificationPolicy::Bytes => {
+            verify_copy_size(from, to)?;
+            verify_copy_bytes(from, to)
+        }
+    }
+}
+
+fn verify_copy_size(from: &Path, to: &Path) -> Result<()> {
+    let source_len = fs::metadata(from)
+        .map_err(|err| GfmError::io(from, err))?
+        .len();
+    let destination_len = fs::metadata(to).map_err(|err| GfmError::io(to, err))?.len();
+    if source_len == destination_len {
+        Ok(())
+    } else {
+        Err(GfmError::Format(format!(
+            "copy verification failed for {} -> {}: source size {} != destination size {}",
+            from.display(),
+            to.display(),
+            source_len,
+            destination_len
+        )))
+    }
+}
+
+fn verify_copy_bytes(from: &Path, to: &Path) -> Result<()> {
+    const VERIFY_BUFFER_BYTES: usize = 128 * 1024;
+
+    let mut source = File::open(from).map_err(|err| GfmError::io(from, err))?;
+    let mut destination = File::open(to).map_err(|err| GfmError::io(to, err))?;
+    let mut source_buffer = vec![0; VERIFY_BUFFER_BYTES];
+    let mut destination_buffer = vec![0; VERIFY_BUFFER_BYTES];
+    let mut offset = 0_u64;
+
+    loop {
+        let source_read = source
+            .read(&mut source_buffer)
+            .map_err(|err| GfmError::io(from, err))?;
+        let destination_read = destination
+            .read(&mut destination_buffer)
+            .map_err(|err| GfmError::io(to, err))?;
+        if source_read != destination_read {
+            return Err(GfmError::Format(format!(
+                "copy verification failed for {} -> {}: read length drift at byte {}",
+                from.display(),
+                to.display(),
+                offset
+            )));
+        }
+        if source_read == 0 {
+            return Ok(());
+        }
+        if source_buffer[..source_read] != destination_buffer[..destination_read] {
+            return Err(GfmError::Format(format!(
+                "copy verification failed for {} -> {}: byte mismatch in block starting at {}",
+                from.display(),
+                to.display(),
+                offset
+            )));
+        }
+        offset += source_read as u64;
     }
 }
 
@@ -1153,7 +1250,7 @@ mod tests {
         let destination = root.join("destination.txt");
         fs::write(&source, "clone-aware copy").unwrap();
 
-        let method = copy_file(&source, &destination).unwrap();
+        let method = copy_file(&source, &destination, VerificationPolicy::Bytes).unwrap();
 
         assert!(matches!(
             method,
@@ -1164,6 +1261,53 @@ mod tests {
             "clone-aware copy"
         );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_verification_rejects_size_mismatch() {
+        let root = unique_temp_dir("gfm-ops-verify-size");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "complete").unwrap();
+        fs::write(&destination, "short").unwrap();
+
+        let err = verify_copy(&source, &destination, VerificationPolicy::Size).unwrap_err();
+
+        assert!(err.to_string().contains("source size"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_verification_rejects_byte_mismatch() {
+        let root = unique_temp_dir("gfm-ops-verify-bytes");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "same length").unwrap();
+        fs::write(&destination, "same Length").unwrap();
+
+        let err = verify_copy(&source, &destination, VerificationPolicy::Bytes).unwrap_err();
+
+        assert!(err.to_string().contains("byte mismatch"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_can_use_size_only_verification_policy() {
+        let root = unique_temp_dir("gfm-ops-verify-size-policy");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "policy").unwrap();
+
+        Operator::new(OperationContext::new(&journal).with_verification(VerificationPolicy::Size))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "policy");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1179,12 +1323,12 @@ mod tests {
         match clone_file(&source, &probe) {
             Ok(()) => {
                 fs::remove_file(&probe).unwrap();
-                let method = copy_file(&source, &destination).unwrap();
+                let method = copy_file(&source, &destination, VerificationPolicy::Bytes).unwrap();
                 assert_eq!(method, CopyMethod::ApfsClone);
                 assert_eq!(fs::read(&destination).unwrap(), b"copy-on-write candidate");
             }
             Err(err) if clone_fallback_allowed(&err) => {
-                let method = copy_file(&source, &destination).unwrap();
+                let method = copy_file(&source, &destination, VerificationPolicy::Bytes).unwrap();
                 assert_eq!(method, CopyMethod::ByteCopy);
             }
             Err(err) => panic!("unexpected clonefile failure: {err}"),
