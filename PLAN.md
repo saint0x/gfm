@@ -416,7 +416,8 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - manifest inspection opens the same mmap archives used by search and reports live archive, term, and byte counts;
   - search and id lookup can consume the manifest directly instead of requiring manually supplied archive lists;
   - promotion replaces retired active archives with a newly published tier archive through the same atomic manifest writer;
-  - promotion reports retired archives and missing retirement requests explicitly for deterministic cleanup scheduling.
+  - promotion reports retired archives and missing retirement requests explicitly for deterministic cleanup scheduling;
+  - physical archive cleanup refuses to remove manifest-active archives, reports already-missing candidates, and only deletes inactive files.
 - Query-time content archive sets:
   - multiple immutable mmap content archives are opened as one logical search surface;
   - each query term performs binary directory lookup inside each archive instead of hydrating all postings;

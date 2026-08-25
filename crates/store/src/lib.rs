@@ -18,9 +18,9 @@ pub use content::{
 };
 pub use contentset::MmapContentSet;
 pub use contentset::{
-    promote_content_archive_manifest, read_content_archive_manifest,
-    write_content_archive_manifest, ContentArchiveManifest, ContentArchiveManifestEntry,
-    ContentManifestPromotion,
+    cleanup_inactive_content_archives, promote_content_archive_manifest,
+    read_content_archive_manifest, write_content_archive_manifest, ContentArchiveCleanupReport,
+    ContentArchiveManifest, ContentArchiveManifestEntry, ContentManifestPromotion,
 };
 pub use dictionary::{
     dictionary_terms_from_records, read_dictionary, write_dictionary, MmapDictionary,

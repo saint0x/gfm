@@ -1952,9 +1952,41 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{promoted_ids_stdout}"
     );
 
+    let cleanup_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-cleanup",
+            manifest.to_str().unwrap(),
+            first_content.to_str().unwrap(),
+            second_content.to_str().unwrap(),
+            &format!("{}.missing", first_content.display()),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        cleanup_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleanup_output.stderr)
+    );
+    let cleanup_stderr = String::from_utf8(cleanup_output.stderr).unwrap();
+    assert!(
+        cleanup_stderr.contains("content-manifest-cleanup")
+            && cleanup_stderr.contains("removed=1")
+            && cleanup_stderr.contains("active=1")
+            && cleanup_stderr.contains("missing=1"),
+        "{cleanup_stderr}"
+    );
+    let cleanup_stdout = String::from_utf8(cleanup_output.stdout).unwrap();
+    assert!(
+        cleanup_stdout.contains(&format!("removed\t{}", first_content.display()))
+            && cleanup_stdout.contains(&format!("active\t{}", second_content.display()))
+            && cleanup_stdout.contains("missing\t"),
+        "{cleanup_stdout}"
+    );
+    assert!(!first_content.exists());
+    assert!(second_content.exists());
+
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
-    fs::remove_file(first_content).unwrap();
     fs::remove_file(second_content).unwrap();
     fs::remove_file(third_content).unwrap();
     fs::remove_file(manifest).unwrap();

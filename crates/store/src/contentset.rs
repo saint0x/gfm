@@ -25,6 +25,13 @@ pub struct ContentManifestPromotion {
     pub missing_retirements: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentArchiveCleanupReport {
+    pub removed_archives: Vec<PathBuf>,
+    pub active_archives: Vec<PathBuf>,
+    pub missing_archives: Vec<PathBuf>,
+}
+
 impl ContentArchiveManifest {
     pub fn new(archives: Vec<ContentArchiveManifestEntry>) -> Result<Self> {
         if archives.is_empty() {
@@ -140,6 +147,40 @@ impl ContentArchiveManifest {
             manifest: Self::new(retained)?,
             retired_archives,
             missing_retirements,
+        })
+    }
+
+    pub fn cleanup_inactive_archives(
+        &self,
+        manifest_path: impl AsRef<Path>,
+        candidates: &[impl AsRef<Path>],
+    ) -> Result<ContentArchiveCleanupReport> {
+        let manifest_path = manifest_path.as_ref();
+        let active = self
+            .resolved_archive_paths(manifest_path)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let mut removed_archives = Vec::new();
+        let mut active_archives = Vec::new();
+        let mut missing_archives = Vec::new();
+        for candidate in candidates {
+            let path = resolve_manifest_path(manifest_path, candidate.as_ref());
+            if active.contains(&path) {
+                active_archives.push(path);
+                continue;
+            }
+            match std::fs::remove_file(&path) {
+                Ok(()) => removed_archives.push(path),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    missing_archives.push(path);
+                }
+                Err(err) => return Err(GfmError::io(&path, err)),
+            }
+        }
+        Ok(ContentArchiveCleanupReport {
+            removed_archives,
+            active_archives,
+            missing_archives,
         })
     }
 }
@@ -260,6 +301,15 @@ pub fn promote_content_archive_manifest(
     let promotion = manifest.promote_archive(manifest_path, new_archive, retired_paths)?;
     promotion.manifest.write(manifest_path)?;
     Ok(promotion)
+}
+
+pub fn cleanup_inactive_content_archives(
+    manifest_path: impl AsRef<Path>,
+    candidates: &[impl AsRef<Path>],
+) -> Result<ContentArchiveCleanupReport> {
+    let manifest_path = manifest_path.as_ref();
+    let manifest = ContentArchiveManifest::read(manifest_path)?;
+    manifest.cleanup_inactive_archives(manifest_path, candidates)
 }
 
 fn canonical_term(term: &str) -> String {
@@ -527,6 +577,46 @@ mod tests {
                 }
             ]
         );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn content_archive_cleanup_removes_only_inactive_candidates() {
+        let dir = temp_dir("gfm-content-manifest-cleanup");
+        let manifest_path = dir.join("content.gfmmanifest");
+        let inactive = dir.join("inactive.gfmcontent");
+        let active = dir.join("active.gfmcontent");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_content_postings(&inactive, &[]).unwrap();
+        write_content_postings(&active, &[]).unwrap();
+
+        ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Hot,
+            path: PathBuf::from("active.gfmcontent"),
+        }])
+        .unwrap()
+        .write(&manifest_path)
+        .unwrap();
+
+        let report = cleanup_inactive_content_archives(
+            &manifest_path,
+            &[
+                PathBuf::from("inactive.gfmcontent"),
+                PathBuf::from("active.gfmcontent"),
+                PathBuf::from("missing.gfmcontent"),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(report.removed_archives, vec![inactive.clone()]);
+        assert_eq!(report.active_archives, vec![active.clone()]);
+        assert_eq!(
+            report.missing_archives,
+            vec![dir.join("missing.gfmcontent")]
+        );
+        assert!(!inactive.exists());
+        assert!(active.exists());
 
         std::fs::remove_dir_all(dir).unwrap();
     }

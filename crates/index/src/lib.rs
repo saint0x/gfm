@@ -11,8 +11,8 @@ use gfm_store::{
     read_records, write_content_postings, write_content_segment, write_records, MmapContentSet,
 };
 pub use gfm_store::{
-    ContentArchiveManifest, ContentArchiveManifestEntry, ContentManifestPromotion,
-    ContentMergeOutcome, ContentMergePolicy, ContentMergeTier,
+    ContentArchiveCleanupReport, ContentArchiveManifest, ContentArchiveManifestEntry,
+    ContentManifestPromotion, ContentMergeOutcome, ContentMergePolicy, ContentMergeTier,
 };
 use gfm_types::{
     ContentPosting, ContentSegment, DirectoryPage, FileEvent, FileEventKind, FileId, FileRecord,

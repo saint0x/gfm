@@ -340,6 +340,7 @@ cargo run -p gfm -- compact-content /tmp/gfm.gfmcontent /tmp/gfm.gfmseg
 cargo run -p gfm -- compact-content-tiered /tmp/gfm.gfmcontent /tmp/gfm-*.gfmseg
 cargo run -p gfm -- content-manifest-write /tmp/gfm.gfmmanifest hot:/tmp/gfm-hot.gfmcontent warm:/tmp/gfm-warm.gfmcontent
 cargo run -p gfm -- content-manifest-promote /tmp/gfm.gfmmanifest warm:/tmp/gfm-next.gfmcontent /tmp/gfm-hot.gfmcontent
+cargo run -p gfm -- content-manifest-cleanup /tmp/gfm.gfmmanifest /tmp/gfm-hot.gfmcontent
 cargo run -p gfm -- search-content-index-manifest /tmp/gfm.gfmidx /tmp/gfm.gfmmanifest "performance-critical"
 ```
 

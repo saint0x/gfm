@@ -806,6 +806,35 @@ fn run() -> Result<()> {
                 println!("missing-retirement\t{}", path.display());
             }
         }
+        Some("content-manifest-cleanup") => {
+            let manifest_path = required_path(
+                args.next(),
+                "content-manifest-cleanup requires a manifest path",
+            )?;
+            let candidates = args.map(PathBuf::from).collect::<Vec<_>>();
+            if candidates.is_empty() {
+                return Err(GfmError::Format(
+                    "content-manifest-cleanup requires at least one candidate archive".to_string(),
+                ));
+            }
+            let manifest = ContentArchiveManifest::read(&manifest_path)?;
+            let report = manifest.cleanup_inactive_archives(&manifest_path, &candidates)?;
+            eprintln!(
+                "content-manifest-cleanup\tremoved={}\tactive={}\tmissing={}",
+                report.removed_archives.len(),
+                report.active_archives.len(),
+                report.missing_archives.len()
+            );
+            for path in report.removed_archives {
+                println!("removed\t{}", path.display());
+            }
+            for path in report.active_archives {
+                println!("active\t{}", path.display());
+            }
+            for path in report.missing_archives {
+                println!("missing\t{}", path.display());
+            }
+        }
         Some("index-content-background") => {
             let root = required_path(args.next(), "index-content-background requires a root path")?;
             let segment_dir = required_path(
@@ -2540,6 +2569,7 @@ fn print_usage() {
   gfm content-manifest-write <manifest.gfmmanifest> <hot|warm|cold:path...>
   gfm content-manifest-inspect <manifest.gfmmanifest>
   gfm content-manifest-promote <manifest.gfmmanifest> <hot|warm|cold:path> [retired-archive...]
+  gfm content-manifest-cleanup <manifest.gfmmanifest> <candidate-archive...>
   gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent>
   gfm resume-content-background [content.job] [jobs.journal]
   gfm search <root> <query>
