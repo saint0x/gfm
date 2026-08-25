@@ -301,6 +301,7 @@ cargo run -p gfm -- metadata-id-block-mmap /tmp/gfm.gfmmeta tag Important 0
 cargo run -p gfm -- metadata-verify /tmp/gfm.gfmmeta
 cargo run -p gfm -- index-dictionary /tmp/gfm.gfmidx /tmp/gfm.gfmdict
 cargo run -p gfm -- dictionary-lookup /tmp/gfm.gfmdict Important
+cargo run -p gfm -- dictionary-verify /tmp/gfm.gfmdict
 ```
 
 Build and query content indexes:

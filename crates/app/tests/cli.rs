@@ -874,6 +874,21 @@ fn searches_persisted_tags_from_binary() {
         "{lookup_stdout}"
     );
 
+    let dictionary_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["dictionary-verify", dictionary.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        dictionary_verify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dictionary_verify.stderr)
+    );
+    let dictionary_verify_stdout = String::from_utf8(dictionary_verify.stdout).unwrap();
+    assert!(
+        dictionary_verify_stdout.contains("\tchecksum=verified"),
+        "{dictionary_verify_stdout}"
+    );
+
     fs::remove_file(index).unwrap();
     fs::remove_file(metadata).unwrap();
     fs::remove_file(dictionary).unwrap();

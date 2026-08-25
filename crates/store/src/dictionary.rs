@@ -1,4 +1,5 @@
 use crate::durable;
+use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use gfm_types::{FileKind, FileRecord, GfmError, Result};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::BTreeSet;
@@ -8,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 const DICTIONARY_MAGIC_V1: &[u8] = b"gfm-dictionary-v1\n";
 const DICTIONARY_INDEX_FOOTER: &[u8] = b"gfm-dictionary-index-v1\n";
+const DICTIONARY_CHECKSUM_FOOTER: &[u8] = b"gfm-dictionary-checksum-v1\n";
 const DICTIONARY_FOOTER_LEN: u64 = 8 + DICTIONARY_INDEX_FOOTER.len() as u64;
 const DEFAULT_BLOCK_SIZE: usize = 16;
 
@@ -87,38 +89,45 @@ fn write_dictionary_with_block_size(
     terms.sort();
     terms.dedup();
     durable::atomic_write(path, |writer| {
-        let mut writer = CountingWriter::new(writer);
-        writer.write_all(DICTIONARY_MAGIC_V1)?;
-        write_varint(&mut writer, terms.len() as u64)?;
-        write_varint(&mut writer, block_size as u64)?;
-        let mut blocks = Vec::new();
-        let mut previous = String::new();
-        for (index, term) in terms.iter().enumerate() {
-            if index % block_size == 0 {
-                let offset = writer.position();
-                blocks.push(DictionaryBlock {
-                    first: term.clone(),
-                    offset,
-                    entries: 0,
-                });
-                previous.clear();
+        let mut bytes = Vec::new();
+        {
+            let mut archive = CountingWriter::new(&mut bytes);
+            archive.write_all(DICTIONARY_MAGIC_V1)?;
+            write_varint(&mut archive, terms.len() as u64)?;
+            write_varint(&mut archive, block_size as u64)?;
+            let mut blocks = Vec::new();
+            let mut previous = String::new();
+            for (index, term) in terms.iter().enumerate() {
+                if index % block_size == 0 {
+                    let offset = archive.position();
+                    blocks.push(DictionaryBlock {
+                        first: term.clone(),
+                        offset,
+                        entries: 0,
+                    });
+                    previous.clear();
+                }
+                write_front_coded(&mut archive, &previous, term)?;
+                previous = term.clone();
+                if let Some(block) = blocks.last_mut() {
+                    block.entries += 1;
+                }
             }
-            write_front_coded(&mut writer, &previous, term)?;
-            previous = term.clone();
-            if let Some(block) = blocks.last_mut() {
-                block.entries += 1;
+            let directory_offset = archive.position();
+            write_varint(&mut archive, blocks.len() as u64)?;
+            for block in &blocks {
+                write_varint(&mut archive, block.first.len() as u64)?;
+                archive.write_all(block.first.as_bytes())?;
+                write_varint(&mut archive, block.offset)?;
+                write_varint(&mut archive, block.entries)?;
             }
+            archive.write_all(&directory_offset.to_le_bytes())?;
+            archive.write_all(DICTIONARY_INDEX_FOOTER)?;
         }
-        let directory_offset = writer.position();
-        write_varint(&mut writer, blocks.len() as u64)?;
-        for block in &blocks {
-            write_varint(&mut writer, block.first.len() as u64)?;
-            writer.write_all(block.first.as_bytes())?;
-            write_varint(&mut writer, block.offset)?;
-            write_varint(&mut writer, block.entries)?;
-        }
-        writer.write_all(&directory_offset.to_le_bytes())?;
-        writer.write_all(DICTIONARY_INDEX_FOOTER)?;
+        let mut footer = Vec::new();
+        write_checksum_footer(&mut footer, &bytes, DICTIONARY_CHECKSUM_FOOTER)?;
+        bytes.extend(footer);
+        writer.write_all(&bytes)?;
         Ok(())
     })
     .map(|_| ())
@@ -140,6 +149,7 @@ impl MmapDictionary {
                 "unsupported dictionary header",
             ));
         }
+        verify_dictionary_checksum_from_slice(&mmap, path)?;
         let mut cursor = Cursor::new(&mmap[DICTIONARY_MAGIC_V1.len()..]);
         let len = usize::try_from(read_varint(&mut cursor).map_err(|err| GfmError::io(path, err))?)
             .map_err(|_| dictionary_format_error(path, "dictionary length overflow"))?;
@@ -170,6 +180,10 @@ impl MmapDictionary {
 
     pub fn block_size(&self) -> usize {
         self.block_size
+    }
+
+    pub fn is_checksummed(&self) -> bool {
+        has_dictionary_checksum_footer(&self.mmap)
     }
 
     pub fn contains(&self, term: &str) -> Result<bool> {
@@ -228,7 +242,12 @@ impl MmapDictionary {
             .blocks
             .get(block_index + 1)
             .and_then(|next| usize::try_from(next.offset).ok())
-            .unwrap_or_else(|| dictionary_directory_offset(&self.mmap).unwrap_or(self.mmap.len()));
+            .unwrap_or_else(|| {
+                dictionary_directory_offset(&self.mmap).unwrap_or_else(|| {
+                    dictionary_indexed_len_from_slice(&self.mmap, &self.path)
+                        .unwrap_or(self.mmap.len())
+                })
+            });
         let bytes = self
             .mmap
             .get(start..end)
@@ -305,7 +324,11 @@ fn read_front_coded(mut reader: impl Read, previous: &str, path: &Path) -> Resul
 fn read_dictionary_directory_from_slice(bytes: &[u8], path: &Path) -> Result<Vec<DictionaryBlock>> {
     let directory_offset = dictionary_directory_offset(bytes)
         .ok_or_else(|| dictionary_format_error(path, "missing dictionary directory footer"))?;
-    let footer_offset = bytes
+    let indexed_len = dictionary_indexed_len_from_slice(bytes, path)?;
+    let archive_bytes = bytes
+        .get(..indexed_len)
+        .ok_or_else(|| dictionary_format_error(path, "dictionary indexed range out of bounds"))?;
+    let footer_offset = archive_bytes
         .len()
         .checked_sub(DICTIONARY_FOOTER_LEN as usize)
         .ok_or_else(|| dictionary_format_error(path, "missing dictionary directory footer"))?;
@@ -315,7 +338,7 @@ fn read_dictionary_directory_from_slice(bytes: &[u8], path: &Path) -> Result<Vec
             "invalid dictionary directory offset",
         ));
     }
-    let footer = bytes
+    let footer = archive_bytes
         .get(footer_offset + 8..)
         .ok_or_else(|| dictionary_format_error(path, "missing dictionary directory footer"))?;
     if footer != DICTIONARY_INDEX_FOOTER {
@@ -324,7 +347,7 @@ fn read_dictionary_directory_from_slice(bytes: &[u8], path: &Path) -> Result<Vec
             "missing dictionary directory footer",
         ));
     }
-    let mut cursor = Cursor::new(&bytes[directory_offset..footer_offset]);
+    let mut cursor = Cursor::new(&archive_bytes[directory_offset..footer_offset]);
     let count = read_varint(&mut cursor).map_err(|err| GfmError::io(path, err))?;
     let mut blocks = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
@@ -351,13 +374,59 @@ fn read_dictionary_directory_from_slice(bytes: &[u8], path: &Path) -> Result<Vec
 }
 
 fn dictionary_directory_offset(bytes: &[u8]) -> Option<usize> {
-    if bytes.len() < DICTIONARY_FOOTER_LEN as usize {
+    let indexed_len = dictionary_indexed_len_from_slice(bytes, Path::new("<dictionary>")).ok()?;
+    if indexed_len < DICTIONARY_FOOTER_LEN as usize {
         return None;
     }
-    let footer_offset = bytes.len() - DICTIONARY_FOOTER_LEN as usize;
+    let footer_offset = indexed_len - DICTIONARY_FOOTER_LEN as usize;
     let mut offset = [0u8; 8];
     offset.copy_from_slice(bytes.get(footer_offset..footer_offset + 8)?);
     usize::try_from(u64::from_le_bytes(offset)).ok()
+}
+
+fn verify_dictionary_checksum_from_slice(bytes: &[u8], path: &Path) -> Result<()> {
+    if has_dictionary_checksum_footer(bytes)
+        && !verify_checksum_footer(bytes, DICTIONARY_CHECKSUM_FOOTER, path, "dictionary")?
+    {
+        return Err(dictionary_format_error(
+            path,
+            "missing dictionary checksum footer",
+        ));
+    }
+    Ok(())
+}
+
+fn dictionary_indexed_len_from_slice(bytes: &[u8], path: &Path) -> Result<usize> {
+    let footer_len = dictionary_checksum_footer_len();
+    if bytes.len() < footer_len {
+        return Ok(bytes.len());
+    }
+    let footer_start = bytes.len() - footer_len;
+    if bytes.get(footer_start + 4..) == Some(DICTIONARY_CHECKSUM_FOOTER) {
+        Ok(footer_start)
+    } else {
+        if bytes.starts_with(DICTIONARY_MAGIC_V1)
+            && bytes
+                .windows(DICTIONARY_CHECKSUM_FOOTER.len())
+                .any(|window| window == DICTIONARY_CHECKSUM_FOOTER)
+        {
+            return Err(dictionary_format_error(
+                path,
+                "invalid dictionary checksum footer",
+            ));
+        }
+        Ok(bytes.len())
+    }
+}
+
+fn has_dictionary_checksum_footer(bytes: &[u8]) -> bool {
+    let footer_len = dictionary_checksum_footer_len();
+    bytes.len() >= footer_len
+        && bytes.get(bytes.len() - footer_len + 4..) == Some(DICTIONARY_CHECKSUM_FOOTER)
+}
+
+const fn dictionary_checksum_footer_len() -> usize {
+    4 + DICTIONARY_CHECKSUM_FOOTER.len()
 }
 
 fn common_prefix_len(left: &[u8], right: &[u8]) -> usize {
@@ -468,6 +537,30 @@ mod tests {
             .unwrap()
             .is_some());
         assert!(!archive.contains("missing").unwrap());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn checksummed_dictionary_rejects_corruption() {
+        let path = temp_path("gfm-dictionary-checksum", "gfmdict");
+        let terms = vec![
+            "alpha".to_string(),
+            "important".to_string(),
+            "kind:file".to_string(),
+        ];
+
+        write_dictionary(&path, &terms).unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        let offset = bytes
+            .windows(b"important".len())
+            .position(|window| window == b"important")
+            .expect("archive should contain the test term");
+        bytes[offset] = b'z';
+        std::fs::write(&path, bytes).unwrap();
+
+        let error = MmapDictionary::open(&path).unwrap_err().to_string();
+
+        assert!(error.contains("checksum mismatch"), "{error}");
         std::fs::remove_file(path).unwrap();
     }
 

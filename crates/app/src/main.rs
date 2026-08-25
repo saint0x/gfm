@@ -849,6 +849,21 @@ fn run() -> Result<()> {
                 None => println!("dictionary\tmissing\tterm={term}"),
             }
         }
+        Some("dictionary-verify") => {
+            let dictionary =
+                required_path(args.next(), "dictionary-verify requires a dictionary path")?;
+            let archive = MmapDictionary::open(dictionary)?;
+            println!(
+                "dictionary-verify\tterms={}\tbytes={}\tchecksum={}",
+                archive.len(),
+                archive.mapped_len(),
+                if archive.is_checksummed() {
+                    "verified"
+                } else {
+                    "legacy"
+                }
+            );
+        }
         Some("metadata-ids-mmap") => {
             let metadata =
                 required_path(args.next(), "metadata-ids-mmap requires a metadata path")?;
@@ -2069,6 +2084,7 @@ fn print_usage() {
   gfm index-metadata <records.gfmidx> <metadata.gfmmeta>
   gfm index-dictionary <records.gfmidx> <dictionary.gfmdict>
   gfm dictionary-lookup <dictionary.gfmdict> <term>
+  gfm dictionary-verify <dictionary.gfmdict>
   gfm metadata-ids-mmap <metadata.gfmmeta> <tag|comment> <term>
   gfm metadata-id-block-mmap <metadata.gfmmeta> <tag|comment> <term> <block-index>
   gfm metadata-verify <metadata.gfmmeta>
