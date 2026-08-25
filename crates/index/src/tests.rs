@@ -2,11 +2,11 @@ use super::*;
 use gfm_content::ExtractionQuarantine;
 use gfm_store::{
     fuzzy_postings_from_records, metadata_postings_from_records, prefix_postings_from_records,
-    substring_postings_from_records, write_fuzzy_postings, write_metadata_postings,
-    write_prefix_postings, write_record_columns, write_substring_postings, FuzzyPosting,
-    PrefixPosting, SubstringPosting,
+    substring_postings_from_records, write_content_postings, write_fuzzy_postings,
+    write_metadata_postings, write_prefix_postings, write_record_columns, write_substring_postings,
+    FuzzyPosting, PrefixPosting, SubstringPosting,
 };
-use gfm_types::{FileKind, MatchReason, VolumeId};
+use gfm_types::{ContentPositions, ContentPosting, FileKind, MatchReason, VolumeId};
 use std::collections::HashSet;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -945,6 +945,60 @@ fn durable_content_postings_survive_reload() {
     assert_eq!(indexed, 1);
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].record.name, "journal.md");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+}
+
+#[test]
+fn budgeted_content_set_loading_imports_bounded_postings() {
+    let root = unique_temp_dir("gfm-budgeted-content-root");
+    let records = unique_temp_path("gfm-budgeted-content-records", "gfmidx");
+    let content = unique_temp_path("gfm-budgeted-content-postings", "gfmcontent");
+    for node in 1..=8 {
+        fs::write(root.join(format!("{node:03}.md")), "plain file").unwrap();
+    }
+
+    let indexer = Indexer::default();
+    let snapshot = indexer.build(&root).unwrap();
+    snapshot.save(&records).unwrap();
+    let ids = snapshot
+        .records
+        .iter()
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+    write_content_postings(
+        &content,
+        &[ContentPosting {
+            term: "needle".to_string(),
+            ids: ids.clone(),
+            positions: ids
+                .iter()
+                .map(|id| ContentPositions {
+                    id: *id,
+                    positions: vec![1],
+                })
+                .collect(),
+        }],
+    )
+    .unwrap();
+
+    let mut live = indexer.load(&records).unwrap().into_live();
+    let terms = live
+        .load_content_set_postings_with_budget(
+            &[&content],
+            "needle",
+            SearchLookupBudget {
+                max_content_ids_per_term: 3,
+                ..SearchLookupBudget::default()
+            },
+        )
+        .unwrap();
+    let hits = live.search("needle", 10);
+
+    assert_eq!(terms, 1);
+    assert_eq!(hits.len(), 3);
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();

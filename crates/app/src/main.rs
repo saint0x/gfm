@@ -1609,6 +1609,8 @@ fn run() -> Result<()> {
                     max_fuzzy_keys_per_term: max_fuzzy_keys,
                     max_fuzzy_terms_per_key: max_fuzzy_terms,
                     max_fuzzy_candidates_per_term: max_fuzzy_candidates,
+                    max_content_ids_per_term: SearchLookupBudget::default()
+                        .max_content_ids_per_term,
                 },
             )?;
             eprintln!(

@@ -533,6 +533,49 @@ impl MmapContentSet {
         Ok(Some(content_posting_from_positions(term, positions_by_id)))
     }
 
+    pub fn posting_for_term_limit(
+        &self,
+        term: &str,
+        limit: usize,
+    ) -> Result<(Option<ContentPosting>, bool)> {
+        let term = canonical_term(term);
+        if term.is_empty() {
+            return Ok((None, false));
+        }
+        let mut positions_by_id: BTreeMap<FileId, BTreeSet<u32>> = BTreeMap::new();
+        let mut truncated = false;
+        for archive in &self.archives {
+            let (Some(posting), archive_truncated) =
+                archive.posting_for_term_limit(&term, limit)?
+            else {
+                continue;
+            };
+            truncated |= archive_truncated;
+            for id in posting.ids {
+                positions_by_id.entry(id).or_default();
+            }
+            for positions in posting.positions {
+                positions_by_id
+                    .entry(positions.id)
+                    .or_default()
+                    .extend(positions.positions);
+            }
+        }
+        if positions_by_id.is_empty() {
+            return Ok((None, truncated));
+        }
+        if positions_by_id.len() > limit {
+            truncated = true;
+            while positions_by_id.len() > limit {
+                positions_by_id.pop_last();
+            }
+        }
+        Ok((
+            Some(content_posting_from_positions(term, positions_by_id)),
+            truncated,
+        ))
+    }
+
     pub fn postings_for_terms<I, S>(&self, terms: I) -> Result<Vec<ContentPosting>>
     where
         I: IntoIterator<Item = S>,
@@ -550,6 +593,32 @@ impl MmapContentSet {
             .into_iter()
             .filter_map(|term| self.posting_for_term(&term).transpose())
             .collect()
+    }
+
+    pub fn postings_for_terms_limit<I, S>(
+        &self,
+        terms: I,
+        limit_per_term: usize,
+    ) -> Result<Vec<ContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut selected = BTreeSet::new();
+        for term in terms {
+            let term = canonical_term(term.as_ref());
+            if !term.is_empty() {
+                selected.insert(term);
+            }
+        }
+
+        let mut postings = Vec::new();
+        for term in selected {
+            if let (Some(posting), _) = self.posting_for_term_limit(&term, limit_per_term)? {
+                postings.push(posting);
+            }
+        }
+        Ok(postings)
     }
 
     pub fn archive_count(&self) -> usize {
@@ -920,6 +989,73 @@ mod tests {
                     positions: vec![2],
                 }
             ]
+        );
+
+        std::fs::remove_file(first).unwrap();
+        std::fs::remove_file(second).unwrap();
+    }
+
+    #[test]
+    fn mmap_content_set_reads_bounded_term_union_deterministically() {
+        let first = temp_path("gfm-content-set-bounded-first", "gfmcontent");
+        let second = temp_path("gfm-content-set-bounded-second", "gfmcontent");
+        let high_ids = (100..200)
+            .map(|node| FileId::new(VolumeId(1), node))
+            .collect::<Vec<_>>();
+        let low_ids = (1..100)
+            .map(|node| FileId::new(VolumeId(1), node))
+            .collect::<Vec<_>>();
+        write_content_postings(
+            &first,
+            &[ContentPosting {
+                term: "needle".to_string(),
+                ids: high_ids.clone(),
+                positions: high_ids
+                    .iter()
+                    .map(|id| ContentPositions {
+                        id: *id,
+                        positions: vec![1],
+                    })
+                    .collect(),
+            }],
+        )
+        .unwrap();
+        write_content_postings(
+            &second,
+            &[ContentPosting {
+                term: "needle".to_string(),
+                ids: low_ids.clone(),
+                positions: low_ids
+                    .iter()
+                    .map(|id| ContentPositions {
+                        id: *id,
+                        positions: vec![2],
+                    })
+                    .collect(),
+            }],
+        )
+        .unwrap();
+
+        let set = MmapContentSet::open([&first, &second]).unwrap();
+        let (posting, truncated) = set.posting_for_term_limit("needle", 3).unwrap();
+        let posting = posting.unwrap();
+
+        assert!(truncated);
+        assert_eq!(
+            posting.ids,
+            vec![
+                FileId::new(VolumeId(1), 1),
+                FileId::new(VolumeId(1), 2),
+                FileId::new(VolumeId(1), 3)
+            ]
+        );
+        assert_eq!(
+            posting
+                .positions
+                .iter()
+                .map(|positions| positions.id)
+                .collect::<Vec<_>>(),
+            posting.ids
         );
 
         std::fs::remove_file(first).unwrap();

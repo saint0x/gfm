@@ -1188,6 +1188,22 @@ impl LiveIndex {
         Ok(terms)
     }
 
+    pub fn load_content_set_postings_with_budget(
+        &mut self,
+        paths: &[impl AsRef<Path>],
+        query: &str,
+        budget: SearchLookupBudget,
+    ) -> Result<usize> {
+        let content = MmapContentSet::open(paths)?;
+        let postings = content.postings_for_terms_limit(
+            content_query_terms(query),
+            budget.max_content_ids_per_term,
+        )?;
+        let terms = postings.len();
+        self.index.import_content_postings(&postings);
+        Ok(terms)
+    }
+
     pub fn load_content_manifest_postings(
         &mut self,
         manifest_path: impl AsRef<Path>,
@@ -1195,6 +1211,22 @@ impl LiveIndex {
     ) -> Result<usize> {
         let content = MmapContentSet::open_manifest(manifest_path)?;
         let postings = content.postings_for_terms(content_query_terms(query))?;
+        let terms = postings.len();
+        self.index.import_content_postings(&postings);
+        Ok(terms)
+    }
+
+    pub fn load_content_manifest_postings_with_budget(
+        &mut self,
+        manifest_path: impl AsRef<Path>,
+        query: &str,
+        budget: SearchLookupBudget,
+    ) -> Result<usize> {
+        let content = MmapContentSet::open_manifest(manifest_path)?;
+        let postings = content.postings_for_terms_limit(
+            content_query_terms(query),
+            budget.max_content_ids_per_term,
+        )?;
         let terms = postings.len();
         self.index.import_content_postings(&postings);
         Ok(terms)

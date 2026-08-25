@@ -462,6 +462,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
 - Query-time content archive sets:
   - multiple immutable mmap content archives are opened as one logical search surface;
   - each query term performs binary directory lookup inside each archive instead of hydrating all postings;
+  - budgeted content-term loads decode only the bounded compressed ID prefix and matching bounded positional prefix needed by the active lookup budget, then union per-archive heads deterministically before import;
   - duplicate file ids and positional offsets are merged deterministically through ordered sets;
   - this lets background compaction publish new tier files while retained archives remain searchable.
 - Query-time prefix, substring, and fuzzy archive lookup:

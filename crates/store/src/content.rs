@@ -1,6 +1,7 @@
 use crate::durable;
 use crate::ids::{
-    read_blocked_file_id_block_from_slice, read_blocked_file_ids, write_blocked_file_ids,
+    read_blocked_file_id_block_from_slice, read_blocked_file_ids,
+    read_blocked_file_ids_limited_report_from_slice, write_blocked_file_ids,
 };
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use gfm_types::{
@@ -375,6 +376,36 @@ impl MmapContentArchive {
         let posting = read_content_posting(Cursor::new(bytes), &self.path, self.version)?;
         if posting.term.trim().to_lowercase() == term {
             Ok(Some(posting))
+        } else {
+            Err(content_format_error(
+                &self.path,
+                "content directory points at the wrong term",
+            ))
+        }
+    }
+
+    pub fn posting_for_term_limit(
+        &self,
+        term: &str,
+        limit: usize,
+    ) -> Result<(Option<ContentPosting>, bool)> {
+        let term = term.trim().to_lowercase();
+        if term.is_empty() {
+            return Ok((None, false));
+        }
+        let Some(entry) = self
+            .directory
+            .binary_search_by(|entry| entry.term.as_str().cmp(term.as_str()))
+            .ok()
+            .map(|index| &self.directory[index])
+        else {
+            return Ok((None, false));
+        };
+        let bytes = self.posting_bytes(entry)?;
+        let (posting, truncated) =
+            read_content_posting_limited_from_slice(bytes, &self.path, self.version, limit)?;
+        if posting.term.trim().to_lowercase() == term {
+            Ok((Some(posting), truncated))
         } else {
             Err(content_format_error(
                 &self.path,
@@ -1072,6 +1103,58 @@ fn read_content_posting(
     })
 }
 
+fn read_content_posting_limited_from_slice(
+    bytes: &[u8],
+    path: &Path,
+    version: ContentStoreVersion,
+    limit: usize,
+) -> Result<(ContentPosting, bool)> {
+    let mut cursor = Cursor::new(bytes);
+    let term = read_content_posting_term(&mut cursor, path)?;
+    let ids_start = usize::try_from(cursor.position())
+        .map_err(|_| content_format_error(path, "content id offset overflow"))?;
+    let id_bytes = bytes
+        .get(ids_start..)
+        .ok_or_else(|| content_format_error(path, "content id offset out of bounds"))?;
+
+    let (ids, ids_truncated, positions_start) = if version.uses_blocked_ids() {
+        let report = read_blocked_file_ids_limited_report_from_slice(id_bytes, limit, path)?;
+        let positions_start = ids_start
+            .checked_add(report.encoded_len)
+            .ok_or_else(|| content_format_error(path, "content position offset overflow"))?;
+        (report.ids, report.truncated, positions_start)
+    } else {
+        let mut id_cursor = Cursor::new(id_bytes);
+        let ids = read_file_ids(&mut id_cursor, path)?;
+        let truncated = ids.len() > limit;
+        let ids = ids.into_iter().take(limit).collect();
+        let consumed = usize::try_from(id_cursor.position())
+            .map_err(|_| content_format_error(path, "content id offset overflow"))?;
+        let positions_start = ids_start
+            .checked_add(consumed)
+            .ok_or_else(|| content_format_error(path, "content position offset overflow"))?;
+        (ids, truncated, positions_start)
+    };
+
+    let (positions, positions_truncated) = if version.uses_positions() {
+        let position_bytes = bytes
+            .get(positions_start..)
+            .ok_or_else(|| content_format_error(path, "content position range out of bounds"))?;
+        read_content_positions_limited(Cursor::new(position_bytes), path, limit)?
+    } else {
+        (Vec::new(), false)
+    };
+
+    Ok((
+        ContentPosting {
+            term,
+            ids,
+            positions,
+        },
+        ids_truncated || positions_truncated,
+    ))
+}
+
 fn read_content_posting_term(mut reader: impl Read, path: &Path) -> Result<String> {
     let term_len = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
     let mut term = vec![0; term_len as usize];
@@ -1158,6 +1241,53 @@ fn read_content_positions(mut reader: impl Read, path: &Path) -> Result<Vec<Cont
         previous = id;
     }
     Ok(entries)
+}
+
+fn read_content_positions_limited(
+    mut reader: impl Read,
+    path: &Path,
+    limit: usize,
+) -> Result<(Vec<ContentPositions>, bool)> {
+    let entry_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+    let entry_count_usize = usize::try_from(entry_count)
+        .map_err(|_| content_format_error(path, "content position count overflow"))?;
+    let read_entries = entry_count_usize.min(limit);
+    let mut entries = Vec::with_capacity(read_entries);
+    let mut previous = FileId::new(VolumeId(0), 0);
+    for _ in 0..read_entries {
+        let volume_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        let volume = previous
+            .volume
+            .0
+            .checked_add(volume_delta)
+            .ok_or_else(|| content_format_error(path, "position volume id overflow"))?;
+        let node_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        let node = if volume == previous.volume.0 {
+            previous
+                .node
+                .checked_add(node_delta)
+                .ok_or_else(|| content_format_error(path, "position file node id overflow"))?
+        } else {
+            node_delta
+        };
+        let id = FileId::new(VolumeId(volume), node);
+        let position_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        let mut positions = Vec::with_capacity(position_count.min(1_000_000) as usize);
+        let mut previous_position = 0u32;
+        for _ in 0..position_count {
+            let delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+            let delta = u32::try_from(delta)
+                .map_err(|_| content_format_error(path, "content position overflow"))?;
+            let position = previous_position
+                .checked_add(delta)
+                .ok_or_else(|| content_format_error(path, "content position overflow"))?;
+            positions.push(position);
+            previous_position = position;
+        }
+        entries.push(ContentPositions { id, positions });
+        previous = id;
+    }
+    Ok((entries, entry_count_usize > limit))
 }
 
 fn write_file_ids(mut writer: impl Write, ids: &[FileId]) -> std::io::Result<()> {
@@ -1378,6 +1508,36 @@ mod tests {
         assert_eq!(full.positions.len(), 300);
         assert_eq!(block.len(), 128);
         assert_eq!(block[0], FileId::new(VolumeId(8), 20_128));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_content_archive_reads_bounded_compressed_posting() {
+        let path = temp_path("gfm-content-bounded-posting", "gfmcontent");
+        let ids = (0..300)
+            .map(|node| FileId::new(VolumeId(8), 20_000 + node))
+            .collect::<Vec<_>>();
+        let posting = ContentPosting {
+            term: "needle".to_string(),
+            ids: ids.clone(),
+            positions: ids
+                .iter()
+                .map(|id| ContentPositions {
+                    id: *id,
+                    positions: vec![1, 3],
+                })
+                .collect(),
+        };
+
+        write_content_postings(&path, &[posting]).unwrap();
+        let archive = MmapContentArchive::open(&path).unwrap();
+        let (bounded, truncated) = archive.posting_for_term_limit("needle", 3).unwrap();
+        let bounded = bounded.unwrap();
+
+        assert!(truncated);
+        assert_eq!(bounded.ids, ids[..3]);
+        assert_eq!(bounded.positions.len(), 3);
+        assert_eq!(bounded.positions[0].positions, vec![1, 3]);
         std::fs::remove_file(path).unwrap();
     }
 

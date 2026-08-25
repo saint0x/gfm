@@ -124,14 +124,40 @@ pub(crate) fn read_blocked_file_ids_limited_from_slice(
     limit: usize,
     path: &Path,
 ) -> Result<Vec<FileId>> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
+    read_blocked_file_ids_limited_report_from_slice(bytes, limit, path).map(|report| report.ids)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BlockedFileIdsLimitedReport {
+    pub ids: Vec<FileId>,
+    pub truncated: bool,
+    pub encoded_len: usize,
+}
+
+pub(crate) fn read_blocked_file_ids_limited_report_from_slice(
+    bytes: &[u8],
+    limit: usize,
+    path: &Path,
+) -> Result<BlockedFileIdsLimitedReport> {
     let mut reader = Cursor::new(bytes);
-    let _count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+    let count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
     let (_block_size, blocks) = read_blocked_header(&mut reader, path)?;
     let payload_start = usize::try_from(reader.position())
         .map_err(|_| id_format_error(path, "id block payload offset overflow"))?;
+    let payload_len = block_payload_len(&blocks, path)?;
+    let encoded_len = payload_start
+        .checked_add(payload_len)
+        .ok_or_else(|| id_format_error(path, "id block range overflow"))?;
+    if bytes.get(..encoded_len).is_none() {
+        return Err(id_format_error(path, "id block out of bounds"));
+    }
+    if limit == 0 {
+        return Ok(BlockedFileIdsLimitedReport {
+            ids: Vec::new(),
+            truncated: count > 0,
+            encoded_len,
+        });
+    }
     let mut payload_offset = 0usize;
     let mut ids = Vec::with_capacity(limit.min(DEFAULT_ID_BLOCK_SIZE));
     for block in &blocks {
@@ -153,13 +179,21 @@ pub(crate) fn read_blocked_file_ids_limited_from_slice(
         )?);
         if ids.len() >= limit {
             ids.truncate(limit);
-            return Ok(ids);
+            return Ok(BlockedFileIdsLimitedReport {
+                ids,
+                truncated: count as usize > limit,
+                encoded_len,
+            });
         }
         payload_offset = payload_offset
             .checked_add(len)
             .ok_or_else(|| id_format_error(path, "id block range overflow"))?;
     }
-    Ok(ids)
+    Ok(BlockedFileIdsLimitedReport {
+        ids,
+        truncated: false,
+        encoded_len,
+    })
 }
 
 pub(crate) fn read_blocked_file_id_block_from_slice(
