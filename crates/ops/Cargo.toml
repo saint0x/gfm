@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+exacl = "0.13.0"
 filetime = "0.2.29"
 gfm-fs = { path = "../fs" }
 gfm-types = { path = "../types" }

@@ -1282,6 +1282,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "exacl"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8de9e551ced9d700a31dacb8b168129640240fcd7a279a3fa4d59608b84ebcae"
+dependencies = [
+ "bitflags 2.13.1",
+ "log",
+ "scopeguard",
+ "uuid",
+]
+
+[[package]]
 name = "exr"
 version = "1.74.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1734,6 +1746,7 @@ dependencies = [
 name = "gfm-ops"
 version = "0.1.0"
 dependencies = [
+ "exacl",
  "filetime",
  "gfm-fs",
  "gfm-types",

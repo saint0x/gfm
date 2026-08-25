@@ -1786,7 +1786,8 @@ fn preserve_metadata(from: &Path, to: &Path, metadata: &fs::Metadata) -> Result<
     preserve_ownership(to, metadata)?;
     preserve_permissions(to, metadata)?;
     preserve_times(to, metadata)?;
-    preserve_xattrs(from, to)
+    preserve_xattrs(from, to)?;
+    preserve_acls(from, to)
 }
 
 #[cfg(unix)]
@@ -1836,7 +1837,41 @@ fn preserve_permissions(to: &Path, metadata: &fs::Metadata) -> Result<()> {
 fn preserve_times(to: &Path, metadata: &fs::Metadata) -> Result<()> {
     let atime = filetime::FileTime::from_last_access_time(metadata);
     let mtime = filetime::FileTime::from_last_modification_time(metadata);
-    filetime::set_file_times(to, atime, mtime).map_err(|err| GfmError::io(to, err))
+    filetime::set_file_times(to, atime, mtime).map_err(|err| GfmError::io(to, err))?;
+    preserve_creation_time(to, metadata)
+}
+
+#[cfg(target_vendor = "apple")]
+fn preserve_creation_time(to: &Path, metadata: &fs::Metadata) -> Result<()> {
+    use std::os::darwin::fs::FileTimesExt;
+
+    let created = match metadata.created() {
+        Ok(created) => created,
+        Err(err) if time_preservation_unsupported(&err) => return Ok(()),
+        Err(err) => return Err(GfmError::io(to, err)),
+    };
+    let file = File::open(to).map_err(|err| GfmError::io(to, err))?;
+    let times = fs::FileTimes::new().set_created(created);
+    match file.set_times(times) {
+        Ok(()) => Ok(()),
+        Err(err) if time_preservation_unsupported(&err) => Ok(()),
+        Err(err) => Err(GfmError::io(to, err)),
+    }
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn preserve_creation_time(_to: &Path, _metadata: &fs::Metadata) -> Result<()> {
+    Ok(())
+}
+
+fn time_preservation_unsupported(err: &io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(libc::ENOTSUP) | Some(libc::EPERM) | Some(libc::EACCES)
+    ) || matches!(
+        err.kind(),
+        io::ErrorKind::Unsupported | io::ErrorKind::PermissionDenied
+    )
 }
 
 fn preserve_xattrs(from: &Path, to: &Path) -> Result<()> {
@@ -1867,6 +1902,43 @@ fn xattr_copy_unsupported(err: &io::Error) -> bool {
         Some(libc::ENOTSUP)
             | Some(libc::ENODATA)
             | Some(libc::ENOATTR)
+            | Some(libc::EPERM)
+            | Some(libc::EACCES)
+    ) || matches!(
+        err.kind(),
+        io::ErrorKind::Unsupported | io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn preserve_acls(from: &Path, to: &Path) -> Result<()> {
+    let entries = match exacl::getfacl(from, None::<exacl::AclOption>) {
+        Ok(entries) => entries,
+        Err(err) if acl_copy_unsupported(&err) => return Ok(()),
+        Err(err) => return Err(GfmError::io(from, err)),
+    };
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let paths = [to];
+    match exacl::setfacl(&paths, &entries, None::<exacl::AclOption>) {
+        Ok(()) => Ok(()),
+        Err(err) if acl_copy_unsupported(&err) => Ok(()),
+        Err(err) => Err(GfmError::io(to, err)),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn preserve_acls(_from: &Path, _to: &Path) -> Result<()> {
+    Ok(())
+}
+
+fn acl_copy_unsupported(err: &io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(libc::ENOTSUP)
+            | Some(libc::ENOSYS)
+            | Some(libc::ENOENT)
             | Some(libc::EPERM)
             | Some(libc::EACCES)
     ) || matches!(
@@ -2820,6 +2892,89 @@ mod tests {
         assert_eq!(
             filetime::FileTime::from_last_modification_time(&copied),
             expected
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn copy_preserves_birthtime_when_host_supports_it() {
+        use std::os::darwin::fs::FileTimesExt;
+        use std::time::Duration;
+
+        let root = unique_temp_dir("gfm-ops-birthtime");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "created").unwrap();
+        let created = UNIX_EPOCH + Duration::from_secs(1_600_000_123);
+        let file = File::open(&source).unwrap();
+        match file.set_times(fs::FileTimes::new().set_created(created)) {
+            Ok(()) => {}
+            Err(err) if time_preservation_unsupported(&err) => {
+                fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            Err(err) => panic!("unexpected birthtime setup failure: {err}"),
+        }
+
+        Operator::new(OperationContext::new(&journal))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            fs::metadata(&destination).unwrap().created().unwrap(),
+            created
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn copy_preserves_access_control_lists_when_host_supports_them() {
+        let root = unique_temp_dir("gfm-ops-acls");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "acl").unwrap();
+        let Ok(user) = std::env::var("USER") else {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        };
+        if user.is_empty() {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let entries = vec![exacl::AclEntry::allow_user(
+            &user,
+            exacl::Perm::READ | exacl::Perm::READATTR | exacl::Perm::READSECURITY,
+            None,
+        )];
+        let source_paths = [&source];
+        match exacl::setfacl(&source_paths, &entries, None::<exacl::AclOption>) {
+            Ok(()) => {}
+            Err(err) if acl_copy_unsupported(&err) => {
+                fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            Err(err) => panic!("unexpected acl setup failure: {err}"),
+        }
+
+        Operator::new(OperationContext::new(&journal))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            exacl::getfacl(&destination, None::<exacl::AclOption>).unwrap(),
+            exacl::getfacl(&source, None::<exacl::AclOption>).unwrap()
         );
 
         fs::remove_dir_all(root).unwrap();
