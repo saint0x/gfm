@@ -81,6 +81,19 @@ impl SearchQuery {
             && self.filters.is_empty()
             && self.expression.is_none()
     }
+
+    pub fn content_candidate_terms(&self) -> Vec<String> {
+        let mut terms = self.terms.clone();
+        for phrase in &self.phrases {
+            terms.extend(tokenize(phrase));
+        }
+        for proximity in &self.proximities {
+            terms.extend(proximity.terms.iter().cloned());
+        }
+        terms.sort();
+        terms.dedup();
+        terms
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

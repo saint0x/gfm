@@ -11,8 +11,8 @@ use gfm_fs::{
     PackageTraversalReport, ScanOptions,
 };
 use gfm_index::{
-    parse_volume_indexing_policy, BackgroundContentIndexer, ContentIndexJobSpec,
-    ContentIndexReport, EventBackpressureQueue, EventPriority, FseventsCursor,
+    content_query_terms, parse_volume_indexing_policy, BackgroundContentIndexer,
+    ContentIndexJobSpec, ContentIndexReport, EventBackpressureQueue, EventPriority, FseventsCursor,
     FseventsCursorHealth, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor,
     IndexVolumeState, Indexer, LiveIndex, SearchFuzzyPosting, SearchMetadataField,
     SearchMetadataPosting, SearchPrefixPosting, SearchRecordColumns, SearchStreamStage,
@@ -920,7 +920,7 @@ fn run() -> Result<()> {
                     ids: posting.ids,
                 })
                 .collect();
-            let search_content = content.postings()?;
+            let search_content = content.postings_for_terms(content_query_terms(&query))?;
             let (live, applied, metadata_keys, prefix_keys, fuzzy_keys, content_keys) =
                 LiveIndex::from_records_with_sidecars(
                     records.records()?,

@@ -1055,11 +1055,18 @@ fn searches_persisted_tags_from_binary() {
     );
     write_content_postings(
         &content,
-        &[ContentPosting {
-            term: "bodymarker".to_string(),
-            ids: vec![FileId::new(VolumeId(1), 1)],
-            positions: Vec::new(),
-        }],
+        &[
+            ContentPosting {
+                term: "bodymarker".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 1)],
+                positions: Vec::new(),
+            },
+            ContentPosting {
+                term: "coldmarker".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 2)],
+                positions: Vec::new(),
+            },
+        ],
     )
     .unwrap();
 
@@ -1114,7 +1121,7 @@ fn searches_persisted_tags_from_binary() {
     assert!(
         sidecar_search_stderr.contains("metadata-keys ")
             && sidecar_search_stderr.contains("prefix-keys ")
-            && sidecar_search_stderr.contains("content-keys "),
+            && sidecar_search_stderr.contains("content-keys 0"),
         "{sidecar_search_stderr}"
     );
 
@@ -1163,6 +1170,11 @@ fn searches_persisted_tags_from_binary() {
     assert!(
         sidecar_content_stdout.contains("tagged.md"),
         "{sidecar_content_stdout}"
+    );
+    let sidecar_content_stderr = String::from_utf8(sidecar_content_search.stderr).unwrap();
+    assert!(
+        sidecar_content_stderr.contains("content-keys 1"),
+        "{sidecar_content_stderr}"
     );
 
     fs::remove_file(index).unwrap();

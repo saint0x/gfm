@@ -294,6 +294,25 @@ impl MmapContentArchive {
         }
     }
 
+    pub fn postings_for_terms<I, S>(&self, terms: I) -> Result<Vec<ContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut selected = BTreeSet::new();
+        for term in terms {
+            let term = term.as_ref().trim().to_lowercase();
+            if !term.is_empty() {
+                selected.insert(term);
+            }
+        }
+
+        selected
+            .into_iter()
+            .filter_map(|term| self.posting_for_term(&term).transpose())
+            .collect()
+    }
+
     pub fn postings(&self) -> Result<Vec<ContentPosting>> {
         self.directory
             .iter()
@@ -1000,6 +1019,13 @@ mod tests {
 
         assert_eq!(read, postings);
         assert_eq!(archive.postings().unwrap(), postings);
+        assert_eq!(
+            archive
+                .postings_for_terms(["beta", "missing", "alpha", "alpha"])
+                .unwrap(),
+            postings
+        );
+        assert!(archive.postings_for_terms(["missing"]).unwrap().is_empty());
         std::fs::remove_file(path).unwrap();
     }
 

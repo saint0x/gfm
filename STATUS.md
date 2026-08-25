@@ -57,49 +57,48 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Storage Engine
 
-37. Implement mmap-backed immutable archive readers for records, dictionaries, metadata postings, and content postings.
-38. Implement dictionary compression for terms, paths, extensions, tags, kinds, metadata keys, and repeated path prefixes.
-39. Implement block-level compression policy with fast random access and bounded decompression windows.
-40. Implement large-index merge policy across hot buffers, immutable segments, compacted tiers, and tombstone cleanup.
-41. Implement record column stores for high-cardinality fields and cache-friendly scan/rank passes.
-42. Implement prefix/fuzzy lookup structures suitable for machine-wide scale.
-43. Implement checksums, schema migration, crash recovery, corruption detection, and rebuild plans.
-44. Implement index size telemetry and compaction scheduling heuristics.
-45. Implement benchmark fixtures for millions of files and realistic developer, media, documents, and iCloud trees.
+37. Implement dictionary compression for terms, paths, extensions, tags, kinds, metadata keys, and repeated path prefixes.
+38. Implement block-level compression policy with fast random access and bounded decompression windows.
+39. Implement large-index merge policy across hot buffers, immutable segments, compacted tiers, and tombstone cleanup.
+40. Implement record column stores for high-cardinality fields and cache-friendly scan/rank passes.
+41. Implement prefix/fuzzy lookup structures suitable for machine-wide scale.
+42. Implement checksums, schema migration, crash recovery, corruption detection, and rebuild plans.
+43. Implement index size telemetry and compaction scheduling heuristics.
+44. Implement benchmark fixtures for millions of files and realistic developer, media, documents, and iCloud trees.
 
 ## File Operations
 
-46. Implement APFS clone fast paths using platform-native clone semantics.
-47. Implement copyfile/Finder-compatible metadata preservation, xattrs, ACLs, resource forks, quarantine attributes, package behavior, and symlink policies.
-48. Implement operation pause, resume, cancellation, retry, and crash recovery replay.
-49. Implement progress accounting for recursive operations before and during execution.
-50. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
-51. Implement Trash restore metadata and restore operation.
-52. Implement privileged-operation flow for protected paths.
-53. Implement network-volume fallbacks and slow-volume throttling.
-54. Implement post-operation verification policy for high-risk moves/copies.
+45. Implement APFS clone fast paths using platform-native clone semantics.
+46. Implement copyfile/Finder-compatible metadata preservation, xattrs, ACLs, resource forks, quarantine attributes, package behavior, and symlink policies.
+47. Implement operation pause, resume, cancellation, retry, and crash recovery replay.
+48. Implement progress accounting for recursive operations before and during execution.
+49. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
+50. Implement Trash restore metadata and restore operation.
+51. Implement privileged-operation flow for protected paths.
+52. Implement network-volume fallbacks and slow-volume throttling.
+53. Implement post-operation verification policy for high-risk moves/copies.
 
 ## Jobs And Runtime
 
-55. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
-56. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
-57. Implement persistent progress snapshots and user-visible progress restoration after restart.
-58. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
-59. Implement per-volume concurrency limits and operation isolation.
-60. Implement structured cancellation propagation across nested jobs and subprocess extractors.
-61. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
+54. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
+55. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
+56. Implement persistent progress snapshots and user-visible progress restoration after restart.
+57. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
+58. Implement per-volume concurrency limits and operation isolation.
+59. Implement structured cancellation propagation across nested jobs and subprocess extractors.
+60. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
 
 ## Preview And Thumbnails
 
-62. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
+61. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
 
 ## Packaging
 
-63. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
+62. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
 
 ## Documentation
 
-64. Expand `PLAN.md` when architectural decisions change materially.
-65. Keep `README.md` written as the completed product contract.
-66. Keep this file limited to unfinished work only.
-67. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+63. Expand `PLAN.md` when architectural decisions change materially.
+64. Keep `README.md` written as the completed product contract.
+65. Keep this file limited to unfinished work only.
+66. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

@@ -5,6 +5,15 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn extracts_content_terms_for_query_sidecar_loading() {
+    assert_eq!(
+        content_query_terms(r#"tag:Important "Launch Notes" near:4:alpha_beta:gamma"#),
+        vec!["alpha", "beta", "gamma", "launch", "notes"]
+    );
+    assert!(content_query_terms("tag:Important kind:file").is_empty());
+}
+
+#[test]
 fn builds_saves_loads_and_searches_snapshot() {
     let root = unique_temp_dir("gfm-index-root");
     let output = unique_temp_path("gfm-index", "gfmidx");

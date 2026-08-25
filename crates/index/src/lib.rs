@@ -48,6 +48,10 @@ pub use volume::{
     VolumeIndexPolicy, VolumeIndexThrottle, VolumeThrottleClass,
 };
 
+pub fn content_query_terms(query: &str) -> Vec<String> {
+    SearchQuery::parse(query).content_candidate_terms()
+}
+
 #[derive(Debug, Clone)]
 pub struct IndexSnapshot {
     pub root: PathBuf,
