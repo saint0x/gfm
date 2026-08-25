@@ -107,20 +107,16 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Preview And Thumbnails
 
-75. Build preview cache with memory and disk tiers.
-76. Implement icon, thumbnail, and Quick Look request coalescing.
-77. Implement visible-window prioritization and cancellation for offscreen preview work.
-78. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
-79. Implement preview security policy for untrusted files.
-80. Implement thumbnail invalidation on content, metadata, tag, and iCloud state changes.
+75. Implement visible-window prioritization and cancellation for offscreen preview work.
+76. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
 
 ## Packaging
 
-81. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
+77. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
 
 ## Documentation
 
-82. Expand `PLAN.md` when architectural decisions change materially.
-83. Keep `README.md` written as the completed product contract.
-84. Keep this file limited to unfinished work only.
-85. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+78. Expand `PLAN.md` when architectural decisions change materially.
+79. Keep `README.md` written as the completed product contract.
+80. Keep this file limited to unfinished work only.
+81. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

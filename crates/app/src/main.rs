@@ -16,6 +16,10 @@ use gfm_mac::{
     current_host_profile, current_permission_onboarding, FileEventStream, SupportMatrix, WatchRoot,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
+use gfm_preview::{
+    decide_invalidation, decide_preview_security, security_input_for_path,
+    PreviewInvalidationEvent, PreviewKind, PreviewSecurityPolicy,
+};
 use gfm_store::ContentArchive;
 use gfm_testkit::{
     run_macrobench, run_regression_gate, MacrobenchOptions, MacrobenchScale, MacrobenchStage,
@@ -369,6 +373,26 @@ fn run() -> Result<()> {
                 );
             }
         }
+        Some("preview-check") => {
+            let path = required_path(args.next(), "preview-check requires a path")?;
+            let kind = parse_preview_kind(args.next())?;
+            let input = security_input_for_path(&path, kind);
+            let decision = decide_preview_security(&PreviewSecurityPolicy::default(), &input);
+            let invalidation = decide_invalidation(PreviewInvalidationEvent {
+                content_changed: true,
+                ..PreviewInvalidationEvent::default()
+            });
+            println!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                kind.as_str(),
+                input.trust.as_str(),
+                input.is_executable,
+                input.is_remote,
+                decision.as_str(),
+                invalidation.invalidate_disk,
+                path.display()
+            );
+        }
         Some("macrobench") => {
             let options = macrobench_options(args.next(), args.next(), "macrobench")?;
             let report = run_macrobench(&options)?;
@@ -692,6 +716,18 @@ fn macrobench_stage(stage: MacrobenchStage) -> &'static str {
     }
 }
 
+fn parse_preview_kind(value: Option<String>) -> Result<PreviewKind> {
+    match value.as_deref() {
+        Some("icon") | None => Ok(PreviewKind::Icon),
+        Some("thumbnail") => Ok(PreviewKind::Thumbnail),
+        Some("quick-look") => Ok(PreviewKind::QuickLook),
+        Some("text") => Ok(PreviewKind::Text),
+        Some(other) => Err(gfm_types::GfmError::Format(format!(
+            "preview kind must be icon, thumbnail, quick-look, or text; got `{other}`"
+        ))),
+    }
+}
+
 fn print_usage() {
     println!(
         "gfm commands:
@@ -718,6 +754,7 @@ fn print_usage() {
   gfm diagnostics-storage-inspect <records.gfmidx|content.gfmcontent>
   gfm support-check
   gfm permission-onboarding
+  gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm macrobench <workspace> [smoke|standard]
   gfm regression-gate <workspace> [smoke|standard]
   gfm release-policy

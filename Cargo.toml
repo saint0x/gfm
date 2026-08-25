@@ -11,6 +11,7 @@ members = [
     "crates/mac",
     "crates/ops",
     "crates/packaging",
+    "crates/preview",
     "crates/search",
     "crates/store",
     "crates/testkit",

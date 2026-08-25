@@ -259,6 +259,7 @@ gfm/
 - Owns icon and thumbnail generation.
 - Integrates Quick Look where possible.
 - Enforces budgets so thumbnails never block navigation.
+- Provides a bounded memory/disk preview cache with atomic disk writes, duplicate request coalescing for icon/thumbnail/Quick Look/text previews, untrusted-file preview security decisions, and invalidation policy for content, metadata, tag, iCloud, and removal events.
 
 `jobs`
 

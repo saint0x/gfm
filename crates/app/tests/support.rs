@@ -56,3 +56,25 @@ fn reports_permission_onboarding_from_binary() {
     assert_eq!(fields[2], "true", "{stdout}");
     assert!(lines.any(|line| line.starts_with("desktop\t")), "{stdout}");
 }
+
+#[test]
+fn reports_preview_security_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["preview-check", "/tmp/example.app", "quick-look"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let fields: Vec<_> = stdout.trim().split('\t').collect();
+
+    assert_eq!(fields.len(), 7, "{stdout}");
+    assert_eq!(fields[0], "quick-look", "{stdout}");
+    assert_eq!(fields[1], "untrusted", "{stdout}");
+    assert_eq!(fields[2], "true", "{stdout}");
+    assert_eq!(fields[4], "metadata-only", "{stdout}");
+    assert_eq!(fields[5], "true", "{stdout}");
+}

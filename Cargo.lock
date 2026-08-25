@@ -178,6 +178,7 @@ dependencies = [
  "gfm-mac",
  "gfm-ops",
  "gfm-packaging",
+ "gfm-preview",
  "gfm-store",
  "gfm-testkit",
  "gfm-types",
@@ -264,6 +265,13 @@ version = "0.1.0"
 dependencies = [
  "gfm-types",
  "serde_json",
+]
+
+[[package]]
+name = "gfm-preview"
+version = "0.1.0"
+dependencies = [
+ "gfm-types",
 ]
 
 [[package]]

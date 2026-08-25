@@ -14,6 +14,7 @@ gfm-jobs = { path = "../jobs" }
 gfm-mac = { path = "../mac" }
 gfm-ops = { path = "../ops" }
 gfm-packaging = { path = "../packaging" }
+gfm-preview = { path = "../preview" }
 gfm-store = { path = "../store" }
 gfm-testkit = { path = "../testkit" }
 gfm-types = { path = "../types" }
