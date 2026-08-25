@@ -403,7 +403,13 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - hot: names, paths, top metadata, recent documents.
   - warm: full metadata.
   - cold: content postings, archived tombstones.
-- Background segment merging with strict I/O budgets.
+- Background segment merging with strict I/O budgets:
+  - content segments are summarized without hydrating postings;
+  - merge selection is tiered by hot/warm/cold segment size;
+  - tombstone-bearing segments are prioritized for cleanup;
+  - selected merge sets preserve original chronological segment order so tombstones do not resurrect older postings;
+  - merge batches are bounded by segment count and byte budgets;
+  - retained segments are reported explicitly for the next manifest/tier promotion step.
 
 ### Query Pipeline
 

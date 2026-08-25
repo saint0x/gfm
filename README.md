@@ -335,6 +335,7 @@ Build appendable content segments and compact them:
 ```sh
 cargo run -p gfm -- index-content-segment . /tmp/gfm.gfmseg
 cargo run -p gfm -- compact-content /tmp/gfm.gfmcontent /tmp/gfm.gfmseg
+cargo run -p gfm -- compact-content-tiered /tmp/gfm.gfmcontent /tmp/gfm-*.gfmseg
 ```
 
 Run the background content indexing pipeline:

@@ -13,7 +13,7 @@ use gfm_fs::{
 use gfm_index::{
     comment_query_terms, content_query_terms, fuzzy_query_keys, parse_volume_indexing_policy,
     prefix_query_terms, tag_query_terms, BackgroundContentIndexer, ContentIndexJobSpec,
-    ContentIndexReport, EventBackpressureQueue, EventPriority, FseventsCursor,
+    ContentIndexReport, ContentMergePolicy, EventBackpressureQueue, EventPriority, FseventsCursor,
     FseventsCursorHealth, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor,
     IndexVolumeState, Indexer, LiveIndex, SearchFuzzyPosting, SearchMetadataField,
     SearchMetadataPosting, SearchPrefixPosting, SearchRecordColumns, SearchStreamStage,
@@ -711,6 +711,35 @@ fn run() -> Result<()> {
             }
             let terms = Indexer::default().compact_content_segments(output, &segments)?;
             eprintln!("compacted {terms} content terms");
+        }
+        Some("compact-content-tiered") => {
+            let output = required_path(
+                args.next(),
+                "compact-content-tiered requires an output path",
+            )?;
+            let segments: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            if segments.is_empty() {
+                return Err(gfm_types::GfmError::Format(
+                    "compact-content-tiered requires at least one segment path".to_string(),
+                ));
+            }
+            let outcome = Indexer::default().compact_content_segments_with_policy(
+                output,
+                &segments,
+                &ContentMergePolicy::default(),
+            )?;
+            eprintln!(
+                "tiered-compacted {} content terms; merged {}; retained {}; bytes {}; tombstone-segments {}; tier {:?}",
+                outcome.postings.len(),
+                outcome.merged_segments.len(),
+                outcome.retained_segments.len(),
+                outcome.merge_bytes,
+                outcome.tombstone_segments,
+                outcome.tier
+            );
+            for segment in outcome.retained_segments {
+                println!("retain\t{}", segment.display());
+            }
         }
         Some("index-content-background") => {
             let root = required_path(args.next(), "index-content-background requires a root path")?;
@@ -2331,6 +2360,7 @@ fn print_usage() {
   gfm extract-quarantine <path> <store.gfmquarantine> [corrupt|encrypted|crash|timeout] [attempts]
   gfm index-content-segment <root> <output.gfmseg>
   gfm compact-content <output.gfmcontent> <segments.gfmseg...>
+  gfm compact-content-tiered <output.gfmcontent> <segments.gfmseg...>
   gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent>
   gfm resume-content-background [content.job] [jobs.journal]
   gfm search <root> <query>

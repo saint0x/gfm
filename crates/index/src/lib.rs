@@ -7,9 +7,10 @@ pub use gfm_search::{
 };
 use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
-    compact_content_segments, read_content_postings, read_records, write_content_postings,
-    write_content_segment, write_records,
+    compact_content_segments, compact_content_segments_with_policy, read_content_postings,
+    read_records, write_content_postings, write_content_segment, write_records,
 };
+pub use gfm_store::{ContentMergeOutcome, ContentMergePolicy, ContentMergeTier};
 use gfm_types::{
     ContentPosting, ContentSegment, DirectoryPage, FileEvent, FileEventKind, FileId, FileRecord,
     GfmError, Result, ScanIssue, SearchHit,
@@ -768,6 +769,15 @@ impl Indexer {
         segments: &[impl AsRef<Path>],
     ) -> Result<usize> {
         compact_content_segments(output, segments).map(|postings| postings.len())
+    }
+
+    pub fn compact_content_segments_with_policy(
+        &self,
+        output: impl AsRef<Path>,
+        segments: &[impl AsRef<Path>],
+        policy: &ContentMergePolicy,
+    ) -> Result<ContentMergeOutcome> {
+        compact_content_segments_with_policy(output, segments, policy)
     }
 }
 

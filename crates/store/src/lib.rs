@@ -10,8 +10,10 @@ mod prefix;
 
 pub use columns::{write_record_columns, MmapRecordColumns, RecordColumn};
 pub use content::{
-    compact_content_segments, read_content_postings, read_content_segment, write_content_postings,
-    write_content_segment, ContentArchive, MmapContentArchive,
+    compact_content_segments, compact_content_segments_with_policy, plan_content_segment_merge,
+    read_content_postings, read_content_segment, summarize_content_segment, write_content_postings,
+    write_content_segment, ContentArchive, ContentMergeOutcome, ContentMergePlan,
+    ContentMergePolicy, ContentMergeTier, ContentSegmentSummary, MmapContentArchive,
 };
 pub use dictionary::{
     dictionary_terms_from_records, read_dictionary, write_dictionary, MmapDictionary,

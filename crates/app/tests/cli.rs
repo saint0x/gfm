@@ -1774,6 +1774,30 @@ fn compacts_content_segments_from_binary() {
         "{}",
         String::from_utf8_lossy(&compact_output.stderr)
     );
+    let tiered_content = unique_temp_path("gfm-cli-segment-tiered-compact", "gfmcontent");
+    let tiered_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "compact-content-tiered",
+            tiered_content.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        tiered_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tiered_output.stderr)
+    );
+    let tiered_stderr = String::from_utf8(tiered_output.stderr).unwrap();
+    assert!(
+        tiered_stderr.contains("tiered-compacted")
+            && tiered_stderr.contains("merged 4")
+            && tiered_stderr.contains("retained 0"),
+        "{tiered_stderr}"
+    );
 
     let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -1797,6 +1821,7 @@ fn compacts_content_segments_from_binary() {
     fs::remove_file(records).unwrap();
     fs::remove_file(segment).unwrap();
     fs::remove_file(content).unwrap();
+    fs::remove_file(tiered_content).unwrap();
 }
 
 #[test]
