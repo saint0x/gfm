@@ -209,6 +209,25 @@ impl MmapMetadataArchive {
             .collect()
     }
 
+    pub fn postings_for<I, S>(&self, field: MetadataField, terms: I) -> Result<Vec<MetadataPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut selected = BTreeSet::new();
+        for term in terms {
+            let term = normalize(term.as_ref());
+            if !term.is_empty() {
+                selected.insert(term);
+            }
+        }
+
+        selected
+            .into_iter()
+            .filter_map(|term| self.posting_for(field, &term).transpose())
+            .collect()
+    }
+
     pub fn posting_for(&self, field: MetadataField, term: &str) -> Result<Option<MetadataPosting>> {
         let term = normalize(term);
         if term.is_empty() {
@@ -717,7 +736,7 @@ mod tests {
             ids: ids.clone(),
         };
 
-        write_metadata_postings(&path, &[posting]).unwrap();
+        write_metadata_postings(&path, std::slice::from_ref(&posting)).unwrap();
         let archive = MmapMetadataArchive::open(&path).unwrap();
         let block = archive
             .id_block_for(MetadataField::Tag, "important", 1)
@@ -726,6 +745,12 @@ mod tests {
         assert_eq!(
             archive.ids_for(MetadataField::Tag, "important").unwrap(),
             ids
+        );
+        assert_eq!(
+            archive
+                .postings_for(MetadataField::Tag, ["missing", "important", "important"])
+                .unwrap(),
+            vec![posting]
         );
         assert_eq!(block.len(), 128);
         assert_eq!(block[0], FileId::new(VolumeId(12), 10_128));

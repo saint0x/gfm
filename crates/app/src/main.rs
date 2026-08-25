@@ -11,8 +11,9 @@ use gfm_fs::{
     PackageTraversalReport, ScanOptions,
 };
 use gfm_index::{
-    content_query_terms, parse_volume_indexing_policy, BackgroundContentIndexer,
-    ContentIndexJobSpec, ContentIndexReport, EventBackpressureQueue, EventPriority, FseventsCursor,
+    comment_query_terms, content_query_terms, fuzzy_query_keys, parse_volume_indexing_policy,
+    prefix_query_terms, tag_query_terms, BackgroundContentIndexer, ContentIndexJobSpec,
+    ContentIndexReport, EventBackpressureQueue, EventPriority, FseventsCursor,
     FseventsCursorHealth, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor,
     IndexVolumeState, Indexer, LiveIndex, SearchFuzzyPosting, SearchMetadataField,
     SearchMetadataPosting, SearchPrefixPosting, SearchRecordColumns, SearchStreamStage,
@@ -893,7 +894,7 @@ fn run() -> Result<()> {
                 });
             }
             let search_fuzzy = fuzzy
-                .postings()?
+                .postings_for(fuzzy_query_keys(&query))?
                 .into_iter()
                 .map(|posting| SearchFuzzyPosting {
                     key: posting.key,
@@ -901,15 +902,18 @@ fn run() -> Result<()> {
                 })
                 .collect();
             let search_prefixes = prefixes
-                .postings()?
+                .postings_for(prefix_query_terms(&query))?
                 .into_iter()
                 .map(|posting| SearchPrefixPosting {
                     prefix: posting.prefix,
                     ids: posting.ids,
                 })
                 .collect();
-            let search_metadata = metadata
-                .postings()?
+            let mut selected_metadata =
+                metadata.postings_for(MetadataField::Comment, comment_query_terms(&query))?;
+            selected_metadata
+                .extend(metadata.postings_for(MetadataField::Tag, tag_query_terms(&query))?);
+            let search_metadata = selected_metadata
                 .into_iter()
                 .map(|posting| SearchMetadataPosting {
                     field: match posting.field {

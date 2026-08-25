@@ -1119,8 +1119,9 @@ fn searches_persisted_tags_from_binary() {
     );
     let sidecar_search_stderr = String::from_utf8(sidecar_search.stderr).unwrap();
     assert!(
-        sidecar_search_stderr.contains("metadata-keys ")
-            && sidecar_search_stderr.contains("prefix-keys ")
+        sidecar_search_stderr.contains("metadata-keys 1")
+            && sidecar_search_stderr.contains("prefix-keys 0")
+            && sidecar_search_stderr.contains("fuzzy-keys 0")
             && sidecar_search_stderr.contains("content-keys 0"),
         "{sidecar_search_stderr}"
     );
@@ -1147,6 +1148,11 @@ fn searches_persisted_tags_from_binary() {
     assert!(
         sidecar_prefix_stdout.contains("tagged.md"),
         "{sidecar_prefix_stdout}"
+    );
+    let sidecar_prefix_stderr = String::from_utf8(sidecar_prefix_search.stderr).unwrap();
+    assert!(
+        sidecar_prefix_stderr.contains("prefix-keys 1"),
+        "{sidecar_prefix_stderr}"
     );
     let sidecar_content_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([

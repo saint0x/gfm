@@ -149,6 +149,25 @@ impl MmapFuzzyArchive {
             .collect()
     }
 
+    pub fn postings_for<I, S>(&self, keys: I) -> Result<Vec<FuzzyPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut selected = BTreeSet::new();
+        for key in keys {
+            let key = normalize(key.as_ref());
+            if !key.is_empty() {
+                selected.insert(key);
+            }
+        }
+
+        selected
+            .into_iter()
+            .filter_map(|key| self.posting_for(&key).transpose())
+            .collect()
+    }
+
     pub fn posting_for(&self, key: &str) -> Result<Option<FuzzyPosting>> {
         let key = normalize(key);
         if key.is_empty() {
@@ -444,6 +463,10 @@ mod tests {
         assert_eq!(
             archive.terms_for("PLAN").unwrap(),
             vec!["plane".to_string(), "plans".to_string()]
+        );
+        assert_eq!(
+            archive.postings_for(["missing", "PLAN", "plan"]).unwrap(),
+            vec![posting]
         );
         assert!(archive.is_checksummed());
         std::fs::remove_file(path).unwrap();

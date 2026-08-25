@@ -147,6 +147,25 @@ impl MmapPrefixArchive {
             .collect()
     }
 
+    pub fn postings_for<I, S>(&self, prefixes: I) -> Result<Vec<PrefixPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut selected = BTreeSet::new();
+        for prefix in prefixes {
+            let prefix = normalize(prefix.as_ref());
+            if !prefix.is_empty() {
+                selected.insert(prefix);
+            }
+        }
+
+        selected
+            .into_iter()
+            .filter_map(|prefix| self.posting_for(&prefix).transpose())
+            .collect()
+    }
+
     pub fn posting_for(&self, prefix: &str) -> Result<Option<PrefixPosting>> {
         let prefix = normalize(prefix);
         if prefix.is_empty() {
@@ -469,6 +488,10 @@ mod tests {
         let archive = MmapPrefixArchive::open(&path).unwrap();
 
         assert_eq!(archive.postings().unwrap(), postings);
+        assert_eq!(
+            archive.postings_for(["proj", "missing", "proj"]).unwrap(),
+            vec![postings[1].clone()]
+        );
         std::fs::remove_file(path).unwrap();
     }
 

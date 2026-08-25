@@ -10,6 +10,13 @@ fn extracts_content_terms_for_query_sidecar_loading() {
         content_query_terms(r#"tag:Important "Launch Notes" near:4:alpha_beta:gamma"#),
         vec!["alpha", "beta", "gamma", "launch", "notes"]
     );
+    assert_eq!(comment_query_terms("launch notes"), vec!["launch", "notes"]);
+    assert_eq!(
+        tag_query_terms("tag:Important -tag:Cold"),
+        vec!["important"]
+    );
+    assert_eq!(prefix_query_terms("project-plan"), vec!["plan", "project"]);
+    assert!(fuzzy_query_keys("project").contains(&"project".to_string()));
     assert!(content_query_terms("tag:Important kind:file").is_empty());
 }
 

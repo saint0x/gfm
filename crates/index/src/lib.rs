@@ -52,6 +52,22 @@ pub fn content_query_terms(query: &str) -> Vec<String> {
     SearchQuery::parse(query).content_candidate_terms()
 }
 
+pub fn comment_query_terms(query: &str) -> Vec<String> {
+    SearchQuery::parse(query).comment_candidate_terms()
+}
+
+pub fn tag_query_terms(query: &str) -> Vec<String> {
+    SearchQuery::parse(query).tag_candidate_terms()
+}
+
+pub fn prefix_query_terms(query: &str) -> Vec<String> {
+    SearchQuery::parse(query).prefix_candidate_terms()
+}
+
+pub fn fuzzy_query_keys(query: &str) -> Vec<String> {
+    SearchQuery::parse(query).fuzzy_candidate_keys()
+}
+
 #[derive(Debug, Clone)]
 pub struct IndexSnapshot {
     pub root: PathBuf,

@@ -94,6 +94,49 @@ impl SearchQuery {
         terms.dedup();
         terms
     }
+
+    pub fn comment_candidate_terms(&self) -> Vec<String> {
+        self.content_candidate_terms()
+    }
+
+    pub fn tag_candidate_terms(&self) -> Vec<String> {
+        let mut terms = self
+            .filters
+            .iter()
+            .filter_map(|filter| match filter {
+                QueryFilter::Tag(term, false) => Some(term.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        terms.sort();
+        terms.dedup();
+        terms
+    }
+
+    pub fn prefix_candidate_terms(&self) -> Vec<String> {
+        let mut terms = self
+            .content_candidate_terms()
+            .into_iter()
+            .filter(|term| crate::is_prefix_term(term))
+            .collect::<Vec<_>>();
+        terms.sort();
+        terms.dedup();
+        terms
+    }
+
+    pub fn fuzzy_candidate_keys(&self) -> Vec<String> {
+        let mut keys = Vec::new();
+        for term in self
+            .content_candidate_terms()
+            .into_iter()
+            .filter(|term| crate::is_fuzzy_term(term))
+        {
+            keys.extend(crate::deletion_keys(&term, 2));
+        }
+        keys.sort();
+        keys.dedup();
+        keys
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
