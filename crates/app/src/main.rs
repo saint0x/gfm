@@ -24,9 +24,9 @@ use gfm_index::{
     SearchStreamStage, ThermalState, UserActivity, VolumeIndexPolicy,
 };
 use gfm_jobs::{
-    JobBatteryState, JobIoPressure, JobJournal, JobThermalState, JobUserActivity, Priority,
-    RecoveryReason, RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure,
-    Task, TaskStatus, VolumeConcurrencyPolicy, WorkerPool,
+    Cancellation, JobBatteryState, JobIoPressure, JobJournal, JobThermalState, JobUserActivity,
+    Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, SchedulingAction,
+    SchedulingPressure, Task, TaskStatus, VolumeConcurrencyPolicy, WorkerPool,
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, parse_spotlight_fixture, AccessIntent,
@@ -685,6 +685,27 @@ fn run() -> Result<()> {
             let pressure = parse_required_scheduling_pressure(&mut args, "extract worker")?;
             let report = run_adaptive_extraction_worker(&path, pressure)?;
             print!("{}", report);
+        }
+        Some("extract-worker-cancel-adaptive") => {
+            let path = required_path(
+                args.next(),
+                "extract-worker-cancel-adaptive requires a path",
+            )?;
+            let pressure = parse_required_scheduling_pressure(&mut args, "extract worker")?;
+            let cancellation = Cancellation::default();
+            cancellation.cancel();
+            match run_adaptive_extraction_worker_cancellable(
+                &path,
+                pressure,
+                ADAPTIVE_WORKER_TIMEOUT,
+                &cancellation,
+            ) {
+                Err(GfmError::Cancelled) => {
+                    println!("extract-worker\tstatus=cancelled\treason=cancelled-before-launch")
+                }
+                Ok(report) => print!("{report}"),
+                Err(err) => return Err(err),
+            }
         }
         Some("extract-worker-quarantine-adaptive") => {
             let path = required_path(
@@ -3836,6 +3857,16 @@ fn run_adaptive_extraction_worker_with_timeout(
     pressure: SchedulingPressure,
     timeout: Duration,
 ) -> Result<String> {
+    run_adaptive_extraction_worker_cancellable(path, pressure, timeout, &Cancellation::default())
+}
+
+fn run_adaptive_extraction_worker_cancellable(
+    path: &Path,
+    pressure: SchedulingPressure,
+    timeout: Duration,
+    cancellation: &Cancellation,
+) -> Result<String> {
+    cancellation.check()?;
     let exe = env::current_exe().map_err(|err| {
         GfmError::Format(format!(
             "could not resolve current executable for extraction worker: {err}"
@@ -3845,9 +3876,21 @@ fn run_adaptive_extraction_worker_with_timeout(
     let stderr_path = worker_temp_path("stderr");
     std::fs::File::create(&stdout_path).map_err(|err| GfmError::io(&stdout_path, err))?;
     std::fs::File::create(&stderr_path).map_err(|err| GfmError::io(&stderr_path, err))?;
+    if let Err(err) = cancellation.check() {
+        let _ = std::fs::remove_file(&stdout_path);
+        let _ = std::fs::remove_file(&stderr_path);
+        return Err(err);
+    }
     let sandbox = WorkerSandbox::new(&exe, path, &stdout_path, &stderr_path)?;
     let mut command = sandbox.command(&exe, path, pressure);
-    let output = run_supervised_worker(&mut command, path, timeout, &stdout_path, &stderr_path)?;
+    let output = run_supervised_worker(
+        &mut command,
+        path,
+        timeout,
+        &stdout_path,
+        &stderr_path,
+        cancellation,
+    )?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(GfmError::Format(format!(
@@ -3979,7 +4022,9 @@ fn run_supervised_worker(
     timeout: Duration,
     stdout_path: &Path,
     stderr_path: &Path,
+    cancellation: &Cancellation,
 ) -> Result<std::process::Output> {
+    cancellation.check()?;
     let stdout_file =
         std::fs::File::create(stdout_path).map_err(|err| GfmError::io(stdout_path, err))?;
     let stderr_file =
@@ -3997,6 +4042,13 @@ fn run_supervised_worker(
         })?;
     let start = Instant::now();
     loop {
+        if let Err(err) = cancellation.check() {
+            kill_process_group(child.id());
+            let _ = child.wait();
+            let _ = std::fs::remove_file(stdout_path);
+            let _ = std::fs::remove_file(stderr_path);
+            return Err(err);
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
                 let stdout =
@@ -4537,6 +4589,7 @@ fn print_usage() {
   gfm extract-report <path>
   gfm extract-report-adaptive <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm extract-worker-adaptive <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
+  gfm extract-worker-cancel-adaptive <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm extract-worker-quarantine-adaptive <path> <store.gfmquarantine> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> [timeout-ms] [failure-threshold]
   gfm extract-cache <path>
   gfm extract-quarantine <path> <store.gfmquarantine> [corrupt|encrypted|crash|timeout] [attempts]

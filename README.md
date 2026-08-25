@@ -364,6 +364,7 @@ cargo run -p gfm -- scan-progress-inspect /tmp/gfm.gfmprogress
 cargo run -p gfm -- fair-scan . 8 ~/Desktop ~/Documents
 cargo run -p gfm -- extract-report ~/Desktop/Report.pdf
 cargo run -p gfm -- extract-worker-adaptive ~/Desktop/Report.pdf elevated serious low active
+cargo run -p gfm -- extract-worker-cancel-adaptive ~/Desktop/Report.pdf elevated serious low active
 cargo run -p gfm -- extract-worker-quarantine-adaptive ~/Desktop/Report.pdf /tmp/gfm.gfmquarantine elevated serious low active
 cargo run -p gfm -- extract-cache ~/Desktop/Report.pdf
 cargo run -p gfm -- extract-quarantine ~/Desktop/Report.pdf /tmp/gfm.gfmquarantine timeout 2
@@ -413,7 +414,7 @@ cargo run -p gfm -- fuzzy-terms-mmap /tmp/gfm.gfmfuzzy Pln
 cargo run -p gfm -- fuzzy-verify /tmp/gfm.gfmfuzzy
 ```
 
-Adaptive subprocess extraction workers derive pressure-aware byte budgets before worker-side file reads, run inside a macOS Seatbelt wrapper that denies filesystem mutation when `sandbox-exec` is available, are supervised with timeout-bounded process-group termination, and persist worker timeout/crash failures into the extraction quarantine store.
+Adaptive subprocess extraction workers derive pressure-aware byte budgets before worker-side file reads, run inside a macOS Seatbelt wrapper that denies filesystem mutation when `sandbox-exec` is available, are supervised with timeout-bounded process-group termination, honor the shared jobs-layer cancellation token, and persist worker timeout/crash failures into the extraction quarantine store.
 
 Build and query content indexes:
 

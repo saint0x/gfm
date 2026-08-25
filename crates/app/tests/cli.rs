@@ -2350,6 +2350,38 @@ fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
 }
 
 #[test]
+fn cancellable_adaptive_extraction_worker_stops_before_launch_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-worker-cancel-root");
+    let path = root.join("document.txt");
+    fs::write(&path, "cancel worker marker").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "extract-worker-cancel-adaptive",
+            path.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout.trim(),
+        "extract-worker\tstatus=cancelled\treason=cancelled-before-launch"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn quarantined_adaptive_extraction_worker_records_timeout_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-worker-quarantine-root");
     let path = root.join("document.txt");
