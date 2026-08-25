@@ -1,5 +1,6 @@
 use gfm_types::{GfmError, Result};
 use std::fs::{self, File, OpenOptions};
+use std::io;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,6 +34,12 @@ pub enum OperationStatus {
     Started,
     Completed,
     Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyMethod {
+    ApfsClone,
+    ByteCopy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,7 +156,7 @@ fn copy_path(from: &Path, to: &Path, conflict: ConflictPolicy) -> Result<()> {
     if metadata.is_dir() {
         copy_directory(from, to)
     } else {
-        copy_file(from, to)
+        copy_file(from, to).map(|_| ())
     }
 }
 
@@ -204,23 +211,75 @@ fn copy_directory(from: &Path, to: &Path) -> Result<()> {
         if child_metadata.is_dir() {
             copy_directory(&source, &destination)?;
         } else {
-            copy_file(&source, &destination)?;
+            let _ = copy_file(&source, &destination)?;
         }
     }
     Ok(())
 }
 
-fn copy_file(from: &Path, to: &Path) -> Result<()> {
+fn copy_file(from: &Path, to: &Path) -> Result<CopyMethod> {
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
-    fs::copy(from, to).map_err(|err| GfmError::io(from, err))?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
-    preserve_permissions(to, &metadata)
+    match clone_file(from, to) {
+        Ok(()) => {
+            preserve_permissions(to, &metadata)?;
+            Ok(CopyMethod::ApfsClone)
+        }
+        Err(err) if clone_fallback_allowed(&err) => {
+            remove_failed_clone_destination(to)?;
+            fs::copy(from, to).map_err(|err| GfmError::io(from, err))?;
+            preserve_permissions(to, &metadata)?;
+            Ok(CopyMethod::ByteCopy)
+        }
+        Err(err) => Err(GfmError::io(from, err)),
+    }
 }
 
 fn preserve_permissions(to: &Path, metadata: &fs::Metadata) -> Result<()> {
     fs::set_permissions(to, metadata.permissions()).map_err(|err| GfmError::io(to, err))
+}
+
+#[cfg(target_os = "macos")]
+fn clone_file(from: &Path, to: &Path) -> io::Result<()> {
+    let source = File::open(from)?;
+    rustix::fs::fclonefileat(
+        &source,
+        rustix::fs::CWD,
+        to,
+        rustix::fs::CloneFlags::empty(),
+    )
+    .map_err(io::Error::from)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clone_file(_from: &Path, _to: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "native clonefile is only available on macOS",
+    ))
+}
+
+fn clone_fallback_allowed(err: &io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(libc::ENOTSUP) | Some(libc::EXDEV) | Some(libc::EINVAL)
+    ) || matches!(
+        err.kind(),
+        io::ErrorKind::Unsupported | io::ErrorKind::InvalidInput
+    )
+}
+
+fn remove_failed_clone_destination(to: &Path) -> Result<()> {
+    match fs::symlink_metadata(to) {
+        Ok(metadata) if metadata.is_dir() => {
+            fs::remove_dir_all(to).map_err(|err| GfmError::io(to, err))
+        }
+        Ok(_) => fs::remove_file(to).map_err(|err| GfmError::io(to, err)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(GfmError::io(to, err)),
+    }
 }
 
 fn ensure_source_exists(path: &Path) -> Result<()> {
@@ -441,6 +500,53 @@ mod tests {
         assert_eq!(journal_entries.len(), 2);
         assert_eq!(journal_entries[0].status, OperationStatus::Started);
         assert_eq!(journal_entries[1].status, OperationStatus::Completed);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_file_reports_method_and_preserves_contents() {
+        let root = unique_temp_dir("gfm-ops-copy-method");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "clone-aware copy").unwrap();
+
+        let method = copy_file(&source, &destination).unwrap();
+
+        assert!(matches!(
+            method,
+            CopyMethod::ApfsClone | CopyMethod::ByteCopy
+        ));
+        assert_eq!(
+            fs::read_to_string(&destination).unwrap(),
+            "clone-aware copy"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn copy_file_uses_apfs_clone_when_host_supports_it() {
+        let root = unique_temp_dir("gfm-ops-apfs-clone");
+        let source = root.join("source.bin");
+        let probe = root.join("probe.bin");
+        let destination = root.join("destination.bin");
+        fs::write(&source, b"copy-on-write candidate").unwrap();
+
+        match clone_file(&source, &probe) {
+            Ok(()) => {
+                fs::remove_file(&probe).unwrap();
+                let method = copy_file(&source, &destination).unwrap();
+                assert_eq!(method, CopyMethod::ApfsClone);
+                assert_eq!(fs::read(&destination).unwrap(), b"copy-on-write candidate");
+            }
+            Err(err) if clone_fallback_allowed(&err) => {
+                let method = copy_file(&source, &destination).unwrap();
+                assert_eq!(method, CopyMethod::ByteCopy);
+            }
+            Err(err) => panic!("unexpected clonefile failure: {err}"),
+        }
 
         fs::remove_dir_all(root).unwrap();
     }

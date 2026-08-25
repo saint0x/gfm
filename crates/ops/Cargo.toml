@@ -6,8 +6,9 @@ license.workspace = true
 
 [dependencies]
 gfm-types = { path = "../types" }
+libc = "0.2.177"
+rustix = { version = "1.1.4", features = ["fs"] }
 trash = "5.2.6"
 
 [lints]
 workspace = true
-

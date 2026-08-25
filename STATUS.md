@@ -61,37 +61,36 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## File Operations
 
-38. Implement APFS clone fast paths using platform-native clone semantics.
-39. Implement copyfile/Finder-compatible metadata preservation, xattrs, ACLs, resource forks, quarantine attributes, package behavior, and symlink policies.
-40. Implement operation pause, resume, cancellation, retry, and crash recovery replay.
-41. Implement progress accounting for recursive operations before and during execution.
-42. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
-43. Implement Trash restore metadata and restore operation.
-44. Implement privileged-operation flow for protected paths.
-45. Implement network-volume fallbacks and slow-volume throttling.
-46. Implement post-operation verification policy for high-risk moves/copies.
+38. Implement copyfile/Finder-compatible metadata preservation, xattrs, ACLs, resource forks, quarantine attributes, package behavior, and symlink policies.
+39. Implement operation pause, resume, cancellation, retry, and crash recovery replay.
+40. Implement progress accounting for recursive operations before and during execution.
+41. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
+42. Implement Trash restore metadata and restore operation.
+43. Implement privileged-operation flow for protected paths.
+44. Implement network-volume fallbacks and slow-volume throttling.
+45. Implement post-operation verification policy for high-risk moves/copies.
 
 ## Jobs And Runtime
 
-47. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
-48. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
-49. Implement persistent progress snapshots and user-visible progress restoration after restart.
-50. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
-51. Implement per-volume concurrency limits and operation isolation.
-52. Implement structured cancellation propagation across nested jobs and subprocess extractors.
-53. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
+46. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
+47. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
+48. Implement persistent progress snapshots and user-visible progress restoration after restart.
+49. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
+50. Implement per-volume concurrency limits and operation isolation.
+51. Implement structured cancellation propagation across nested jobs and subprocess extractors.
+52. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
 
 ## Preview And Thumbnails
 
-54. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
+53. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
 
 ## Packaging
 
-55. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
+54. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
 
 ## Documentation
 
-56. Expand `PLAN.md` when architectural decisions change materially.
-57. Keep `README.md` written as the completed product contract.
-58. Keep this file limited to unfinished work only.
-59. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+55. Expand `PLAN.md` when architectural decisions change materially.
+56. Keep `README.md` written as the completed product contract.
+57. Keep this file limited to unfinished work only.
+58. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
