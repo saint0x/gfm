@@ -130,6 +130,26 @@ fn reports_ui_context_menu_contract_from_binary() {
 }
 
 #[test]
+fn reports_ui_dialog_contract_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["ui-dialog-contract", "conflict"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=conflict\tpresentation=window-sheet"));
+    assert!(stdout.contains("field\tapply-to-all\tApply to All\tcheckbox"));
+    assert!(stdout.contains("button\treplace\tReplace\tdestructive\tenabled=true"));
+    assert!(stdout.contains("button\tkeep-both\tKeep Both\tdefault\tenabled=true"));
+    assert!(stdout.contains("button\tstop\tStop\tcancel\tenabled=true"));
+}
+
+#[test]
 fn reports_ui_titlebar_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-titlebar-contract", "/tmp/gfm"])

@@ -10,6 +10,7 @@ use std::sync::{
 };
 
 mod context;
+mod dialog;
 mod menu;
 mod session;
 mod sidebar;
@@ -18,6 +19,10 @@ mod toolbar;
 
 pub use context::{
     ContextItemKind, ContextMenuContract, ContextMenuInput, ContextMenuItemSpec, ContextSurface,
+};
+pub use dialog::{
+    DialogButtonRole, DialogButtonSpec, DialogContract, DialogFieldKind, DialogFieldSpec,
+    DialogPresentation, DialogSurface,
 };
 pub use menu::{MenuCommandSpec, MenuCommandState, MenuContract};
 pub use session::{

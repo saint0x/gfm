@@ -159,6 +159,7 @@ cargo run -p gfm -- app ~/Desktop
 cargo run -p gfm -- ui-contract ~/Desktop
 cargo run -p gfm -- ui-menu-contract
 cargo run -p gfm -- ui-context-menu-contract search-result
+cargo run -p gfm -- ui-dialog-contract conflict
 cargo run -p gfm -- ui-titlebar-contract ~/Desktop
 cargo run -p gfm -- ui-session-contract ~/Desktop
 cargo run -p gfm -- ui-toolbar-contract ~/Desktop

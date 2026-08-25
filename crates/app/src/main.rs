@@ -28,9 +28,9 @@ use gfm_testkit::{
 };
 use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
 use gfm_ui::{
-    AppLaunchSpec, ContextMenuContract, ContextMenuInput, ContextSurface, MenuContract,
-    SidebarContract, TitlebarContract, ToolbarContract, WindowLifecycleContract,
-    WindowSessionContract, WindowSessionStore,
+    AppLaunchSpec, ContextMenuContract, ContextMenuInput, ContextSurface, DialogContract,
+    DialogSurface, MenuContract, SidebarContract, TitlebarContract, ToolbarContract,
+    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::env;
 use std::path::PathBuf;
@@ -101,6 +101,14 @@ fn run() -> Result<()> {
                 .with_ejectable(ejectable)
                 .with_clipboard_items(has_clipboard_items);
             println!("{}", ContextMenuContract::finder_default(input).as_tsv());
+        }
+        Some("ui-dialog-contract") => {
+            let surface = args
+                .next()
+                .unwrap_or_else(|| "alert".to_string())
+                .parse::<DialogSurface>()
+                .map_err(GfmError::Format)?;
+            println!("{}", DialogContract::finder_default(surface).as_tsv());
         }
         Some("ui-titlebar-contract") => {
             let spec = match args.next() {
@@ -885,6 +893,7 @@ fn print_usage() {
   gfm ui-contract [path]
   gfm ui-menu-contract
   gfm ui-context-menu-contract [file|folder|volume|sidebar|empty|selection|search-result|trash] [selection-count] [writable] [ejectable] [has-clipboard-items]
+  gfm ui-dialog-contract [alert|rename|popover|disclosure|progress|conflict|permission]
   gfm ui-titlebar-contract [path]
   gfm ui-session-contract [path] [window-session.tsv]
   gfm ui-toolbar-contract [path]
