@@ -58,6 +58,53 @@ fn reports_permission_onboarding_from_binary() {
 }
 
 #[test]
+fn reports_security_scoped_access_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-security-{}", std::process::id()));
+    let unprotected = root.join("plain.md");
+    let protected = root.join("Documents").join("Plan.md");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(protected.parent().unwrap()).unwrap();
+    std::fs::write(&unprotected, "plain").unwrap();
+    std::fs::write(&protected, "plan").unwrap();
+
+    let plain = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("security-scope")
+        .arg(&unprotected)
+        .arg("read")
+        .output()
+        .unwrap();
+    assert!(
+        plain.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    let plain_stdout = String::from_utf8(plain.stdout).unwrap();
+    assert!(plain_stdout.starts_with("security-scope\t"));
+    assert!(plain_stdout.contains("\tintent=read\tscope=none\tprobe=granted\t"));
+    assert!(plain_stdout.contains("\tmode=plain-filesystem\taction=allow\t"));
+    assert!(plain_stdout.contains("\tbookmark-required=false\t"));
+
+    let scoped = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("security-scope")
+        .arg(&protected)
+        .arg("read")
+        .output()
+        .unwrap();
+    assert!(
+        scoped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&scoped.stderr)
+    );
+    let scoped_stdout = String::from_utf8(scoped.stdout).unwrap();
+    assert!(scoped_stdout.contains("\tintent=read\tscope=documents\tprobe=granted\t"));
+    assert!(scoped_stdout.contains("\tmode=security-scoped-bookmark\taction=allow\t"));
+    assert!(scoped_stdout.contains("\tbookmark-required=true\t"));
+    assert!(scoped_stdout.contains("\tleast-privilege=true\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_mac_bridge_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("mac-bridges")

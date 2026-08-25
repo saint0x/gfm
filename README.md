@@ -225,6 +225,7 @@ Inspect first-run permission readiness without forcing Full Disk Access:
 
 ```sh
 cargo run -p gfm -- permission-onboarding
+cargo run -p gfm -- security-scope ~/Documents/Plan.md read
 ```
 
 Inspect preview security and invalidation policy:

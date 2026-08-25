@@ -16,9 +16,10 @@ use gfm_jobs::{
     WorkerPool,
 };
 use gfm_mac::{
-    current_host_profile, current_permission_onboarding, parse_spotlight_fixture, FileEventStream,
-    FileProviderStateReport, MacBridgeContract, NativeIconDescriptor, SpotlightMetadataReader,
-    SpotlightReconciliationReport, SupportMatrix, VolumeDiscoveryReport, WatchRoot,
+    current_host_profile, current_permission_onboarding, parse_spotlight_fixture, AccessIntent,
+    FileEventStream, FileProviderStateReport, MacBridgeContract, NativeIconDescriptor,
+    SecurityScopedAccessReport, SpotlightMetadataReader, SpotlightReconciliationReport,
+    SupportMatrix, VolumeDiscoveryReport, WatchRoot,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_preview::{
@@ -721,6 +722,18 @@ fn run() -> Result<()> {
                     escape_output_field(&item.reason)
                 );
             }
+        }
+        Some("security-scope") => {
+            let path = required_path(args.next(), "security-scope requires a path")?;
+            let intent = args
+                .next()
+                .map(|value| AccessIntent::parse(&value))
+                .transpose()?
+                .unwrap_or(AccessIntent::Read);
+            println!(
+                "{}",
+                SecurityScopedAccessReport::evaluate(path, intent).as_tsv()
+            );
         }
         Some("mac-bridges") => {
             println!("{}", MacBridgeContract::finder_required().as_tsv());
@@ -1563,6 +1576,7 @@ fn print_usage() {
   gfm diagnostics-storage-inspect <records.gfmidx|content.gfmcontent>
   gfm support-check
   gfm permission-onboarding
+  gfm security-scope <path> [read|write|index|preview|operate]
   gfm mac-bridges
   gfm native-icon <path>
   gfm fileprovider-state <path>

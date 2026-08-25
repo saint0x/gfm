@@ -9,6 +9,7 @@ mod bridge;
 mod fileprovider;
 mod icon;
 mod permissions;
+mod security;
 mod spotlight;
 mod volume;
 
@@ -23,6 +24,10 @@ pub use icon::{NativeIconBadge, NativeIconDescriptor, NativeIconProvider, Native
 pub use permissions::{
     current_permission_onboarding, PermissionAction, PermissionOnboardingPlan, PermissionPolicy,
     PermissionPromptMode, PermissionReadiness, PermissionScope, PermissionState,
+};
+pub use security::{
+    AccessIntent, AccessProbeState, ProtectedScope, SecurityAccessMode, SecurityDecisionAction,
+    SecurityScopedAccessReport,
 };
 pub use spotlight::{
     parse_spotlight_fixture, SpotlightField, SpotlightFieldDecision, SpotlightFieldReconciliation,
