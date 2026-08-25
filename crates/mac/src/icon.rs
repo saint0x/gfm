@@ -298,11 +298,16 @@ mod tests {
             name: name.to_string(),
             kind,
             len: 0,
+            mode: 0,
+            owner: 0,
+            group: 0,
+            xattrs_digest: 0,
             created: None,
             modified: None,
             changed: None,
             hidden: name.starts_with('.'),
             tags: Vec::new(),
+            finder_comment: None,
         }
     }
 }

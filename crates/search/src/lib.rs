@@ -47,6 +47,7 @@ pub struct SearchIndex {
     name_exact: BTreeMap<String, BTreeSet<FileId>>,
     name_terms: BTreeMap<String, BTreeSet<FileId>>,
     path_terms: BTreeMap<String, BTreeSet<FileId>>,
+    metadata_terms: BTreeMap<String, BTreeSet<FileId>>,
     fuzzy_terms: BTreeMap<String, BTreeSet<String>>,
     extension: BTreeMap<String, BTreeSet<FileId>>,
     tags: BTreeMap<String, BTreeSet<FileId>>,
@@ -337,6 +338,9 @@ impl SearchIndex {
             }
             if let Some(ids) = self.path_terms.get(term) {
                 add_scores(&mut scores, ids, PATH_COMPONENT, MatchReason::PathComponent);
+            }
+            if let Some(ids) = self.metadata_terms.get(term) {
+                add_scores(&mut scores, ids, TAG, MatchReason::Tag);
             }
             if let Some(ids) = self.extension.get(term) {
                 add_scores(&mut scores, ids, EXTENSION, MatchReason::Extension);
@@ -733,6 +737,14 @@ impl SearchIndex {
                 self.tags.entry(tag).or_default().insert(record.id);
             }
         }
+        if let Some(comment) = &record.finder_comment {
+            for token in tokenize(&normalize(comment)) {
+                self.metadata_terms
+                    .entry(token)
+                    .or_default()
+                    .insert(record.id);
+            }
+        }
     }
 
     fn remove_terms(&mut self, record: &FileRecord) {
@@ -757,6 +769,11 @@ impl SearchIndex {
         }
         for tag in &record.tags {
             remove_id(&mut self.tags, &normalize(tag), record.id);
+        }
+        if let Some(comment) = &record.finder_comment {
+            for token in tokenize(&normalize(comment)) {
+                remove_id(&mut self.metadata_terms, &token, record.id);
+            }
         }
         for positions in self.content_terms.values_mut() {
             positions.remove(&record.id);
@@ -812,10 +829,19 @@ fn record_contains_term(record: &FileRecord, term: &str) -> bool {
     normalize(&record.name).contains(term)
         || normalize_path(&record.path).contains(term)
         || record.tags.iter().any(|tag| normalize(tag).contains(term))
+        || record
+            .finder_comment
+            .as_deref()
+            .is_some_and(|comment| normalize(comment).contains(term))
 }
 
 fn record_matches_phrase(record: &FileRecord, phrase: &str) -> bool {
-    normalize(&record.name).contains(phrase) || normalize_path(&record.path).contains(phrase)
+    normalize(&record.name).contains(phrase)
+        || normalize_path(&record.path).contains(phrase)
+        || record
+            .finder_comment
+            .as_deref()
+            .is_some_and(|comment| normalize(comment).contains(phrase))
 }
 
 fn record_fuzzy_matches_term(record: &FileRecord, term: &str) -> bool {

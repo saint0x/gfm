@@ -50,6 +50,7 @@ use gfm_ui::{
 };
 use std::collections::BTreeMap;
 use std::env;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -450,6 +451,25 @@ fn run() -> Result<()> {
             std::fs::rename(&from, &to).map_err(|err| GfmError::io(&from, err))?;
             let mut live = LiveIndex::from_records(snapshot.records);
             let report = live.apply_rename(&from, &to)?;
+            println!("{}", report.as_tsv());
+        }
+        Some("metadata-update") => {
+            let path = required_path(args.next(), "metadata-update requires a path")?;
+            let root = path
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let snapshot = Indexer::default().build(root)?;
+            if let Some(append) = args.next() {
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .map_err(|err| GfmError::io(&path, err))?;
+                file.write_all(append.as_bytes())
+                    .map_err(|err| GfmError::io(&path, err))?;
+            }
+            let mut live = LiveIndex::from_records(snapshot.records);
+            let report = live.apply_metadata_update(&path)?;
             println!("{}", report.as_tsv());
         }
         Some("fsevents-cursor-checkpoint") => {
@@ -1685,6 +1705,7 @@ fn print_usage() {
   gfm index-state <root> <records.gfmidx> <state.gfmstate>
   gfm index-state-inspect <state.gfmstate>
   gfm rename-correlation <source> <destination>
+  gfm metadata-update <path> [append-text]
   gfm fsevents-cursor-checkpoint <state.gfmstate> <cursor.gfmcursor> <last-event-id> [clean|repair-required]
   gfm fsevents-cursor-inspect <cursor.gfmcursor>
   gfm fsevents-cursor-resume <state.gfmstate> <cursor.gfmcursor>

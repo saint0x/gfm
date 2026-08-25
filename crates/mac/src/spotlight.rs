@@ -468,11 +468,16 @@ mod tests {
             name: name.to_string(),
             kind: FileKind::File,
             len: 42,
+            mode: 0,
+            owner: 0,
+            group: 0,
+            xattrs_digest: 0,
             created: None,
             modified: None,
             changed: None,
             hidden: false,
             tags: vec!["Important".to_string(), "Client".to_string()],
+            finder_comment: None,
         }
     }
 }

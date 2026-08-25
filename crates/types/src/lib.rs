@@ -33,11 +33,16 @@ pub struct FileRecord {
     pub name: String,
     pub kind: FileKind,
     pub len: u64,
+    pub mode: u32,
+    pub owner: u32,
+    pub group: u32,
+    pub xattrs_digest: u64,
     pub created: Option<SystemTime>,
     pub modified: Option<SystemTime>,
     pub changed: Option<SystemTime>,
     pub hidden: bool,
     pub tags: Vec<String>,
+    pub finder_comment: Option<String>,
 }
 
 impl FileRecord {

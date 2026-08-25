@@ -13,32 +13,43 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MAGIC_V1: &str = "gfm-store-v1";
 const MAGIC_V2: &str = "gfm-store-v2";
+const MAGIC_V3: &str = "gfm-store-v3";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StoreVersion {
     V1,
     V2,
+    V3,
 }
 
 pub fn write_records(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<()> {
     let path = path.as_ref();
     let file = File::create(path).map_err(|err| GfmError::io(path, err))?;
     let mut writer = BufWriter::new(file);
-    writeln!(writer, "{MAGIC_V2}").map_err(|err| GfmError::io(path, err))?;
+    writeln!(writer, "{MAGIC_V3}").map_err(|err| GfmError::io(path, err))?;
     for record in records {
         writeln!(
             writer,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             record.id.volume.0,
             record.id.node,
             record.parent.map(|id| id.node).unwrap_or(0),
             encode_kind(record.kind),
             record.len,
+            record.mode,
+            record.owner,
+            record.group,
+            record.xattrs_digest,
             encode_time(record.created),
             encode_time(record.modified),
             encode_time(record.changed),
             u8::from(record.hidden),
             encode_tags(&record.tags),
+            record
+                .finder_comment
+                .as_deref()
+                .map(escape)
+                .unwrap_or_default(),
             escape(&record.path.to_string_lossy()),
         )
         .map_err(|err| GfmError::io(path, err))?;
@@ -53,6 +64,7 @@ pub fn read_records(path: impl AsRef<Path>) -> Result<Vec<FileRecord>> {
     let version = match lines.next() {
         Some(Ok(header)) if header == MAGIC_V1 => StoreVersion::V1,
         Some(Ok(header)) if header == MAGIC_V2 => StoreVersion::V2,
+        Some(Ok(header)) if header == MAGIC_V3 => StoreVersion::V3,
         Some(Ok(header)) => {
             return Err(GfmError::Format(format!(
                 "unsupported store header `{header}` in {}",
@@ -78,6 +90,7 @@ fn parse_record(line: &str, version: StoreVersion) -> std::result::Result<FileRe
     let expected = match version {
         StoreVersion::V1 => 10,
         StoreVersion::V2 => 11,
+        StoreVersion::V3 => 16,
     };
     if parts.len() != expected {
         return Err(format!("expected {expected} fields, got {}", parts.len()));
@@ -88,17 +101,32 @@ fn parse_record(line: &str, version: StoreVersion) -> std::result::Result<FileRe
     let parent_node = parse_u64(parts[2], "parent")?;
     let kind = decode_kind(parts[3])?;
     let len = parse_u64(parts[4], "len")?;
-    let created = decode_time(parts[5])?;
-    let modified = decode_time(parts[6])?;
-    let changed = decode_time(parts[7])?;
-    let hidden = match parts[8] {
+    let (mode, owner, group, xattrs_digest, created_index) = match version {
+        StoreVersion::V1 | StoreVersion::V2 => (0, 0, 0, 0, 5),
+        StoreVersion::V3 => (
+            parse_u32(parts[5], "mode")?,
+            parse_u32(parts[6], "owner")?,
+            parse_u32(parts[7], "group")?,
+            parse_u64(parts[8], "xattrs_digest")?,
+            9,
+        ),
+    };
+    let created = decode_time(parts[created_index])?;
+    let modified = decode_time(parts[created_index + 1])?;
+    let changed = decode_time(parts[created_index + 2])?;
+    let hidden = match parts[created_index + 3] {
         "0" => false,
         "1" => true,
         other => return Err(format!("invalid hidden flag `{other}`")),
     };
-    let (tags, path_index) = match version {
-        StoreVersion::V1 => (Vec::new(), 9),
-        StoreVersion::V2 => (decode_tags(parts[9])?, 10),
+    let (tags, finder_comment, path_index) = match version {
+        StoreVersion::V1 => (Vec::new(), None, 9),
+        StoreVersion::V2 => (decode_tags(parts[9])?, None, 10),
+        StoreVersion::V3 => (
+            decode_tags(parts[created_index + 4])?,
+            decode_comment(parts[created_index + 5])?,
+            created_index + 6,
+        ),
     };
     let path = PathBuf::from(unescape(parts[path_index])?);
     let name = path
@@ -114,15 +142,26 @@ fn parse_record(line: &str, version: StoreVersion) -> std::result::Result<FileRe
         name,
         kind,
         len,
+        mode,
+        owner,
+        group,
+        xattrs_digest,
         created,
         modified,
         changed,
         hidden,
         tags,
+        finder_comment,
     })
 }
 
 fn parse_u64(value: &str, field: &str) -> std::result::Result<u64, String> {
+    value
+        .parse()
+        .map_err(|err| format!("invalid {field} `{value}`: {err}"))
+}
+
+fn parse_u32(value: &str, field: &str) -> std::result::Result<u32, String> {
     value
         .parse()
         .map_err(|err| format!("invalid {field} `{value}`: {err}"))
@@ -174,6 +213,13 @@ fn decode_tags(input: &str) -> std::result::Result<Vec<String>, String> {
     tags.sort();
     tags.dedup();
     Ok(tags)
+}
+
+fn decode_comment(input: &str) -> std::result::Result<Option<String>, String> {
+    if input.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(unescape(input)?))
 }
 
 fn split_escaped(input: &str) -> Vec<&str> {
@@ -254,11 +300,16 @@ mod tests {
             name: "report.txt".to_string(),
             kind: FileKind::File,
             len: 42,
+            mode: 0o100644,
+            owner: 501,
+            group: 20,
+            xattrs_digest: 99,
             created: None,
             modified: Some(UNIX_EPOCH + Duration::from_secs(10)),
             changed: None,
             hidden: false,
             tags: vec!["Important".to_string(), "Review, Later".to_string()],
+            finder_comment: Some("handoff notes".to_string()),
         }];
 
         write_records(&path, &records).unwrap();

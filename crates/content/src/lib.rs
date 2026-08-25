@@ -407,11 +407,16 @@ mod tests {
             name: "note.md".to_string(),
             kind: FileKind::File,
             len: 19,
+            mode: 0,
+            owner: 0,
+            group: 0,
+            xattrs_digest: 0,
             created: None,
             modified: None,
             changed: None,
             hidden: false,
             tags: Vec::new(),
+            finder_comment: None,
         };
 
         let doc = Extractor::default()
@@ -490,11 +495,16 @@ mod tests {
             name: "note.md".to_string(),
             kind: FileKind::File,
             len: 57,
+            mode: 0,
+            owner: 0,
+            group: 0,
+            xattrs_digest: 0,
             created: None,
             modified: None,
             changed: None,
             hidden: false,
             tags: Vec::new(),
+            finder_comment: None,
         };
 
         let snippet = Extractor::default()
@@ -535,11 +545,16 @@ mod tests {
             name: "large.pdf".to_string(),
             kind: FileKind::File,
             len: fs::metadata(&path).unwrap().len(),
+            mode: 0,
+            owner: 0,
+            group: 0,
+            xattrs_digest: 0,
             created: None,
             modified: None,
             changed: None,
             hidden: false,
             tags: Vec::new(),
+            finder_comment: None,
         };
         let extractor = Extractor::new(ExtractionPolicy {
             max_pdf_bytes: 12,

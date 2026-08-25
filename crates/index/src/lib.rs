@@ -16,6 +16,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 mod cursor;
+mod metadata;
 mod rename;
 mod repair;
 mod state;
@@ -24,6 +25,7 @@ pub use cursor::{
     FseventsCursor, FseventsCursorHealth, FseventsResumeAction, FseventsResumePlan,
     FSEVENTS_CURSOR_SCHEMA_VERSION,
 };
+pub use metadata::{diff_metadata, MetadataUpdateReport};
 pub use rename::{correlate_rename, RenameCorrelationReport};
 pub use repair::{RepairPriority, RepairReason, RepairSchedule, SubtreeRepairJob};
 pub use state::{IndexVolumeState, INDEX_STATE_SCHEMA_VERSION};
@@ -240,8 +242,12 @@ impl LiveIndex {
 
     pub fn apply_event(&mut self, event: &FileEvent) -> Result<UpdateOutcome> {
         match &event.kind {
-            FileEventKind::Create | FileEventKind::Modify | FileEventKind::Other => {
-                self.upsert_path(&event.path)
+            FileEventKind::Create | FileEventKind::Other => self.upsert_path(&event.path),
+            FileEventKind::Modify => {
+                let report = self.apply_metadata_update(&event.path)?;
+                Ok(UpdateOutcome::MetadataUpdated {
+                    changed: report.changed.len(),
+                })
             }
             FileEventKind::Remove => {
                 let removed = self.index.remove_subtree(&event.path).len();
@@ -262,6 +268,15 @@ impl LiveIndex {
         correlate_rename(&mut self.index, from, to)
     }
 
+    pub fn apply_metadata_update(&mut self, path: &Path) -> Result<MetadataUpdateReport> {
+        let previous = self.index.get_path(path).cloned();
+        let current =
+            gfm_fs::record_for_path(path, previous.as_ref().and_then(|r| r.parent), false)?;
+        let report = MetadataUpdateReport::from_records(path, previous.as_ref(), &current);
+        self.index.insert(current);
+        Ok(report)
+    }
+
     fn upsert_path(&mut self, path: &Path) -> Result<UpdateOutcome> {
         let record = gfm_fs::record_for_path(path, None, false)?;
         self.index.insert(record);
@@ -272,6 +287,7 @@ impl LiveIndex {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateOutcome {
     Upserted,
+    MetadataUpdated { changed: usize },
     Removed { records: usize },
     Renamed { removed: usize, inserted: usize },
     NeedsRescan,

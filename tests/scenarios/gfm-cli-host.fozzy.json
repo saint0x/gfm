@@ -83,6 +83,21 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-metadata.md",
+      "data": "metadata"
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "metadata-update",
+        "tmp/gfm-fozzy-metadata.md",
+        " appended"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

@@ -155,6 +155,34 @@ fn reports_rename_correlation_from_binary() {
 }
 
 #[test]
+fn reports_metadata_update_from_binary() {
+    let root = unique_temp_dir("gfm-cli-metadata-root");
+    let path = root.join("Metadata.md");
+    fs::write(&path, "metadata").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "metadata-update",
+            path.to_str().unwrap(),
+            " appended content",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("metadata-update\t"), "{stdout}");
+    assert!(stdout.contains("\texisted=true\t"), "{stdout}");
+    assert!(stdout.contains("size"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn persists_fsevents_cursor_from_binary() {
     let root = unique_temp_dir("gfm-cli-fsevents-root");
     let index = unique_temp_path("gfm-cli-fsevents-records", "gfmidx");

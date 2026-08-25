@@ -35,10 +35,10 @@ fn live_index_applies_create_modify_and_remove_events() {
 
     fs::write(&target, "second").unwrap();
     let modified = FileEvent::new(&target, FileEventKind::Modify);
-    assert_eq!(
+    assert!(matches!(
         live.apply_event(&modified).unwrap(),
-        UpdateOutcome::Upserted
-    );
+        UpdateOutcome::MetadataUpdated { changed } if changed > 0
+    ));
     assert_eq!(live.search("needle", 5).len(), 1);
 
     fs::remove_file(&target).unwrap();
@@ -48,6 +48,49 @@ fn live_index_applies_create_modify_and_remove_events() {
         UpdateOutcome::Removed { records: 1 }
     );
     assert!(live.search("needle", 5).is_empty());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn live_index_applies_incremental_metadata_updates() {
+    let root = unique_temp_dir("gfm-metadata-update-root");
+    let target = root.join("Metadata.md");
+    fs::write(&target, "first").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let mut live = snapshot.into_live();
+    let old_len = live.search("metadata", 5)[0].record.len;
+
+    fs::write(&target, "first plus more").unwrap();
+    let report = live.apply_metadata_update(&target).unwrap();
+    let hits = live.search("metadata", 5);
+
+    assert!(report.changed.contains(&"size"), "{report:?}");
+    assert!(hits[0].record.len > old_len);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn live_index_applies_chmod_metadata_updates() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = unique_temp_dir("gfm-chmod-update-root");
+    let target = root.join("Permissions.md");
+    fs::write(&target, "mode").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let mut live = snapshot.into_live();
+    let old_mode = live.search("permissions", 5)[0].record.mode;
+
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    let report = live.apply_metadata_update(&target).unwrap();
+    let hits = live.search("permissions", 5);
+
+    assert!(report.changed.contains(&"mode"), "{report:?}");
+    assert_ne!(hits[0].record.mode, old_mode);
 
     fs::remove_dir_all(root).unwrap();
 }

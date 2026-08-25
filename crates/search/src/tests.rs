@@ -316,6 +316,24 @@ fn removes_reindexed_tag_postings() {
 }
 
 #[test]
+fn searches_and_reindexes_finder_comments() {
+    let mut index = SearchIndex::new();
+    let mut item = record(1, "/tmp/report.md", "report.md");
+    item.finder_comment = Some("client handoff notes".to_string());
+    index.insert(item.clone());
+
+    let hits = index.query("handoff", 10);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.name, "report.md");
+
+    item.finder_comment = Some("archived later".to_string());
+    index.insert(item);
+
+    assert!(index.query("handoff", 10).is_empty());
+    assert_eq!(index.query("archived", 10).len(), 1);
+}
+
+#[test]
 fn filters_named_and_absolute_scopes() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/Users/me/Desktop/report.md", "report.md"));
@@ -684,11 +702,16 @@ fn volume_record(volume: u64, node: u64, path: &str, name: &str) -> FileRecord {
         name: name.to_string(),
         kind: FileKind::File,
         len: 0,
+        mode: 0,
+        owner: 0,
+        group: 0,
+        xattrs_digest: 0,
         created: None,
         modified: None,
         changed: None,
         hidden: false,
         tags: Vec::new(),
+        finder_comment: None,
     }
 }
 

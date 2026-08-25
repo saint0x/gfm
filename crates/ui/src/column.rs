@@ -670,11 +670,16 @@ mod tests {
             name: name.to_string(),
             kind,
             len: node * 10,
+            mode: 0,
+            owner: 0,
+            group: 0,
+            xattrs_digest: 0,
             created: Some(UNIX_EPOCH + Duration::from_secs(node)),
             modified: Some(UNIX_EPOCH + Duration::from_secs(node)),
             changed: Some(UNIX_EPOCH + Duration::from_secs(node)),
             hidden: false,
             tags: Vec::new(),
+            finder_comment: None,
         }
     }
 }

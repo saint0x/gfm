@@ -3,6 +3,7 @@ use gfm_types::{
 };
 use std::collections::{BTreeSet, VecDeque};
 use std::fs::{self, Metadata};
+use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::path::Path;
 
@@ -14,6 +15,9 @@ mod metadata;
 pub use metadata::{
     FinderLabelColor, FinderLinkRole, FinderMetadataReport, FinderTagEntry, FinderTypeRole,
 };
+
+const USER_TAGS_XATTR: &str = "com.apple.metadata:_kMDItemUserTags";
+const FINDER_COMMENT_XATTR: &str = "com.apple.metadata:kMDItemFinderComment";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanOptions {
@@ -334,10 +338,15 @@ pub fn record_for_path(
         id: file_id(&metadata),
         parent,
         tags: finder_tags(&path),
-        path,
+        finder_comment: finder_comment(&path),
+        path: path.clone(),
         name,
         kind,
         len: metadata.len(),
+        mode: metadata_mode(&metadata),
+        owner: metadata_owner(&metadata),
+        group: metadata_group(&metadata),
+        xattrs_digest: xattrs_digest(&path),
         created: metadata.created().ok(),
         modified: metadata.modified().ok(),
         changed: changed_time(&metadata),
@@ -346,10 +355,7 @@ pub fn record_for_path(
 }
 
 fn finder_tags(path: &Path) -> Vec<String> {
-    let Some(raw) = xattr::get(path, "com.apple.metadata:_kMDItemUserTags")
-        .ok()
-        .flatten()
-    else {
+    let Some(raw) = xattr::get(path, USER_TAGS_XATTR).ok().flatten() else {
         return Vec::new();
     };
     let Ok(plist::Value::Array(values)) = plist::Value::from_reader(Cursor::new(raw)) else {
@@ -375,6 +381,33 @@ fn finder_tag_name(raw: &str) -> Option<String> {
         .unwrap_or(raw)
         .trim();
     (!tag.is_empty()).then(|| tag.to_string())
+}
+
+fn finder_comment(path: &Path) -> Option<String> {
+    let raw = xattr::get(path, FINDER_COMMENT_XATTR).ok().flatten()?;
+    match plist::Value::from_reader(Cursor::new(raw)).ok()? {
+        plist::Value::String(comment) if !comment.trim().is_empty() => Some(comment),
+        _ => None,
+    }
+}
+
+fn xattrs_digest(path: &Path) -> u64 {
+    let mut entries = Vec::new();
+    let Ok(names) = xattr::list(path) else {
+        return 0;
+    };
+    for name in names {
+        let Some(name_text) = name.to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        let value = xattr::get(path, &name).ok().flatten().unwrap_or_default();
+        entries.push((name_text, value));
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    entries.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn finder_order(record: &FileRecord) -> (u8, String) {
@@ -461,6 +494,36 @@ fn changed_time(metadata: &Metadata) -> Option<std::time::SystemTime> {
 #[cfg(not(unix))]
 fn changed_time(_metadata: &Metadata) -> Option<std::time::SystemTime> {
     None
+}
+
+#[cfg(unix)]
+fn metadata_mode(metadata: &Metadata) -> u32 {
+    metadata.mode()
+}
+
+#[cfg(not(unix))]
+fn metadata_mode(_metadata: &Metadata) -> u32 {
+    0
+}
+
+#[cfg(unix)]
+fn metadata_owner(metadata: &Metadata) -> u32 {
+    metadata.uid()
+}
+
+#[cfg(not(unix))]
+fn metadata_owner(_metadata: &Metadata) -> u32 {
+    0
+}
+
+#[cfg(unix)]
+fn metadata_group(metadata: &Metadata) -> u32 {
+    metadata.gid()
+}
+
+#[cfg(not(unix))]
+fn metadata_group(_metadata: &Metadata) -> u32 {
+    0
 }
 
 #[cfg(test)]
@@ -615,6 +678,27 @@ mod tests {
         let record = record_for_path(&path, None, false).unwrap();
 
         assert_eq!(record.tags, vec!["Important"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reads_finder_comments_and_xattr_digest_from_xattrs_when_supported() {
+        let root = unique_temp_dir();
+        let path = root.join("commented.txt");
+        fs::write(&path, "commented").unwrap();
+        let before = record_for_path(&path, None, false).unwrap();
+        let value = plist::Value::String("handoff notes".to_string());
+        let mut payload = Vec::new();
+        value.to_writer_binary(&mut payload).unwrap();
+        if xattr::set(&path, FINDER_COMMENT_XATTR, &payload).is_err() {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+
+        let record = record_for_path(&path, None, false).unwrap();
+
+        assert_eq!(record.finder_comment.as_deref(), Some("handoff notes"));
+        assert_ne!(record.xattrs_digest, before.xattrs_digest);
         fs::remove_dir_all(root).unwrap();
     }
 
