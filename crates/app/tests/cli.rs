@@ -338,6 +338,31 @@ fn searches_docx_content_from_binary() {
 }
 
 #[test]
+fn searches_zip_archive_metadata_from_binary() {
+    let root = unique_temp_dir("gfm-cli-zip-content-root");
+    fs::write(
+        root.join("bundle.zip"),
+        ooxml_package(&[("docs/zipneedle.txt", "payload")]),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-content", root.to_str().unwrap(), "zipneedle"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("bundle.zip"), "{stdout}");
+    assert!(stdout.contains("[[zipneedle]]"), "{stdout}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn search_content_skips_disguised_binary_from_binary() {
     let root = unique_temp_dir("gfm-cli-disguised-binary-root");
     fs::write(

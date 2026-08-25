@@ -1,9 +1,13 @@
+mod archive;
 mod ooxml;
 mod pdf;
+mod rich;
 
+use archive::{extract_archive_metadata, ArchiveExtractStatus, ArchiveKind};
 use gfm_types::{FileKind, FileRecord, GfmError, Result, SearchSnippet, SnippetHighlight};
 use ooxml::{extract_ooxml, OoxmlExtractStatus, OoxmlKind};
 use pdf::{extract_pdf, PdfExtractStatus};
+use rich::{extract_rich, RichKind};
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
@@ -19,6 +23,9 @@ pub struct ExtractionPolicy {
     pub max_office_entries: usize,
     pub max_office_entry_bytes: u64,
     pub max_office_text_bytes: usize,
+    pub max_archive_bytes: u64,
+    pub max_archive_entries: usize,
+    pub max_archive_text_bytes: usize,
     pub extensions: BTreeSet<String>,
 }
 
@@ -33,6 +40,9 @@ impl Default for ExtractionPolicy {
             max_office_entries: 10_000,
             max_office_entry_bytes: 8 * 1024 * 1024,
             max_office_text_bytes: 4 * 1024 * 1024,
+            max_archive_bytes: 64 * 1024 * 1024,
+            max_archive_entries: 20_000,
+            max_archive_text_bytes: 2 * 1024 * 1024,
             extensions: text_extensions(),
         }
     }
@@ -62,6 +72,8 @@ impl Extractor {
             self.policy.max_pdf_bytes
         } else if office_kind(&record.path).is_some() {
             self.policy.max_office_bytes
+        } else if archive_kind(&record.path).is_some() {
+            self.policy.max_archive_bytes
         } else {
             self.policy.max_bytes
         };
@@ -99,11 +111,15 @@ impl Extractor {
         }
         let metadata = std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?;
         let office = office_kind(path);
+        let rich = rich_kind(path);
+        let archive = archive_kind(path);
         let is_pdf = path_is_pdf(path);
         let max_bytes = if is_pdf {
             self.policy.max_pdf_bytes
         } else if office.is_some() {
             self.policy.max_office_bytes
+        } else if archive.is_some() {
+            self.policy.max_archive_bytes
         } else {
             self.policy.max_bytes
         };
@@ -140,6 +156,21 @@ impl Extractor {
             };
         }
 
+        if let Some(kind) = archive {
+            let (status, document) = extract_archive_metadata(&bytes, kind, &self.policy);
+            return match status {
+                ArchiveExtractStatus::Extracted
+                | ArchiveExtractStatus::Unsupported
+                | ArchiveExtractStatus::TooLarge
+                | ArchiveExtractStatus::TooManyEntries
+                | ArchiveExtractStatus::Corrupt => Ok(document),
+            };
+        }
+
+        if let Some(kind) = rich {
+            return Ok(extract_rich(&bytes, kind));
+        }
+
         if is_binary(&bytes) {
             return Ok(None);
         }
@@ -158,11 +189,29 @@ impl Extractor {
     fn accepts_path(&self, path: &Path) -> bool {
         path_is_pdf(path)
             || office_kind(path).is_some()
+            || archive_kind(path).is_some()
+            || rich_kind(path).is_some()
             || path
                 .extension()
                 .and_then(|extension| extension.to_str())
                 .map(|extension| self.policy.extensions.contains(&extension.to_lowercase()))
                 .unwrap_or(false)
+    }
+}
+
+fn rich_kind(path: &Path) -> Option<RichKind> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "html" | "htm" => Some(RichKind::Html),
+        "rtf" => Some(RichKind::Rtf),
+        "eml" => Some(RichKind::Email),
+        _ => None,
+    }
+}
+
+fn archive_kind(path: &Path) -> Option<ArchiveKind> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "zip" => Some(ArchiveKind::Zip),
+        _ => None,
     }
 }
 
@@ -552,6 +601,64 @@ mod tests {
     }
 
     #[test]
+    fn extracts_html_visible_text() {
+        let root = unique_temp_dir("gfm-content-html");
+        let path = root.join("page.html");
+        fs::write(
+            &path,
+            "<html><body><h1>Visible &amp; searchable</h1><script>hiddenneedle</script><p>htmlneedle</p></body></html>",
+        )
+        .unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
+
+        assert_eq!(doc.text, "Visible & searchable htmlneedle");
+        assert!(!doc.text.contains("hiddenneedle"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_rtf_text() {
+        let root = unique_temp_dir("gfm-content-rtf");
+        let path = root.join("note.rtf");
+        fs::write(&path, br"{\rtf1\ansi rtfneedle\par rich text}").unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
+
+        assert_eq!(doc.text, "rtfneedle rich text");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_email_text() {
+        let root = unique_temp_dir("gfm-content-email");
+        let path = root.join("message.eml");
+        fs::write(
+            &path,
+            b"From: Ada <ada@example.com>\r\nTo: Team\r\nSubject: Email Needle\r\n\r\nBody has emailneedle=20text",
+        )
+        .unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
+
+        assert!(doc.text.contains("Email Needle"));
+        assert!(doc.text.contains("emailneedle text"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_zip_archive_metadata() {
+        let root = unique_temp_dir("gfm-content-zip");
+        let path = root.join("bundle.zip");
+        fs::write(&path, zip_package(&[("docs/zipneedle.txt", "payload")])).unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
+
+        assert!(doc.text.contains("docs/zipneedle.txt"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn applies_office_entry_budget() {
         let root = unique_temp_dir("gfm-content-office-budget");
         let path = root.join("brief.docx");
@@ -613,6 +720,10 @@ endobj
     }
 
     fn ooxml_package(parts: &[(&str, &str)]) -> Vec<u8> {
+        zip_package(parts)
+    }
+
+    fn zip_package(parts: &[(&str, &str)]) -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let options =
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
