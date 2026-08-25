@@ -271,6 +271,7 @@ gfm/
 - Admits interactive live content extraction/search jobs through the same volume-isolated worker path before they crawl, extract, and snippet candidate files.
 - Admits Quick Look preview and thumbnail generation jobs through the same volume-isolated worker path before producing preview contracts.
 - Persists background content indexing job volume identity and resumes that job through the same isolated, journaled, capped-retry worker path.
+- Admits sidecar repair, persistent index repair, and diagnostics index rebuild jobs through volume-isolated worker admission before scanning, rebuilding, quarantining, or publishing repaired archives.
 
 `config`
 
@@ -581,7 +582,7 @@ All operations go through a scheduler:
 
 Scheduler properties:
 
-- Per-volume queues backed by worker admission limits so one hot volume cannot monopolize all runtime workers or destroy interactive I/O latency; foreground file operations, live content extraction/search, Quick Look previews, thumbnail generation, and background content indexing already run through isolated worker admission.
+- Per-volume queues backed by worker admission limits so one hot volume cannot monopolize all runtime workers or destroy interactive I/O latency; foreground file operations, live content extraction/search, Quick Look previews, thumbnail generation, background content indexing, sidecar repair, persistent index repair, and diagnostics index rebuild already run through isolated worker admission.
 - Operation dependencies.
 - Priority inheritance from visible UI.
 - Exact preflight item/byte totals and completion-backed progress aggregation.

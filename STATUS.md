@@ -74,21 +74,20 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 45. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
 46. Implement persistent progress snapshots and user-visible progress restoration after restart.
 47. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
-48. Bind the implemented per-volume worker admission limits into repair job producers beyond the already-wired foreground operation, live content extraction/search, Quick Look preview, thumbnail generation, and background content indexing producers.
-49. Implement structured cancellation propagation across nested jobs and subprocess extractors.
-50. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
+48. Implement structured cancellation propagation across nested jobs and subprocess extractors.
+49. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
 
 ## Preview And Thumbnails
 
-51. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
+50. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
 
 ## Packaging
 
-52. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
+51. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
 
 ## Documentation
 
-53. Expand `PLAN.md` when architectural decisions change materially.
-54. Keep `README.md` written as the completed product contract.
-55. Keep this file limited to unfinished work only.
-56. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+52. Expand `PLAN.md` when architectural decisions change materially.
+53. Keep `README.md` written as the completed product contract.
+54. Keep this file limited to unfinished work only.
+55. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

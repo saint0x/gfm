@@ -144,6 +144,8 @@ Quick Look preview and thumbnail generation commands also enter through volume-i
 
 Background content indexing persists its `VolumeId` in the durable job spec and resumes through the same isolated, journaled, capped-retry worker path.
 
+Sidecar repair, persistent index repair, and diagnostics index rebuild commands enter through volume-isolated worker admission before scanning, rebuilding, quarantining, or publishing repaired archives.
+
 ## UI Parity
 
 GFM treats Finder parity as a testable contract.

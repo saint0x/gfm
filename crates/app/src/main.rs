@@ -1754,7 +1754,12 @@ fn run() -> Result<()> {
                 "sidecar-recover requires a quarantine directory",
             )?;
             let sidecars = parse_sidecar_paths(&mut args, "sidecar-recover")?;
-            let report = recover_sidecars(&records, &sidecars, &quarantine)?;
+            let volume = detect_volume_id(&records)
+                .ok()
+                .or_else(|| parent_volume(&records));
+            let report = run_volume_task(volume, Priority::Visible, "sidecar repair", move || {
+                recover_sidecars(&records, &sidecars, &quarantine)
+            })?;
             println!("{}", report.before.as_tsv());
             println!(
                 "sidecar-recovery\trebuilt={}\tquarantined={}",
@@ -2083,7 +2088,12 @@ fn run() -> Result<()> {
                 Some(content) => RebuildSpec::with_content(root, records, PathBuf::from(content)),
                 None => RebuildSpec::records(root, records),
             };
-            let report = rebuild_index(&spec)?;
+            let volume = detect_volume_id(&spec.root)
+                .ok()
+                .or_else(|| parent_volume(&spec.records_path));
+            let report = run_volume_task(volume, Priority::Visible, "index rebuild", move || {
+                rebuild_index(&spec)
+            })?;
             println!(
                 "{}\t{}\t{}\t{}\t{}",
                 report.root.display(),
@@ -2138,7 +2148,15 @@ fn run() -> Result<()> {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| records.with_extension("quarantine"));
             let spec = PersistentIndexRecoverySpec::new(root, records, state, quarantine);
-            let report = recover_index(&spec)?;
+            let volume = detect_volume_id(&spec.root)
+                .ok()
+                .or_else(|| parent_volume(&spec.records_path));
+            let report = run_volume_task(
+                volume,
+                Priority::Visible,
+                "persistent index repair",
+                move || recover_index(&spec),
+            )?;
             println!("{}", report.before.as_tsv());
             println!(
                 "persistent-index-recovery\trebuilt-records={}\trebuilt-state={}\tquarantined-records={}",
