@@ -181,6 +181,31 @@ fn searches_persisted_tags_from_binary() {
 }
 
 #[test]
+fn searches_with_scope_prefixes_from_binary() {
+    let root = unique_temp_dir("gfm-cli-scope-root");
+    fs::create_dir_all(root.join("Desktop")).unwrap();
+    fs::create_dir_all(root.join("Downloads")).unwrap();
+    fs::write(root.join("Desktop").join("report.md"), "desktop").unwrap();
+    fs::write(root.join("Downloads").join("report.md"), "downloads").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search", root.to_str().unwrap(), "report @desktop"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Desktop/report.md"), "{stdout}");
+    assert!(!stdout.contains("Downloads/report.md"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn performs_journaled_copy_move_and_delete_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-root");
     let journal = root.join("ops.journal");

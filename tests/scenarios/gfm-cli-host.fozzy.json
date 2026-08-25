@@ -35,6 +35,12 @@
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["search", ".", "PLAN scope:/Users/deepsaint/Desktop/gfm"],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["search-content", ".", "performance-critical"],
       "expect_exit": 0
     },

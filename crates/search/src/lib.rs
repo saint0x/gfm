@@ -2,7 +2,8 @@ mod query;
 
 use query::{normalize, tokenize};
 pub use query::{
-    DateComparison, DateField, QueryExpr, QueryFilter, QueryKind, SearchQuery, SizeComparison,
+    DateComparison, DateField, QueryExpr, QueryFilter, QueryKind, QueryScope, SearchQuery,
+    SizeComparison,
 };
 
 use gfm_types::{ContentPosting, FileId, FileRecord, MatchReason, SearchHit};
@@ -651,6 +652,37 @@ mod tests {
 
         assert!(index.query("tag:important", 10).is_empty());
         assert_eq!(index.query("tag:later", 10).len(), 1);
+    }
+
+    #[test]
+    fn filters_named_and_absolute_scopes() {
+        let mut index = SearchIndex::new();
+        index.insert(record(1, "/Users/me/Desktop/report.md", "report.md"));
+        index.insert(record(2, "/Users/me/Downloads/report.md", "report.md"));
+        index.insert(record(3, "/Users/me/Documents/report.md", "report.md"));
+
+        let desktop = index.query("report @desktop", 10);
+        let downloads = index.query("report scope:downloads", 10);
+        let subtree = index.query("report scope:/Users/me/Documents", 10);
+
+        assert_eq!(desktop.len(), 1);
+        assert!(desktop[0].record.path.ends_with("Desktop/report.md"));
+        assert_eq!(downloads.len(), 1);
+        assert!(downloads[0].record.path.ends_with("Downloads/report.md"));
+        assert_eq!(subtree.len(), 1);
+        assert!(subtree[0].record.path.ends_with("Documents/report.md"));
+    }
+
+    #[test]
+    fn supports_negative_scope_filters() {
+        let mut index = SearchIndex::new();
+        index.insert(record(1, "/Users/me/Desktop/report.md", "report.md"));
+        index.insert(record(2, "/Users/me/Downloads/report.md", "report.md"));
+
+        let hits = index.query("report -@desktop", 10);
+
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].record.path.ends_with("Downloads/report.md"));
     }
 
     fn record(node: u64, path: &str, name: &str) -> FileRecord {

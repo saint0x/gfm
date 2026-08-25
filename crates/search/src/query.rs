@@ -89,6 +89,7 @@ pub enum QueryFilter {
     Path(String, bool),
     Extension(String, bool),
     Tag(String, bool),
+    Scope(QueryScope, bool),
     Kind(QueryKind, bool),
     Size(SizeComparison, bool),
     Date(DateField, DateComparison, bool),
@@ -96,6 +97,9 @@ pub enum QueryFilter {
 
 impl QueryFilter {
     fn parse(input: &str, negative: bool) -> Option<Self> {
+        if let Some(scope) = input.strip_prefix('@').and_then(QueryScope::parse) {
+            return Some(Self::Scope(scope, negative));
+        }
         let (field, value) = input.split_once(':')?;
         let value = value.trim();
         if value.is_empty() {
@@ -106,6 +110,7 @@ impl QueryFilter {
             "path" | "in" => Some(Self::Path(normalize(value), negative)),
             "ext" | "extension" => Some(Self::Extension(normalize_extension(value), negative)),
             "tag" | "label" => Some(Self::Tag(normalize(value), negative)),
+            "scope" | "where" => QueryScope::parse(value).map(|scope| Self::Scope(scope, negative)),
             "kind" | "type" => QueryKind::parse(value).map(|kind| Self::Kind(kind, negative)),
             "size" => SizeComparison::parse(value).map(|size| Self::Size(size, negative)),
             "date" | "modified" | "mtime" => DateComparison::parse(value)
@@ -127,6 +132,7 @@ impl QueryFilter {
                 .map(normalize_extension)
                 .is_some_and(|extension| extension == *value),
             Self::Tag(value, _) => record.tags.iter().any(|tag| normalize(tag) == *value),
+            Self::Scope(scope, _) => scope.matches(record),
             Self::Kind(kind, _) => kind.matches(record.kind),
             Self::Size(size, _) => size.matches(record.len),
             Self::Date(field, date, _) => field.time(record).is_some_and(|time| date.matches(time)),
@@ -144,6 +150,7 @@ impl QueryFilter {
             | Self::Path(_, negative)
             | Self::Extension(_, negative)
             | Self::Tag(_, negative)
+            | Self::Scope(_, negative)
             | Self::Kind(_, negative)
             | Self::Size(_, negative)
             | Self::Date(_, _, negative) => *negative,
@@ -178,6 +185,60 @@ impl QueryKind {
                 | (Self::Symlink, FileKind::Symlink)
                 | (Self::Other, FileKind::Other)
         )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum QueryScope {
+    Desktop,
+    Documents,
+    Downloads,
+    Applications,
+    ICloud,
+    Trash,
+    Home,
+    Path(String),
+}
+
+impl QueryScope {
+    fn parse(input: &str) -> Option<Self> {
+        let value = input.trim();
+        if value.is_empty() {
+            return None;
+        }
+        let normalized = normalize(value);
+        Some(match normalized.as_str() {
+            "desktop" => Self::Desktop,
+            "documents" | "docs" => Self::Documents,
+            "downloads" => Self::Downloads,
+            "applications" | "apps" => Self::Applications,
+            "icloud" | "icloud-drive" | "icloud drive" => Self::ICloud,
+            "trash" => Self::Trash,
+            "home" => Self::Home,
+            _ => Self::Path(normalized),
+        })
+    }
+
+    fn matches(&self, record: &FileRecord) -> bool {
+        match self {
+            Self::Desktop => path_has_component(&record.path, "desktop"),
+            Self::Documents => path_has_component(&record.path, "documents"),
+            Self::Downloads => path_has_component(&record.path, "downloads"),
+            Self::Applications => path_has_component(&record.path, "applications"),
+            Self::ICloud => {
+                path_contains_component_sequence(&record.path, &["mobile documents"])
+                    || path_contains_component_sequence(&record.path, &["icloud drive"])
+            }
+            Self::Trash => {
+                path_has_component(&record.path, ".trash")
+                    || path_has_component(&record.path, "trash")
+            }
+            Self::Home => path_has_users_home_prefix(&record.path),
+            Self::Path(path) => {
+                let record_path = normalize_path(&record.path);
+                record_path == *path || record_path.starts_with(&format!("{path}/"))
+            }
+        }
     }
 }
 
@@ -485,6 +546,40 @@ fn normalize_path(path: &Path) -> String {
     normalize(&path.to_string_lossy())
 }
 
+fn path_has_component(path: &Path, expected: &str) -> bool {
+    path.components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .any(|component| normalize(component) == expected)
+}
+
+fn path_contains_component_sequence(path: &Path, expected: &[&str]) -> bool {
+    let components: Vec<_> = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .map(normalize)
+        .collect();
+    if expected.is_empty() {
+        return true;
+    }
+    components.windows(expected.len()).any(|window| {
+        window
+            .iter()
+            .zip(expected)
+            .all(|(left, right)| left == right)
+    })
+}
+
+fn path_has_users_home_prefix(path: &Path) -> bool {
+    let components: Vec<_> = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .map(normalize)
+        .collect();
+    components
+        .windows(2)
+        .any(|window| window[0] == "users" && !window[1].is_empty())
+}
+
 fn parse_operator(input: &str) -> (SizeOperator, &str) {
     if let Some(value) = input.strip_prefix(">=") {
         (SizeOperator::Gte, value)
@@ -694,6 +789,44 @@ mod tests {
                 QueryFilter::Tag("later".to_string(), true),
             ]
         );
+    }
+
+    #[test]
+    fn parses_scope_filters_and_prefixes() {
+        let query =
+            SearchQuery::parse("@desktop scope:downloads -scope:trash scope:/Users/me/Work");
+
+        assert_eq!(
+            query.filters,
+            vec![
+                QueryFilter::Scope(QueryScope::Desktop, false),
+                QueryFilter::Scope(QueryScope::Downloads, false),
+                QueryFilter::Scope(QueryScope::Trash, true),
+                QueryFilter::Scope(QueryScope::Path("/users/me/work".to_string()), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn matches_named_and_path_scopes() {
+        let desktop = FileRecord {
+            id: gfm_types::FileId::new(gfm_types::VolumeId(1), 1),
+            parent: None,
+            path: "/Users/me/Desktop/report.md".into(),
+            name: "report.md".to_string(),
+            kind: FileKind::File,
+            len: 0,
+            created: None,
+            modified: None,
+            changed: None,
+            hidden: false,
+            tags: Vec::new(),
+        };
+
+        assert!(QueryScope::Desktop.matches(&desktop));
+        assert!(QueryScope::Home.matches(&desktop));
+        assert!(QueryScope::Path("/users/me/desktop".to_string()).matches(&desktop));
+        assert!(!QueryScope::Downloads.matches(&desktop));
     }
 
     #[test]
