@@ -97,6 +97,7 @@ The index is compact and incremental:
 - progressive hot/deep result streaming with stable dedupe
 - name substring n-gram candidates and delete-key fuzzy candidate indexes for infix and typo-tolerant matches without full-record scans
 - archive-backed prefix, substring, and fuzzy lookup with explicit candidate budgets, adaptive prefix cutoffs, lookup cache telemetry, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
+- direct content-posting scoring for normal content-term queries without temporary ID-set materialization
 - exact phrase and `near:N:alpha,beta` positional content retrieval
 - bounded snippets with highlighted content matches
 - binary-signature and control-byte classification before content extraction

@@ -769,9 +769,7 @@ impl SearchIndex {
                 add_scores(&mut scores, ids, TAG, MatchReason::Tag);
             }
             if pass.includes_deep() {
-                if let Some(ids) = self.content_ids(term) {
-                    add_scores(&mut scores, &ids, CONTENT, MatchReason::Content);
-                }
+                self.add_content_scores(&mut scores, term);
             }
         }
 
@@ -1011,7 +1009,19 @@ impl SearchIndex {
             .is_some_and(|positions| positions.contains_key(&id))
     }
 
-    fn content_ids(&self, term: &str) -> Option<BTreeSet<FileId>> {
+    fn add_content_scores(&self, scores: &mut HashMap<FileId, RankAccumulator>, term: &str) {
+        let Some(positions) = self.content_terms.get(term) else {
+            return;
+        };
+        for id in positions.keys() {
+            scores
+                .entry(*id)
+                .and_modify(|score| score.add(CONTENT, MatchReason::Content))
+                .or_insert_with(|| RankAccumulator::new(CONTENT, MatchReason::Content));
+        }
+    }
+
+    fn content_id_set(&self, term: &str) -> Option<BTreeSet<FileId>> {
         self.content_terms
             .get(term)
             .map(|positions| positions.keys().copied().collect())
@@ -1216,11 +1226,11 @@ impl SearchIndex {
         let Some(first) = terms.next() else {
             return BTreeSet::new();
         };
-        let Some(first_ids) = self.content_ids(first) else {
+        let Some(first_ids) = self.content_id_set(first) else {
             return BTreeSet::new();
         };
         let candidates = terms.try_fold(first_ids, |mut candidates, term| {
-            let ids = self.content_ids(term)?;
+            let ids = self.content_id_set(term)?;
             candidates.retain(|id| ids.contains(id));
             Some(candidates)
         });

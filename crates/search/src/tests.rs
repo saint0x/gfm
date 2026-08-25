@@ -592,6 +592,37 @@ fn finds_content_terms() {
 }
 
 #[test]
+fn content_term_scoring_uses_bounded_top_hits_without_id_materialization() {
+    let mut index = SearchIndex::new();
+    for node in 1..=48 {
+        let item = record(
+            node,
+            &format!("/tmp/content-{node}.txt"),
+            &format!("content-{node}.txt"),
+        );
+        index.insert(item.clone());
+        index.insert_content(item.id, "needle body text");
+    }
+    let first = record(98, "/tmp/a/needle", "needle");
+    let second = record(99, "/tmp/b/needle", "needle");
+    index.insert(first.clone());
+    index.insert(second.clone());
+    index.insert_content(first.id, "needle body text");
+    index.insert_content(second.id, "needle body text");
+
+    let hits = index.query("needle", 2);
+    let paths: Vec<_> = hits.into_iter().map(|hit| hit.record.path).collect();
+
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/tmp/a/needle"),
+            PathBuf::from("/tmp/b/needle")
+        ]
+    );
+}
+
+#[test]
 fn cancelled_queries_stop_before_returning_hits() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/needle.txt", "needle.txt"));
