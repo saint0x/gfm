@@ -10,6 +10,33 @@ fn diagnostics_rebuilds_and_inspects_indexes_from_binary() {
     let content = root.join("content.gfmcontent");
     fs::write(root.join("needle.md"), "diagnostic needle").unwrap();
 
+    let deferred = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-index-rebuild-adaptive",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        deferred.status.success(),
+        "{}",
+        String::from_utf8_lossy(&deferred.stderr)
+    );
+    let deferred_stderr = String::from_utf8(deferred.stderr).unwrap();
+    assert!(
+        deferred_stderr.contains("index-rebuild-deferred")
+            && deferred_stderr.contains("action=Defer"),
+        "{deferred_stderr}"
+    );
+    assert!(!records.exists());
+    assert!(!content.exists());
+
     let rebuild = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "diagnostics-index-rebuild",

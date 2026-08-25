@@ -152,6 +152,8 @@ Sidecar repair uses the same adaptive scheduling policy before rebuilding derive
 
 Persistent index repair uses the same adaptive scheduling policy before rebuilding state, quarantining corrupt record archives, or publishing repaired recovery state.
 
+Diagnostics index rebuild uses the same adaptive scheduling policy before filesystem scans, content extraction, record publication, or content archive publication starts.
+
 Sidecar repair, persistent index repair, and diagnostics index rebuild commands enter through volume-isolated worker admission before scanning, rebuilding, quarantining, or publishing repaired archives.
 
 ## UI Parity
@@ -226,6 +228,7 @@ Run operator diagnostics:
 
 ```sh
 cargo run -p gfm -- diagnostics-index-rebuild . /tmp/gfm.gfmidx /tmp/gfm.gfmcontent
+cargo run -p gfm -- diagnostics-index-rebuild-adaptive . /tmp/gfm.gfmidx saturated nominal ac idle /tmp/gfm.gfmcontent
 cargo run -p gfm -- diagnostics-storage-inspect /tmp/gfm.gfmidx
 cargo run -p gfm -- diagnostics-storage-inspect /tmp/gfm.gfmcontent
 cargo run -p gfm -- diagnostics-trace-export /tmp/gfm-diagnostics.json
@@ -308,6 +311,7 @@ cargo run -p gfm -- derived-sidecar-rebuild records.gfmidx prefixes prefixes.gfm
 `macrobench-fixture` materializes real filesystem benchmark trees for developer projects, documents, media, iCloud-shaped files, external-volume-shaped files, network-volume-shaped files, huge directories, and nested trees, then writes a manifest with exact file and directory counts; the `million` scale materializes a one-million-file fixture without running the full benchmark loop.
 `regression-gate` materializes benchmark indexes and real prefix/fuzzy sidecar archives, then fails on latency, index-density, prefix lookup, fuzzy lookup, cache-path, and sidecar-truncation drift.
 `large-sidecar-gate` synthesizes realistic record distributions, writes real prefix/fuzzy sidecars, verifies bounded repeated lookup behavior at million-entry scale, skips digit-run-heavy tokens in fuzzy sidecars, probes full sidecars with a bounded live record set, and retains `thresholds.tsv` plus `gfm-large-sidecar-history.tsv` artifacts using the `production-macos-million-v1` calibration profile.
+`diagnostics-index-rebuild-adaptive` defers filesystem scans, content extraction, record publication, and content archive publication under saturated host pressure.
 `diagnostics-index-recovery-plan`, `diagnostics-index-recover`, and `diagnostics-index-recover-adaptive` classify persistent record/state health, rebuild missing or stale state, and quarantine corrupt record archives before rebuilding; the adaptive path defers before mutating recovery state under saturated host pressure.
 `content-manifest-recovery-plan` and `content-manifest-recover` classify content manifest health, prune invalid archives, and quarantine corrupt manifests before rebuilding from mmap-validated archives.
 `content-manifest-promotion-recovery-plan` and `content-manifest-promotion-recover` complete or clean up interrupted content manifest promotions from the durable promotion journal so compaction cannot strand a valid new content archive behind a stale manifest.

@@ -2179,20 +2179,43 @@ fn run() -> Result<()> {
             let report = run_volume_task(volume, Priority::Visible, "index rebuild", move || {
                 rebuild_index(&spec)
             })?;
-            println!(
-                "{}\t{}\t{}\t{}\t{}",
-                report.root.display(),
-                report.records_path.display(),
-                report
-                    .content_path
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                report.records,
-                report.content_indexed
-            );
-            if report.inaccessible != 0 {
-                eprintln!("inaccessible\t{}", report.inaccessible);
+            print_index_rebuild_report(report);
+        }
+        Some("diagnostics-index-rebuild-adaptive") => {
+            let root = required_path(
+                args.next(),
+                "diagnostics-index-rebuild-adaptive requires a root path",
+            )?;
+            let records = required_path(
+                args.next(),
+                "diagnostics-index-rebuild-adaptive requires a records path",
+            )?;
+            let pressure = parse_required_scheduling_pressure(&mut args, "index rebuild")?;
+            let spec = match args.next() {
+                Some(content) => RebuildSpec::with_content(root, records, PathBuf::from(content)),
+                None => RebuildSpec::records(root, records),
+            };
+            let volume = detect_volume_id(&spec.root)
+                .ok()
+                .or_else(|| parent_volume(&spec.records_path));
+            let outcome = run_scheduled_volume_task(
+                volume,
+                Priority::Background,
+                "index rebuild",
+                pressure,
+                move || rebuild_index(&spec),
+            )?;
+            if outcome.deferred {
+                eprintln!(
+                    "index-rebuild-deferred\taction={:?}",
+                    outcome.scheduling_action
+                );
+            } else {
+                let report = outcome.result.ok_or_else(|| {
+                    GfmError::Format("index rebuild ran without a report".to_string())
+                })?;
+                eprintln!("index-rebuild-action\t{:?}", outcome.scheduling_action);
+                print_index_rebuild_report(report);
             }
         }
         Some("diagnostics-index-recovery-plan") => {
@@ -3575,6 +3598,24 @@ fn print_sidecar_recovery_report(report: SidecarRecovery) {
     }
 }
 
+fn print_index_rebuild_report(report: gfm_diagnostics::RebuildReport) {
+    println!(
+        "{}\t{}\t{}\t{}\t{}",
+        report.root.display(),
+        report.records_path.display(),
+        report
+            .content_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        report.records,
+        report.content_indexed
+    );
+    if report.inaccessible != 0 {
+        eprintln!("inaccessible\t{}", report.inaccessible);
+    }
+}
+
 fn print_persistent_index_recovery_report(report: PersistentIndexRecovery) {
     println!("{}", report.before.as_tsv());
     println!(
@@ -4063,6 +4104,7 @@ fn print_usage() {
   gfm config-check [config.toml]
   gfm config-dump [config.toml]
   gfm diagnostics-index-rebuild <root> <records.gfmidx> [content.gfmcontent]
+  gfm diagnostics-index-rebuild-adaptive <root> <records.gfmidx> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> [content.gfmcontent]
   gfm diagnostics-index-recovery-plan <root> <records.gfmidx> <state.gfmstate> [quarantine-dir]
   gfm diagnostics-index-recover <root> <records.gfmidx> <state.gfmstate> [quarantine-dir]
   gfm diagnostics-index-recover-adaptive <root> <records.gfmidx> <state.gfmstate> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> [quarantine-dir]
