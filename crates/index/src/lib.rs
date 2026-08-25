@@ -2,11 +2,11 @@ use gfm_content::Extractor;
 use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
 pub use gfm_search::{
-    SearchFuzzyPosting, SearchLookupBudget, SearchLookupTelemetry, SearchMetadataField,
-    SearchMetadataPosting, SearchPrefixPosting, SearchQueryReport, SearchRecordColumns,
-    SearchStreamStage,
+    SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupTelemetry,
+    SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting, SearchQueryReport,
+    SearchRecordColumns, SearchStreamStage,
 };
-use gfm_search::{SearchLookup, SearchQuery, SearchStreamBatch, ShardedSearchIndex};
+use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
     compact_content_segments, compact_content_segments_with_policy, plan_content_segment_merge,
     read_content_postings, read_records, summarize_content_segment, write_content_postings,

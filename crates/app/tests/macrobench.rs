@@ -253,6 +253,8 @@ fn runs_regression_gate_from_binary() {
 
     assert!(stdout.contains("fixture\t"), "{stdout}");
     assert!(stdout.contains("index-bytes\t"), "{stdout}");
+    assert!(stdout.contains("sidecar-prefix-candidates\t"), "{stdout}");
+    assert!(stdout.contains("sidecar-fuzzy-verified\t"), "{stdout}");
     assert!(stdout.contains("passed\ttrue"), "{stdout}");
     assert!(root
         .join("gfm-macrobench-fixture")

@@ -260,6 +260,8 @@ cargo run -p gfm -- parity-profile 25A354 dark 2x display-p3
 cargo run -p gfm -- regression-gate /tmp/gfm-bench smoke
 ```
 
+`regression-gate` materializes the benchmark indexes and fails on latency, index-density, prefix lookup, fuzzy lookup, and sidecar-truncation drift.
+
 Build, sign, and register the native app bundle:
 
 ```sh

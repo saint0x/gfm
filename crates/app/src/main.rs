@@ -2300,10 +2300,16 @@ fn run() -> Result<()> {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
             let run = run_regression_gate(&options, RegressionGateOptions::default())?;
             println!(
-                "fixture\t{}\tfiles\t{}\tindex-bytes\t{}\tpassed\t{}",
+                "fixture\t{}\tfiles\t{}\tindex-bytes\t{}\tsidecar-prefix-candidates\t{}\tsidecar-fuzzy-verified\t{}\tsidecar-prefix-truncated\t{}\tsidecar-fuzzy-truncated\t{}\tpassed\t{}",
                 run.macrobench.fixture_root.display(),
                 run.macrobench.files_materialized,
                 run.index_size_bytes,
+                run.sidecar_lookup.prefix_candidate_ids,
+                run.sidecar_lookup.fuzzy_verified_candidates,
+                run.sidecar_lookup.prefix_truncated_terms,
+                run.sidecar_lookup.fuzzy_term_truncated_keys
+                    + run.sidecar_lookup.fuzzy_key_truncated_terms
+                    + run.sidecar_lookup.fuzzy_candidate_truncated_terms,
                 run.passed()
             );
             for violation in &run.gate.violations {

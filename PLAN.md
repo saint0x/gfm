@@ -435,7 +435,8 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - sharded search fans out the same archive lookup across volume shards and filters candidate ids per shard;
   - archive-backed lookup avoids importing large prefix/fuzzy candidate maps into heap memory for each machine-wide query session;
   - prefix ids, fuzzy delete keys, fuzzy terms per key, and verified fuzzy candidates are capped by an explicit search lookup budget;
-  - search reports expose prefix/fuzzy lookup telemetry, truncation counters, candidate counts, and verified-candidate counts so latency gates can enforce worst-case behavior.
+  - search reports expose prefix/fuzzy lookup telemetry, truncation counters, candidate counts, and verified-candidate counts;
+  - regression gates execute sidecar-backed search probes and fail on candidate-count overflow or lookup truncation before prefix/fuzzy expansion can become a machine-wide latency cliff.
 - Index footprint telemetry and maintenance scheduling:
   - record, column, metadata, prefix, fuzzy, content-manifest, and pending content-segment archives are measured from mmap readers and filesystem byte counts;
   - footprint reports include total bytes, bytes per record, sidecar key counts, content archive counts, segment postings, tombstones, and tombstone-bearing segment counts;

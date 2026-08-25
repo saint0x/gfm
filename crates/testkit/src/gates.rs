@@ -1,9 +1,9 @@
 use crate::{
     run_macrobench, MacrobenchOptions, MacrobenchReport, MacrobenchScenario, MacrobenchStage,
 };
-use gfm_index::Indexer;
+use gfm_index::{Indexer, SearchLookup, SearchLookupBudget, SearchLookupTelemetry};
 use gfm_telemetry::{BudgetViolation, FrameTimingSummary, ResourceSummary};
-use gfm_types::{GfmError, Result};
+use gfm_types::{FileId, GfmError, Result};
 use std::fs;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -12,12 +12,16 @@ pub struct RegressionInputs<'a> {
     pub resources: Option<ResourceSummary>,
     pub frame_timing: Option<FrameTimingSummary>,
     pub index_size_bytes: Option<u64>,
+    pub sidecar_lookup: Option<SearchLookupTelemetry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegressionGateOptions {
     pub max_peak_memory_bytes: u64,
     pub max_index_bytes_per_record: u64,
+    pub max_sidecar_prefix_candidate_ids: usize,
+    pub max_sidecar_fuzzy_verified_candidates: usize,
+    pub fail_on_sidecar_truncation: bool,
     pub fail_on_frame_stalls: bool,
 }
 
@@ -26,6 +30,9 @@ impl Default for RegressionGateOptions {
         Self {
             max_peak_memory_bytes: 512 * 1024 * 1024,
             max_index_bytes_per_record: 512,
+            max_sidecar_prefix_candidate_ids: 8_192,
+            max_sidecar_fuzzy_verified_candidates: 8_192,
+            fail_on_sidecar_truncation: true,
             fail_on_frame_stalls: true,
         }
     }
@@ -62,6 +69,20 @@ pub enum RegressionGateViolation {
     FrameStallDetected {
         stalls: u64,
     },
+    SidecarPrefixCandidatesExceeded {
+        observed: usize,
+        budget: usize,
+    },
+    SidecarFuzzyCandidatesExceeded {
+        observed: usize,
+        budget: usize,
+    },
+    SidecarLookupTruncated {
+        prefix_terms: usize,
+        fuzzy_terms_with_truncated_keys: usize,
+        fuzzy_keys_with_truncated_terms: usize,
+        fuzzy_candidate_terms: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,6 +90,7 @@ pub struct RegressionGateRun {
     pub macrobench: MacrobenchReport,
     pub gate: RegressionGateReport,
     pub index_size_bytes: u64,
+    pub sidecar_lookup: SearchLookupTelemetry,
 }
 
 impl RegressionGateRun {
@@ -83,12 +105,14 @@ pub fn run_regression_gate(
 ) -> Result<RegressionGateRun> {
     let macrobench = run_macrobench(macrobench_options)?;
     let index_size_bytes = materialize_record_indexes(&macrobench)?;
+    let sidecar_lookup = measure_sidecar_lookup(&macrobench)?;
     let gate = evaluate_regression_gate(
         &RegressionInputs {
             macrobench: &macrobench,
             resources: None,
             frame_timing: None,
             index_size_bytes: Some(index_size_bytes),
+            sidecar_lookup: Some(sidecar_lookup.clone()),
         },
         gate_options,
     );
@@ -96,6 +120,7 @@ pub fn run_regression_gate(
         macrobench,
         gate,
         index_size_bytes,
+        sidecar_lookup,
     })
 }
 
@@ -158,6 +183,34 @@ pub fn evaluate_regression_gate(
         }
     }
 
+    if let Some(sidecar) = &inputs.sidecar_lookup {
+        if sidecar.prefix_candidate_ids > options.max_sidecar_prefix_candidate_ids {
+            violations.push(RegressionGateViolation::SidecarPrefixCandidatesExceeded {
+                observed: sidecar.prefix_candidate_ids,
+                budget: options.max_sidecar_prefix_candidate_ids,
+            });
+        }
+        if sidecar.fuzzy_verified_candidates > options.max_sidecar_fuzzy_verified_candidates {
+            violations.push(RegressionGateViolation::SidecarFuzzyCandidatesExceeded {
+                observed: sidecar.fuzzy_verified_candidates,
+                budget: options.max_sidecar_fuzzy_verified_candidates,
+            });
+        }
+        if options.fail_on_sidecar_truncation
+            && (sidecar.prefix_truncated_terms > 0
+                || sidecar.fuzzy_term_truncated_keys > 0
+                || sidecar.fuzzy_key_truncated_terms > 0
+                || sidecar.fuzzy_candidate_truncated_terms > 0)
+        {
+            violations.push(RegressionGateViolation::SidecarLookupTruncated {
+                prefix_terms: sidecar.prefix_truncated_terms,
+                fuzzy_terms_with_truncated_keys: sidecar.fuzzy_term_truncated_keys,
+                fuzzy_keys_with_truncated_terms: sidecar.fuzzy_key_truncated_terms,
+                fuzzy_candidate_terms: sidecar.fuzzy_candidate_truncated_terms,
+            });
+        }
+    }
+
     RegressionGateReport { violations }
 }
 
@@ -185,6 +238,51 @@ fn materialize_record_indexes(report: &MacrobenchReport) -> Result<u64> {
     Ok(total)
 }
 
+fn measure_sidecar_lookup(report: &MacrobenchReport) -> Result<SearchLookupTelemetry> {
+    let mut telemetry = SearchLookupTelemetry::default();
+    for scenario in MacrobenchScenario::ALL {
+        let root = report.fixture_root.join(scenario.directory());
+        let snapshot = Indexer::default().build(&root)?;
+        let ids = snapshot
+            .records
+            .iter()
+            .map(|record| record.id)
+            .collect::<Vec<_>>();
+        let lookup = GateLookup {
+            prefix_ids: ids,
+            fuzzy_terms: vec![
+                "project".to_string(),
+                "needle".to_string(),
+                "contentneedle".to_string(),
+            ],
+        };
+        let live = snapshot.into_live();
+        let report = live.search_with_lookup_budget(
+            "project needle",
+            50,
+            &lookup,
+            SearchLookupBudget::default(),
+        )?;
+        telemetry.merge(&report.lookup);
+    }
+    Ok(telemetry)
+}
+
+struct GateLookup {
+    prefix_ids: Vec<FileId>,
+    fuzzy_terms: Vec<String>,
+}
+
+impl SearchLookup for GateLookup {
+    fn prefix_ids(&self, _prefix: &str) -> Result<Vec<FileId>> {
+        Ok(self.prefix_ids.clone())
+    }
+
+    fn fuzzy_terms(&self, _key: &str) -> Result<Vec<String>> {
+        Ok(self.fuzzy_terms.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +308,11 @@ mod tests {
                 resources: Some(telemetry.resources()),
                 frame_timing: None,
                 index_size_bytes: Some(20_000),
+                sidecar_lookup: Some(SearchLookupTelemetry {
+                    prefix_candidate_ids: 128,
+                    fuzzy_verified_candidates: 64,
+                    ..SearchLookupTelemetry::default()
+                }),
             },
             RegressionGateOptions::default(),
         );
@@ -242,10 +345,22 @@ mod tests {
                 resources: Some(telemetry.resources()),
                 frame_timing: Some(frames.summary()),
                 index_size_bytes: Some(20_000),
+                sidecar_lookup: Some(SearchLookupTelemetry {
+                    prefix_candidate_ids: 999,
+                    fuzzy_verified_candidates: 999,
+                    prefix_truncated_terms: 1,
+                    fuzzy_term_truncated_keys: 1,
+                    fuzzy_key_truncated_terms: 1,
+                    fuzzy_candidate_truncated_terms: 1,
+                    ..SearchLookupTelemetry::default()
+                }),
             },
             RegressionGateOptions {
                 max_peak_memory_bytes: 512,
                 max_index_bytes_per_record: 128,
+                max_sidecar_prefix_candidate_ids: 128,
+                max_sidecar_fuzzy_verified_candidates: 128,
+                fail_on_sidecar_truncation: true,
                 fail_on_frame_stalls: true,
             },
         );
@@ -270,6 +385,54 @@ mod tests {
                 RegressionGateViolation::FrameStallDetected { .. }
             )
         }));
+        assert!(gate.violations.iter().any(|violation| {
+            matches!(
+                violation,
+                RegressionGateViolation::SidecarPrefixCandidatesExceeded { .. }
+            )
+        }));
+        assert!(gate.violations.iter().any(|violation| {
+            matches!(
+                violation,
+                RegressionGateViolation::SidecarFuzzyCandidatesExceeded { .. }
+            )
+        }));
+        assert!(gate.violations.iter().any(|violation| {
+            matches!(
+                violation,
+                RegressionGateViolation::SidecarLookupTruncated { .. }
+            )
+        }));
+    }
+
+    #[test]
+    fn fails_on_sidecar_lookup_truncation_without_other_drift() {
+        let report = macrobench_report(Vec::new(), 100);
+        let gate = evaluate_regression_gate(
+            &RegressionInputs {
+                macrobench: &report,
+                resources: None,
+                frame_timing: None,
+                index_size_bytes: None,
+                sidecar_lookup: Some(SearchLookupTelemetry {
+                    prefix_candidate_ids: 128,
+                    fuzzy_verified_candidates: 64,
+                    prefix_truncated_terms: 1,
+                    ..SearchLookupTelemetry::default()
+                }),
+            },
+            RegressionGateOptions::default(),
+        );
+
+        assert_eq!(
+            gate.violations,
+            vec![RegressionGateViolation::SidecarLookupTruncated {
+                prefix_terms: 1,
+                fuzzy_terms_with_truncated_keys: 0,
+                fuzzy_keys_with_truncated_terms: 0,
+                fuzzy_candidate_terms: 0,
+            }]
+        );
     }
 
     #[test]
@@ -280,12 +443,17 @@ mod tests {
             RegressionGateOptions {
                 max_peak_memory_bytes: u64::MAX,
                 max_index_bytes_per_record: u64::MAX,
+                max_sidecar_prefix_candidate_ids: usize::MAX,
+                max_sidecar_fuzzy_verified_candidates: usize::MAX,
+                fail_on_sidecar_truncation: false,
                 fail_on_frame_stalls: true,
             },
         )
         .unwrap();
 
         assert!(run.index_size_bytes > 0);
+        assert!(run.sidecar_lookup.prefix_terms > 0);
+        assert!(run.sidecar_lookup.prefix_candidate_ids > 0);
         assert!(run
             .macrobench
             .fixture_root
