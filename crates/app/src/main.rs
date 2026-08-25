@@ -9,7 +9,8 @@ use gfm_fs::{
     PackageTraversalReport, ScanOptions,
 };
 use gfm_index::{
-    BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, Indexer, SearchStreamStage,
+    BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, IndexVolumeState, Indexer,
+    SearchStreamStage,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -420,6 +421,20 @@ fn run() -> Result<()> {
                 snapshot.records.len(),
                 snapshot.inaccessible.len()
             );
+        }
+        Some("index-state") => {
+            let root = required_path(args.next(), "index-state requires a root path")?;
+            let records = required_path(args.next(), "index-state requires a records path")?;
+            let state = required_path(args.next(), "index-state requires a state path")?;
+            let state = Indexer::default().build_persistent(root, records, state)?;
+            println!("{}", state.as_tsv());
+        }
+        Some("index-state-inspect") => {
+            let state = required_path(
+                args.next(),
+                "index-state-inspect requires an index state path",
+            )?;
+            println!("{}", IndexVolumeState::read(state)?.as_tsv());
         }
         Some("index-content") => {
             let root = required_path(args.next(), "index-content requires a root path")?;
@@ -1555,6 +1570,8 @@ fn print_usage() {
   gfm finder-metadata <path>
   gfm list [path]
   gfm index <root> <output.gfmidx>
+  gfm index-state <root> <records.gfmidx> <state.gfmstate>
+  gfm index-state-inspect <state.gfmstate>
   gfm index-content <root> <records.gfmidx> <content.gfmcontent>
   gfm index-content-segment <root> <output.gfmseg>
   gfm compact-content <output.gfmcontent> <segments.gfmseg...>

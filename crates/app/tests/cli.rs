@@ -40,6 +40,89 @@ fn indexes_and_searches_real_files_from_binary() {
 }
 
 #[test]
+fn persists_volume_index_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-index-state-root");
+    let index = unique_temp_path("gfm-cli-index-state-records", "gfmidx");
+    let state = unique_temp_path("gfm-cli-index-state", "gfmstate");
+    fs::create_dir_all(root.join("Projects")).unwrap();
+    fs::write(root.join("Projects").join("StatefulSearch.md"), "alpha").unwrap();
+
+    let first = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            root.to_str().unwrap(),
+            index.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_stdout = String::from_utf8(first.stdout).unwrap();
+    assert!(first_stdout.starts_with("index-state\t"), "{first_stdout}");
+    assert!(first_stdout.contains("\tschema=1\t"), "{first_stdout}");
+    assert!(first_stdout.contains("\tscan-epoch=1\t"), "{first_stdout}");
+    assert!(
+        first_stdout.contains("\trecord-count=3\t"),
+        "{first_stdout}"
+    );
+
+    let second = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            root.to_str().unwrap(),
+            index.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_stdout = String::from_utf8(second.stdout).unwrap();
+    assert!(
+        second_stdout.contains("\tscan-epoch=2\t"),
+        "{second_stdout}"
+    );
+
+    let inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index-state-inspect", state.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        inspect.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+    let inspect_stdout = String::from_utf8(inspect.stdout).unwrap();
+    assert_eq!(inspect_stdout, second_stdout);
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-index", index.to_str().unwrap(), "stateful"])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+    let search_stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(
+        search_stdout.contains("StatefulSearch.md"),
+        "{search_stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(index).unwrap();
+    fs::remove_file(state).unwrap();
+}
+
+#[test]
 fn searches_with_structured_filters_from_binary() {
     let root = unique_temp_dir("gfm-cli-filter-root");
     fs::create_dir_all(root.join("Desktop").join("Client Work")).unwrap();

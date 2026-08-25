@@ -323,6 +323,52 @@ fn content_index_job_spec_round_trips() {
     fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn persistent_index_state_tracks_volume_mount_and_epoch() {
+    let root = unique_temp_dir("gfm-index-state-root");
+    let records = unique_temp_path("gfm-index-state-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-index-state", "gfmstate");
+    fs::write(root.join("Needle.md"), "state").unwrap();
+
+    let indexer = Indexer::default();
+    let first = indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    let second = indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    let reloaded = IndexVolumeState::read(&state_path).unwrap();
+    let snapshot = indexer.load(&records).unwrap();
+
+    assert_eq!(first.schema_version, INDEX_STATE_SCHEMA_VERSION);
+    assert_eq!(first.scan_epoch, 1);
+    assert_eq!(second.scan_epoch, 2);
+    assert_eq!(second.volume_id, first.volume_id);
+    assert_eq!(second.mount_id, first.mount_id);
+    assert_eq!(reloaded, second);
+    assert_eq!(snapshot.search("needle", 5).len(), 1);
+    assert!(second.as_tsv().starts_with("index-state\t"));
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+}
+
+#[test]
+fn index_state_rejects_unsupported_schema_versions() {
+    let path = unique_temp_path("gfm-index-state-bad", "gfmstate");
+    fs::write(
+        &path,
+        "gfm-index-state-v1\nschema_version\t999\nroot\t/tmp/root\nrecords_path\t/tmp/index.gfmidx\nvolume_id\t1\nmount_id\tdev:1:root:/tmp/root\nscan_epoch\t1\nrecord_count\t1\ninaccessible_count\t0\n",
+    )
+    .unwrap();
+
+    let error = IndexVolumeState::read(&path).unwrap_err();
+
+    assert!(format!("{error}").contains("unsupported index state schema version 999"));
+    fs::remove_file(path).unwrap();
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let path = unique_temp_path(prefix, "");
     fs::create_dir_all(&path).unwrap();

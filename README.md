@@ -278,6 +278,8 @@ Build and query record indexes:
 
 ```sh
 cargo run -p gfm -- index . /tmp/gfm.gfmidx
+cargo run -p gfm -- index-state . /tmp/gfm.gfmidx /tmp/gfm.gfmstate
+cargo run -p gfm -- index-state-inspect /tmp/gfm.gfmstate
 cargo run -p gfm -- search-index /tmp/gfm.gfmidx PLAN
 ```
 

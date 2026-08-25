@@ -15,6 +15,10 @@ use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+mod state;
+
+pub use state::{IndexVolumeState, INDEX_STATE_SCHEMA_VERSION};
+
 #[derive(Debug, Clone)]
 pub struct IndexSnapshot {
     pub root: PathBuf,
@@ -81,6 +85,22 @@ impl IndexSnapshot {
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         write_records(path, &self.records)
+    }
+
+    pub fn volume_state(
+        &self,
+        records_path: impl Into<PathBuf>,
+        previous: Option<&IndexVolumeState>,
+    ) -> Result<IndexVolumeState> {
+        IndexVolumeState::from_page(
+            &DirectoryPage {
+                root: self.root.clone(),
+                entries: self.records.clone(),
+                inaccessible: self.inaccessible.clone(),
+            },
+            records_path,
+            previous,
+        )
     }
 
     pub fn save_with_content(
@@ -477,6 +497,25 @@ impl Indexer {
 
     pub fn build(&self, root: impl AsRef<Path>) -> Result<IndexSnapshot> {
         scan_tree(root, self.options.clone()).map(IndexSnapshot::from_page)
+    }
+
+    pub fn build_persistent(
+        &self,
+        root: impl AsRef<Path>,
+        records_path: impl AsRef<Path>,
+        state_path: impl AsRef<Path>,
+    ) -> Result<IndexVolumeState> {
+        let records_path = records_path.as_ref();
+        let state_path = state_path.as_ref();
+        let previous = state_path
+            .exists()
+            .then(|| IndexVolumeState::read(state_path))
+            .transpose()?;
+        let snapshot = self.build(root)?;
+        snapshot.save(records_path)?;
+        let state = snapshot.volume_state(records_path.to_path_buf(), previous.as_ref())?;
+        state.write(state_path)?;
+        Ok(state)
     }
 
     pub fn load(&self, path: impl AsRef<Path>) -> Result<IndexSnapshot> {

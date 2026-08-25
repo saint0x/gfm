@@ -53,6 +53,23 @@
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-state",
+        ".",
+        "/tmp/gfm-fozzy-host-state.gfmidx",
+        "/tmp/gfm-fozzy-host.gfmstate"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["index-state-inspect", "/tmp/gfm-fozzy-host.gfmstate"],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["index-content-segment", ".", "/tmp/gfm-fozzy-host.gfmseg"],
       "expect_exit": 0
     },
