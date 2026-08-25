@@ -26,10 +26,11 @@ use gfm_testkit::{
     run_macrobench, run_regression_gate, MacrobenchOptions, MacrobenchScale, MacrobenchStage,
     RegressionGateOptions,
 };
-use gfm_types::{FileId, FileKind, Result, SearchHit, VolumeId};
+use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
 use gfm_ui::{
-    AppLaunchSpec, MenuContract, SidebarContract, TitlebarContract, ToolbarContract,
-    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    AppLaunchSpec, ContextMenuContract, ContextMenuInput, ContextSurface, MenuContract,
+    SidebarContract, TitlebarContract, ToolbarContract, WindowLifecycleContract,
+    WindowSessionContract, WindowSessionStore,
 };
 use std::env;
 use std::path::PathBuf;
@@ -63,6 +64,43 @@ fn run() -> Result<()> {
         }
         Some("ui-menu-contract") => {
             println!("{}", MenuContract::finder_default().as_tsv());
+        }
+        Some("ui-context-menu-contract") => {
+            let surface = args
+                .next()
+                .unwrap_or_else(|| "file".to_string())
+                .parse::<ContextSurface>()
+                .map_err(GfmError::Format)?;
+            let selection_count = args
+                .next()
+                .map(|value| parse_u16(&value, "selection-count"))
+                .transpose()?
+                .unwrap_or(match surface {
+                    ContextSurface::Empty => 0,
+                    _ => 1,
+                });
+            let writable = args
+                .next()
+                .map(|value| parse_bool(&value, "writable"))
+                .transpose()?
+                .unwrap_or(true);
+            let ejectable = args
+                .next()
+                .map(|value| parse_bool(&value, "ejectable"))
+                .transpose()?
+                .unwrap_or(surface == ContextSurface::Volume);
+            let has_clipboard_items = args
+                .next()
+                .map(|value| parse_bool(&value, "has-clipboard-items"))
+                .transpose()?
+                .unwrap_or(true);
+
+            let input = ContextMenuInput::new(surface)
+                .with_selection_count(selection_count)
+                .with_writable(writable)
+                .with_ejectable(ejectable)
+                .with_clipboard_items(has_clipboard_items);
+            println!("{}", ContextMenuContract::finder_default(input).as_tsv());
         }
         Some("ui-titlebar-contract") => {
             let spec = match args.next() {
@@ -574,7 +612,21 @@ fn run() -> Result<()> {
 fn required_path(value: Option<String>, message: &str) -> Result<PathBuf> {
     value
         .map(PathBuf::from)
-        .ok_or_else(|| gfm_types::GfmError::Format(message.to_string()))
+        .ok_or_else(|| GfmError::Format(message.to_string()))
+}
+
+fn parse_u16(value: &str, name: &str) -> Result<u16> {
+    value
+        .parse()
+        .map_err(|_| GfmError::Format(format!("{name} must be an unsigned 16-bit integer")))
+}
+
+fn parse_bool(value: &str, name: &str) -> Result<bool> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(GfmError::Format(format!("{name} must be true or false"))),
+    }
 }
 
 fn config_store(value: Option<String>) -> Result<ConfigStore> {
@@ -832,6 +884,7 @@ fn print_usage() {
   gfm app [path]
   gfm ui-contract [path]
   gfm ui-menu-contract
+  gfm ui-context-menu-contract [file|folder|volume|sidebar|empty|selection|search-result|trash] [selection-count] [writable] [ejectable] [has-clipboard-items]
   gfm ui-titlebar-contract [path]
   gfm ui-session-contract [path] [window-session.tsv]
   gfm ui-toolbar-contract [path]

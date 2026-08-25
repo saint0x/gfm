@@ -9,12 +9,16 @@ use std::sync::{
     Arc,
 };
 
+mod context;
 mod menu;
 mod session;
 mod sidebar;
 mod titlebar;
 mod toolbar;
 
+pub use context::{
+    ContextItemKind, ContextMenuContract, ContextMenuInput, ContextMenuItemSpec, ContextSurface,
+};
 pub use menu::{MenuCommandSpec, MenuCommandState, MenuContract};
 pub use session::{
     ActivationPolicy, PlacementPolicy, RestorePolicy, TabPolicy, WindowPlacement,

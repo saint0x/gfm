@@ -100,6 +100,36 @@ fn reports_ui_menu_contract_from_binary() {
 }
 
 #[test]
+fn reports_ui_context_menu_contract_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-context-menu-contract",
+            "search-result",
+            "1",
+            "true",
+            "false",
+            "true",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("context-menu\tsurface=search-result\tselection=1\titems="));
+    assert!(stdout.contains("item\topen\tOpen\tgfm::Open\tcommand\tenabled=true"));
+    assert!(stdout.contains(
+        "item\tshow-original\tShow in Enclosing Folder\tgfm::EnclosingFolder\tcommand\tenabled=true"
+    ));
+    assert!(stdout.contains(
+        "item\tmove-to-trash\tMove to Trash\tgfm::MoveToTrash\tcommand\tenabled=true\tdestructive=true"
+    ));
+}
+
+#[test]
 fn reports_ui_titlebar_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-titlebar-contract", "/tmp/gfm"])
