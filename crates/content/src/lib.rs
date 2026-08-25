@@ -1,6 +1,7 @@
 mod archive;
 mod ooxml;
 mod pdf;
+mod quarantine;
 mod rich;
 mod structured;
 
@@ -8,12 +9,15 @@ use archive::{extract_archive_metadata, ArchiveExtractStatus, ArchiveKind};
 use gfm_types::{FileKind, FileRecord, GfmError, Result, SearchSnippet, SnippetHighlight};
 use ooxml::{extract_ooxml, OoxmlExtractStatus, OoxmlKind};
 use pdf::{extract_pdf, PdfExtractStatus};
+pub use quarantine::{ExtractionQuarantine, QuarantineDecision, QuarantineEntry};
 use rich::{extract_rich, RichKind};
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use structured::{extract_structured, StructuredExtractStatus, StructuredKind};
+
+pub const EXTRACTOR_VERSION: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub struct ExtractionPolicy {
@@ -21,6 +25,7 @@ pub struct ExtractionPolicy {
     pub max_pdf_bytes: u64,
     pub max_pdf_pages: usize,
     pub max_pdf_objects: usize,
+    pub max_pdf_stream_bytes: usize,
     pub max_office_bytes: u64,
     pub max_office_entries: usize,
     pub max_office_entry_bytes: u64,
@@ -39,6 +44,7 @@ impl Default for ExtractionPolicy {
             max_pdf_bytes: 16 * 1024 * 1024,
             max_pdf_pages: 256,
             max_pdf_objects: 20_000,
+            max_pdf_stream_bytes: 8 * 1024 * 1024,
             max_office_bytes: 32 * 1024 * 1024,
             max_office_entries: 10_000,
             max_office_entry_bytes: 8 * 1024 * 1024,
@@ -56,6 +62,119 @@ impl Default for ExtractionPolicy {
 pub struct ContentDocument {
     pub bytes_read: usize,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtractionFormat {
+    Text,
+    Pdf,
+    Office,
+    Archive,
+    Rich,
+    Structured,
+    Unsupported,
+}
+
+impl ExtractionFormat {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Pdf => "pdf",
+            Self::Office => "office",
+            Self::Archive => "archive",
+            Self::Rich => "rich",
+            Self::Structured => "structured",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtractionStatus {
+    Extracted,
+    Skipped(&'static str),
+    Quarantined(&'static str),
+}
+
+impl ExtractionStatus {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Extracted => "extracted",
+            Self::Skipped(_) => "skipped",
+            Self::Quarantined(_) => "quarantined",
+        }
+    }
+
+    pub const fn reason(&self) -> &'static str {
+        match self {
+            Self::Extracted => "ok",
+            Self::Skipped(reason) | Self::Quarantined(reason) => reason,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractionFingerprint {
+    pub extractor_version: u32,
+    pub len: u64,
+    pub modified_ns: Option<u128>,
+}
+
+impl ExtractionFingerprint {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        let modified_ns = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos());
+        Self {
+            extractor_version: EXTRACTOR_VERSION,
+            len: metadata.len(),
+            modified_ns,
+        }
+    }
+
+    pub fn cache_key(&self, path: &Path) -> String {
+        format!(
+            "v{}:{}:{}:{}",
+            self.extractor_version,
+            path.display(),
+            self.len,
+            self.modified_ns
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string())
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractionReport {
+    pub path: PathBuf,
+    pub format: ExtractionFormat,
+    pub status: ExtractionStatus,
+    pub fingerprint: ExtractionFingerprint,
+    pub document: Option<ContentDocument>,
+}
+
+impl ExtractionReport {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "extract\tpath={}\tformat={}\tstatus={}\treason={}\tversion={}\tbytes-read={}\ttext-bytes={}",
+            self.path.display(),
+            self.format.as_str(),
+            self.status.as_str(),
+            self.status.reason(),
+            self.fingerprint.extractor_version,
+            self.document
+                .as_ref()
+                .map(|document| document.bytes_read)
+                .unwrap_or(0),
+            self.document
+                .as_ref()
+                .map(|document| document.text.len())
+                .unwrap_or(0)
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -109,16 +228,26 @@ impl Extractor {
     }
 
     pub fn extract_path(&self, path: impl AsRef<Path>) -> Result<Option<ContentDocument>> {
+        Ok(self.extract_path_report(path)?.document)
+    }
+
+    pub fn extract_path_report(&self, path: impl AsRef<Path>) -> Result<ExtractionReport> {
         let path = path.as_ref();
         if !self.accepts_path(path) {
-            return Ok(None);
+            return Ok(report_without_metadata(
+                path,
+                ExtractionFormat::Unsupported,
+                ExtractionStatus::Skipped("unsupported-extension"),
+            ));
         }
         let metadata = std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?;
+        let fingerprint = ExtractionFingerprint::from_metadata(&metadata);
         let office = office_kind(path);
         let rich = rich_kind(path);
         let archive = archive_kind(path);
         let structured = structured_kind(path);
         let is_pdf = path_is_pdf(path);
+        let format = extraction_format(is_pdf, office, archive, rich, structured);
         let max_bytes = if is_pdf {
             self.policy.max_pdf_bytes
         } else if office.is_some() {
@@ -129,7 +258,13 @@ impl Extractor {
             self.policy.max_bytes
         };
         if metadata.len() > max_bytes {
-            return Ok(None);
+            return Ok(ExtractionReport {
+                path: path.to_path_buf(),
+                format,
+                status: ExtractionStatus::Skipped("too-large"),
+                fingerprint,
+                document: None,
+            });
         }
 
         let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
@@ -140,65 +275,91 @@ impl Extractor {
 
         if is_pdf {
             let (status, document) = extract_pdf(&bytes, &self.policy);
-            return match status {
-                PdfExtractStatus::Extracted
-                | PdfExtractStatus::Unsupported
-                | PdfExtractStatus::TooLarge
-                | PdfExtractStatus::TooManyPages
-                | PdfExtractStatus::TooManyObjects => Ok(document),
-            };
+            return Ok(ExtractionReport {
+                path: path.to_path_buf(),
+                format,
+                status: pdf_report_status(status),
+                fingerprint,
+                document,
+            });
         }
 
         if let Some(kind) = office {
             let (status, document) = extract_ooxml(&bytes, kind, &self.policy);
-            return match status {
-                OoxmlExtractStatus::Extracted
-                | OoxmlExtractStatus::Unsupported
-                | OoxmlExtractStatus::TooLarge
-                | OoxmlExtractStatus::TooManyEntries
-                | OoxmlExtractStatus::EntryTooLarge
-                | OoxmlExtractStatus::Corrupt => Ok(document),
-            };
+            return Ok(ExtractionReport {
+                path: path.to_path_buf(),
+                format,
+                status: ooxml_report_status(status),
+                fingerprint,
+                document,
+            });
         }
 
         if let Some(kind) = archive {
             let (status, document) = extract_archive_metadata(&bytes, kind, &self.policy);
-            return match status {
-                ArchiveExtractStatus::Extracted
-                | ArchiveExtractStatus::Unsupported
-                | ArchiveExtractStatus::TooLarge
-                | ArchiveExtractStatus::TooManyEntries
-                | ArchiveExtractStatus::Corrupt => Ok(document),
-            };
+            return Ok(ExtractionReport {
+                path: path.to_path_buf(),
+                format,
+                status: archive_report_status(status),
+                fingerprint,
+                document,
+            });
         }
 
         if let Some(kind) = rich {
-            return Ok(extract_rich(&bytes, kind));
+            let document = extract_rich(&bytes, kind);
+            return Ok(ExtractionReport {
+                path: path.to_path_buf(),
+                format,
+                status: document_status(document.as_ref()),
+                fingerprint,
+                document,
+            });
         }
 
         if let Some(kind) = structured {
             let (status, document) = extract_structured(&bytes, kind, &self.policy);
-            return match status {
-                StructuredExtractStatus::Extracted
-                | StructuredExtractStatus::Unsupported
-                | StructuredExtractStatus::TooLarge
-                | StructuredExtractStatus::Corrupt => Ok(document),
-            };
+            return Ok(ExtractionReport {
+                path: path.to_path_buf(),
+                format,
+                status: structured_report_status(status),
+                fingerprint,
+                document,
+            });
         }
 
         if is_binary(&bytes) {
-            return Ok(None);
+            return Ok(ExtractionReport {
+                path: path.to_path_buf(),
+                format,
+                status: ExtractionStatus::Skipped("binary"),
+                fingerprint,
+                document: None,
+            });
         }
 
         let Ok(text) = String::from_utf8(bytes) else {
-            return Ok(None);
+            return Ok(ExtractionReport {
+                path: path.to_path_buf(),
+                format,
+                status: ExtractionStatus::Skipped("non-utf8"),
+                fingerprint,
+                document: None,
+            });
         };
         let text = normalize_text(&text);
 
-        Ok(Some(ContentDocument {
+        let document = ContentDocument {
             bytes_read: text.len(),
             text,
-        }))
+        };
+        Ok(ExtractionReport {
+            path: path.to_path_buf(),
+            format,
+            status: ExtractionStatus::Extracted,
+            fingerprint,
+            document: Some(document),
+        })
     }
 
     fn accepts_path(&self, path: &Path) -> bool {
@@ -212,6 +373,96 @@ impl Extractor {
                 .and_then(|extension| extension.to_str())
                 .map(|extension| self.policy.extensions.contains(&extension.to_lowercase()))
                 .unwrap_or(false)
+    }
+}
+
+fn extraction_format(
+    is_pdf: bool,
+    office: Option<OoxmlKind>,
+    archive: Option<ArchiveKind>,
+    rich: Option<RichKind>,
+    structured: Option<StructuredKind>,
+) -> ExtractionFormat {
+    if is_pdf {
+        ExtractionFormat::Pdf
+    } else if office.is_some() {
+        ExtractionFormat::Office
+    } else if archive.is_some() {
+        ExtractionFormat::Archive
+    } else if rich.is_some() {
+        ExtractionFormat::Rich
+    } else if structured.is_some() {
+        ExtractionFormat::Structured
+    } else {
+        ExtractionFormat::Text
+    }
+}
+
+fn pdf_report_status(status: PdfExtractStatus) -> ExtractionStatus {
+    match status {
+        PdfExtractStatus::Extracted => ExtractionStatus::Extracted,
+        PdfExtractStatus::Unsupported => ExtractionStatus::Skipped("unsupported-pdf"),
+        PdfExtractStatus::TooLarge => ExtractionStatus::Skipped("too-large"),
+        PdfExtractStatus::TooManyPages => ExtractionStatus::Skipped("too-many-pages"),
+        PdfExtractStatus::TooManyObjects => ExtractionStatus::Skipped("too-many-objects"),
+        PdfExtractStatus::Encrypted => ExtractionStatus::Quarantined("encrypted-pdf"),
+        PdfExtractStatus::Corrupt => ExtractionStatus::Quarantined("corrupt-pdf"),
+    }
+}
+
+fn ooxml_report_status(status: OoxmlExtractStatus) -> ExtractionStatus {
+    match status {
+        OoxmlExtractStatus::Extracted => ExtractionStatus::Extracted,
+        OoxmlExtractStatus::Unsupported => ExtractionStatus::Skipped("unsupported-office"),
+        OoxmlExtractStatus::TooLarge => ExtractionStatus::Skipped("too-large"),
+        OoxmlExtractStatus::TooManyEntries => ExtractionStatus::Skipped("too-many-entries"),
+        OoxmlExtractStatus::EntryTooLarge => ExtractionStatus::Skipped("entry-too-large"),
+        OoxmlExtractStatus::Corrupt => ExtractionStatus::Quarantined("corrupt-office"),
+    }
+}
+
+fn archive_report_status(status: ArchiveExtractStatus) -> ExtractionStatus {
+    match status {
+        ArchiveExtractStatus::Extracted => ExtractionStatus::Extracted,
+        ArchiveExtractStatus::Unsupported => ExtractionStatus::Skipped("unsupported-archive"),
+        ArchiveExtractStatus::TooLarge => ExtractionStatus::Skipped("too-large"),
+        ArchiveExtractStatus::TooManyEntries => ExtractionStatus::Skipped("too-many-entries"),
+        ArchiveExtractStatus::Corrupt => ExtractionStatus::Quarantined("corrupt-archive"),
+    }
+}
+
+fn structured_report_status(status: StructuredExtractStatus) -> ExtractionStatus {
+    match status {
+        StructuredExtractStatus::Extracted => ExtractionStatus::Extracted,
+        StructuredExtractStatus::Unsupported => ExtractionStatus::Skipped("unsupported-structured"),
+        StructuredExtractStatus::TooLarge => ExtractionStatus::Skipped("too-large"),
+        StructuredExtractStatus::Corrupt => ExtractionStatus::Quarantined("corrupt-structured"),
+    }
+}
+
+fn document_status(document: Option<&ContentDocument>) -> ExtractionStatus {
+    if document.is_some() {
+        ExtractionStatus::Extracted
+    } else {
+        ExtractionStatus::Skipped("no-text")
+    }
+}
+
+fn report_without_metadata(
+    path: &Path,
+    format: ExtractionFormat,
+    status: ExtractionStatus,
+) -> ExtractionReport {
+    ExtractionReport {
+        path: path.to_path_buf(),
+        format,
+        status,
+        fingerprint: ExtractionFingerprint {
+            extractor_version: EXTRACTOR_VERSION,
+            len: 0,
+            modified_ns: None,
+        },
+        document: None,
     }
 }
 
@@ -580,6 +831,66 @@ mod tests {
         let doc = extractor.extract_path(&path).unwrap();
 
         assert!(doc.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reports_versioned_pdf_extraction_fingerprints() {
+        let root = unique_temp_dir("gfm-content-pdf-report");
+        let path = root.join("brief.pdf");
+        fs::write(&path, minimal_pdf("versioned pdfneedle")).unwrap();
+
+        let report = Extractor::default().extract_path_report(&path).unwrap();
+
+        assert_eq!(report.format, ExtractionFormat::Pdf);
+        assert_eq!(report.status, ExtractionStatus::Extracted);
+        assert_eq!(report.fingerprint.extractor_version, EXTRACTOR_VERSION);
+        assert!(report
+            .fingerprint
+            .cache_key(&path)
+            .starts_with(&format!("v{EXTRACTOR_VERSION}:")));
+        assert!(report.as_tsv().contains("\tstatus=extracted\t"));
+        assert!(report
+            .document
+            .unwrap()
+            .text
+            .contains("versioned pdfneedle"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quarantines_repeated_corrupt_pdf_failures_by_content_fingerprint() {
+        let root = unique_temp_dir("gfm-content-pdf-quarantine");
+        let path = root.join("corrupt.pdf");
+        fs::write(
+            &path,
+            b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Contents 2 0 R >>
+endobj
+2 0 obj
+<< /Length 12 /Filter /FlateDecode >>
+stream
+not-valid-zlib
+endstream
+endobj",
+        )
+        .unwrap();
+        let extractor = Extractor::default();
+        let mut quarantine = ExtractionQuarantine::new(2);
+
+        let first = extractor.extract_path_report(&path).unwrap();
+        assert_eq!(first.status, ExtractionStatus::Quarantined("corrupt-pdf"));
+        assert_eq!(quarantine.record_report(&first), QuarantineDecision::Allow);
+        let second = extractor.extract_path_report(&path).unwrap();
+        let decision = quarantine.record_report(&second);
+
+        assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
+        assert!(matches!(
+            quarantine.before_extract(&path, &second.fingerprint),
+            QuarantineDecision::Quarantined(_)
+        ));
+        assert!(decision.as_tsv().contains("\treason=corrupt-pdf\t"));
         fs::remove_dir_all(root).unwrap();
     }
 

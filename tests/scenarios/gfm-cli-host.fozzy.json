@@ -529,6 +529,12 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["extract-report", "tmp/gfm-fozzy-preview.pdf"],
+      "expect_exit": 0
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-thumbnail.png",
       "data": "png"

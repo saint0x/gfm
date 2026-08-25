@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+flate2 = "1.1"
 gfm-types = { path = "../types" }
 plist = "1.7"
 zip = { version = "4.3.0", default-features = false, features = ["deflate"] }

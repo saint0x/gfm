@@ -1,4 +1,6 @@
 use crate::{normalize_text, ContentDocument, ExtractionPolicy};
+use flate2::read::ZlibDecoder;
+use std::io::Read;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PdfExtractStatus {
@@ -7,6 +9,8 @@ pub(crate) enum PdfExtractStatus {
     TooLarge,
     TooManyPages,
     TooManyObjects,
+    Encrypted,
+    Corrupt,
 }
 
 pub(crate) fn extract_pdf(
@@ -18,6 +22,9 @@ pub(crate) fn extract_pdf(
     }
     if !bytes.starts_with(b"%PDF-") {
         return (PdfExtractStatus::Unsupported, None);
+    }
+    if has_encryption_dictionary(bytes) {
+        return (PdfExtractStatus::Encrypted, None);
     }
 
     let objects = count_marker(bytes, b" obj");
@@ -32,14 +39,21 @@ pub(crate) fn extract_pdf(
 
     let mut text = String::new();
     for stream in streams(bytes) {
-        if stream_has_filter(stream.header, b"FlateDecode")
-            || stream_has_filter(stream.header, b"LZWDecode")
+        if stream_has_filter(stream.header, b"LZWDecode")
             || stream_has_filter(stream.header, b"ASCII85Decode")
             || stream_has_filter(stream.header, b"DCTDecode")
         {
             continue;
         }
-        extract_text_stream(stream.body, &mut text);
+        if stream_has_filter(stream.header, b"FlateDecode") {
+            match inflate_stream(stream.body, policy.max_pdf_stream_bytes) {
+                Ok(decoded) => extract_text_stream(&decoded, &mut text),
+                Err(InflateError::TooLarge) => return (PdfExtractStatus::TooLarge, None),
+                Err(InflateError::Corrupt) => return (PdfExtractStatus::Corrupt, None),
+            }
+        } else {
+            extract_text_stream(stream.body, &mut text);
+        }
     }
 
     let text = normalize_text(text.trim());
@@ -54,6 +68,27 @@ pub(crate) fn extract_pdf(
             text,
         }),
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InflateError {
+    TooLarge,
+    Corrupt,
+}
+
+fn inflate_stream(bytes: &[u8], max_bytes: usize) -> std::result::Result<Vec<u8>, InflateError> {
+    let limit = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+    let mut decoder = ZlibDecoder::new(bytes);
+    let mut decoded = Vec::new();
+    let bytes_read = decoder
+        .by_ref()
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut decoded)
+        .map_err(|_| InflateError::Corrupt)?;
+    if bytes_read > max_bytes {
+        return Err(InflateError::TooLarge);
+    }
+    Ok(decoded)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -267,6 +302,12 @@ fn stream_has_filter(bytes: &[u8], filter: &[u8]) -> bool {
     bytes.windows(filter.len()).any(|window| window == filter)
 }
 
+fn has_encryption_dictionary(bytes: &[u8]) -> bool {
+    bytes
+        .windows(b"/Encrypt".len())
+        .any(|window| window == b"/Encrypt")
+}
+
 fn find_from(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
     if needle.is_empty() || start >= haystack.len() {
         return None;
@@ -333,6 +374,75 @@ endobj";
         let (status, doc) = extract_pdf(&pdf, &policy);
 
         assert_eq!(status, PdfExtractStatus::TooManyPages);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn extracts_flate_decoded_pdf_text_streams() {
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(
+            &mut encoder,
+            b"BT /F1 12 Tf 72 720 Td (compressed pdfneedle) Tj ET",
+        )
+        .unwrap();
+        let compressed = encoder.finish().unwrap();
+        let mut pdf = b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Contents 2 0 R >>
+endobj
+2 0 obj
+<< /Length "
+            .to_vec();
+        pdf.extend(compressed.len().to_string().as_bytes());
+        pdf.extend(
+            b" /Filter /FlateDecode >>
+stream
+",
+        );
+        pdf.extend(compressed);
+        pdf.extend(
+            b"
+endstream
+endobj
+%%EOF",
+        );
+
+        let (status, doc) = extract_pdf(&pdf, &ExtractionPolicy::default());
+
+        assert_eq!(status, PdfExtractStatus::Extracted);
+        assert_eq!(doc.unwrap().text, "compressed pdfneedle");
+    }
+
+    #[test]
+    fn reports_encrypted_pdfs_without_extracting() {
+        let pdf = b"%PDF-1.7
+1 0 obj
+<< /Encrypt 2 0 R >>
+endobj";
+
+        let (status, doc) = extract_pdf(pdf, &ExtractionPolicy::default());
+
+        assert_eq!(status, PdfExtractStatus::Encrypted);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn reports_corrupt_flate_streams() {
+        let pdf = b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Contents 2 0 R >>
+endobj
+2 0 obj
+<< /Length 12 /Filter /FlateDecode >>
+stream
+not-valid-zlib
+endstream
+endobj";
+
+        let (status, doc) = extract_pdf(pdf, &ExtractionPolicy::default());
+
+        assert_eq!(status, PdfExtractStatus::Corrupt);
         assert!(doc.is_none());
     }
 }

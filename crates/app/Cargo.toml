@@ -21,6 +21,7 @@ gfm-types = { path = "../types" }
 gfm-ui = { path = "../ui" }
 
 [dev-dependencies]
+flate2 = "1.1"
 zip = { version = "4.3.0", default-features = false, features = ["deflate"] }
 
 [lints]

@@ -973,6 +973,34 @@ fn search_content_skips_disguised_binary_from_binary() {
 }
 
 #[test]
+fn reports_compressed_pdf_extraction_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-report-root");
+    let path = root.join("Compressed.pdf");
+    fs::write(&path, compressed_pdf("compressed report needle")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["extract-report", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("extract\tpath="), "{stdout}");
+    assert!(
+        stdout.contains("\tformat=pdf\tstatus=extracted\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tversion=2\t"), "{stdout}");
+    assert!(stdout.contains("quarantine\tallow"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_persisted_text_content_from_binary() {
     let root = unique_temp_dir("gfm-cli-durable-content-root");
     let records = unique_temp_path("gfm-cli-durable-records", "gfmidx");
@@ -1453,6 +1481,34 @@ endobj
         text
     )
     .into_bytes()
+}
+
+fn compressed_pdf(text: &str) -> Vec<u8> {
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    let stream = format!("BT /F1 12 Tf 72 720 Td ({text}) Tj ET");
+    encoder.write_all(stream.as_bytes()).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let mut pdf = b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Contents 2 0 R >>
+endobj
+2 0 obj
+<< /Length "
+        .to_vec();
+    pdf.extend(compressed.len().to_string().as_bytes());
+    pdf.extend(
+        b" /Filter /FlateDecode >>
+stream
+",
+    );
+    pdf.extend(compressed);
+    pdf.extend(
+        b"
+endstream
+endobj
+%%EOF",
+    );
+    pdf
 }
 
 fn ooxml_package(parts: &[(&str, &str)]) -> Vec<u8> {

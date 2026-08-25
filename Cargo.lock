@@ -1639,6 +1639,7 @@ dependencies = [
 name = "gfm"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "gfm-config",
  "gfm-content",
  "gfm-diagnostics",
@@ -1669,6 +1670,7 @@ dependencies = [
 name = "gfm-content"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "gfm-types",
  "plist",
  "zip",
