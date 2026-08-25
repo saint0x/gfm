@@ -1,5 +1,6 @@
 mod columns;
 mod content;
+mod contentrecover;
 mod contentset;
 mod dictionary;
 mod durable;
@@ -15,6 +16,12 @@ pub use content::{
     read_content_postings, read_content_segment, summarize_content_segment, write_content_postings,
     write_content_segment, ContentArchive, ContentMergeOutcome, ContentMergePlan,
     ContentMergePolicy, ContentMergeTier, ContentSegmentSummary, MmapContentArchive,
+};
+pub use contentrecover::{
+    content_manifest_recovery_action_name, content_manifest_recovery_reason_name,
+    plan_content_manifest_recovery, recover_content_manifest, ContentArchiveHealth,
+    ContentManifestRecovery, ContentManifestRecoveryAction, ContentManifestRecoveryPlan,
+    ContentManifestRecoveryReason,
 };
 pub use contentset::MmapContentSet;
 pub use contentset::{

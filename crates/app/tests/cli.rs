@@ -2091,6 +2091,88 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
 }
 
 #[test]
+fn recovers_corrupt_content_manifest_from_binary() {
+    let manifest = unique_temp_path("gfm-cli-content-manifest-recovery", "gfmmanifest");
+    let content = unique_temp_path("gfm-cli-content-manifest-recovery", "gfmcontent");
+    let quarantine = unique_temp_dir("gfm-cli-content-manifest-recovery-quarantine");
+    write_content_postings(
+        &content,
+        &[ContentPosting {
+            term: "recoverneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 7)],
+            positions: Vec::new(),
+        }],
+    )
+    .unwrap();
+    fs::write(&manifest, "not-a-content-manifest").unwrap();
+
+    let plan_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-recovery-plan",
+            manifest.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        plan_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan_output.stderr)
+    );
+    let plan_stdout = String::from_utf8(plan_output.stdout).unwrap();
+    assert!(
+        plan_stdout.contains("action=quarantine-manifest-and-write-discovered")
+            && plan_stdout.contains("reason=unreadable-manifest")
+            && plan_stdout.contains("valid=1"),
+        "{plan_stdout}"
+    );
+
+    let recover_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-recover",
+            manifest.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        recover_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recover_output.stderr)
+    );
+    let recover_stdout = String::from_utf8(recover_output.stdout).unwrap();
+    assert!(
+        recover_stdout.contains("wrote-manifest=true") && recover_stdout.contains("action=ready"),
+        "{recover_stdout}"
+    );
+    assert!(quarantine.read_dir().unwrap().any(|entry| entry
+        .unwrap()
+        .path()
+        .extension()
+        .is_some()));
+
+    let inspect_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["content-manifest-inspect", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        inspect_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspect_output.stderr)
+    );
+    let inspect_stdout = String::from_utf8(inspect_output.stdout).unwrap();
+    assert!(
+        inspect_stdout.contains("content-manifest\tarchives=1"),
+        "{inspect_stdout}"
+    );
+
+    fs::remove_file(manifest).unwrap();
+    fs::remove_file(content).unwrap();
+    fs::remove_dir_all(quarantine).unwrap();
+}
+
+#[test]
 fn compacts_content_segments_from_binary() {
     let root = unique_temp_dir("gfm-cli-segment-content-root");
     let records = unique_temp_path("gfm-cli-segment-records", "gfmidx");

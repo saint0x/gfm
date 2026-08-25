@@ -449,6 +449,12 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - missing records trigger a full records-plus-state rebuild plan;
   - unreadable record archives are quarantined before rebuilding so corrupted bytes are preserved for diagnostics while startup can recover to a valid index;
   - diagnostics commands expose both dry-run recovery plans and executing recovery transcripts with before/after state.
+- Content manifest recovery:
+  - content manifests are classified as ready, missing, unreadable, missing-archive, unreadable-archive, or unrecoverable before startup or maintenance opens them;
+  - missing manifests can be rebuilt from caller-supplied discovered archives after each archive passes the same mmap checksum/open validation used by search;
+  - unreadable manifests are quarantined before being replaced by a discovered-archive manifest so corrupt bytes remain available for diagnostics;
+  - manifests with missing or corrupt archive entries are pruned only when at least one valid archive remains searchable;
+  - recovery commands expose dry-run plans, invalid archive details, quarantine paths, and before/after recovery transcripts.
 
 ### Query Pipeline
 

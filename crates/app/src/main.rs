@@ -38,10 +38,11 @@ use gfm_preview::{
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
 use gfm_store::{
-    dictionary_term_report_from_records, metadata_postings_from_records, write_dictionary,
-    write_metadata_postings, write_record_columns, ContentArchive, MetadataField,
-    MmapContentArchive, MmapContentSet, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive,
-    MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
+    dictionary_term_report_from_records, metadata_postings_from_records,
+    plan_content_manifest_recovery, recover_content_manifest, write_dictionary,
+    write_metadata_postings, write_record_columns, ContentArchive, ContentArchiveHealth,
+    MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary, MmapFuzzyArchive,
+    MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_store::{
     fuzzy_postings_from_records, prefix_postings_from_records, write_fuzzy_postings,
@@ -776,6 +777,44 @@ fn run() -> Result<()> {
                     path.display()
                 );
             }
+        }
+        Some("content-manifest-recovery-plan") => {
+            let manifest_path = required_path(
+                args.next(),
+                "content-manifest-recovery-plan requires a manifest path",
+            )?;
+            let discovered = args
+                .map(|spec| parse_content_manifest_archive_spec(&spec))
+                .collect::<Result<Vec<_>>>()?;
+            let plan = plan_content_manifest_recovery(&manifest_path, &discovered);
+            println!("{}", plan.as_tsv());
+            print_content_archive_health("invalid", &plan.invalid_archives);
+        }
+        Some("content-manifest-recover") => {
+            let manifest_path = required_path(
+                args.next(),
+                "content-manifest-recover requires a manifest path",
+            )?;
+            let quarantine = required_path(
+                args.next(),
+                "content-manifest-recover requires a quarantine directory",
+            )?;
+            let discovered = args
+                .map(|spec| parse_content_manifest_archive_spec(&spec))
+                .collect::<Result<Vec<_>>>()?;
+            let report = recover_content_manifest(&manifest_path, &discovered, &quarantine)?;
+            println!("{}", report.before.as_tsv());
+            println!(
+                "content-manifest-recovery\twrote-manifest={}\tquarantined-manifest={}",
+                report.wrote_manifest,
+                report
+                    .quarantined_manifest_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            );
+            println!("{}", report.after.as_tsv());
+            print_content_archive_health("invalid-before", &report.before.invalid_archives);
         }
         Some("content-manifest-promote") => {
             let manifest_path = required_path(
@@ -2987,6 +3026,18 @@ fn content_tier_name(tier: ContentMergeTier) -> &'static str {
     }
 }
 
+fn print_content_archive_health(label: &str, archives: &[ContentArchiveHealth]) {
+    for archive in archives {
+        println!(
+            "{}\t{}\t{}\t{}",
+            label,
+            content_tier_name(archive.entry.tier),
+            archive.resolved_path.display(),
+            archive.detail.as_deref().unwrap_or("-")
+        );
+    }
+}
+
 fn print_usage() {
     println!(
         "gfm commands:
@@ -3026,6 +3077,8 @@ fn print_usage() {
   gfm compact-content-tiered <output.gfmcontent> <segments.gfmseg...>
   gfm content-manifest-write <manifest.gfmmanifest> <hot|warm|cold:path...>
   gfm content-manifest-inspect <manifest.gfmmanifest>
+  gfm content-manifest-recovery-plan <manifest.gfmmanifest> [hot|warm|cold:path...]
+  gfm content-manifest-recover <manifest.gfmmanifest> <quarantine-dir> [hot|warm|cold:path...]
   gfm content-manifest-promote <manifest.gfmmanifest> <hot|warm|cold:path> [retired-archive...]
   gfm content-manifest-cleanup <manifest.gfmmanifest> <candidate-archive...>
   gfm content-cleanup-plan <manifest.gfmmanifest> <min-retired-archives> <min-retired-bytes> <max-cleanup-archives> <candidate-archive...>
