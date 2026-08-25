@@ -100,7 +100,7 @@ The index is compact and incremental:
 - indexed positive `name:`, `path:`, `ext:`, `tag:`, and `kind:` filter candidates for boolean `AND`/`OR` expressions, with final expression matching kept as the correctness authority
 - name substring n-gram candidates and delete-key fuzzy candidate indexes for infix and typo-tolerant matches without full-record scans; sub-trigram substring probes are cut off instead of expanding to all records, leaving exact and prefix indexes as the bounded short-query path
 - archive-backed prefix, substring, and fuzzy lookup with explicit candidate budgets, adaptive prefix cutoffs, lookup cache telemetry, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
-- default sidecar-backed search imports only bounded query-matching substring and content postings before ranking, with an explicit budget override path for operator probes
+- default sidecar-backed search imports only bounded query-matching metadata, substring, and content postings before ranking, with an explicit budget override path for operator probes
 - budgeted query-scoped content archive and archive-set loading that decodes bounded compressed ID and positional prefixes per term instead of hydrating broad postings before query-time ranking
 - cached score/name/path/id sort keys during bounded top-k ranking so deterministic ordering does not repeatedly allocate while results are merged
 - direct content-posting scoring for normal content-term queries without temporary ID-set materialization

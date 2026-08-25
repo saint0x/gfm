@@ -1,6 +1,7 @@
 use crate::durable;
 use crate::ids::{
-    read_blocked_file_id_block_from_slice, read_blocked_file_ids, write_blocked_file_ids,
+    read_blocked_file_id_block_from_slice, read_blocked_file_ids,
+    read_blocked_file_ids_limited_from_slice, write_blocked_file_ids,
 };
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
@@ -199,6 +200,57 @@ impl MmapMetadataArchive {
             .unwrap_or_default())
     }
 
+    pub fn ids_for_limit(
+        &self,
+        field: MetadataField,
+        term: &str,
+        limit: usize,
+    ) -> Result<(Vec<FileId>, bool)> {
+        let term = normalize(term);
+        if term.is_empty() || limit == 0 {
+            return Ok((Vec::new(), false));
+        }
+        let Some(entry) = self
+            .directory
+            .binary_search_by(|entry| {
+                (entry.field, entry.term.as_str()).cmp(&(field, term.as_str()))
+            })
+            .ok()
+            .map(|index| &self.directory[index])
+        else {
+            return Ok((Vec::new(), false));
+        };
+        let bytes = self.posting_bytes(entry)?;
+        let mut cursor = Cursor::new(bytes);
+        let (posting_field, posting_term) = read_metadata_posting_header(&mut cursor, &self.path)?;
+        if posting_field != field || posting_term != term {
+            return Err(metadata_format_error(
+                &self.path,
+                "metadata directory points at the wrong posting",
+            ));
+        }
+        let ids_start = usize::try_from(cursor.position())
+            .map_err(|_| metadata_format_error(&self.path, "metadata id offset overflow"))?;
+        let id_bytes = bytes
+            .get(ids_start..)
+            .ok_or_else(|| metadata_format_error(&self.path, "metadata id offset out of bounds"))?;
+        let mut ids = match self.version {
+            MetadataStoreVersion::V1 => {
+                read_file_ids_limited(Cursor::new(id_bytes), &self.path, limit.saturating_add(1))?
+            }
+            MetadataStoreVersion::V2 | MetadataStoreVersion::V3 => {
+                read_blocked_file_ids_limited_from_slice(
+                    id_bytes,
+                    limit.saturating_add(1),
+                    &self.path,
+                )?
+            }
+        };
+        let truncated = ids.len() > limit;
+        ids.truncate(limit);
+        Ok((ids, truncated))
+    }
+
     pub fn postings(&self) -> Result<Vec<MetadataPosting>> {
         self.directory
             .iter()
@@ -226,6 +278,34 @@ impl MmapMetadataArchive {
             .into_iter()
             .filter_map(|term| self.posting_for(field, &term).transpose())
             .collect()
+    }
+
+    pub fn postings_for_limit<I, S>(
+        &self,
+        field: MetadataField,
+        terms: I,
+        limit_per_term: usize,
+    ) -> Result<Vec<MetadataPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut selected = BTreeSet::new();
+        for term in terms {
+            let term = normalize(term.as_ref());
+            if !term.is_empty() {
+                selected.insert(term);
+            }
+        }
+
+        let mut postings = Vec::new();
+        for term in selected {
+            let (ids, _) = self.ids_for_limit(field, &term, limit_per_term)?;
+            if !ids.is_empty() {
+                postings.push(MetadataPosting { field, term, ids });
+            }
+        }
+        Ok(postings)
     }
 
     pub fn posting_for(&self, field: MetadataField, term: &str) -> Result<Option<MetadataPosting>> {
@@ -530,6 +610,33 @@ fn read_file_ids(mut reader: impl Read, path: &Path) -> Result<Vec<FileId>> {
     Ok(ids)
 }
 
+fn read_file_ids_limited(mut reader: impl Read, path: &Path, limit: usize) -> Result<Vec<FileId>> {
+    let id_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+    let mut ids = Vec::with_capacity((id_count as usize).min(limit));
+    let mut previous = FileId::new(VolumeId(0), 0);
+    for _ in 0..id_count.min(limit as u64) {
+        let volume_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        let volume = previous
+            .volume
+            .0
+            .checked_add(volume_delta)
+            .ok_or_else(|| metadata_format_error(path, "volume id overflow"))?;
+        let node_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        let node = if volume == previous.volume.0 {
+            previous
+                .node
+                .checked_add(node_delta)
+                .ok_or_else(|| metadata_format_error(path, "file node id overflow"))?
+        } else {
+            node_delta
+        };
+        let id = FileId::new(VolumeId(volume), node);
+        ids.push(id);
+        previous = id;
+    }
+    Ok(ids)
+}
+
 fn write_varint(mut writer: impl Write, mut value: u64) -> std::io::Result<()> {
     while value >= 0x80 {
         writer.write_all(&[((value as u8) & 0x7f) | 0x80])?;
@@ -754,6 +861,46 @@ mod tests {
         );
         assert_eq!(block.len(), 128);
         assert_eq!(block[0], FileId::new(VolumeId(12), 10_128));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_metadata_archive_reads_bounded_selected_postings_for_query_import() {
+        let path = temp_path("gfm-metadata-bounded-postings", "gfmmeta");
+        let postings = vec![
+            MetadataPosting {
+                field: MetadataField::Tag,
+                term: "important".to_string(),
+                ids: (0..8)
+                    .map(|node| FileId::new(VolumeId(12), 10_000 + node))
+                    .collect(),
+            },
+            MetadataPosting {
+                field: MetadataField::Comment,
+                term: "handoff".to_string(),
+                ids: vec![FileId::new(VolumeId(7), 1), FileId::new(VolumeId(7), 2)],
+            },
+        ];
+
+        write_metadata_postings(&path, &postings).unwrap();
+        let archive = MmapMetadataArchive::open(&path).unwrap();
+        let (ids, truncated) = archive
+            .ids_for_limit(MetadataField::Tag, "IMPORTANT", 3)
+            .unwrap();
+        let limited = archive
+            .postings_for_limit(MetadataField::Tag, ["missing", "important", "important"], 3)
+            .unwrap();
+        let comments = archive
+            .postings_for_limit(MetadataField::Comment, ["handoff"], 3)
+            .unwrap();
+
+        assert!(truncated);
+        assert_eq!(ids.len(), 3);
+        assert_eq!(ids[0], FileId::new(VolumeId(12), 10_000));
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].term, "important");
+        assert_eq!(limited[0].ids.len(), 3);
+        assert_eq!(comments, vec![postings[1].clone()]);
         std::fs::remove_file(path).unwrap();
     }
 

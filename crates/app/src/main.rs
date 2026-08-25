@@ -1429,10 +1429,16 @@ fn run() -> Result<()> {
                     comment: column.comment,
                 });
             }
-            let mut selected_metadata =
-                metadata.postings_for(MetadataField::Comment, comment_query_terms(&query))?;
-            selected_metadata
-                .extend(metadata.postings_for(MetadataField::Tag, tag_query_terms(&query))?);
+            let mut selected_metadata = metadata.postings_for_limit(
+                MetadataField::Comment,
+                comment_query_terms(&query),
+                budget.max_metadata_ids_per_term,
+            )?;
+            selected_metadata.extend(metadata.postings_for_limit(
+                MetadataField::Tag,
+                tag_query_terms(&query),
+                budget.max_metadata_ids_per_term,
+            )?);
             let search_metadata = selected_metadata
                 .into_iter()
                 .map(|posting| SearchMetadataPosting {
@@ -1477,10 +1483,11 @@ fn run() -> Result<()> {
                 search_content,
             );
             eprintln!(
-                "columns-indexed {applied} metadata-keys {metadata_keys} prefix-keys {prefix_keys} substring-keys {substring_keys} fuzzy-keys {fuzzy_keys} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {content_keys} substring-budget {} content-budget {}",
+                "columns-indexed {applied} metadata-keys {metadata_keys} prefix-keys {prefix_keys} substring-keys {substring_keys} fuzzy-keys {fuzzy_keys} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {content_keys} metadata-budget {} substring-budget {} content-budget {}",
                 lookup.indexed_prefixes(),
                 lookup.indexed_substring_grams(),
                 lookup.indexed_fuzzy_keys(),
+                budget.max_metadata_ids_per_term,
                 budget.max_substring_ids_per_gram,
                 budget.max_content_ids_per_term
             );
@@ -1569,10 +1576,16 @@ fn run() -> Result<()> {
                     comment: column.comment,
                 });
             }
-            let mut selected_metadata =
-                metadata.postings_for(MetadataField::Comment, comment_query_terms(&query))?;
-            selected_metadata
-                .extend(metadata.postings_for(MetadataField::Tag, tag_query_terms(&query))?);
+            let mut selected_metadata = metadata.postings_for_limit(
+                MetadataField::Comment,
+                comment_query_terms(&query),
+                max_content_ids,
+            )?;
+            selected_metadata.extend(metadata.postings_for_limit(
+                MetadataField::Tag,
+                tag_query_terms(&query),
+                max_content_ids,
+            )?);
             let search_metadata = selected_metadata
                 .into_iter()
                 .map(|posting| SearchMetadataPosting {
@@ -1624,11 +1637,12 @@ fn run() -> Result<()> {
                     max_fuzzy_keys_per_term: max_fuzzy_keys,
                     max_fuzzy_terms_per_key: max_fuzzy_terms,
                     max_fuzzy_candidates_per_term: max_fuzzy_candidates,
+                    max_metadata_ids_per_term: max_content_ids,
                     max_content_ids_per_term: max_content_ids,
                 },
             )?;
             eprintln!(
-                "sidecar-budget\tcolumns-indexed={applied}\tmetadata-keys={metadata_keys}\tprefix-keys={prefix_keys}\tsubstring-keys={substring_keys}\tfuzzy-keys={fuzzy_keys}\tcontent-keys={content_keys}\tcontent-budget={max_content_ids}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
+                "sidecar-budget\tcolumns-indexed={applied}\tmetadata-keys={metadata_keys}\tprefix-keys={prefix_keys}\tsubstring-keys={substring_keys}\tfuzzy-keys={fuzzy_keys}\tcontent-keys={content_keys}\tmetadata-budget={max_content_ids}\tcontent-budget={max_content_ids}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
                 lookup.indexed_prefixes(),
                 lookup.indexed_substring_grams(),
                 lookup.indexed_fuzzy_keys(),

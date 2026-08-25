@@ -46,6 +46,7 @@ pub struct SearchLookupBudget {
     pub max_fuzzy_keys_per_term: usize,
     pub max_fuzzy_terms_per_key: usize,
     pub max_fuzzy_candidates_per_term: usize,
+    pub max_metadata_ids_per_term: usize,
     pub max_content_ids_per_term: usize,
 }
 
@@ -59,6 +60,7 @@ impl Default for SearchLookupBudget {
             max_fuzzy_keys_per_term: 96,
             max_fuzzy_terms_per_key: 512,
             max_fuzzy_candidates_per_term: 4096,
+            max_metadata_ids_per_term: 4096,
             max_content_ids_per_term: 4096,
         }
     }

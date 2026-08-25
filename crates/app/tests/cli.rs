@@ -1737,6 +1737,7 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_search_stderr.contains("substring-archive-keys")
             && sidecar_search_stderr.contains("fuzzy-archive-keys")
             && sidecar_search_stderr.contains("content-keys 0")
+            && sidecar_search_stderr.contains("metadata-budget 4096")
             && sidecar_search_stderr.contains("substring-budget 4096")
             && sidecar_search_stderr.contains("content-budget 4096"),
         "{sidecar_search_stderr}"
@@ -1814,6 +1815,7 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_budget_stderr.contains("\tfuzzy-terms=2")
             && sidecar_budget_stderr.contains("\tfuzzy-lookup-requests=")
             && sidecar_budget_stderr.contains("\tfuzzy-cache-misses=")
+            && sidecar_budget_stderr.contains("\tmetadata-budget=1")
             && sidecar_budget_stderr.contains("\tcontent-budget=1")
             && sidecar_budget_stderr.contains("\tfuzzy-term-truncated-keys=2"),
         "{sidecar_budget_stderr}"
