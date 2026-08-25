@@ -5,6 +5,13 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+mod schedule;
+
+pub use schedule::{
+    PreviewPriority, PreviewScheduler, PreviewSchedulingPolicy, PreviewTask, PreviewTaskDecision,
+    Rect, Viewport,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PreviewKind {
     Icon,

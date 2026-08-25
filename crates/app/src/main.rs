@@ -18,14 +18,15 @@ use gfm_mac::{
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path,
-    PreviewInvalidationEvent, PreviewKind, PreviewSecurityPolicy,
+    PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
+    PreviewSchedulingPolicy, PreviewSecurityPolicy, PreviewTask, Rect, Viewport,
 };
 use gfm_store::ContentArchive;
 use gfm_testkit::{
     run_macrobench, run_regression_gate, MacrobenchOptions, MacrobenchScale, MacrobenchStage,
     RegressionGateOptions,
 };
-use gfm_types::{FileKind, Result, SearchHit};
+use gfm_types::{FileId, FileKind, Result, SearchHit, VolumeId};
 use std::env;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -393,6 +394,28 @@ fn run() -> Result<()> {
                 path.display()
             );
         }
+        Some("preview-schedule") => {
+            let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy {
+                max_visible: 8,
+                max_prefetch: 8,
+                cancel_offscreen: true,
+            })?;
+            let viewport = Viewport::new(Rect::new(0, 0, 100, 100), 64);
+            for decision in scheduler.schedule(
+                viewport,
+                vec![
+                    preview_task(1, 0, 0),
+                    preview_task(2, 0, 130),
+                    preview_task(3, 0, 260),
+                ],
+            ) {
+                println!(
+                    "{}\t{}",
+                    decision.as_str(),
+                    preview_decision_priority(&decision)
+                );
+            }
+        }
         Some("macrobench") => {
             let options = macrobench_options(args.next(), args.next(), "macrobench")?;
             let report = run_macrobench(&options)?;
@@ -728,6 +751,25 @@ fn parse_preview_kind(value: Option<String>) -> Result<PreviewKind> {
     }
 }
 
+fn preview_task(node: u64, x: i32, y: i32) -> PreviewTask {
+    PreviewTask::new(
+        PreviewRequestKey::new(
+            FileId::new(VolumeId(1), node),
+            PathBuf::from(format!("{node}.preview")),
+            PreviewKind::Thumbnail,
+        ),
+        Rect::new(x, y, 32, 32),
+    )
+}
+
+fn preview_decision_priority(decision: &gfm_preview::PreviewTaskDecision) -> &'static str {
+    match decision {
+        gfm_preview::PreviewTaskDecision::Scheduled { priority, .. }
+        | gfm_preview::PreviewTaskDecision::Coalesced { priority, .. } => priority.as_str(),
+        gfm_preview::PreviewTaskDecision::Cancelled { reason, .. } => reason,
+    }
+}
+
 fn print_usage() {
     println!(
         "gfm commands:
@@ -755,6 +797,7 @@ fn print_usage() {
   gfm support-check
   gfm permission-onboarding
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
+  gfm preview-schedule
   gfm macrobench <workspace> [smoke|standard]
   gfm regression-gate <workspace> [smoke|standard]
   gfm release-policy

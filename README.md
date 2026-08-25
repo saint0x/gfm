@@ -57,7 +57,7 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 - `crates/index`: initial crawl, FSEvents ingestion, background metadata/content pipelines, per-volume state, and repair scheduling.
 - `crates/search`: query parsing, ranking, streaming results, filename/path/content/metadata retrieval, fuzzy matching, snippets, cancellation, supersession, and recency scoring.
 - `crates/store`: mmap segment store, dictionaries, compressed postings, appendable content segments, tombstones, merge policy, and compaction.
-- `crates/preview`: icons, thumbnails, Quick Look preview policy, memory/disk preview cache, request coalescing, security decisions, invalidation, and extraction budgets.
+- `crates/preview`: icons, thumbnails, Quick Look preview policy, memory/disk preview cache, request coalescing, visible-window prioritization, cancellation, security decisions, invalidation, and extraction budgets.
 - `crates/jobs`: scheduling, cancellation, prioritization, fairness, progress, and backpressure.
 - `crates/config`: versioned TOML config, Finder parity profiles, user settings, feature flags, hidden performance controls, diagnostics toggles, validation, and atomic persistence.
 - `crates/telemetry`: bounded latency histograms, hard performance budgets, frame timing, UI-thread stall detection, IO/CPU/memory/allocation/queue/compaction summaries, counters, traces, and local-only diagnostics export with privacy review.
@@ -208,6 +208,7 @@ Inspect preview security and invalidation policy:
 
 ```sh
 cargo run -p gfm -- preview-check /tmp/example.app quick-look
+cargo run -p gfm -- preview-schedule
 ```
 
 Inspect the validated release policy:
