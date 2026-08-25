@@ -2,14 +2,22 @@ use crate::durable;
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
 use memmap2::{Mmap, MmapOptions};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 const COLUMNS_MAGIC_V1: &[u8] = b"gfm-record-columns-v1\n";
+const COLUMNS_MAGIC_V2: &[u8] = b"gfm-record-columns-v2\n";
 const COLUMNS_INDEX_FOOTER: &[u8] = b"gfm-record-columns-index-v1\n";
 const COLUMNS_CHECKSUM_FOOTER: &[u8] = b"gfm-record-columns-checksum-v1\n";
 const COLUMNS_FOOTER_LEN: u64 = 8 + COLUMNS_INDEX_FOOTER.len() as u64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ColumnsVersion {
+    V1,
+    V2,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordColumn {
@@ -28,14 +36,72 @@ struct ColumnDirectoryEntry {
     len: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StringPoolEntry {
+    offset: u64,
+    len: u64,
+}
+
 #[derive(Debug)]
 pub struct MmapRecordColumns {
     path: PathBuf,
     mmap: Mmap,
+    version: ColumnsVersion,
     directory: Vec<ColumnDirectoryEntry>,
+    strings: Vec<StringPoolEntry>,
 }
 
 pub fn write_record_columns(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<()> {
+    write_record_columns_v2(path, records)
+}
+
+fn write_record_columns_v2(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<()> {
+    let path = path.as_ref();
+    let columns = records
+        .iter()
+        .map(RecordColumn::from_record)
+        .collect::<Vec<_>>();
+    let string_ids = string_pool_for_columns(&columns);
+    durable::atomic_write(path, |writer| {
+        let mut bytes = Vec::new();
+        bytes.write_all(COLUMNS_MAGIC_V2)?;
+        write_varint(&mut bytes, records.len() as u64)?;
+        write_varint(&mut bytes, string_ids.len() as u64)?;
+        for value in string_ids.keys() {
+            write_string(&mut bytes, value)?;
+        }
+
+        let mut directory = Vec::with_capacity(columns.len());
+        for column in &columns {
+            let offset = bytes.len() as u64;
+            write_column_v2(&mut bytes, column, &string_ids)?;
+            directory.push(ColumnDirectoryEntry {
+                id: column.id,
+                offset,
+                len: bytes.len() as u64 - offset,
+            });
+        }
+        let directory_offset = bytes.len() as u64;
+        write_varint(&mut bytes, directory.len() as u64)?;
+        for entry in &directory {
+            write_varint(&mut bytes, entry.id.volume.0)?;
+            write_varint(&mut bytes, entry.id.node)?;
+            write_varint(&mut bytes, entry.offset)?;
+            write_varint(&mut bytes, entry.len)?;
+        }
+        bytes.write_all(&directory_offset.to_le_bytes())?;
+        bytes.write_all(COLUMNS_INDEX_FOOTER)?;
+        let mut footer = Vec::new();
+        write_checksum_footer(&mut footer, &bytes, COLUMNS_CHECKSUM_FOOTER)?;
+        bytes.extend(footer);
+        writer.write_all(&bytes)?;
+        Ok(())
+    })
+    .map(|_| ())
+}
+
+#[cfg(test)]
+fn write_record_columns_v1(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<()> {
     let path = path.as_ref();
     durable::atomic_write(path, |writer| {
         let mut bytes = Vec::new();
@@ -78,18 +144,19 @@ impl MmapRecordColumns {
             // SAFETY: The map is read-only and all reads are bounds checked.
             unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
         };
-        if !mmap.starts_with(COLUMNS_MAGIC_V1) {
-            return Err(column_format_error(
-                path,
-                "unsupported record columns header",
-            ));
-        }
+        let version = columns_version_from_slice(&mmap, path)?;
         verify_columns_checksum_from_slice(&mmap, path)?;
+        let strings = match version {
+            ColumnsVersion::V1 => Vec::new(),
+            ColumnsVersion::V2 => read_string_pool_directory_from_slice(&mmap, path)?,
+        };
         let directory = read_columns_directory_from_slice(&mmap, path)?;
         Ok(Self {
             path: path.to_path_buf(),
             mmap,
+            version,
             directory,
+            strings,
         })
     }
 
@@ -107,6 +174,10 @@ impl MmapRecordColumns {
 
     pub fn is_checksummed(&self) -> bool {
         has_columns_checksum_footer(&self.mmap)
+    }
+
+    pub fn string_pool_len(&self) -> usize {
+        self.strings.len()
     }
 
     pub fn column(&self, index: usize) -> Result<RecordColumn> {
@@ -145,7 +216,10 @@ impl MmapRecordColumns {
             .mmap
             .get(start..end)
             .ok_or_else(|| column_format_error(&self.path, "record column range out of bounds"))?;
-        let column = read_column(Cursor::new(bytes), &self.path)?;
+        let column = match self.version {
+            ColumnsVersion::V1 => read_column(Cursor::new(bytes), &self.path)?,
+            ColumnsVersion::V2 => read_column_v2(Cursor::new(bytes), self)?,
+        };
         if column.id != entry.id {
             return Err(column_format_error(
                 &self.path,
@@ -153,6 +227,32 @@ impl MmapRecordColumns {
             ));
         }
         Ok(column)
+    }
+
+    fn string_by_id(&self, id: u64) -> Result<String> {
+        let index = usize::try_from(id)
+            .map_err(|_| column_format_error(&self.path, "string pool id overflow"))?;
+        let entry = self
+            .strings
+            .get(index)
+            .ok_or_else(|| column_format_error(&self.path, "string pool id out of bounds"))?;
+        let start = usize::try_from(entry.offset)
+            .map_err(|_| column_format_error(&self.path, "string pool offset overflow"))?;
+        let len = usize::try_from(entry.len)
+            .map_err(|_| column_format_error(&self.path, "string pool length overflow"))?;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| column_format_error(&self.path, "string pool range overflow"))?;
+        let bytes = self
+            .mmap
+            .get(start..end)
+            .ok_or_else(|| column_format_error(&self.path, "string pool range out of bounds"))?;
+        String::from_utf8(bytes.to_vec()).map_err(|err| {
+            GfmError::Format(format!(
+                "invalid record columns {}: pooled string is not UTF-8: {err}",
+                self.path.display()
+            ))
+        })
     }
 }
 
@@ -177,6 +277,7 @@ impl RecordColumn {
     }
 }
 
+#[cfg(test)]
 fn write_column(mut writer: impl Write, column: &RecordColumn) -> std::io::Result<()> {
     write_varint(&mut writer, column.id.volume.0)?;
     write_varint(&mut writer, column.id.node)?;
@@ -188,6 +289,48 @@ fn write_column(mut writer: impl Write, column: &RecordColumn) -> std::io::Resul
         write_string(&mut writer, tag)?;
     }
     write_optional_string(&mut writer, column.comment.as_deref())
+}
+
+fn write_column_v2(
+    mut writer: impl Write,
+    column: &RecordColumn,
+    string_ids: &BTreeMap<String, u64>,
+) -> std::io::Result<()> {
+    write_varint(&mut writer, column.id.volume.0)?;
+    write_varint(&mut writer, column.id.node)?;
+    write_string_id(&mut writer, string_ids, &column.name)?;
+    write_string_id(&mut writer, string_ids, &column.path)?;
+    write_optional_string_id(&mut writer, string_ids, column.extension.as_deref())?;
+    write_varint(&mut writer, column.tags.len() as u64)?;
+    for tag in &column.tags {
+        write_string_id(&mut writer, string_ids, tag)?;
+    }
+    write_optional_string_id(&mut writer, string_ids, column.comment.as_deref())
+}
+
+fn write_string_id(
+    mut writer: impl Write,
+    string_ids: &BTreeMap<String, u64>,
+    value: &str,
+) -> std::io::Result<()> {
+    let id = string_ids
+        .get(value)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "missing string id"))?;
+    write_varint(&mut writer, *id)
+}
+
+fn write_optional_string_id(
+    mut writer: impl Write,
+    string_ids: &BTreeMap<String, u64>,
+    value: Option<&str>,
+) -> std::io::Result<()> {
+    match value {
+        Some(value) => {
+            writer.write_all(&[1])?;
+            write_string_id(writer, string_ids, value)
+        }
+        None => writer.write_all(&[0]),
+    }
 }
 
 fn read_column(mut reader: impl Read, path: &Path) -> Result<RecordColumn> {
@@ -212,6 +355,73 @@ fn read_column(mut reader: impl Read, path: &Path) -> Result<RecordColumn> {
     })
 }
 
+fn read_column_v2(mut reader: impl Read, archive: &MmapRecordColumns) -> Result<RecordColumn> {
+    let volume = read_varint(&mut reader).map_err(|err| GfmError::io(&archive.path, err))?;
+    let node = read_varint(&mut reader).map_err(|err| GfmError::io(&archive.path, err))?;
+    let name = archive
+        .string_by_id(read_varint(&mut reader).map_err(|err| GfmError::io(&archive.path, err))?)?;
+    let column_path = archive
+        .string_by_id(read_varint(&mut reader).map_err(|err| GfmError::io(&archive.path, err))?)?;
+    let extension = read_optional_string_id(&mut reader, archive)?;
+    let tag_count = read_varint(&mut reader).map_err(|err| GfmError::io(&archive.path, err))?;
+    let mut tags = Vec::with_capacity(tag_count.min(1_000_000) as usize);
+    for _ in 0..tag_count {
+        tags.push(archive.string_by_id(
+            read_varint(&mut reader).map_err(|err| GfmError::io(&archive.path, err))?,
+        )?);
+    }
+    let comment = read_optional_string_id(&mut reader, archive)?;
+    Ok(RecordColumn {
+        id: FileId::new(VolumeId(volume), node),
+        name,
+        path: column_path,
+        extension,
+        tags,
+        comment,
+    })
+}
+
+fn read_optional_string_id(
+    mut reader: impl Read,
+    archive: &MmapRecordColumns,
+) -> Result<Option<String>> {
+    let mut present = [0u8; 1];
+    reader
+        .read_exact(&mut present)
+        .map_err(|err| GfmError::io(&archive.path, err))?;
+    match present[0] {
+        0 => Ok(None),
+        1 => archive
+            .string_by_id(read_varint(reader).map_err(|err| GfmError::io(&archive.path, err))?)
+            .map(Some),
+        _ => Err(column_format_error(
+            &archive.path,
+            "invalid optional string id tag",
+        )),
+    }
+}
+
+fn string_pool_for_columns(columns: &[RecordColumn]) -> BTreeMap<String, u64> {
+    let mut strings = BTreeMap::new();
+    for column in columns {
+        strings.insert(column.name.clone(), 0);
+        strings.insert(column.path.clone(), 0);
+        if let Some(extension) = &column.extension {
+            strings.insert(extension.clone(), 0);
+        }
+        for tag in &column.tags {
+            strings.insert(tag.clone(), 0);
+        }
+        if let Some(comment) = &column.comment {
+            strings.insert(comment.clone(), 0);
+        }
+    }
+    for (index, id) in strings.values_mut().enumerate() {
+        *id = index as u64;
+    }
+    strings
+}
+
 fn write_string(mut writer: impl Write, value: &str) -> std::io::Result<()> {
     write_varint(&mut writer, value.len() as u64)?;
     writer.write_all(value.as_bytes())
@@ -232,6 +442,7 @@ fn read_string(mut reader: impl Read, path: &Path) -> Result<String> {
     })
 }
 
+#[cfg(test)]
 fn write_optional_string(mut writer: impl Write, value: Option<&str>) -> std::io::Result<()> {
     match value {
         Some(value) => {
@@ -300,6 +511,74 @@ fn read_columns_directory_from_slice(
     entries.sort_by_key(|entry| entry.id);
     entries.dedup_by_key(|entry| entry.id);
     Ok(entries)
+}
+
+fn read_string_pool_directory_from_slice(
+    bytes: &[u8],
+    path: &Path,
+) -> Result<Vec<StringPoolEntry>> {
+    let indexed_len = columns_indexed_len_from_slice(bytes, path)?;
+    let directory_offset = columns_directory_offset(bytes)
+        .ok_or_else(|| column_format_error(path, "missing record columns directory footer"))?;
+    if directory_offset > indexed_len {
+        return Err(column_format_error(
+            path,
+            "record columns directory offset out of bounds",
+        ));
+    }
+    let mut cursor = Cursor::new(
+        bytes
+            .get(COLUMNS_MAGIC_V2.len()..directory_offset)
+            .ok_or_else(|| column_format_error(path, "record columns string pool out of bounds"))?,
+    );
+    let _record_count = read_varint(&mut cursor).map_err(|err| GfmError::io(path, err))?;
+    let string_count = read_varint(&mut cursor).map_err(|err| GfmError::io(path, err))?;
+    let mut entries = Vec::with_capacity(string_count.min(1_000_000) as usize);
+    for _ in 0..string_count {
+        let len = read_varint(&mut cursor).map_err(|err| GfmError::io(path, err))?;
+        let start = COLUMNS_MAGIC_V2
+            .len()
+            .checked_add(usize::try_from(cursor.position()).map_err(|_| {
+                column_format_error(path, "record columns string pool offset overflow")
+            })?)
+            .ok_or_else(|| {
+                column_format_error(path, "record columns string pool offset overflow")
+            })?;
+        let len_usize = usize::try_from(len)
+            .map_err(|_| column_format_error(path, "record columns string length overflow"))?;
+        let end = start
+            .checked_add(len_usize)
+            .ok_or_else(|| column_format_error(path, "record columns string range overflow"))?;
+        if end > directory_offset {
+            return Err(column_format_error(
+                path,
+                "record columns string crosses column data",
+            ));
+        }
+        cursor.set_position(
+            cursor.position().checked_add(len).ok_or_else(|| {
+                column_format_error(path, "record columns string offset overflow")
+            })?,
+        );
+        entries.push(StringPoolEntry {
+            offset: start as u64,
+            len,
+        });
+    }
+    Ok(entries)
+}
+
+fn columns_version_from_slice(bytes: &[u8], path: &Path) -> Result<ColumnsVersion> {
+    if bytes.starts_with(COLUMNS_MAGIC_V2) {
+        Ok(ColumnsVersion::V2)
+    } else if bytes.starts_with(COLUMNS_MAGIC_V1) {
+        Ok(ColumnsVersion::V1)
+    } else {
+        Err(column_format_error(
+            path,
+            "unsupported record columns header",
+        ))
+    }
 }
 
 fn columns_directory_offset(bytes: &[u8]) -> Option<usize> {
@@ -394,6 +673,7 @@ mod tests {
     #[test]
     fn mmap_record_columns_read_normalized_random_access_columns() {
         let path = temp_path("gfm-record-columns", "gfmcols");
+        let legacy_path = temp_path("gfm-record-columns-legacy", "gfmcols");
         let records = vec![
             record(2, "/tmp/Archive.PDF", "Archive.PDF", &["Later"], None),
             record(
@@ -403,21 +683,58 @@ mod tests {
                 &["Important", "Later"],
                 Some("Launch Notes"),
             ),
+            record(
+                3,
+                "/tmp/Team/Launch Notes 3.md",
+                "Launch Notes 3.md",
+                &["Important", "Later"],
+                Some("Launch Notes"),
+            ),
+            record(
+                4,
+                "/tmp/Team/Launch Notes 4.md",
+                "Launch Notes 4.md",
+                &["Important", "Later"],
+                Some("Launch Notes"),
+            ),
+            record(
+                5,
+                "/tmp/Team/Launch Notes 5.md",
+                "Launch Notes 5.md",
+                &["Important", "Later"],
+                Some("Launch Notes"),
+            ),
+            record(
+                6,
+                "/tmp/Team/Launch Notes 6.md",
+                "Launch Notes 6.md",
+                &["Important", "Later"],
+                Some("Launch Notes"),
+            ),
         ];
 
         write_record_columns(&path, &records).unwrap();
+        write_record_columns_v1(&legacy_path, &records).unwrap();
         let archive = MmapRecordColumns::open(&path).unwrap();
+        let legacy = MmapRecordColumns::open(&legacy_path).unwrap();
         let first = archive.find(records[1].id).unwrap().unwrap();
 
-        assert_eq!(archive.len(), 2);
+        assert_eq!(archive.len(), records.len());
         assert!(archive.is_checksummed());
+        assert!(archive.string_pool_len() >= 7);
+        assert!(
+            std::fs::metadata(&path).unwrap().len()
+                < std::fs::metadata(&legacy_path).unwrap().len()
+        );
         assert_eq!(archive.column(0).unwrap().id, records[1].id);
         assert_eq!(first.name, "important.md");
         assert_eq!(first.path, "/tmp/important.md");
         assert_eq!(first.extension.as_deref(), Some("md"));
         assert_eq!(first.tags, vec!["important", "later"]);
         assert_eq!(first.comment.as_deref(), Some("launch notes"));
+        assert_eq!(legacy.find(records[1].id).unwrap().unwrap(), first);
         std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(legacy_path).unwrap();
     }
 
     #[test]
