@@ -1,6 +1,8 @@
 use gfm_content::Extractor;
 use gfm_fs::read_directory;
-use gfm_index::{BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, Indexer};
+use gfm_index::{
+    BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, Indexer, SearchStreamStage,
+};
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
     WorkerPool,
@@ -153,6 +155,19 @@ fn run() -> Result<()> {
             let snapshot = Indexer::default().build(root)?;
             for hit in snapshot.search(&query, 50) {
                 print_hit(&hit);
+            }
+        }
+        Some("search-stream") => {
+            let root = required_path(args.next(), "search-stream requires a root path")?;
+            let query = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format("search-stream requires a query string".to_string())
+            })?;
+            let snapshot = Indexer::default().build(root)?;
+            for batch in snapshot.stream_search(&query, 50)? {
+                println!("batch\t{}", stream_stage(batch.stage));
+                for hit in batch.hits {
+                    print_hit(&hit);
+                }
             }
         }
         Some("search-content") => {
@@ -434,6 +449,13 @@ fn recovery_reason(reason: RecoveryReason) -> &'static str {
     }
 }
 
+fn stream_stage(stage: SearchStreamStage) -> &'static str {
+    match stage {
+        SearchStreamStage::Hot => "hot",
+        SearchStreamStage::Deep => "deep",
+    }
+}
+
 fn print_usage() {
     println!(
         "gfm commands:
@@ -445,6 +467,7 @@ fn print_usage() {
   gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent>
   gfm resume-content-background [content.job] [jobs.journal]
   gfm search <root> <query>
+  gfm search-stream <root> <query>
   gfm search-content <root> <query>
   gfm search-index <index.gfmidx> <query>
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>

@@ -1,7 +1,8 @@
 use gfm_content::Extractor;
 use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
-use gfm_search::{SearchQuery, ShardedSearchIndex};
+pub use gfm_search::SearchStreamStage;
+use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
     compact_content_segments, read_content_postings, read_records, write_content_postings,
     write_content_segment, write_records,
@@ -36,6 +37,14 @@ impl IndexSnapshot {
             index.insert(record);
         }
         index.query(query, limit)
+    }
+
+    pub fn stream_search(&self, query: &str, limit: usize) -> Result<Vec<SearchStreamBatch>> {
+        let mut index = ShardedSearchIndex::new();
+        for record in self.records.iter().cloned() {
+            index.insert(record);
+        }
+        index.stream(query, limit)
     }
 
     pub fn search_cancellable(
@@ -136,6 +145,10 @@ impl LiveIndex {
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
         self.index.query(query, limit)
+    }
+
+    pub fn stream_search(&self, query: &str, limit: usize) -> Result<Vec<SearchStreamBatch>> {
+        self.index.stream(query, limit)
     }
 
     pub fn search_cancellable(
@@ -712,6 +725,33 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         fs::remove_file(records).unwrap();
         fs::remove_file(content).unwrap();
+    }
+
+    #[test]
+    fn live_index_streams_hot_then_deep_results() {
+        let root = unique_temp_dir("gfm-live-stream-root");
+        fs::write(root.join("needle.md"), "metadata match").unwrap();
+        fs::write(root.join("deep.md"), "needle only in content").unwrap();
+
+        let snapshot = Indexer::default().build(&root).unwrap();
+        let mut live = snapshot.into_live();
+        live.index_content(&Extractor::default()).unwrap();
+
+        let batches = live.stream_search("needle", 10).unwrap();
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].stage, SearchStreamStage::Hot);
+        assert!(batches[0]
+            .hits
+            .iter()
+            .any(|hit| hit.record.name == "needle.md"));
+        assert_eq!(batches[1].stage, SearchStreamStage::Deep);
+        assert!(batches[1]
+            .hits
+            .iter()
+            .any(|hit| hit.record.name == "deep.md"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

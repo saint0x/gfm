@@ -407,6 +407,59 @@ fn intent_ranking_surfaces_recently_touched_files() {
 }
 
 #[test]
+fn stream_returns_hot_results_before_deep_content_results() {
+    let mut index = SearchIndex::new();
+    let hot = record(1, "/tmp/needle.md", "needle.md");
+    let deep = record(2, "/tmp/deep.md", "deep.md");
+    index.insert(hot);
+    index.insert(deep.clone());
+    index.insert_content(deep.id, "needle exists only in content");
+
+    let batches = index.stream("needle", 10).unwrap();
+
+    assert_eq!(batches.len(), 2);
+    assert_eq!(batches[0].stage, SearchStreamStage::Hot);
+    assert_eq!(batches[0].hits[0].record.name, "needle.md");
+    assert_eq!(batches[1].stage, SearchStreamStage::Deep);
+    assert_eq!(batches[1].hits[0].record.name, "deep.md");
+    assert_eq!(batches[1].hits[0].reason, MatchReason::Content);
+}
+
+#[test]
+fn stream_omits_deep_batch_when_full_results_do_not_change() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/report.md", "report.md"));
+
+    let batches = index.stream("report", 10).unwrap();
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].stage, SearchStreamStage::Hot);
+}
+
+#[test]
+fn stream_honors_cancellation() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/report.md", "report.md"));
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = index.stream_cancellable("report", 10, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+}
+
+#[test]
+fn fuzzy_term_candidates_survive_structured_expression_filtering() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/needl", "needl"));
+
+    let hits = index.query("needle", 10);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].reason, MatchReason::FuzzyName);
+}
+
+#[test]
 fn sharded_search_merges_volume_results_deterministically() {
     let mut index = ShardedSearchIndex::new();
     index.insert(volume_record(2, 2, "/Volumes/B/report.md", "report.md"));
@@ -466,6 +519,30 @@ fn sharded_search_honors_cancellation() {
     let result = index.query_cancellable("report", 10, &cancellation);
 
     assert!(matches!(result, Err(GfmError::Cancelled)));
+}
+
+#[test]
+fn sharded_stream_merges_stages_across_volumes() {
+    let mut index = ShardedSearchIndex::new();
+    let hot = volume_record(1, 1, "/Volumes/A/needle.md", "needle.md");
+    let deep = volume_record(2, 1, "/Volumes/B/deep.md", "deep.md");
+    index.insert(hot);
+    index.insert(deep.clone());
+    index.insert_content(deep.id, "needle exists only in volume b content");
+
+    let batches = index.stream("needle", 10).unwrap();
+
+    assert_eq!(batches.len(), 2);
+    assert_eq!(batches[0].stage, SearchStreamStage::Hot);
+    assert_eq!(
+        batches[0].hits[0].record.path,
+        PathBuf::from("/Volumes/A/needle.md")
+    );
+    assert_eq!(batches[1].stage, SearchStreamStage::Deep);
+    assert_eq!(
+        batches[1].hits[0].record.path,
+        PathBuf::from("/Volumes/B/deep.md")
+    );
 }
 
 fn record(node: u64, path: &str, name: &str) -> FileRecord {

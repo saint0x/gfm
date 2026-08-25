@@ -1,4 +1,4 @@
-use crate::{sort_hits, SearchIndex, SearchQuery};
+use crate::{sort_hits, SearchIndex, SearchQuery, SearchStreamBatch, SearchStreamStage};
 use gfm_jobs::Cancellation;
 use gfm_types::{FileId, FileRecord, GfmError, Result, SearchHit, VolumeId};
 use std::collections::BTreeMap;
@@ -143,6 +143,95 @@ impl ShardedSearchIndex {
         merged.truncate(limit);
         cancellation.check()?;
         Ok(merged)
+    }
+
+    pub fn stream(&self, query: &str, limit: usize) -> Result<Vec<SearchStreamBatch>> {
+        self.stream_structured(&SearchQuery::parse(query), limit)
+    }
+
+    pub fn stream_structured(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.stream_structured_cancellable(query, limit, &Cancellation::default())
+    }
+
+    pub fn stream_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.stream_structured_cancellable(&SearchQuery::parse(query), limit, cancellation)
+    }
+
+    pub fn stream_structured_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        cancellation.check()?;
+        if query.is_empty() || limit == 0 || self.shards.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut hot = Vec::new();
+        let mut deep = Vec::new();
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = self
+                .shards
+                .values()
+                .map(|shard| {
+                    scope.spawn(move || {
+                        shard.stream_structured_cancellable(query, limit, cancellation)
+                    })
+                })
+                .collect();
+
+            for handle in handles {
+                for batch in handle
+                    .join()
+                    .map_err(|_| GfmError::Format("search shard worker panicked".to_string()))??
+                {
+                    match batch.stage {
+                        SearchStreamStage::Hot => hot.extend(batch.hits),
+                        SearchStreamStage::Deep => deep.extend(batch.hits),
+                    }
+                }
+            }
+            Ok::<(), GfmError>(())
+        })?;
+
+        let mut batches = Vec::new();
+        let mut seen = BTreeMap::new();
+        sort_hits(&mut hot);
+        hot.truncate(limit);
+        if !hot.is_empty() {
+            for hit in &hot {
+                seen.insert(hit.record.id, hit.score);
+            }
+            batches.push(SearchStreamBatch {
+                stage: SearchStreamStage::Hot,
+                hits: hot,
+            });
+        }
+
+        sort_hits(&mut deep);
+        deep.retain(|hit| match seen.get(&hit.record.id) {
+            Some(score) => hit.score > *score,
+            None => true,
+        });
+        deep.truncate(limit);
+        if !deep.is_empty() {
+            batches.push(SearchStreamBatch {
+                stage: SearchStreamStage::Deep,
+                hits: deep,
+            });
+        }
+        cancellation.check()?;
+        Ok(batches)
     }
 
     fn prune_empty_shards(&mut self) {

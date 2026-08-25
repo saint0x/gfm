@@ -90,13 +90,13 @@ The index is compact and incremental:
 - background compaction
 - mmap immutable readers
 - hot mutable buffers
-- progressive result streaming
+- progressive hot/deep result streaming with stable dedupe
 - bounded snippets with highlighted content matches
 - binary-signature and control-byte classification before content extraction
 - ranking that separates exact, prefix, substring, fuzzy, metadata, content, and recency signals
 - user-intent boosts for Applications, Recents, Downloads, Desktop, screenshots, and project folders
 
-Queries return immediately from hot state and refine as deeper metadata/content results arrive.
+Queries return immediately from hot state and refine as deeper metadata/content results arrive through explicit stream batches.
 
 ## Operations
 

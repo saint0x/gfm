@@ -18,6 +18,18 @@ use gfm_jobs::Cancellation;
 use gfm_types::{ContentPositions, ContentPosting, FileId, FileRecord, MatchReason, SearchHit};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchStreamStage {
+    Hot,
+    Deep,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchStreamBatch {
+    pub stage: SearchStreamStage,
+    pub hits: Vec<SearchHit>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SearchIndex {
     records: HashMap<FileId, FileRecord>,
@@ -191,6 +203,80 @@ impl SearchIndex {
         limit: usize,
         cancellation: &Cancellation,
     ) -> gfm_types::Result<Vec<SearchHit>> {
+        self.query_pass(query, limit, SearchPass::Full, cancellation)
+    }
+
+    pub fn stream(&self, query: &str, limit: usize) -> gfm_types::Result<Vec<SearchStreamBatch>> {
+        self.stream_structured(&SearchQuery::parse(query), limit)
+    }
+
+    pub fn stream_structured(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+    ) -> gfm_types::Result<Vec<SearchStreamBatch>> {
+        self.stream_structured_cancellable(query, limit, &Cancellation::default())
+    }
+
+    pub fn stream_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<Vec<SearchStreamBatch>> {
+        self.stream_structured_cancellable(&SearchQuery::parse(query), limit, cancellation)
+    }
+
+    pub fn stream_structured_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<Vec<SearchStreamBatch>> {
+        cancellation.check()?;
+        if query.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let hot = self.query_pass(query, limit, SearchPass::Hot, cancellation)?;
+        let full = self.query_pass(query, limit, SearchPass::Full, cancellation)?;
+        let mut seen: HashMap<FileId, i64> = HashMap::new();
+        let mut batches = Vec::new();
+
+        if !hot.is_empty() {
+            for hit in &hot {
+                seen.insert(hit.record.id, hit.score);
+            }
+            batches.push(SearchStreamBatch {
+                stage: SearchStreamStage::Hot,
+                hits: hot,
+            });
+        }
+
+        let deep: Vec<_> = full
+            .into_iter()
+            .filter(|hit| match seen.get(&hit.record.id) {
+                Some(score) => hit.score > *score,
+                None => true,
+            })
+            .collect();
+        if !deep.is_empty() {
+            batches.push(SearchStreamBatch {
+                stage: SearchStreamStage::Deep,
+                hits: deep,
+            });
+        }
+        cancellation.check()?;
+        Ok(batches)
+    }
+
+    fn query_pass(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        pass: SearchPass,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<Vec<SearchHit>> {
         cancellation.check()?;
         if query.is_empty() || limit == 0 {
             return Ok(Vec::new());
@@ -229,8 +315,10 @@ impl SearchIndex {
             if let Some(ids) = self.tags.get(term) {
                 add_scores(&mut scores, ids, 325, MatchReason::Tag);
             }
-            if let Some(ids) = self.content_ids(term) {
-                add_scores(&mut scores, &ids, 150, MatchReason::Content);
+            if pass.includes_deep() {
+                if let Some(ids) = self.content_ids(term) {
+                    add_scores(&mut scores, &ids, 150, MatchReason::Content);
+                }
             }
         }
 
@@ -238,14 +326,14 @@ impl SearchIndex {
             cancellation.check()?;
             for record in self.records.values().filter(|record| {
                 record_matches_phrase(record, phrase)
-                    || self.content_matches_phrase(record.id, phrase)
+                    || (pass.includes_deep() && self.content_matches_phrase(record.id, phrase))
             }) {
                 cancellation.check()?;
                 scores
                     .entry(record.id)
                     .and_modify(|(score, _)| *score += 450)
                     .or_insert_with(|| {
-                        if self.content_matches_phrase(record.id, phrase) {
+                        if pass.includes_deep() && self.content_matches_phrase(record.id, phrase) {
                             (450, MatchReason::Content)
                         } else {
                             (450, MatchReason::PathComponent)
@@ -263,7 +351,10 @@ impl SearchIndex {
                         .entry(record.id)
                         .and_modify(|(score, _)| *score += 300)
                         .or_insert((300, MatchReason::SubstringName));
-                } else if !text.is_empty() && bounded_levenshtein(&name, &text, 2).is_some() {
+                } else if pass.includes_deep()
+                    && !text.is_empty()
+                    && bounded_levenshtein(&name, &text, 2).is_some()
+                {
                     scores
                         .entry(record.id)
                         .and_modify(|(score, _)| *score += 100)
@@ -305,7 +396,7 @@ impl SearchIndex {
                 }
                 self.records
                     .get(&id)
-                    .filter(|record| self.record_matches_query(record, query))
+                    .filter(|record| self.record_matches_query(record, query, pass))
                     .map(|record| SearchHit {
                         record: record.clone(),
                         score: score + recency_score(record),
@@ -321,44 +412,55 @@ impl SearchIndex {
         Ok(hits)
     }
 
-    fn record_matches_query(&self, record: &FileRecord, query: &SearchQuery) -> bool {
+    fn record_matches_query(
+        &self,
+        record: &FileRecord,
+        query: &SearchQuery,
+        pass: SearchPass,
+    ) -> bool {
         if let Some(expression) = &query.expression {
-            return self.record_matches_expression(record, expression);
+            return self.record_matches_expression(record, expression, pass);
         }
-        if query
-            .excluded_terms
-            .iter()
-            .any(|term| record_contains_term(record, term) || self.content_has(record.id, term))
-        {
+        if query.excluded_terms.iter().any(|term| {
+            record_contains_term(record, term)
+                || (pass.includes_deep() && self.content_has(record.id, term))
+        }) {
             return false;
         }
         if !query.phrases.iter().all(|phrase| {
-            record_matches_phrase(record, phrase) || self.content_matches_phrase(record.id, phrase)
+            record_matches_phrase(record, phrase)
+                || (pass.includes_deep() && self.content_matches_phrase(record.id, phrase))
         }) {
             return false;
         }
         query.filters.iter().all(|filter| filter.matches(record))
     }
 
-    fn record_matches_expression(&self, record: &FileRecord, expression: &QueryExpr) -> bool {
+    fn record_matches_expression(
+        &self,
+        record: &FileRecord,
+        expression: &QueryExpr,
+        pass: SearchPass,
+    ) -> bool {
         match expression {
             QueryExpr::Term(term) => {
                 record_contains_term(record, term)
-                    || self.content_has(record.id, term)
+                    || (pass.includes_deep() && self.content_has(record.id, term))
+                    || (pass.includes_deep() && record_fuzzy_matches_term(record, term))
                     || term_matches_intent(term, record)
             }
             QueryExpr::Phrase(phrase) => {
                 record_matches_phrase(record, phrase)
-                    || self.content_matches_phrase(record.id, phrase)
+                    || (pass.includes_deep() && self.content_matches_phrase(record.id, phrase))
             }
             QueryExpr::Filter(filter) => filter.matches(record),
-            QueryExpr::Not(expression) => !self.record_matches_expression(record, expression),
+            QueryExpr::Not(expression) => !self.record_matches_expression(record, expression, pass),
             QueryExpr::And(expressions) => expressions
                 .iter()
-                .all(|expression| self.record_matches_expression(record, expression)),
+                .all(|expression| self.record_matches_expression(record, expression, pass)),
             QueryExpr::Or(expressions) => expressions
                 .iter()
-                .any(|expression| self.record_matches_expression(record, expression)),
+                .any(|expression| self.record_matches_expression(record, expression, pass)),
         }
     }
 
@@ -476,6 +578,18 @@ impl SearchIndex {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchPass {
+    Hot,
+    Full,
+}
+
+impl SearchPass {
+    fn includes_deep(self) -> bool {
+        self == Self::Full
+    }
+}
+
 fn path_key(path: &std::path::Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -488,6 +602,11 @@ fn record_contains_term(record: &FileRecord, term: &str) -> bool {
 
 fn record_matches_phrase(record: &FileRecord, phrase: &str) -> bool {
     normalize(&record.name).contains(phrase) || normalize_path(&record.path).contains(phrase)
+}
+
+fn record_fuzzy_matches_term(record: &FileRecord, term: &str) -> bool {
+    let name = normalize(&record.name);
+    bounded_levenshtein(&name, term, 2).is_some()
 }
 
 fn normalize_path(path: &std::path::Path) -> String {

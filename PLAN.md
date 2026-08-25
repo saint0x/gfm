@@ -308,6 +308,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
 - First keystroke under 30 ms for cached filename/path results.
 - Top visible results under 50 ms for warm index.
 - Progressive full result stream under 150 ms for common queries.
+- Search streams are emitted as stable hot/deep batches: hot name/path/metadata/intent hits first, then deeper content and fuzzy results without duplicate unchanged records.
 - Newly created/renamed files visible in search within 250 ms after event ingestion on local APFS volumes.
 - Cold start can begin with last durable index immediately while background validation catches up.
 

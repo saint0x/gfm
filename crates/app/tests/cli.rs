@@ -155,6 +155,32 @@ fn searches_with_boolean_groups_from_binary() {
 }
 
 #[test]
+fn streams_hot_then_deep_search_batches_from_binary() {
+    let root = unique_temp_dir("gfm-cli-stream-root");
+    fs::write(root.join("needle.md"), "hot").unwrap();
+    fs::write(root.join("needl"), "fuzzy").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-stream", root.to_str().unwrap(), "needle"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let hot = stdout.find("batch\thot").expect(&stdout);
+    let deep = stdout.find("batch\tdeep").expect(&stdout);
+    assert!(hot < deep, "{stdout}");
+    assert!(stdout.contains("needle.md"), "{stdout}");
+    assert!(stdout.contains("needl"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_persisted_tags_from_binary() {
     let index = unique_temp_path("gfm-cli-tags", "gfmidx");
     fs::write(
