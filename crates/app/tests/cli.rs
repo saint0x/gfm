@@ -123,6 +123,48 @@ fn persists_volume_index_state_from_binary() {
 }
 
 #[test]
+fn reports_scan_progress_from_binary() {
+    let root = unique_temp_dir("gfm-cli-scan-progress-root");
+    let records = unique_temp_path("gfm-cli-scan-progress-records", "gfmidx");
+    let progress = unique_temp_path("gfm-cli-scan-progress", "gfmprogress");
+    fs::write(root.join("Progress.md"), "alpha").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "scan-progress",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            progress.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("scan-progress\t"), "{stdout}");
+    assert!(stdout.contains("\tcompleted=true"), "{stdout}");
+
+    let inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["scan-progress-inspect", progress.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        inspect.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+    assert_eq!(String::from_utf8(inspect.stdout).unwrap(), stdout);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(progress).unwrap();
+}
+
+#[test]
 fn reports_rename_correlation_from_binary() {
     let root = unique_temp_dir("gfm-cli-rename-root");
     let from = root.join("RenameOld.md");

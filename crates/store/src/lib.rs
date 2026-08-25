@@ -1,13 +1,14 @@
 mod content;
+mod durable;
 
 pub use content::{
     compact_content_segments, read_content_postings, read_content_segment, write_content_postings,
     write_content_segment, ContentArchive,
 };
+pub use durable::{atomic_write, DurableCommit};
 
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
-use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -24,42 +25,42 @@ enum StoreVersion {
 
 pub fn write_records(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<()> {
     let path = path.as_ref();
-    let file = File::create(path).map_err(|err| GfmError::io(path, err))?;
-    let mut writer = BufWriter::new(file);
-    writeln!(writer, "{MAGIC_V3}").map_err(|err| GfmError::io(path, err))?;
-    for record in records {
-        writeln!(
-            writer,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            record.id.volume.0,
-            record.id.node,
-            record.parent.map(|id| id.node).unwrap_or(0),
-            encode_kind(record.kind),
-            record.len,
-            record.mode,
-            record.owner,
-            record.group,
-            record.xattrs_digest,
-            encode_time(record.created),
-            encode_time(record.modified),
-            encode_time(record.changed),
-            u8::from(record.hidden),
-            encode_tags(&record.tags),
-            record
-                .finder_comment
-                .as_deref()
-                .map(escape)
-                .unwrap_or_default(),
-            escape(&record.path.to_string_lossy()),
-        )
-        .map_err(|err| GfmError::io(path, err))?;
-    }
-    writer.flush().map_err(|err| GfmError::io(path, err))
+    durable::atomic_write(path, |writer| {
+        writeln!(writer, "{MAGIC_V3}")?;
+        for record in records {
+            writeln!(
+                writer,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                record.id.volume.0,
+                record.id.node,
+                record.parent.map(|id| id.node).unwrap_or(0),
+                encode_kind(record.kind),
+                record.len,
+                record.mode,
+                record.owner,
+                record.group,
+                record.xattrs_digest,
+                encode_time(record.created),
+                encode_time(record.modified),
+                encode_time(record.changed),
+                u8::from(record.hidden),
+                encode_tags(&record.tags),
+                record
+                    .finder_comment
+                    .as_deref()
+                    .map(escape)
+                    .unwrap_or_default(),
+                escape(&record.path.to_string_lossy()),
+            )?;
+        }
+        Ok(())
+    })
+    .map(|_| ())
 }
 
 pub fn read_records(path: impl AsRef<Path>) -> Result<Vec<FileRecord>> {
     let path = path.as_ref();
-    let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+    let file = std::fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
     let mut lines = BufReader::new(file).lines();
     let version = match lines.next() {
         Some(Ok(header)) if header == MAGIC_V1 => StoreVersion::V1,
@@ -333,6 +334,21 @@ mod tests {
         assert_eq!(read.len(), 1);
         assert_eq!(read[0].name, "legacy.txt");
         assert!(read[0].tags.is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn atomic_write_preserves_existing_file_on_write_failure() {
+        let path = temp_path("gfm-store-atomic", "txt");
+        std::fs::write(&path, "stable").unwrap();
+
+        let result = atomic_write(&path, |writer| {
+            writer.write_all(b"partial")?;
+            Err(std::io::Error::other("simulated crash"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "stable");
         std::fs::remove_file(path).unwrap();
     }
 

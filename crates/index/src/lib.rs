@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 mod backpressure;
 mod cursor;
 mod metadata;
+mod progress;
 mod rename;
 mod repair;
 mod state;
@@ -30,6 +31,7 @@ pub use cursor::{
     FSEVENTS_CURSOR_SCHEMA_VERSION,
 };
 pub use metadata::{diff_metadata, MetadataUpdateReport};
+pub use progress::{ScanProgressCheckpoint, SCAN_PROGRESS_SCHEMA_VERSION};
 pub use rename::{correlate_rename, RenameCorrelationReport};
 pub use repair::{RepairPriority, RepairReason, RepairSchedule, SubtreeRepairJob};
 pub use state::{IndexVolumeState, INDEX_STATE_SCHEMA_VERSION};
@@ -536,6 +538,34 @@ impl Indexer {
         let state = snapshot.volume_state(records_path.to_path_buf(), previous.as_ref())?;
         state.write(state_path)?;
         Ok(state)
+    }
+
+    pub fn build_with_progress(
+        &self,
+        root: impl AsRef<Path>,
+        records_path: impl AsRef<Path>,
+        progress_path: impl AsRef<Path>,
+    ) -> Result<ScanProgressCheckpoint> {
+        let root = root.as_ref();
+        let records_path = records_path.as_ref();
+        let progress_path = progress_path.as_ref();
+        let started = ScanProgressCheckpoint::started(root, records_path);
+        started.write(progress_path)?;
+        let snapshot = self.build(root)?;
+        let last_path = snapshot.records.last().map(|record| record.path.clone());
+        let scanned = snapshot.records.len();
+        let inaccessible = snapshot.inaccessible.len();
+        let progress = started
+            .with_progress(scanned, inaccessible, last_path)
+            .with_publication(1, 0);
+        snapshot.save(records_path)?;
+        let completed = progress.completed();
+        completed.write(progress_path)?;
+        Ok(completed)
+    }
+
+    pub fn scan_progress(&self, progress_path: impl AsRef<Path>) -> Result<ScanProgressCheckpoint> {
+        ScanProgressCheckpoint::read(progress_path)
     }
 
     pub fn checkpoint_fsevents_cursor(

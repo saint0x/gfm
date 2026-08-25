@@ -59,30 +59,20 @@ impl IndexVolumeState {
 
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
-        let temporary = temporary_path(path);
-        let file = fs::File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
-        let mut writer = BufWriter::new(file);
-        writeln!(writer, "{MAGIC}").map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "schema_version\t{}", self.schema_version)
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "root\t{}", escape_path(&self.root))
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "records_path\t{}", escape_path(&self.records_path))
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "volume_id\t{}", self.volume_id.0)
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "mount_id\t{}", escape(&self.mount_id))
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "scan_epoch\t{}", self.scan_epoch)
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "record_count\t{}", self.record_count)
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "inaccessible_count\t{}", self.inaccessible_count)
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writer
-            .flush()
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        fs::rename(&temporary, path).map_err(|err| GfmError::io(path, err))
+        gfm_store::atomic_write(path, |writer| {
+            let mut writer = BufWriter::new(writer);
+            writeln!(writer, "{MAGIC}")?;
+            writeln!(writer, "schema_version\t{}", self.schema_version)?;
+            writeln!(writer, "root\t{}", escape_path(&self.root))?;
+            writeln!(writer, "records_path\t{}", escape_path(&self.records_path))?;
+            writeln!(writer, "volume_id\t{}", self.volume_id.0)?;
+            writeln!(writer, "mount_id\t{}", escape(&self.mount_id))?;
+            writeln!(writer, "scan_epoch\t{}", self.scan_epoch)?;
+            writeln!(writer, "record_count\t{}", self.record_count)?;
+            writeln!(writer, "inaccessible_count\t{}", self.inaccessible_count)?;
+            writer.flush()
+        })
+        .map(|_| ())
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
@@ -184,14 +174,6 @@ impl IndexVolumeState {
 fn mount_identity(root: &Path, volume_id: VolumeId) -> String {
     let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     format!("dev:{}:root:{}", volume_id.0, canonical.display())
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("state");
-    path.with_file_name(format!(".{file_name}.tmp"))
 }
 
 fn required<T>(value: Option<T>, field: &str, path: &Path) -> Result<T> {

@@ -2,7 +2,7 @@ use crate::IndexVolumeState;
 use gfm_types::{GfmError, Result, VolumeId};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const FSEVENTS_CURSOR_SCHEMA_VERSION: u32 = 1;
 
@@ -61,26 +61,18 @@ impl FseventsCursor {
 
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
-        let temporary = temporary_path(path);
-        let file = fs::File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
-        let mut writer = BufWriter::new(file);
-        writeln!(writer, "{MAGIC}").map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "schema_version\t{}", self.schema_version)
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "volume_id\t{}", self.volume_id.0)
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "mount_id\t{}", escape(&self.mount_id))
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "scan_epoch\t{}", self.scan_epoch)
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "last_event_id\t{}", self.last_event_id)
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writeln!(writer, "health\t{}", self.health.as_str())
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        writer
-            .flush()
-            .map_err(|err| GfmError::io(&temporary, err))?;
-        fs::rename(&temporary, path).map_err(|err| GfmError::io(path, err))
+        gfm_store::atomic_write(path, |writer| {
+            let mut writer = BufWriter::new(writer);
+            writeln!(writer, "{MAGIC}")?;
+            writeln!(writer, "schema_version\t{}", self.schema_version)?;
+            writeln!(writer, "volume_id\t{}", self.volume_id.0)?;
+            writeln!(writer, "mount_id\t{}", escape(&self.mount_id))?;
+            writeln!(writer, "scan_epoch\t{}", self.scan_epoch)?;
+            writeln!(writer, "last_event_id\t{}", self.last_event_id)?;
+            writeln!(writer, "health\t{}", self.health.as_str())?;
+            writer.flush()
+        })
+        .map(|_| ())
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
@@ -244,14 +236,6 @@ impl FseventsResumePlan {
             reason: reason.to_string(),
         }
     }
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("cursor");
-    path.with_file_name(format!(".{file_name}.tmp"))
 }
 
 fn required<T>(value: Option<T>, field: &str, path: &Path) -> Result<T> {

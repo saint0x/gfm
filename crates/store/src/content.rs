@@ -1,9 +1,10 @@
+use crate::durable;
 use gfm_types::{
     ContentPositions, ContentPosting, ContentSegment, FileId, GfmError, Result, VolumeId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 const CONTENT_MAGIC_V1: &[u8] = b"gfm-content-v1\n";
@@ -16,44 +17,33 @@ const CONTENT_FOOTER_LEN: u64 = 8 + CONTENT_INDEX_FOOTER.len() as u64;
 
 pub fn write_content_postings(path: impl AsRef<Path>, postings: &[ContentPosting]) -> Result<()> {
     let path = path.as_ref();
-    let file = File::create(path).map_err(|err| GfmError::io(path, err))?;
-    let mut writer = BufWriter::new(file);
-    writer
-        .write_all(CONTENT_MAGIC_V3)
-        .map_err(|err| GfmError::io(path, err))?;
-    write_varint(&mut writer, postings.len() as u64).map_err(|err| GfmError::io(path, err))?;
+    durable::atomic_write(path, |writer| {
+        let mut writer = CountingWriter::new(writer);
+        writer.write_all(CONTENT_MAGIC_V3)?;
+        write_varint(&mut writer, postings.len() as u64)?;
+        let mut directory = Vec::with_capacity(postings.len());
+        for posting in postings {
+            let offset = writer.position();
+            write_content_posting(&mut writer, posting)?;
+            let end = writer.position();
+            directory.push(ContentDirectoryEntry {
+                term: posting.term.trim().to_lowercase(),
+                offset,
+                len: end.saturating_sub(offset),
+            });
+        }
+        directory.sort_by(|left, right| left.term.cmp(&right.term));
 
-    let mut directory = Vec::with_capacity(postings.len());
-    for posting in postings {
-        let offset = writer
-            .stream_position()
-            .map_err(|err| GfmError::io(path, err))?;
-        write_content_posting(&mut writer, posting).map_err(|err| GfmError::io(path, err))?;
-        let end = writer
-            .stream_position()
-            .map_err(|err| GfmError::io(path, err))?;
-        directory.push(ContentDirectoryEntry {
-            term: posting.term.trim().to_lowercase(),
-            offset,
-            len: end.saturating_sub(offset),
-        });
-    }
-    directory.sort_by(|left, right| left.term.cmp(&right.term));
-
-    let directory_offset = writer
-        .stream_position()
-        .map_err(|err| GfmError::io(path, err))?;
-    write_varint(&mut writer, directory.len() as u64).map_err(|err| GfmError::io(path, err))?;
-    for entry in &directory {
-        write_directory_entry(&mut writer, entry).map_err(|err| GfmError::io(path, err))?;
-    }
-    writer
-        .write_all(&directory_offset.to_le_bytes())
-        .map_err(|err| GfmError::io(path, err))?;
-    writer
-        .write_all(CONTENT_INDEX_FOOTER)
-        .map_err(|err| GfmError::io(path, err))?;
-    writer.flush().map_err(|err| GfmError::io(path, err))
+        let directory_offset = writer.position();
+        write_varint(&mut writer, directory.len() as u64)?;
+        for entry in &directory {
+            write_directory_entry(&mut writer, entry)?;
+        }
+        writer.write_all(&directory_offset.to_le_bytes())?;
+        writer.write_all(CONTENT_INDEX_FOOTER)?;
+        Ok(())
+    })
+    .map(|_| ())
 }
 
 pub fn read_content_postings(path: impl AsRef<Path>) -> Result<Vec<ContentPosting>> {
@@ -203,20 +193,45 @@ fn read_content_magic(mut file: impl Read, path: &Path) -> Result<Vec<u8>> {
     Ok(longer)
 }
 
+struct CountingWriter<'a> {
+    inner: &'a mut dyn Write,
+    position: u64,
+}
+
+impl<'a> CountingWriter<'a> {
+    fn new(inner: &'a mut dyn Write) -> Self {
+        Self { inner, position: 0 }
+    }
+
+    fn position(&self) -> u64 {
+        self.position
+    }
+}
+
+impl Write for CountingWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(buf)?;
+        self.position += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 pub fn write_content_segment(path: impl AsRef<Path>, segment: &ContentSegment) -> Result<()> {
     let path = path.as_ref();
-    let file = File::create(path).map_err(|err| GfmError::io(path, err))?;
-    let mut writer = BufWriter::new(file);
-    writer
-        .write_all(CONTENT_SEGMENT_MAGIC_V2)
-        .map_err(|err| GfmError::io(path, err))?;
-    write_file_ids(&mut writer, &segment.tombstones).map_err(|err| GfmError::io(path, err))?;
-    write_varint(&mut writer, segment.postings.len() as u64)
-        .map_err(|err| GfmError::io(path, err))?;
-    for posting in &segment.postings {
-        write_content_posting(&mut writer, posting).map_err(|err| GfmError::io(path, err))?;
-    }
-    writer.flush().map_err(|err| GfmError::io(path, err))
+    durable::atomic_write(path, |writer| {
+        writer.write_all(CONTENT_SEGMENT_MAGIC_V2)?;
+        write_file_ids(&mut *writer, &segment.tombstones)?;
+        write_varint(&mut *writer, segment.postings.len() as u64)?;
+        for posting in &segment.postings {
+            write_content_posting(&mut *writer, posting)?;
+        }
+        Ok(())
+    })
+    .map(|_| ())
 }
 
 pub fn read_content_segment(path: impl AsRef<Path>) -> Result<ContentSegment> {

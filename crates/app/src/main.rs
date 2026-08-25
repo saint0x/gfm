@@ -440,6 +440,23 @@ fn run() -> Result<()> {
             )?;
             println!("{}", IndexVolumeState::read(state)?.as_tsv());
         }
+        Some("scan-progress") => {
+            let root = required_path(args.next(), "scan-progress requires a root path")?;
+            let records = required_path(args.next(), "scan-progress requires a records path")?;
+            let progress = required_path(
+                args.next(),
+                "scan-progress requires a progress checkpoint path",
+            )?;
+            let checkpoint = Indexer::default().build_with_progress(root, records, progress)?;
+            println!("{}", checkpoint.as_tsv());
+        }
+        Some("scan-progress-inspect") => {
+            let progress = required_path(
+                args.next(),
+                "scan-progress-inspect requires a progress checkpoint path",
+            )?;
+            println!("{}", Indexer::default().scan_progress(progress)?.as_tsv());
+        }
         Some("rename-correlation") => {
             let from = required_path(args.next(), "rename-correlation requires a source path")?;
             let to = required_path(
@@ -1747,6 +1764,8 @@ fn print_usage() {
   gfm index <root> <output.gfmidx>
   gfm index-state <root> <records.gfmidx> <state.gfmstate>
   gfm index-state-inspect <state.gfmstate>
+  gfm scan-progress <root> <records.gfmidx> <progress.gfmprogress>
+  gfm scan-progress-inspect <progress.gfmprogress>
   gfm rename-correlation <source> <destination>
   gfm metadata-update <path> [append-text]
   gfm event-backpressure <capacity> <visible-burst> <background-events> [visible-events]

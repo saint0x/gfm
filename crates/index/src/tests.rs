@@ -521,6 +521,34 @@ fn persistent_index_state_tracks_volume_mount_and_epoch() {
 }
 
 #[test]
+fn scan_progress_checkpoint_tracks_completed_scan_publication() {
+    let root = unique_temp_dir("gfm-scan-progress-root");
+    let records = unique_temp_path("gfm-scan-progress-records", "gfmidx");
+    let progress = unique_temp_path("gfm-scan-progress", "gfmprogress");
+    fs::write(root.join("Progress.md"), "state").unwrap();
+
+    let indexer = Indexer::default();
+    let checkpoint = indexer
+        .build_with_progress(&root, &records, &progress)
+        .unwrap();
+    let reloaded = indexer.scan_progress(&progress).unwrap();
+    let snapshot = indexer.load(&records).unwrap();
+
+    assert_eq!(checkpoint, reloaded);
+    assert!(checkpoint.completed);
+    assert_eq!(checkpoint.published_segments, 1);
+    assert!(snapshot
+        .records
+        .iter()
+        .any(|record| record.name == "Progress.md"));
+    assert!(checkpoint.as_tsv().starts_with("scan-progress\t"));
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(progress).unwrap();
+}
+
+#[test]
 fn index_state_rejects_unsupported_schema_versions() {
     let path = unique_temp_path("gfm-index-state-bad", "gfmstate");
     fs::write(

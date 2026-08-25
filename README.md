@@ -280,6 +280,8 @@ Build and query record indexes:
 cargo run -p gfm -- index . /tmp/gfm.gfmidx
 cargo run -p gfm -- index-state . /tmp/gfm.gfmidx /tmp/gfm.gfmstate
 cargo run -p gfm -- index-state-inspect /tmp/gfm.gfmstate
+cargo run -p gfm -- scan-progress . /tmp/gfm.gfmidx /tmp/gfm.gfmprogress
+cargo run -p gfm -- scan-progress-inspect /tmp/gfm.gfmprogress
 cargo run -p gfm -- rename-correlation /tmp/OldName.md /tmp/NewName.md
 cargo run -p gfm -- metadata-update /tmp/Report.md ' appended bytes'
 cargo run -p gfm -- event-backpressure 4096 8 250000 32
