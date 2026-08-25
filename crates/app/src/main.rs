@@ -1079,11 +1079,21 @@ fn run() -> Result<()> {
             let query = args.next().ok_or_else(|| {
                 gfm_types::GfmError::Format("search-content requires a query string".to_string())
             })?;
-            let snapshot = Indexer::default().build(root)?;
-            let mut live = snapshot.into_live();
-            let indexed = live.index_content(&Extractor::default())?;
+            let volume = detect_volume_id(&root).ok();
+            let (indexed, hits): (usize, Vec<SearchHit>) = run_volume_task(
+                volume,
+                Priority::Visible,
+                "content extraction search",
+                move || {
+                    let snapshot = Indexer::default().build(root)?;
+                    let mut live = snapshot.into_live();
+                    let indexed = live.index_content(&Extractor::default())?;
+                    let hits = live.search_with_snippets(&query, 50, &Extractor::default(), 96)?;
+                    Ok((indexed, hits))
+                },
+            )?;
             eprintln!("content-indexed {indexed} files");
-            for hit in live.search_with_snippets(&query, 50, &Extractor::default(), 96)? {
+            for hit in hits {
                 print_hit(&hit);
             }
         }
@@ -3208,19 +3218,31 @@ fn run_preview_contract<T>(
 where
     T: Send + 'static,
 {
+    run_volume_task(volume, Priority::Visible, label, build)
+}
+
+fn run_volume_task<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    label: &'static str,
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
     let result_slot = Arc::new(Mutex::new(None));
     let result_slot_task = Arc::clone(&result_slot);
     let mut scheduler = Scheduler::new();
     let job = if let Some(volume) = volume {
-        scheduler.schedule_on_volume(Priority::Visible, label, volume)
+        scheduler.schedule_on_volume(priority, label, volume)
     } else {
-        scheduler.schedule(Priority::Visible, label)
+        scheduler.schedule(priority, label)
     };
     let task = Task::new(job.clone(), move |_| {
-        let contract = build()?;
+        let result = work()?;
         *result_slot_task
             .lock()
-            .expect("preview contract lock poisoned") = Some(contract);
+            .expect("volume task result lock poisoned") = Some(result);
         Ok(())
     });
     let report = WorkerPool::new(1).run_isolated(vec![task], VolumeConcurrencyPolicy::new(1));
@@ -3228,22 +3250,22 @@ where
         .outcomes
         .iter()
         .find(|outcome| outcome.id == job.id)
-        .ok_or_else(|| GfmError::Format("preview job did not run".to_string()))?;
+        .ok_or_else(|| GfmError::Format(format!("{label} job did not run")))?;
     match &outcome.status {
         TaskStatus::Completed => {}
         TaskStatus::Started => {
-            return Err(GfmError::Format("preview job is still running".to_string()))
+            return Err(GfmError::Format(format!("{label} job is still running")))
         }
         TaskStatus::Cancelled => return Err(GfmError::Cancelled),
         TaskStatus::Failed(message) => {
-            return Err(GfmError::Format(format!("preview job failed: {message}")))
+            return Err(GfmError::Format(format!("{label} job failed: {message}")))
         }
     }
     let result = result_slot
         .lock()
-        .expect("preview contract lock poisoned")
+        .expect("volume task result lock poisoned")
         .take()
-        .ok_or_else(|| GfmError::Format("preview job completed without a contract".to_string()))?;
+        .ok_or_else(|| GfmError::Format(format!("{label} job completed without a result")))?;
     Ok(result)
 }
 
