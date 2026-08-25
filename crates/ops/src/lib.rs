@@ -1149,6 +1149,12 @@ fn copy_path_with_session(
     {
         return copy_file_replacing_existing(from, to, execution, progress);
     }
+    if conflict == ConflictPolicy::Replace
+        && metadata.file_type().is_symlink()
+        && replacement_destination_is_non_directory(to)
+    {
+        return copy_symlink_replacing_existing(from, to, progress);
+    }
     prepare_destination(to, conflict)?;
     if metadata.file_type().is_symlink() {
         copy_symlink(from, to, progress)
@@ -1188,6 +1194,28 @@ fn copy_file_replacing_existing(
             execution.volume_copy_policy,
             progress,
         )?;
+        rename_replacing_file(&stage, to)
+    })();
+    if result.is_err() && path_exists_or_symlink(&stage) {
+        let _ = delete_path_untracked(&stage);
+    }
+    result
+}
+
+fn copy_symlink_replacing_existing(
+    from: &Path,
+    to: &Path,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    progress.check_cancelled()?;
+    let source_metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+    let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
+    if metadata_same_file(&source_metadata, &destination_metadata) {
+        return progress.advance(&source_metadata);
+    }
+    let stage = allocate_replace_stage_path(to)?;
+    let result = (|| {
+        copy_symlink(from, &stage, progress)?;
         rename_replacing_file(&stage, to)
     })();
     if result.is_err() && path_exists_or_symlink(&stage) {
@@ -1292,6 +1320,12 @@ fn move_path(
     {
         return move_file_replacing_existing(from, to, verification, volume_copy_policy, progress);
     }
+    if conflict == ConflictPolicy::Replace
+        && source_is_symlink(from)
+        && replacement_destination_is_non_directory(to)
+    {
+        return move_symlink_replacing_existing(from, to, progress);
+    }
     prepare_destination(to, conflict)?;
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
@@ -1365,9 +1399,49 @@ fn move_file_replacing_existing(
     }
 }
 
+fn move_symlink_replacing_existing(
+    from: &Path,
+    to: &Path,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    progress.check_cancelled()?;
+    let source_metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+    let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
+    if metadata_same_file(&source_metadata, &destination_metadata) {
+        if from != to {
+            delete_path_untracked(from)?;
+        }
+        return progress.complete();
+    }
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
+    match fs::rename(from, to) {
+        Ok(()) => progress.complete(),
+        Err(rename_err) => {
+            copy_symlink_replacing_existing(from, to, progress)?;
+            delete_path_untracked(from).map_err(|delete_err| {
+                GfmError::Format(format!(
+                    "moved symlink to {} but failed to remove source {}: {}; original rename error: {}",
+                    to.display(),
+                    from.display(),
+                    delete_err,
+                    rename_err
+                ))
+            })
+        }
+    }
+}
+
 fn source_is_regular_file(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .map(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+fn source_is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_symlink())
         .unwrap_or(false)
 }
 
@@ -3547,6 +3621,84 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn copy_replace_symlink_uses_staged_destination() {
+        let root = unique_temp_dir("gfm-ops-copy-replace-symlink");
+        let journal = root.join("journal.log");
+        let old_target = root.join("old-target.txt");
+        let new_target = root.join("new-target.txt");
+        let source = root.join("source-link");
+        let destination = root.join("destination-link");
+        fs::write(&old_target, "old").unwrap();
+        fs::write(&new_target, "new").unwrap();
+        std::os::unix::fs::symlink(&new_target, &source).unwrap();
+        std::os::unix::fs::symlink(&old_target, &destination).unwrap();
+
+        Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::Replace))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(fs::read_link(&source).unwrap(), new_target);
+        assert_eq!(fs::read_link(&destination).unwrap(), new_target);
+        let leaked_stage = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".gfm-replace-")
+            });
+        assert!(!leaked_stage);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_copy_replace_symlink_preserves_existing_destination() {
+        let root = unique_temp_dir("gfm-ops-copy-replace-symlink-cancel");
+        let journal = root.join("journal.log");
+        let old_target = root.join("old-target.txt");
+        let new_target = root.join("new-target.txt");
+        let source = root.join("source-link");
+        let destination = root.join("destination-link");
+        fs::write(&old_target, "old").unwrap();
+        fs::write(&new_target, "new").unwrap();
+        std::os::unix::fs::symlink(&new_target, &source).unwrap();
+        std::os::unix::fs::symlink(&old_target, &destination).unwrap();
+        let cancellation = OperationCancellation::default();
+        let operator = Operator::new(
+            OperationContext::new(&journal)
+                .with_conflict(ConflictPolicy::Replace)
+                .with_cancellation(cancellation.clone()),
+        );
+
+        let err = operator
+            .execute_with_progress(
+                Operation::Copy {
+                    from: source.clone(),
+                    to: destination.clone(),
+                },
+                |event| {
+                    if event.phase == OperationProgressPhase::Planned {
+                        cancellation.cancel();
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert_eq!(fs::read_link(&source).unwrap(), new_target);
+        assert_eq!(fs::read_link(&destination).unwrap(), old_target);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn copy_preserves_symlink_timestamps_when_host_supports_them() {
         let root = unique_temp_dir("gfm-ops-symlink-times");
         let journal = root.join("journal.log");
@@ -4716,6 +4868,74 @@ mod tests {
         assert_eq!(fs::read_to_string(&destination).unwrap(), "shared inode");
         assert_eq!(before_destination.ino(), after_destination.ino());
         assert_eq!(after_destination.nlink(), 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn move_replace_symlink_uses_final_rename_without_predelete() {
+        let root = unique_temp_dir("gfm-ops-move-replace-symlink");
+        let journal = root.join("journal.log");
+        let old_target = root.join("old-target.txt");
+        let new_target = root.join("new-target.txt");
+        let source = root.join("source-link");
+        let destination = root.join("destination-link");
+        fs::write(&old_target, "old").unwrap();
+        fs::write(&new_target, "new").unwrap();
+        std::os::unix::fs::symlink(&new_target, &source).unwrap();
+        std::os::unix::fs::symlink(&old_target, &destination).unwrap();
+
+        Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::Replace))
+            .execute(Operation::Move {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert!(!path_exists_or_symlink(&source));
+        assert_eq!(fs::read_link(&destination).unwrap(), new_target);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_move_replace_symlink_preserves_existing_destination() {
+        let root = unique_temp_dir("gfm-ops-move-replace-symlink-cancel");
+        let journal = root.join("journal.log");
+        let old_target = root.join("old-target.txt");
+        let new_target = root.join("new-target.txt");
+        let source = root.join("source-link");
+        let destination = root.join("destination-link");
+        fs::write(&old_target, "old").unwrap();
+        fs::write(&new_target, "new").unwrap();
+        std::os::unix::fs::symlink(&new_target, &source).unwrap();
+        std::os::unix::fs::symlink(&old_target, &destination).unwrap();
+        let cancellation = OperationCancellation::default();
+        let operator = Operator::new(
+            OperationContext::new(&journal)
+                .with_conflict(ConflictPolicy::Replace)
+                .with_cancellation(cancellation.clone()),
+        );
+
+        let err = operator
+            .execute_with_progress(
+                Operation::Move {
+                    from: source.clone(),
+                    to: destination.clone(),
+                },
+                |event| {
+                    if event.phase == OperationProgressPhase::Planned {
+                        cancellation.cancel();
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert_eq!(fs::read_link(&source).unwrap(), new_target);
+        assert_eq!(fs::read_link(&destination).unwrap(), old_target);
 
         fs::remove_dir_all(root).unwrap();
     }
