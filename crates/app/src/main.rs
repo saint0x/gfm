@@ -1277,13 +1277,15 @@ fn run() -> Result<()> {
                 &lookup,
                 SearchLookupBudget {
                     max_prefix_ids_per_term: max_prefix_ids,
+                    min_archive_prefix_chars: SearchLookupBudget::default()
+                        .min_archive_prefix_chars,
                     max_fuzzy_keys_per_term: max_fuzzy_keys,
                     max_fuzzy_terms_per_key: max_fuzzy_terms,
                     max_fuzzy_candidates_per_term: max_fuzzy_candidates,
                 },
             )?;
             eprintln!(
-                "sidecar-budget\tcolumns-indexed={applied}\tmetadata-keys={metadata_keys}\tprefix-keys={prefix_keys}\tfuzzy-keys={fuzzy_keys}\tprefix-archive-keys={}\tfuzzy-archive-keys={}\tcontent-keys={content_keys}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-truncated-terms={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
+                "sidecar-budget\tcolumns-indexed={applied}\tmetadata-keys={metadata_keys}\tprefix-keys={prefix_keys}\tfuzzy-keys={fuzzy_keys}\tprefix-archive-keys={}\tfuzzy-archive-keys={}\tcontent-keys={content_keys}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
                 lookup.indexed_prefixes(),
                 lookup.indexed_fuzzy_keys(),
                 report.lookup.prefix_terms,
@@ -1292,6 +1294,7 @@ fn run() -> Result<()> {
                 report.lookup.prefix_candidate_ids,
                 report.lookup.prefix_cache_hits,
                 report.lookup.prefix_cache_misses,
+                report.lookup.prefix_cutoff_terms,
                 report.lookup.prefix_truncated_terms,
                 report.lookup.fuzzy_terms,
                 report.lookup.fuzzy_keys,
@@ -2426,7 +2429,7 @@ fn run() -> Result<()> {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
             let run = run_regression_gate(&options, RegressionGateOptions::default())?;
             println!(
-                "fixture\t{}\tfiles\t{}\tindex-bytes\t{}\tsidecar-prefix-candidates\t{}\tsidecar-fuzzy-verified\t{}\tsidecar-prefix-cache-hits\t{}\tsidecar-fuzzy-cache-hits\t{}\tsidecar-prefix-truncated\t{}\tsidecar-fuzzy-truncated\t{}\tpassed\t{}",
+                "fixture\t{}\tfiles\t{}\tindex-bytes\t{}\tsidecar-prefix-candidates\t{}\tsidecar-fuzzy-verified\t{}\tsidecar-prefix-cache-hits\t{}\tsidecar-fuzzy-cache-hits\t{}\tsidecar-prefix-cutoffs\t{}\tsidecar-prefix-truncated\t{}\tsidecar-fuzzy-truncated\t{}\tpassed\t{}",
                 run.macrobench.fixture_root.display(),
                 run.macrobench.files_materialized,
                 run.index_size_bytes,
@@ -2434,6 +2437,7 @@ fn run() -> Result<()> {
                 run.sidecar_lookup.fuzzy_verified_candidates,
                 run.sidecar_lookup.prefix_cache_hits,
                 run.sidecar_lookup.fuzzy_cache_hits,
+                run.sidecar_lookup.prefix_cutoff_terms,
                 run.sidecar_lookup.prefix_truncated_terms,
                 run.sidecar_lookup.fuzzy_term_truncated_keys
                     + run.sidecar_lookup.fuzzy_key_truncated_terms

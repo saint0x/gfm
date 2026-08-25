@@ -1213,6 +1213,7 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_budget_stderr.contains("\tprefix-lookup-ids=")
             && sidecar_budget_stderr.contains("\tprefix-candidate-ids=")
             && sidecar_budget_stderr.contains("\tprefix-cache-misses=")
+            && sidecar_budget_stderr.contains("\tprefix-cutoff-terms=")
             && sidecar_budget_stderr.contains("\tfuzzy-terms=2")
             && sidecar_budget_stderr.contains("\tfuzzy-lookup-requests=")
             && sidecar_budget_stderr.contains("\tfuzzy-cache-misses=")

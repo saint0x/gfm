@@ -272,9 +272,40 @@ fn sidecar_prefix_lookup_budget_caps_candidates_and_reports_truncation() {
         .unwrap();
 
     assert_eq!(report.lookup.prefix_terms, 1);
+    assert_eq!(report.lookup.prefix_lookup_ids, 0);
     assert_eq!(report.lookup.prefix_candidate_ids, 2);
+    assert_eq!(report.lookup.prefix_cutoff_terms, 1);
     assert!(report.lookup.prefix_truncated_terms >= 1);
     assert!(!report.hits.is_empty());
+}
+
+#[test]
+fn sidecar_prefix_lookup_budget_cuts_off_short_archive_prefixes() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/omega.md", "omega.md"));
+    let lookup = StaticLookup {
+        prefix_ids: vec![FileId::new(VolumeId(1), 1)],
+        fuzzy_terms: Vec::new(),
+    };
+
+    let report = index
+        .query_structured_with_lookup_budget_cancellable(
+            &SearchQuery::parse("p"),
+            10,
+            &lookup,
+            SearchLookupBudget {
+                min_archive_prefix_chars: 2,
+                ..SearchLookupBudget::default()
+            },
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(report.lookup.prefix_terms, 1);
+    assert_eq!(report.lookup.prefix_lookup_ids, 0);
+    assert_eq!(report.lookup.prefix_candidate_ids, 0);
+    assert_eq!(report.lookup.prefix_cutoff_terms, 1);
+    assert!(report.hits.is_empty());
 }
 
 #[test]

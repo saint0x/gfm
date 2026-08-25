@@ -36,6 +36,7 @@ const PREFIX_MAX_TERM_LEN: usize = 32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchLookupBudget {
     pub max_prefix_ids_per_term: usize,
+    pub min_archive_prefix_chars: usize,
     pub max_fuzzy_keys_per_term: usize,
     pub max_fuzzy_terms_per_key: usize,
     pub max_fuzzy_candidates_per_term: usize,
@@ -45,6 +46,7 @@ impl Default for SearchLookupBudget {
     fn default() -> Self {
         Self {
             max_prefix_ids_per_term: 4096,
+            min_archive_prefix_chars: 2,
             max_fuzzy_keys_per_term: 96,
             max_fuzzy_terms_per_key: 512,
             max_fuzzy_candidates_per_term: 4096,
@@ -60,6 +62,7 @@ pub struct SearchLookupTelemetry {
     pub prefix_candidate_ids: usize,
     pub prefix_cache_hits: usize,
     pub prefix_cache_misses: usize,
+    pub prefix_cutoff_terms: usize,
     pub prefix_truncated_terms: usize,
     pub fuzzy_terms: usize,
     pub fuzzy_keys: usize,
@@ -82,6 +85,7 @@ impl SearchLookupTelemetry {
         self.prefix_candidate_ids += other.prefix_candidate_ids;
         self.prefix_cache_hits += other.prefix_cache_hits;
         self.prefix_cache_misses += other.prefix_cache_misses;
+        self.prefix_cutoff_terms += other.prefix_cutoff_terms;
         self.prefix_truncated_terms += other.prefix_truncated_terms;
         self.fuzzy_terms += other.fuzzy_terms;
         self.fuzzy_keys += other.fuzzy_keys;
@@ -1021,6 +1025,11 @@ impl SearchIndex {
                 .collect();
         }
         let remaining = budget.max_prefix_ids_per_term.saturating_sub(ids.len());
+        if remaining == 0 || term.chars().count() < budget.min_archive_prefix_chars {
+            telemetry.prefix_cutoff_terms += 1;
+            telemetry.prefix_candidate_ids += ids.len();
+            return Ok(ids);
+        }
         let lookup_ids = lookup.prefix_ids(term)?;
         telemetry.prefix_lookup_ids += lookup_ids.len();
         if lookup_ids.len() > remaining {
