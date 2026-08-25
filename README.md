@@ -97,7 +97,7 @@ The index is compact and incremental:
 - progressive hot/deep result streaming with stable dedupe
 - query-intent preclassification so ordinary searches skip full-record Finder-intent scoring passes
 - anchored boolean execution so positive `AND` terms, phrases, or proximity clauses bound `NOT` and filter checks without forcing a full-record universe scan
-- name substring n-gram candidates and delete-key fuzzy candidate indexes for infix and typo-tolerant matches without full-record scans
+- name substring n-gram candidates and delete-key fuzzy candidate indexes for infix and typo-tolerant matches without full-record scans; sub-trigram substring probes are cut off instead of expanding to all records, leaving exact and prefix indexes as the bounded short-query path
 - archive-backed prefix, substring, and fuzzy lookup with explicit candidate budgets, adaptive prefix cutoffs, lookup cache telemetry, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
 - cached score/name/path/id sort keys during bounded top-k ranking so deterministic ordering does not repeatedly allocate while results are merged
 - direct content-posting scoring for normal content-term queries without temporary ID-set materialization

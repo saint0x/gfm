@@ -1612,7 +1612,7 @@ fn run() -> Result<()> {
                 },
             )?;
             eprintln!(
-                "sidecar-budget\tcolumns-indexed={applied}\tmetadata-keys={metadata_keys}\tprefix-keys={prefix_keys}\tsubstring-keys={substring_keys}\tfuzzy-keys={fuzzy_keys}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tcontent-keys={content_keys}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
+                "sidecar-budget\tcolumns-indexed={applied}\tmetadata-keys={metadata_keys}\tprefix-keys={prefix_keys}\tsubstring-keys={substring_keys}\tfuzzy-keys={fuzzy_keys}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tcontent-keys={content_keys}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
                 lookup.indexed_prefixes(),
                 lookup.indexed_substring_grams(),
                 lookup.indexed_fuzzy_keys(),
@@ -1631,6 +1631,7 @@ fn run() -> Result<()> {
                 report.lookup.substring_candidate_ids,
                 report.lookup.substring_cache_hits,
                 report.lookup.substring_cache_misses,
+                report.lookup.substring_cutoff_terms,
                 report.lookup.substring_term_truncated_grams,
                 report.lookup.substring_truncated_grams,
                 report.lookup.fuzzy_terms,
@@ -3127,7 +3128,7 @@ fn run() -> Result<()> {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
             let run = run_regression_gate(&options, RegressionGateOptions::default())?;
             println!(
-                "fixture\t{}\tfiles\t{}\tindex-bytes\t{}\tsidecar-prefix-candidates\t{}\tsidecar-substring-candidates\t{}\tsidecar-fuzzy-verified\t{}\tsidecar-prefix-cache-hits\t{}\tsidecar-substring-cache-hits\t{}\tsidecar-fuzzy-cache-hits\t{}\tsidecar-prefix-cutoffs\t{}\tsidecar-prefix-truncated\t{}\tsidecar-substring-truncated\t{}\tsidecar-fuzzy-truncated\t{}\tpassed\t{}",
+                "fixture\t{}\tfiles\t{}\tindex-bytes\t{}\tsidecar-prefix-candidates\t{}\tsidecar-substring-candidates\t{}\tsidecar-fuzzy-verified\t{}\tsidecar-prefix-cache-hits\t{}\tsidecar-substring-cache-hits\t{}\tsidecar-fuzzy-cache-hits\t{}\tsidecar-prefix-cutoffs\t{}\tsidecar-prefix-truncated\t{}\tsidecar-substring-cutoffs\t{}\tsidecar-substring-truncated\t{}\tsidecar-fuzzy-truncated\t{}\tpassed\t{}",
                 run.macrobench.fixture_root.display(),
                 run.macrobench.files_materialized,
                 run.index_size_bytes,
@@ -3139,6 +3140,7 @@ fn run() -> Result<()> {
                 run.sidecar_lookup.fuzzy_cache_hits,
                 run.sidecar_lookup.prefix_cutoff_terms,
                 run.sidecar_lookup.prefix_truncated_terms,
+                run.sidecar_lookup.substring_cutoff_terms,
                 run.sidecar_lookup.substring_term_truncated_grams
                     + run.sidecar_lookup.substring_truncated_grams,
                 run.sidecar_lookup.fuzzy_term_truncated_keys
@@ -3165,7 +3167,7 @@ fn run() -> Result<()> {
             )?;
             let report = run_large_sidecar_gate(&LargeSidecarGateOptions::new(workspace, records))?;
             println!(
-                "large-sidecar-gate\tfixture={}\tthresholds={}\thistory={}\tprofile={}\tmin-ci-records={}\trecords={}\tprobe-records={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tsubstring-bytes={}\tfuzzy-bytes={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tsubstring-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
+                "large-sidecar-gate\tfixture={}\tthresholds={}\thistory={}\tprofile={}\tmin-ci-records={}\trecords={}\tprobe-records={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tsubstring-bytes={}\tfuzzy-bytes={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tsubstring-cutoffs={}\tsubstring-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
                 report.fixture_root.display(),
                 report.thresholds_path.display(),
                 report.history_path.display(),
@@ -3187,6 +3189,7 @@ fn run() -> Result<()> {
                 report.lookup.fuzzy_cache_hits,
                 report.lookup.prefix_cutoff_terms,
                 report.lookup.prefix_truncated_terms,
+                report.lookup.substring_cutoff_terms,
                 report.lookup.substring_term_truncated_grams + report.lookup.substring_truncated_grams,
                 report.lookup.fuzzy_term_truncated_keys
                     + report.lookup.fuzzy_key_truncated_terms

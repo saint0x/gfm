@@ -472,6 +472,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - the archive lookup caches repeated prefix, substring gram, and fuzzy key probes inside the mmap-backed lookup object and reports request, hit, and miss counters with each budgeted query;
   - prefix ids, archive prefix length, substring grams, substring ids per gram, fuzzy delete keys, fuzzy terms per key, and verified fuzzy candidates are capped by an explicit search lookup budget;
   - adaptive prefix cutoffs skip archive expansion for too-short prefixes and already-saturated local candidate sets before they can touch mmap sidecars;
+  - sub-trigram substring probes are cut off before candidate expansion so one- and two-character searches cannot degrade into all-record scans; exact and prefix indexes remain the bounded short-query path until a dedicated short-infix index exists;
   - fuzzy sidecar generation excludes all-numeric and long digit-run name tokens so high-cardinality generated identifiers do not dominate deletion-key expansion or heap residency;
   - search reports expose prefix/substring/fuzzy lookup telemetry, cache-hit telemetry, cutoff telemetry, truncation counters, candidate counts, and verified-candidate counts;
   - regression gates materialize real prefix/substring/fuzzy sidecar archives from macrobench records, execute repeated sidecar-backed search probes, and fail on candidate-count overflow or lookup truncation before prefix/substring/fuzzy expansion can become a machine-wide latency cliff;

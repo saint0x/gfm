@@ -133,6 +133,34 @@ fn sidecar_substring_lookup_budget_caps_grams_and_reports_truncation() {
 }
 
 #[test]
+fn short_substring_query_does_not_expand_to_all_records() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/alpha.pdf", "alpha.pdf"));
+    index.insert(record(2, "/tmp/report.pdf", "report.pdf"));
+    let lookup = StaticLookup {
+        prefix_ids: Vec::new(),
+        substring_ids: Vec::new(),
+        fuzzy_terms: Vec::new(),
+    };
+
+    let report = index
+        .query_structured_with_lookup_budget_cancellable(
+            &SearchQuery::parse("lp"),
+            10,
+            &lookup,
+            SearchLookupBudget::default(),
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert!(report.hits.is_empty());
+    assert_eq!(report.lookup.substring_cutoff_terms, 1);
+    assert_eq!(report.lookup.substring_grams, 0);
+    assert_eq!(report.lookup.substring_lookup_requests, 0);
+    assert_eq!(report.lookup.substring_candidate_ids, 0);
+}
+
+#[test]
 fn reindexed_records_refresh_cached_columns() {
     let mut index = SearchIndex::new();
     let mut item = record(1, "/tmp/alpha.md", "alpha.md");

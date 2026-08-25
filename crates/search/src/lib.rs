@@ -77,6 +77,7 @@ pub struct SearchLookupTelemetry {
     pub substring_candidate_ids: usize,
     pub substring_cache_hits: usize,
     pub substring_cache_misses: usize,
+    pub substring_cutoff_terms: usize,
     pub substring_term_truncated_grams: usize,
     pub substring_truncated_grams: usize,
     pub fuzzy_terms: usize,
@@ -109,6 +110,7 @@ impl SearchLookupTelemetry {
         self.substring_candidate_ids += other.substring_candidate_ids;
         self.substring_cache_hits += other.substring_cache_hits;
         self.substring_cache_misses += other.substring_cache_misses;
+        self.substring_cutoff_terms += other.substring_cutoff_terms;
         self.substring_term_truncated_grams += other.substring_term_truncated_grams;
         self.substring_truncated_grams += other.substring_truncated_grams;
         self.fuzzy_terms += other.fuzzy_terms;
@@ -1137,9 +1139,14 @@ impl SearchIndex {
         if term.is_empty() {
             return Ok(BTreeSet::new());
         }
+        if term.chars().count() < SUBSTRING_GRAM_CHARS {
+            telemetry.substring_cutoff_terms += 1;
+            return Ok(BTreeSet::new());
+        }
         let grams = substring_grams(term);
         if grams.is_empty() {
-            return Ok(self.records.keys().copied().collect());
+            telemetry.substring_cutoff_terms += 1;
+            return Ok(BTreeSet::new());
         }
         telemetry.substring_terms += 1;
         if grams.len() > budget.max_substring_grams_per_term {
