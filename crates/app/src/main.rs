@@ -2061,6 +2061,32 @@ fn run() -> Result<()> {
                 print_hit(&hit);
             }
         }
+        Some("search-content-index-adaptive") => {
+            let records = required_path(
+                args.next(),
+                "search-content-index-adaptive requires a records path",
+            )?;
+            let content = required_path(
+                args.next(),
+                "search-content-index-adaptive requires a content path",
+            )?;
+            let query = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "search-content-index-adaptive requires a query string".to_string(),
+                )
+            })?;
+            let pressure = parse_required_scheduling_pressure(&mut args, "content index search")?;
+            let root = records
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let extractor =
+                Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
+            let live = Indexer::default().load_live_with_content(records, content)?;
+            for hit in live.search_with_snippets(&query, 50, &extractor, 96)? {
+                print_hit(&hit);
+            }
+        }
         Some("search-content-index-set") => {
             let records = required_path(
                 args.next(),
@@ -4205,6 +4231,7 @@ fn print_usage() {
   gfm metadata-id-block-mmap <metadata.gfmmeta> <tag|comment> <term> <block-index>
   gfm metadata-verify <metadata.gfmmeta>
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>
+  gfm search-content-index-adaptive <records.gfmidx> <content.gfmcontent> <query> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm search-content-index-set <records.gfmidx> <query> <content.gfmcontent...>
   gfm search-content-index-manifest <records.gfmidx> <manifest.gfmmanifest> <query>
   gfm content-ids <content.gfmcontent> <term>

@@ -2430,6 +2430,58 @@ fn searches_persisted_text_content_from_binary() {
 }
 
 #[test]
+fn adaptive_persisted_content_search_applies_snippet_pressure_budget_from_binary() {
+    let root = unique_temp_dir("gfm-cli-durable-adaptive-snippet-root");
+    let records = unique_temp_path("gfm-cli-durable-adaptive-snippet-records", "gfmidx");
+    let content = unique_temp_path("gfm-cli-durable-adaptive-snippet-content", "gfmcontent");
+    let mut body = "x".repeat(1024 * 1024 + 1);
+    body.push_str(" persistedpressuremarker");
+    fs::write(root.join("large.md"), body).unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-content",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index-adaptive",
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "persistedpressuremarker",
+            "elevated",
+            "serious",
+            "low",
+            "active",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(stdout.contains("large.md"), "{stdout}");
+    assert!(!stdout.contains("[[persistedpressuremarker]]"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+}
+
+#[test]
 fn searches_persisted_content_phrases_from_binary() {
     let root = unique_temp_dir("gfm-cli-durable-phrase-root");
     let records = unique_temp_path("gfm-cli-durable-phrase-records", "gfmidx");

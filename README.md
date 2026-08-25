@@ -152,6 +152,8 @@ Resumed background content jobs use the same pressure-aware budget derivation be
 
 Adaptive direct content search uses the same pressure-aware budget derivation before live extraction and snippet generation.
 
+Adaptive persisted content search uses the same pressure-aware budget derivation before foreground snippet extraction reopens source files.
+
 Content segment maintenance uses the same adaptive scheduling policy before compaction, manifest promotion, or cleanup publication starts.
 
 Sidecar repair uses the same adaptive scheduling policy before rebuilding derived sidecars or quarantining corrupt sidecar archives.
@@ -412,6 +414,7 @@ Build and query content indexes:
 ```sh
 cargo run -p gfm -- index-content . /tmp/gfm.gfmidx /tmp/gfm.gfmcontent
 cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent "performance-critical"
+cargo run -p gfm -- search-content-index-adaptive /tmp/gfm.gfmidx /tmp/gfm.gfmcontent "performance-critical" elevated serious low active
 cargo run -p gfm -- search-content-index-set /tmp/gfm.gfmidx "performance-critical" /tmp/gfm-hot.gfmcontent /tmp/gfm-warm.gfmcontent
 cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent '"performance-critical systems"'
 cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent "near:8:performance,systems"
