@@ -53,6 +53,79 @@ fn live_index_applies_create_modify_and_remove_events() {
 }
 
 #[test]
+fn live_index_correlates_file_renames_without_identity_churn() {
+    let root = unique_temp_dir("gfm-rename-file-root");
+    let from = root.join("NeedleOld.txt");
+    let to = root.join("NeedleNew.txt");
+    fs::write(&from, "first").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let mut live = snapshot.into_live();
+    let original_id = live.search("needleold", 5)[0].record.id;
+
+    fs::rename(&from, &to).unwrap();
+    let event = FileEvent::new(
+        &to,
+        FileEventKind::Rename {
+            from,
+            to: to.clone(),
+        },
+    );
+
+    assert_eq!(
+        live.apply_event(&event).unwrap(),
+        UpdateOutcome::Renamed {
+            removed: 1,
+            inserted: 1
+        }
+    );
+    assert!(live.search("needleold", 5).is_empty());
+    let hits = live.search("needlenew", 5);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.id, original_id);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn live_index_correlates_directory_renames_across_subtrees() {
+    let root = unique_temp_dir("gfm-rename-dir-root");
+    let from = root.join("OldProject");
+    let to = root.join("NewProject");
+    let nested = from.join("Nested");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(nested.join("Needle.md"), "first").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let mut live = snapshot.into_live();
+    let original_file_id = live.search("needle", 5)[0].record.id;
+    let removed_count = 3;
+
+    fs::rename(&from, &to).unwrap();
+    let event = FileEvent::new(
+        &to,
+        FileEventKind::Rename {
+            from,
+            to: to.clone(),
+        },
+    );
+
+    assert_eq!(
+        live.apply_event(&event).unwrap(),
+        UpdateOutcome::Renamed {
+            removed: removed_count,
+            inserted: removed_count
+        }
+    );
+    let hits = live.search("needle", 5);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.id, original_file_id);
+    assert!(hits[0].record.path.ends_with("NewProject/Nested/Needle.md"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn snapshot_can_search_text_content() {
     let root = unique_temp_dir("gfm-content-index-root");
     fs::write(root.join("notes.md"), "needle appears inside the file body").unwrap();

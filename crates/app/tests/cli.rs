@@ -123,6 +123,38 @@ fn persists_volume_index_state_from_binary() {
 }
 
 #[test]
+fn reports_rename_correlation_from_binary() {
+    let root = unique_temp_dir("gfm-cli-rename-root");
+    let from = root.join("RenameOld.md");
+    let to = root.join("RenameNew.md");
+    fs::write(&from, "rename identity").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "rename-correlation",
+            from.to_str().unwrap(),
+            to.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("rename-correlation\t"), "{stdout}");
+    assert!(stdout.contains("\tremoved=1\t"), "{stdout}");
+    assert!(stdout.contains("\tinserted=1\t"), "{stdout}");
+    assert!(stdout.contains("\tpreserved=1"), "{stdout}");
+    assert!(!from.exists());
+    assert!(to.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn persists_fsevents_cursor_from_binary() {
     let root = unique_temp_dir("gfm-cli-fsevents-root");
     let index = unique_temp_path("gfm-cli-fsevents-records", "gfmidx");

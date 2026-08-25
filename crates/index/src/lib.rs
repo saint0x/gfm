@@ -16,6 +16,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 mod cursor;
+mod rename;
 mod repair;
 mod state;
 
@@ -23,6 +24,7 @@ pub use cursor::{
     FseventsCursor, FseventsCursorHealth, FseventsResumeAction, FseventsResumePlan,
     FSEVENTS_CURSOR_SCHEMA_VERSION,
 };
+pub use rename::{correlate_rename, RenameCorrelationReport};
 pub use repair::{RepairPriority, RepairReason, RepairSchedule, SubtreeRepairJob};
 pub use state::{IndexVolumeState, INDEX_STATE_SCHEMA_VERSION};
 
@@ -246,27 +248,18 @@ impl LiveIndex {
                 Ok(UpdateOutcome::Removed { records: removed })
             }
             FileEventKind::Rename { from, to } => {
-                let removed = self.index.remove_subtree(from).len();
-                match self.upsert_path(to) {
-                    Ok(UpdateOutcome::Upserted) => Ok(UpdateOutcome::Renamed {
-                        removed,
-                        inserted: 1,
-                    }),
-                    Ok(other) => Ok(other),
-                    Err(err) => {
-                        if removed > 0 {
-                            Ok(UpdateOutcome::Renamed {
-                                removed,
-                                inserted: 0,
-                            })
-                        } else {
-                            Err(err)
-                        }
-                    }
-                }
+                let report = self.apply_rename(from, to)?;
+                Ok(UpdateOutcome::Renamed {
+                    removed: report.removed,
+                    inserted: report.inserted,
+                })
             }
             FileEventKind::Rescan => Ok(UpdateOutcome::NeedsRescan),
         }
+    }
+
+    pub fn apply_rename(&mut self, from: &Path, to: &Path) -> Result<RenameCorrelationReport> {
+        correlate_rename(&mut self.index, from, to)
     }
 
     fn upsert_path(&mut self, path: &Path) -> Result<UpdateOutcome> {

@@ -280,6 +280,7 @@ Build and query record indexes:
 cargo run -p gfm -- index . /tmp/gfm.gfmidx
 cargo run -p gfm -- index-state . /tmp/gfm.gfmidx /tmp/gfm.gfmstate
 cargo run -p gfm -- index-state-inspect /tmp/gfm.gfmstate
+cargo run -p gfm -- rename-correlation /tmp/OldName.md /tmp/NewName.md
 cargo run -p gfm -- fsevents-cursor-checkpoint /tmp/gfm.gfmstate /tmp/gfm.gfmcursor 12345
 cargo run -p gfm -- fsevents-cursor-resume /tmp/gfm.gfmstate /tmp/gfm.gfmcursor
 cargo run -p gfm -- fsevents-repair-schedule /tmp/gfm.gfmstate /tmp/gfm.gfmcursor 12346,12350 kernel-dropped ~/Documents

@@ -10,7 +10,7 @@ use gfm_fs::{
 };
 use gfm_index::{
     BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, FseventsCursor,
-    FseventsCursorHealth, IndexVolumeState, Indexer, SearchStreamStage,
+    FseventsCursorHealth, IndexVolumeState, Indexer, LiveIndex, SearchStreamStage,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -435,6 +435,22 @@ fn run() -> Result<()> {
                 "index-state-inspect requires an index state path",
             )?;
             println!("{}", IndexVolumeState::read(state)?.as_tsv());
+        }
+        Some("rename-correlation") => {
+            let from = required_path(args.next(), "rename-correlation requires a source path")?;
+            let to = required_path(
+                args.next(),
+                "rename-correlation requires a destination path",
+            )?;
+            let root = from
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let snapshot = Indexer::default().build(root)?;
+            std::fs::rename(&from, &to).map_err(|err| GfmError::io(&from, err))?;
+            let mut live = LiveIndex::from_records(snapshot.records);
+            let report = live.apply_rename(&from, &to)?;
+            println!("{}", report.as_tsv());
         }
         Some("fsevents-cursor-checkpoint") => {
             let state = required_path(
@@ -1668,6 +1684,7 @@ fn print_usage() {
   gfm index <root> <output.gfmidx>
   gfm index-state <root> <records.gfmidx> <state.gfmstate>
   gfm index-state-inspect <state.gfmstate>
+  gfm rename-correlation <source> <destination>
   gfm fsevents-cursor-checkpoint <state.gfmstate> <cursor.gfmcursor> <last-event-id> [clean|repair-required]
   gfm fsevents-cursor-inspect <cursor.gfmcursor>
   gfm fsevents-cursor-resume <state.gfmstate> <cursor.gfmcursor>

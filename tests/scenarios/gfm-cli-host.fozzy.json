@@ -68,6 +68,21 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-rename-old.md",
+      "data": "rename identity"
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "rename-correlation",
+        "tmp/gfm-fozzy-rename-old.md",
+        "tmp/gfm-fozzy-rename-new.md"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
