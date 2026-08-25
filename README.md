@@ -150,7 +150,7 @@ The scheduler plans foreground, visible, background, maintenance, and repair wor
 
 Job progress is persisted through atomic typed snapshots that record job id, class, priority, label, volume id, state, completed units, total units, detail text, and update timestamp. On restart, planned, running, and paused snapshots are restored for user-visible progress surfaces while completed, cancelled, and failed terminal work stays out of the active restoration set.
 
-When `GFM_JOB_PAYLOAD_CATALOG` and `GFM_JOB_PROGRESS_STORE` are configured, shared operation and volume-scoped producers publish payload catalog rows and planned/running/terminal progress snapshots directly from the scheduler path. That gives foreground operations, visible preview and repair jobs, index rebuilds, and thumbnail generation one durable runtime metadata contract.
+When `GFM_JOB_PAYLOAD_CATALOG` and `GFM_JOB_PROGRESS_STORE` are configured, shared operation, volume-scoped, and adaptive scheduled producers publish payload catalog rows and planned/running/terminal progress snapshots directly from the scheduler path. That gives foreground operations, visible preview and repair jobs, adaptive sidecar and persistent-index repair, diagnostics rebuilds, and thumbnail generation one durable runtime metadata contract.
 
 The retriable background content indexing worker also publishes payload and progress records as it plans, enters retry attempts, and records terminal completion or failure, so machine-wide indexing work can be restored and diagnosed through the same runtime metadata layer.
 

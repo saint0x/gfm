@@ -3950,7 +3950,16 @@ where
     } else {
         scheduler.schedule(priority, label)
     };
+    let runtime = RuntimeJobHandle::begin(
+        &job,
+        payload_kind_for_label(label),
+        label,
+        1,
+        format!("{}:{label}:adaptive", priority.as_str()),
+    )?;
+    let runtime_task = runtime.clone();
     let task = Task::new(job.clone(), move |_| {
+        runtime_task.running()?;
         let result = work()?;
         *result_slot_task
             .lock()
@@ -3964,6 +3973,7 @@ where
         .iter()
         .find(|outcome| outcome.id == job.id)
         .ok_or_else(|| GfmError::Format(format!("{label} job did not run")))?;
+    runtime.finish(&outcome.status)?;
     match &outcome.status {
         TaskStatus::Completed => {}
         TaskStatus::Started => {

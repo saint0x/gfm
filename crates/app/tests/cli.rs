@@ -1852,11 +1852,19 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
     assert_eq!(fs::read_to_string(&dictionary).unwrap(), "not-a-dictionary");
     assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
 
+    let catalog = unique_temp_path("gfm-cli-sidecar-recovery-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-sidecar-recovery-runtime", "gfmprogress");
     let recover_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
-            "sidecar-recover",
+            "sidecar-recover-adaptive",
             records.to_str().unwrap(),
             quarantine.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
             "-",
             "-",
             prefixes.to_str().unwrap(),
@@ -1876,6 +1884,27 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
             && recover_stdout.contains("action=ready"),
         "{recover_stdout}"
     );
+    let recover_stderr = String::from_utf8(recover_output.stderr).unwrap();
+    assert!(
+        recover_stderr.contains("sidecar-recovery-action"),
+        "{recover_stderr}"
+    );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(catalog_text.contains("\trepair\t"), "{catalog_text}");
+    assert!(catalog_text.contains("sidecar repair"), "{catalog_text}");
+    assert!(
+        catalog_text.contains("runtime/repair/sidecar-repair.gfmjob"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tbackground\tbackground\tsidecar repair"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tcompleted\t1\t1\tcompleted\t"),
+        "{progress_text}"
+    );
 
     let prefix_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["prefix-verify", prefixes.to_str().unwrap()])
@@ -1892,6 +1921,8 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
     fs::remove_file(records).unwrap();
     fs::remove_file(prefixes).unwrap();
     fs::remove_file(dictionary).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
     fs::remove_dir_all(quarantine).unwrap();
 }
 
