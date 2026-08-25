@@ -55,7 +55,7 @@ use gfm_store::{
 use gfm_store::{
     fuzzy_postings_from_records, plan_sidecar_recovery, prefix_postings_from_records,
     recover_sidecars, sidecar_kind_name, write_fuzzy_postings, write_prefix_postings,
-    SidecarHealth, SidecarKind, SidecarPaths,
+    SidecarHealth, SidecarKind, SidecarPaths, SidecarRecovery,
 };
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_macrobench_fixture_report,
@@ -1821,16 +1821,40 @@ fn run() -> Result<()> {
             let report = run_volume_task(volume, Priority::Visible, "sidecar repair", move || {
                 recover_sidecars(&records, &sidecars, &quarantine)
             })?;
-            println!("{}", report.before.as_tsv());
-            println!(
-                "sidecar-recovery\trebuilt={}\tquarantined={}",
-                report.rebuilt_sidecars.len(),
-                report.quarantined_sidecars.len()
-            );
-            println!("{}", report.after.as_tsv());
-            print_sidecar_health("invalid-before", &report.before.invalid_sidecars);
-            for path in report.quarantined_sidecars {
-                println!("quarantined\t{}", path.display());
+            print_sidecar_recovery_report(report);
+        }
+        Some("sidecar-recover-adaptive") => {
+            let records = required_path(
+                args.next(),
+                "sidecar-recover-adaptive requires a records path",
+            )?;
+            let quarantine = required_path(
+                args.next(),
+                "sidecar-recover-adaptive requires a quarantine directory",
+            )?;
+            let pressure = parse_required_scheduling_pressure(&mut args, "sidecar repair")?;
+            let sidecars = parse_sidecar_paths(&mut args, "sidecar-recover-adaptive")?;
+            let volume = detect_volume_id(&records)
+                .ok()
+                .or_else(|| parent_volume(&records));
+            let outcome = run_scheduled_volume_task(
+                volume,
+                Priority::Background,
+                "sidecar repair",
+                pressure,
+                move || recover_sidecars(&records, &sidecars, &quarantine),
+            )?;
+            if outcome.deferred {
+                eprintln!(
+                    "sidecar-recovery-deferred\taction={:?}",
+                    outcome.scheduling_action
+                );
+            } else {
+                let report = outcome.result.ok_or_else(|| {
+                    GfmError::Format("sidecar repair ran without a report".to_string())
+                })?;
+                eprintln!("sidecar-recovery-action\t{:?}", outcome.scheduling_action);
+                print_sidecar_recovery_report(report);
             }
         }
         Some("fuzzy-terms-mmap") => {
@@ -3502,6 +3526,20 @@ fn print_content_maintenance_report(report: ContentMaintenanceReport) {
     }
 }
 
+fn print_sidecar_recovery_report(report: SidecarRecovery) {
+    println!("{}", report.before.as_tsv());
+    println!(
+        "sidecar-recovery\trebuilt={}\tquarantined={}",
+        report.rebuilt_sidecars.len(),
+        report.quarantined_sidecars.len()
+    );
+    println!("{}", report.after.as_tsv());
+    print_sidecar_health("invalid-before", &report.before.invalid_sidecars);
+    for path in report.quarantined_sidecars {
+        println!("quarantined\t{}", path.display());
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ContentJobOutcome {
     report: Option<ContentIndexReport>,
@@ -3950,6 +3988,7 @@ fn print_usage() {
   gfm index-fuzzy <records.gfmidx> <fuzzy.gfmfuzzy>
   gfm sidecar-recovery-plan <records.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <dictionary.gfmdict|->
   gfm sidecar-recover <records.gfmidx> <quarantine-dir> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <dictionary.gfmdict|->
+  gfm sidecar-recover-adaptive <records.gfmidx> <quarantine-dir> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <dictionary.gfmdict|->
   gfm fuzzy-terms-mmap <fuzzy.gfmfuzzy> <key>
   gfm fuzzy-verify <fuzzy.gfmfuzzy>
   gfm prefix-ids-mmap <prefixes.gfmprefix> <prefix>

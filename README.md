@@ -148,6 +148,8 @@ Background content indexing also consumes explicit runtime pressure signals: sat
 
 Content segment maintenance uses the same adaptive scheduling policy before compaction, manifest promotion, or cleanup publication starts.
 
+Sidecar repair uses the same adaptive scheduling policy before rebuilding derived sidecars or quarantining corrupt sidecar archives.
+
 Sidecar repair, persistent index repair, and diagnostics index rebuild commands enter through volume-isolated worker admission before scanning, rebuilding, quarantining, or publishing repaired archives.
 
 ## UI Parity
@@ -284,6 +286,7 @@ cargo run -p gfm -- content-manifest-promotion-recovery-plan content.gfmmanifest
 cargo run -p gfm -- content-manifest-promotion-recover content.gfmmanifest
 cargo run -p gfm -- sidecar-recovery-plan records.gfmidx columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
 cargo run -p gfm -- sidecar-recover records.gfmidx quarantine columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
+cargo run -p gfm -- sidecar-recover-adaptive records.gfmidx quarantine saturated nominal ac idle columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
 cargo run -p gfm -- archive-schema records records.gfmidx
 cargo run -p gfm -- archive-schema prefixes prefixes.gfmprefix
 cargo run -p gfm -- archive-rebuild-plan records.gfmidx columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict content.gfmcontent content.gfmmanifest hot:content.gfmcontent

@@ -1820,6 +1820,38 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
         "{plan_stdout}"
     );
 
+    let deferred_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "sidecar-recover-adaptive",
+            records.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            dictionary.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        deferred_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&deferred_output.stderr)
+    );
+    let deferred_stderr = String::from_utf8(deferred_output.stderr).unwrap();
+    assert!(
+        deferred_stderr.contains("sidecar-recovery-deferred")
+            && deferred_stderr.contains("action=Defer"),
+        "{deferred_stderr}"
+    );
+    assert!(!prefixes.exists());
+    assert_eq!(fs::read_to_string(&dictionary).unwrap(), "not-a-dictionary");
+    assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
+
     let recover_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "sidecar-recover",
