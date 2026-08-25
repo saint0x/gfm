@@ -623,6 +623,32 @@ fn content_term_scoring_uses_bounded_top_hits_without_id_materialization() {
 }
 
 #[test]
+fn content_proximity_uses_rarest_posting_candidates_without_id_sets() {
+    let mut index = SearchIndex::new();
+    for node in 1..=64 {
+        let item = record(
+            node,
+            &format!("/tmp/noisy-{node}.txt"),
+            &format!("noisy-{node}.txt"),
+        );
+        index.insert(item.clone());
+        index.insert_content(item.id, "alpha far filler filler filler");
+    }
+
+    let near = record(100, "/tmp/a/near.txt", "near.txt");
+    let far = record(101, "/tmp/b/far.txt", "far.txt");
+    index.insert(near.clone());
+    index.insert(far.clone());
+    index.insert_content(near.id, "alpha beta");
+    index.insert_content(far.id, "alpha filler filler filler beta");
+
+    let hits = index.query("near:1:alpha,beta", 10);
+    let paths: Vec<_> = hits.into_iter().map(|hit| hit.record.path).collect();
+
+    assert_eq!(paths, vec![PathBuf::from("/tmp/a/near.txt")]);
+}
+
+#[test]
 fn cancelled_queries_stop_before_returning_hits() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/needle.txt", "needle.txt"));

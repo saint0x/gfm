@@ -1025,12 +1025,6 @@ impl SearchIndex {
         }
     }
 
-    fn content_id_set(&self, term: &str) -> Option<BTreeSet<FileId>> {
-        self.content_terms
-            .get(term)
-            .map(|positions| positions.keys().copied().collect())
-    }
-
     fn content_frequency(&self, id: FileId, term: &str) -> usize {
         self.content_terms
             .get(term)
@@ -1225,22 +1219,27 @@ impl SearchIndex {
         })
     }
 
-    fn content_proximity_ids(&self, proximity: &QueryProximity) -> BTreeSet<FileId> {
-        let mut terms = proximity.terms.iter();
-        let Some(first) = terms.next() else {
-            return BTreeSet::new();
+    fn content_proximity_ids(&self, proximity: &QueryProximity) -> Vec<FileId> {
+        let postings: Option<Vec<_>> = proximity
+            .terms
+            .iter()
+            .map(|term| self.content_terms.get(term))
+            .collect();
+        let Some(mut postings) = postings else {
+            return Vec::new();
         };
-        let Some(first_ids) = self.content_id_set(first) else {
-            return BTreeSet::new();
+        let Some((rarest_index, _)) = postings
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, positions)| positions.len())
+        else {
+            return Vec::new();
         };
-        let candidates = terms.try_fold(first_ids, |mut candidates, term| {
-            let ids = self.content_id_set(term)?;
-            candidates.retain(|id| ids.contains(id));
-            Some(candidates)
-        });
-        candidates
-            .unwrap_or_default()
-            .into_iter()
+        let rarest = postings.swap_remove(rarest_index);
+        rarest
+            .keys()
+            .copied()
+            .filter(|id| postings.iter().all(|positions| positions.contains_key(id)))
             .filter(|id| self.content_matches_proximity(*id, proximity))
             .collect()
     }
