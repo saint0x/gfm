@@ -396,8 +396,8 @@ impl ShardedSearchIndex {
             return Ok(Vec::new());
         }
 
-        let mut hot = Vec::new();
-        let mut deep = Vec::new();
+        let mut hot = BoundedHitMerge::new(limit);
+        let mut deep = BoundedHitMerge::new(limit.saturating_mul(2));
         std::thread::scope(|scope| {
             let handles: Vec<_> = self
                 .shards
@@ -425,7 +425,7 @@ impl ShardedSearchIndex {
 
         let mut batches = Vec::new();
         let mut seen = BTreeMap::new();
-        hot = top_hits(hot, limit);
+        let hot = hot.into_sorted_hits();
         if !hot.is_empty() {
             for hit in &hot {
                 seen.insert(hit.record.id, hit.score);
@@ -436,11 +436,12 @@ impl ShardedSearchIndex {
             });
         }
 
+        let mut deep = deep.into_sorted_hits();
         deep.retain(|hit| match seen.get(&hit.record.id) {
             Some(score) => hit.score > *score,
             None => true,
         });
-        deep = top_hits(deep, limit);
+        let deep = top_hits(deep, limit);
         if !deep.is_empty() {
             batches.push(SearchStreamBatch {
                 stage: SearchStreamStage::Deep,

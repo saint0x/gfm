@@ -2060,6 +2060,44 @@ fn sharded_stream_merges_stages_across_volumes() {
     );
 }
 
+#[test]
+fn sharded_stream_bounds_stage_merges_across_many_volumes() {
+    let mut index = ShardedSearchIndex::new();
+    for volume in 1..=24 {
+        let hot = volume_record(
+            volume,
+            1,
+            &format!("/Volumes/{volume:02}/needle.md"),
+            "needle.md",
+        );
+        let deep = volume_record(
+            volume,
+            2,
+            &format!("/Volumes/{volume:02}/deep-{volume:02}.md"),
+            &format!("deep-{volume:02}.md"),
+        );
+        index.insert(hot);
+        index.insert(deep.clone());
+        index.insert_content(deep.id, "needle exists only in content");
+    }
+
+    let batches = index.stream("needle", 5).unwrap();
+
+    assert_eq!(batches.len(), 2);
+    assert_eq!(batches[0].stage, SearchStreamStage::Hot);
+    assert_eq!(batches[0].hits.len(), 5);
+    assert_eq!(batches[1].stage, SearchStreamStage::Deep);
+    assert_eq!(batches[1].hits.len(), 5);
+    assert_eq!(
+        batches[0].hits[0].record.path,
+        PathBuf::from("/Volumes/01/needle.md")
+    );
+    assert_eq!(
+        batches[1].hits[0].record.path,
+        PathBuf::from("/Volumes/01/deep-01.md")
+    );
+}
+
 fn record(node: u64, path: &str, name: &str) -> FileRecord {
     volume_record(1, node, path, name)
 }
