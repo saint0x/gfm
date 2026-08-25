@@ -128,6 +128,39 @@ fn supports_boolean_content_phrase_queries() {
 }
 
 #[test]
+fn matches_content_terms_within_proximity_window() {
+    let mut index = SearchIndex::new();
+    let keep = record(1, "/tmp/near.txt", "near.txt");
+    let skip = record(2, "/tmp/far.txt", "far.txt");
+    index.insert(keep.clone());
+    index.insert(skip.clone());
+    index.insert_content(keep.id, "alpha one two beta");
+    index.insert_content(skip.id, "alpha one two three four five beta");
+
+    let hits = index.query("near:3:alpha,beta", 10);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.name, "near.txt");
+    assert_eq!(hits[0].reason, MatchReason::Content);
+}
+
+#[test]
+fn supports_boolean_content_proximity_queries() {
+    let mut index = SearchIndex::new();
+    let keep = record(1, "/tmp/near.txt", "near.txt");
+    let skip = record(2, "/tmp/far.txt", "far.txt");
+    index.insert(keep.clone());
+    index.insert(skip.clone());
+    index.insert_content(keep.id, "client alpha one beta");
+    index.insert_content(skip.id, "client alpha one two three beta");
+
+    let hits = index.query("client AND near:2:alpha,beta", 10);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.name, "near.txt");
+}
+
+#[test]
 fn filters_by_kind_extension_path_and_size() {
     let mut index = SearchIndex::new();
     let mut keep = record(1, "/Users/me/Desktop/PLAN.md", "PLAN.md");

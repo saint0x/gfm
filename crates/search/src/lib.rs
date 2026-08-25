@@ -8,8 +8,8 @@ use fuzzy::bounded_levenshtein;
 use intent::{intent_score, term_matches_intent};
 use query::{normalize, tokenize};
 pub use query::{
-    DateComparison, DateField, QueryExpr, QueryFilter, QueryKind, QueryScope, SearchQuery,
-    SizeComparison,
+    DateComparison, DateField, QueryExpr, QueryFilter, QueryKind, QueryProximity, QueryScope,
+    SearchQuery, SizeComparison,
 };
 pub use session::SearchSupersession;
 pub use shard::ShardedSearchIndex;
@@ -342,6 +342,18 @@ impl SearchIndex {
             }
         }
 
+        if pass.includes_deep() {
+            for proximity in &query.proximities {
+                cancellation.check()?;
+                for id in self.content_proximity_ids(proximity) {
+                    scores
+                        .entry(id)
+                        .and_modify(|(score, _)| *score += 375)
+                        .or_insert((375, MatchReason::Content));
+                }
+            }
+        }
+
         if scores.len() < limit {
             for record in self.records.values() {
                 cancellation.check()?;
@@ -433,6 +445,17 @@ impl SearchIndex {
         }) {
             return false;
         }
+        if pass.includes_deep()
+            && !query
+                .proximities
+                .iter()
+                .all(|proximity| self.content_matches_proximity(record.id, proximity))
+        {
+            return false;
+        }
+        if !pass.includes_deep() && !query.proximities.is_empty() {
+            return false;
+        }
         query.filters.iter().all(|filter| filter.matches(record))
     }
 
@@ -452,6 +475,9 @@ impl SearchIndex {
             QueryExpr::Phrase(phrase) => {
                 record_matches_phrase(record, phrase)
                     || (pass.includes_deep() && self.content_matches_phrase(record.id, phrase))
+            }
+            QueryExpr::Proximity(proximity) => {
+                pass.includes_deep() && self.content_matches_proximity(record.id, proximity)
             }
             QueryExpr::Filter(filter) => filter.matches(record),
             QueryExpr::Not(expression) => !self.record_matches_expression(record, expression, pass),
@@ -516,6 +542,50 @@ impl SearchIndex {
                 .iter()
                 .enumerate()
                 .all(|(offset, positions)| positions.contains(&(*start + offset as u32 + 1)))
+        })
+    }
+
+    fn content_proximity_ids(&self, proximity: &QueryProximity) -> BTreeSet<FileId> {
+        let mut terms = proximity.terms.iter();
+        let Some(first) = terms.next() else {
+            return BTreeSet::new();
+        };
+        let Some(first_ids) = self.content_ids(first) else {
+            return BTreeSet::new();
+        };
+        let candidates = terms.try_fold(first_ids, |mut candidates, term| {
+            let ids = self.content_ids(term)?;
+            candidates.retain(|id| ids.contains(id));
+            Some(candidates)
+        });
+        candidates
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|id| self.content_matches_proximity(*id, proximity))
+            .collect()
+    }
+
+    fn content_matches_proximity(&self, id: FileId, proximity: &QueryProximity) -> bool {
+        let positions: Option<Vec<&Vec<u32>>> = proximity
+            .terms
+            .iter()
+            .map(|term| {
+                self.content_terms
+                    .get(term)
+                    .and_then(|positions| positions.get(&id))
+                    .filter(|positions| !positions.is_empty())
+            })
+            .collect();
+        let Some(positions) = positions else {
+            return false;
+        };
+        let mut anchors = positions[0].iter().copied();
+        anchors.any(|anchor| {
+            positions.iter().skip(1).all(|other| {
+                other
+                    .iter()
+                    .any(|position| anchor.abs_diff(*position) <= proximity.distance)
+            })
         })
     }
 
@@ -619,7 +689,7 @@ fn expression_needs_universe(expression: &QueryExpr) -> bool {
         QueryExpr::And(expressions) | QueryExpr::Or(expressions) => {
             expressions.iter().any(expression_needs_universe)
         }
-        QueryExpr::Term(_) | QueryExpr::Phrase(_) => false,
+        QueryExpr::Term(_) | QueryExpr::Phrase(_) | QueryExpr::Proximity(_) => false,
     }
 }
 

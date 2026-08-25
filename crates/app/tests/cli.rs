@@ -412,6 +412,53 @@ fn searches_persisted_content_phrases_from_binary() {
 }
 
 #[test]
+fn searches_persisted_content_proximity_from_binary() {
+    let root = unique_temp_dir("gfm-cli-durable-proximity-root");
+    let records = unique_temp_path("gfm-cli-durable-proximity-records", "gfmidx");
+    let content = unique_temp_path("gfm-cli-durable-proximity-content", "gfmcontent");
+    fs::write(root.join("keep.md"), "alpha one two beta").unwrap();
+    fs::write(root.join("skip.md"), "alpha one two three four beta").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-content",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index",
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "near:3:alpha,beta",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(stdout.contains("keep.md"), "{stdout}");
+    assert!(!stdout.contains("skip.md"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+}
+
+#[test]
 fn resolves_content_ids_from_archive_directory() {
     let root = unique_temp_dir("gfm-cli-content-ids-root");
     let records = unique_temp_path("gfm-cli-content-ids-records", "gfmidx");

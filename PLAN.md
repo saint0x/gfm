@@ -334,6 +334,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
    - Pluggable extractors.
    - Large binary files excluded by default.
    - Chunked content with per-file byte budgets.
+   - Positional postings support exact quoted phrases and explicit `near:N:alpha,beta` proximity windows after durable reload.
 
 5. Recency and usage index
    - Opened, previewed, moved, copied, renamed, searched, selected.

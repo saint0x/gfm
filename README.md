@@ -91,6 +91,7 @@ The index is compact and incremental:
 - mmap immutable readers
 - hot mutable buffers
 - progressive hot/deep result streaming with stable dedupe
+- exact phrase and `near:N:alpha,beta` positional content retrieval
 - bounded snippets with highlighted content matches
 - binary-signature and control-byte classification before content extraction
 - ranking that separates exact, prefix, substring, fuzzy, metadata, content, and recency signals
@@ -159,6 +160,7 @@ cargo run -p gfm -- search . 'tag:Important kind:file'
 cargo run -p gfm -- search . 'README @desktop'
 cargo run -p gfm -- search-content . "Finder parity"
 cargo run -p gfm -- search-content . '"Finder parity"'
+cargo run -p gfm -- search-content . "near:6:finder,parity"
 ```
 
 Build and query record indexes:
@@ -174,6 +176,7 @@ Build and query content indexes:
 cargo run -p gfm -- index-content . /tmp/gfm.gfmidx /tmp/gfm.gfmcontent
 cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent "performance-critical"
 cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent '"performance-critical systems"'
+cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent "near:8:performance,systems"
 cargo run -p gfm -- content-ids /tmp/gfm.gfmcontent "performance-critical"
 ```
 
