@@ -122,16 +122,14 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Packaging
 
-84. Build signed `.app` bundle with icons, entitlements, Info.plist, launch services registration, and document associations.
-85. Implement hardened runtime settings.
-86. Implement notarization pipeline.
-87. Implement first-run permission onboarding that remains Finder-parity by default.
-88. Implement update, rollback, crash-report, and diagnostics policy.
-89. Implement release artifact validation on clean macOS machines.
+84. Implement notarization pipeline.
+85. Implement first-run permission onboarding that remains Finder-parity by default.
+86. Implement update, rollback, crash-report, and diagnostics policy.
+87. Implement release artifact validation on clean macOS machines.
 
 ## Documentation
 
-90. Expand `PLAN.md` when architectural decisions change materially.
-91. Keep `README.md` written as the completed product contract.
-92. Keep this file limited to unfinished work only.
-93. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+88. Expand `PLAN.md` when architectural decisions change materially.
+89. Keep `README.md` written as the completed product contract.
+90. Keep this file limited to unfinished work only.
+91. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

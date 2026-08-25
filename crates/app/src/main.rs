@@ -10,6 +10,7 @@ use gfm_jobs::{
 };
 use gfm_mac::{FileEventStream, WatchRoot};
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
+use gfm_packaging::{build_app_bundle, register_launch_services, AppBundleSpec, SigningIdentity};
 use gfm_store::ContentArchive;
 use gfm_testkit::{
     run_macrobench, run_regression_gate, MacrobenchOptions, MacrobenchScale, MacrobenchStage,
@@ -284,6 +285,29 @@ fn run() -> Result<()> {
                     run.gate.violations.len()
                 )));
             }
+        }
+        Some("bundle-app") => {
+            let executable = required_path(args.next(), "bundle-app requires an executable path")?;
+            let icon = required_path(args.next(), "bundle-app requires an icon path")?;
+            let output_dir = required_path(args.next(), "bundle-app requires an output directory")?;
+            let mut spec = AppBundleSpec::new(executable, icon, output_dir);
+            spec.signing_identity = match args.next().as_deref() {
+                Some("--unsigned") => SigningIdentity::Unsigned,
+                Some("--ad-hoc") | None => SigningIdentity::AdHoc,
+                Some(identity) => SigningIdentity::DeveloperId(identity.to_string()),
+            };
+            let bundle = build_app_bundle(&spec)?;
+            println!(
+                "{}\t{}\t{}",
+                bundle.app_path.display(),
+                bundle.executable_path.display(),
+                bundle.signed
+            );
+        }
+        Some("register-app") => {
+            let app_path = required_path(args.next(), "register-app requires an .app path")?;
+            register_launch_services(&app_path)?;
+            println!("{}", app_path.display());
         }
         Some("jobs-recover") => {
             let journal = args
@@ -582,6 +606,8 @@ fn print_usage() {
   gfm config-dump [config.toml]
   gfm macrobench <workspace> [smoke|standard]
   gfm regression-gate <workspace> [smoke|standard]
+  gfm bundle-app <executable> <GFM.icns> <output-dir> [--ad-hoc|--unsigned|developer-id]
+  gfm register-app <GFM.app>
   gfm jobs-recover [jobs.journal]
   gfm watch-once <root>
   gfm copy <source> <destination>

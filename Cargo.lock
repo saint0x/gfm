@@ -176,6 +176,7 @@ dependencies = [
  "gfm-jobs",
  "gfm-mac",
  "gfm-ops",
+ "gfm-packaging",
  "gfm-store",
  "gfm-testkit",
  "gfm-types",
@@ -242,6 +243,13 @@ version = "0.1.0"
 dependencies = [
  "gfm-types",
  "trash",
+]
+
+[[package]]
+name = "gfm-packaging"
+version = "0.1.0"
+dependencies = [
+ "gfm-types",
 ]
 
 [[package]]

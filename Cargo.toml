@@ -9,6 +9,7 @@ members = [
     "crates/jobs",
     "crates/mac",
     "crates/ops",
+    "crates/packaging",
     "crates/search",
     "crates/store",
     "crates/testkit",

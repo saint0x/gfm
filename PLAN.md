@@ -283,6 +283,15 @@ gfm/
 - Runs macrobenchmarks through the real index build, hot search, streaming search, and content search paths, then evaluates observations against telemetry budgets.
 - Provides regression gates that fail on latency budget violations, peak memory drift, index-size density drift, and frame-time/stall drift.
 
+`packaging`
+
+- Owns deterministic macOS `.app` construction for release and host validation.
+- Generates `Info.plist` with Finder-compatible document associations for folders and files, bundle metadata, category, icon reference, executable metadata, and minimum macOS version.
+- Copies the native binary and icon resources into the canonical app bundle layout.
+- Generates signing entitlements as release inputs and signs bundles with ad-hoc or Developer ID identities.
+- Enables hardened runtime during signing and verifies the signature after bundle creation.
+- Exposes Launch Services registration as an explicit operator command so release/install flows can register GFM without hiding host mutation inside validation.
+
 ## Data Model
 
 ### Core Identity

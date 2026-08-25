@@ -117,6 +117,23 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-host.icns",
+      "data": "icns-test"
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "bundle-app",
+        "target/aarch64-apple-darwin/debug/gfm",
+        "tmp/gfm-fozzy-host.icns",
+        "tmp/gfm-fozzy-dist",
+        "--unsigned"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
