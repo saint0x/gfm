@@ -269,6 +269,8 @@ cargo run -p gfm -- archive-schema records records.gfmidx
 cargo run -p gfm -- archive-schema prefixes prefixes.gfmprefix
 cargo run -p gfm -- records-migration-plan records.gfmidx
 cargo run -p gfm -- records-migrate records.gfmidx quarantine
+cargo run -p gfm -- content-migration-plan content.gfmcontent
+cargo run -p gfm -- content-migrate content.gfmcontent quarantine
 ```
 
 `regression-gate` materializes benchmark indexes and real prefix/fuzzy sidecar archives, then fails on latency, index-density, prefix lookup, fuzzy lookup, cache-path, and sidecar-truncation drift.
@@ -276,8 +278,9 @@ cargo run -p gfm -- records-migrate records.gfmidx quarantine
 `diagnostics-index-recovery-plan` and `diagnostics-index-recover` classify persistent record/state health, rebuild missing or stale state, and quarantine corrupt record archives before rebuilding.
 `content-manifest-recovery-plan` and `content-manifest-recover` classify content manifest health, prune invalid archives, and quarantine corrupt manifests before rebuilding from mmap-validated archives.
 `sidecar-recovery-plan` and `sidecar-recover` validate, quarantine, and rebuild search sidecars from the durable record archive.
-`archive-schema` classifies record, column, metadata, prefix, fuzzy, dictionary, content, and content-manifest archives as current, legacy, unsupported, missing, or unreadable while validating known schemas through the production mmap readers.
+`archive-schema` classifies record, column, metadata, prefix, fuzzy, dictionary, content, and content-manifest archives as current, legacy, unsupported, missing, or unreadable while validating known schemas through the production readers used by search and diagnostics.
 `records-migration-plan` and `records-migrate` rewrite legacy record archives into the current checksummed schema after preserving a byte backup for operator rollback and forensic inspection.
+`content-migration-plan` and `content-migrate` rewrite legacy sequential content archives into the current indexed and checksummed content schema after preserving a byte backup.
 
 Build, sign, and register the native app bundle:
 
@@ -325,6 +328,8 @@ cargo run -p gfm -- archive-schema records /tmp/gfm.gfmidx
 cargo run -p gfm -- archive-schema content-manifest /tmp/gfm.gfmmanifest
 cargo run -p gfm -- records-migration-plan /tmp/gfm.gfmidx
 cargo run -p gfm -- records-migrate /tmp/gfm.gfmidx /tmp/gfm-migration-backups
+cargo run -p gfm -- content-migration-plan /tmp/gfm.gfmcontent
+cargo run -p gfm -- content-migrate /tmp/gfm.gfmcontent /tmp/gfm-migration-backups
 cargo run -p gfm -- records-verify /tmp/gfm.gfmidx
 cargo run -p gfm -- index-columns /tmp/gfm.gfmidx /tmp/gfm.gfmcols
 cargo run -p gfm -- columns-verify /tmp/gfm.gfmcols

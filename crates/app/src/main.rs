@@ -39,11 +39,12 @@ use gfm_preview::{
 };
 use gfm_store::{
     dictionary_term_report_from_records, inspect_archive_schema, metadata_postings_from_records,
-    migrate_record_archive, plan_content_manifest_recovery, plan_record_archive_migration,
-    recover_content_manifest, write_dictionary, write_metadata_postings, write_record_columns,
-    ArchiveSchemaKind, ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive,
-    MmapContentSet, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
-    MmapRecordArchive, MmapRecordColumns,
+    migrate_content_archive, migrate_record_archive, plan_content_archive_migration,
+    plan_content_manifest_recovery, plan_record_archive_migration, recover_content_manifest,
+    write_dictionary, write_metadata_postings, write_record_columns, ArchiveSchemaKind,
+    ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive, MmapContentSet,
+    MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
+    MmapRecordColumns,
 };
 use gfm_store::{
     fuzzy_postings_from_records, plan_sidecar_recovery, prefix_postings_from_records,
@@ -1493,6 +1494,20 @@ fn run() -> Result<()> {
             let backup_dir =
                 required_path(args.next(), "records-migrate requires a backup directory")?;
             let migration = migrate_record_archive(records, backup_dir)?;
+            println!("{}", migration.as_tsv());
+        }
+        Some("content-migration-plan") => {
+            let content = required_path(
+                args.next(),
+                "content-migration-plan requires a content path",
+            )?;
+            println!("{}", plan_content_archive_migration(content).as_tsv());
+        }
+        Some("content-migrate") => {
+            let content = required_path(args.next(), "content-migrate requires a content path")?;
+            let backup_dir =
+                required_path(args.next(), "content-migrate requires a backup directory")?;
+            let migration = migrate_content_archive(content, backup_dir)?;
             println!("{}", migration.as_tsv());
         }
         Some("index-columns") => {
@@ -3239,6 +3254,8 @@ fn print_usage() {
   gfm archive-schema <records|columns|metadata|prefixes|fuzzy|dictionary|content|content-manifest> <archive-path>
   gfm records-migration-plan <records.gfmidx>
   gfm records-migrate <records.gfmidx> <backup-dir>
+  gfm content-migration-plan <content.gfmcontent>
+  gfm content-migrate <content.gfmcontent> <backup-dir>
   gfm records-verify <index.gfmidx>
   gfm index-columns <records.gfmidx> <columns.gfmcols>
   gfm columns-verify <columns.gfmcols>

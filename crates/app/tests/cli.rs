@@ -212,6 +212,75 @@ fn migrates_legacy_record_archive_from_binary() {
 }
 
 #[test]
+fn migrates_legacy_content_archive_from_binary() {
+    let content = unique_temp_path("gfm-cli-content-migrate", "gfmcontent");
+    let backup = unique_temp_dir("gfm-cli-content-migrate-backup");
+    write_legacy_content_archive(
+        &content,
+        &[ContentPosting {
+            term: "legacyneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(7), 11)],
+            positions: Vec::new(),
+        }],
+    );
+
+    let plan = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["content-migration-plan", content.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let plan_stdout = String::from_utf8(plan.stdout).unwrap();
+    assert!(
+        plan_stdout.contains("content-archive-migration-plan\taction=migrate"),
+        "{plan_stdout}"
+    );
+
+    let migration = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-migrate",
+            content.to_str().unwrap(),
+            backup.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        migration.status.success(),
+        "{}",
+        String::from_utf8_lossy(&migration.stderr)
+    );
+    let migration_stdout = String::from_utf8(migration.stdout).unwrap();
+    assert!(
+        migration_stdout.contains(
+            "content-archive-migration\tmigrated-postings=1\tbefore-status=legacy\tafter-status=current"
+        ),
+        "{migration_stdout}"
+    );
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["content-verify", content.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        verify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify.stderr)
+    );
+    let verify_stdout = String::from_utf8(verify.stdout).unwrap();
+    assert!(
+        verify_stdout.contains("\tchecksum=verified"),
+        "{verify_stdout}"
+    );
+    assert!(backup.read_dir().unwrap().next().is_some());
+
+    fs::remove_file(content).unwrap();
+    fs::remove_dir_all(backup).unwrap();
+}
+
+#[test]
 fn persists_volume_index_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-index-state-root");
     let index = unique_temp_path("gfm-cli-index-state-records", "gfmidx");
@@ -2886,6 +2955,43 @@ endobj
 %%EOF",
     );
     pdf
+}
+
+fn write_legacy_content_archive(path: &std::path::Path, postings: &[ContentPosting]) {
+    let mut bytes = Vec::new();
+    bytes.extend(b"gfm-content-v1\n");
+    push_varint(&mut bytes, postings.len() as u64);
+    for posting in postings {
+        push_varint(&mut bytes, posting.term.len() as u64);
+        bytes.extend(posting.term.as_bytes());
+        write_legacy_file_ids(&mut bytes, &posting.ids);
+    }
+    fs::write(path, bytes).unwrap();
+}
+
+fn write_legacy_file_ids(bytes: &mut Vec<u8>, ids: &[FileId]) {
+    let mut ids = ids.to_vec();
+    ids.sort();
+    push_varint(bytes, ids.len() as u64);
+    let mut previous = FileId::new(VolumeId(0), 0);
+    for id in ids {
+        push_varint(bytes, id.volume.0.saturating_sub(previous.volume.0));
+        let node_delta = if id.volume == previous.volume {
+            id.node.saturating_sub(previous.node)
+        } else {
+            id.node
+        };
+        push_varint(bytes, node_delta);
+        previous = id;
+    }
+}
+
+fn push_varint(bytes: &mut Vec<u8>, mut value: u64) {
+    while value >= 0x80 {
+        bytes.push(((value as u8) & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    bytes.push(value as u8);
 }
 
 fn ooxml_package(parts: &[(&str, &str)]) -> Vec<u8> {

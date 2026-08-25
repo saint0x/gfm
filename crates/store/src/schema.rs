@@ -1,6 +1,7 @@
 use crate::{
-    read_records, write_records, ContentArchiveManifest, MmapContentArchive, MmapDictionary,
-    MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
+    read_content_postings, read_records, write_content_postings, write_records, ContentArchive,
+    ContentArchiveManifest, MmapContentArchive, MmapDictionary, MmapFuzzyArchive,
+    MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_types::{GfmError, Result};
 use std::fmt;
@@ -158,6 +159,68 @@ pub struct RecordArchiveMigration {
     pub backup_path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentArchiveMigrationAction {
+    Ready,
+    Migrate,
+    CannotMigrate,
+}
+
+impl ContentArchiveMigrationAction {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Migrate => "migrate",
+            Self::CannotMigrate => "cannot-migrate",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentArchiveMigrationPlan {
+    pub action: ContentArchiveMigrationAction,
+    pub before: ArchiveSchemaReport,
+    pub detail: Option<String>,
+}
+
+impl ContentArchiveMigrationPlan {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "content-archive-migration-plan\taction={}\tstatus={}\tschema={}\tcurrent={}\tpath={}\tdetail={}",
+            self.action.as_str(),
+            self.before.status.as_str(),
+            self.before.schema.as_deref().unwrap_or("-"),
+            self.before.current_schema,
+            escape_field(&self.before.path.display().to_string()),
+            self.detail.as_deref().map(escape_field).unwrap_or("-".to_string())
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentArchiveMigration {
+    pub before: ContentArchiveMigrationPlan,
+    pub after: ArchiveSchemaReport,
+    pub migrated_postings: usize,
+    pub backup_path: Option<PathBuf>,
+}
+
+impl ContentArchiveMigration {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "content-archive-migration\tmigrated-postings={}\tbefore-status={}\tafter-status={}\tbackup={}\tpath={}",
+            self.migrated_postings,
+            self.before.before.status.as_str(),
+            self.after.status.as_str(),
+            self.backup_path
+                .as_ref()
+                .map(|path| escape_field(&path.display().to_string()))
+                .unwrap_or("-".to_string()),
+            escape_field(&self.after.path.display().to_string())
+        )
+    }
+}
+
 impl RecordArchiveMigration {
     pub fn as_tsv(&self) -> String {
         format!(
@@ -288,6 +351,85 @@ pub fn migrate_record_archive(
     })
 }
 
+pub fn plan_content_archive_migration(path: impl AsRef<Path>) -> ContentArchiveMigrationPlan {
+    let before = inspect_archive_schema(ArchiveSchemaKind::Content, path);
+    let (action, detail) = match before.status {
+        ArchiveSchemaStatus::Current => (
+            ContentArchiveMigrationAction::Ready,
+            Some("content archive is already current".to_string()),
+        ),
+        ArchiveSchemaStatus::Legacy => (
+            ContentArchiveMigrationAction::Migrate,
+            Some("legacy content archive can be rewritten as current gfm-content-v5".to_string()),
+        ),
+        ArchiveSchemaStatus::Missing => (
+            ContentArchiveMigrationAction::CannotMigrate,
+            Some("missing content archive must be rebuilt from extraction segments".to_string()),
+        ),
+        ArchiveSchemaStatus::Unsupported => (
+            ContentArchiveMigrationAction::CannotMigrate,
+            Some("unsupported content archive schema cannot be migrated".to_string()),
+        ),
+        ArchiveSchemaStatus::Unreadable => (
+            ContentArchiveMigrationAction::CannotMigrate,
+            Some("unreadable content archive must be quarantined and rebuilt".to_string()),
+        ),
+    };
+    ContentArchiveMigrationPlan {
+        action,
+        before,
+        detail,
+    }
+}
+
+pub fn migrate_content_archive(
+    path: impl AsRef<Path>,
+    backup_dir: impl AsRef<Path>,
+) -> Result<ContentArchiveMigration> {
+    let path = path.as_ref();
+    let backup_dir = backup_dir.as_ref();
+    let before = plan_content_archive_migration(path);
+    match before.action {
+        ContentArchiveMigrationAction::Ready => {
+            return Ok(ContentArchiveMigration {
+                after: before.before.clone(),
+                before,
+                migrated_postings: 0,
+                backup_path: None,
+            });
+        }
+        ContentArchiveMigrationAction::CannotMigrate => {
+            return Err(GfmError::Format(format!(
+                "{} cannot be migrated: {}",
+                path.display(),
+                before
+                    .detail
+                    .as_deref()
+                    .unwrap_or("unsupported migration state")
+            )));
+        }
+        ContentArchiveMigrationAction::Migrate => {}
+    }
+
+    let postings = read_content_postings(path)?;
+    let backup_path = backup_archive(path, backup_dir, "legacy")?;
+    write_content_postings(path, &postings)?;
+    let after = inspect_archive_schema(ArchiveSchemaKind::Content, path);
+    if after.status != ArchiveSchemaStatus::Current {
+        return Err(GfmError::Format(format!(
+            "{} migration produced {} instead of current schema",
+            path.display(),
+            after.status.as_str()
+        )));
+    }
+    Ok(ContentArchiveMigration {
+        before,
+        after,
+        migrated_postings: postings.len(),
+        backup_path: Some(backup_path),
+    })
+}
+
 fn inspect_archive_schema_result(
     kind: ArchiveSchemaKind,
     path: &Path,
@@ -324,17 +466,54 @@ fn inspect_archive_schema_result(
                 MmapDictionary::open(path).map(|_| ())
             })
         }
-        ArchiveSchemaKind::Content => {
-            inspect_magic_schema(kind, path, &[CONTENT_CURRENT], CONTENT_LEGACY, || {
-                MmapContentArchive::open(path).map(|_| ())
-            })
-        }
+        ArchiveSchemaKind::Content => inspect_content_schema(kind, path),
         ArchiveSchemaKind::ContentManifest => {
             inspect_line_schema(kind, path, &[CONTENT_MANIFEST_CURRENT], &[], || {
                 ContentArchiveManifest::read(path).map(|_| ())
             })
         }
     }
+}
+
+fn inspect_content_schema(kind: ArchiveSchemaKind, path: &Path) -> Result<ArchiveSchemaReport> {
+    let max_len = CONTENT_LEGACY
+        .iter()
+        .chain([CONTENT_CURRENT].iter())
+        .map(|magic| magic.len())
+        .max()
+        .unwrap_or(0);
+    let mut bytes = vec![0; max_len];
+    let mut file = File::open(path).map_err(|err| gfm_types::GfmError::io(path, err))?;
+    let len = file
+        .read(&mut bytes)
+        .map_err(|err| gfm_types::GfmError::io(path, err))?;
+    bytes.truncate(len);
+
+    if let Some(schema) = matching_magic(&bytes, &[CONTENT_CURRENT]) {
+        return validated_report(
+            kind,
+            path,
+            ArchiveSchemaStatus::Current,
+            Some(schema),
+            || MmapContentArchive::open(path).map(|_| ()),
+        );
+    }
+    if let Some(schema) = matching_magic(&bytes, CONTENT_LEGACY) {
+        return validated_report(
+            kind,
+            path,
+            ArchiveSchemaStatus::Legacy,
+            Some(schema),
+            || ContentArchive::open(path).map(|_| ()),
+        );
+    }
+    Ok(report(
+        kind,
+        path,
+        ArchiveSchemaStatus::Unsupported,
+        None,
+        Some("unsupported archive header".to_string()),
+    ))
 }
 
 fn inspect_line_schema(
@@ -627,6 +806,44 @@ mod tests {
     }
 
     #[test]
+    fn migrates_legacy_content_archive_to_current_schema_with_backup() {
+        let dir = temp_dir("gfm-schema-content-migration");
+        let content = dir.join("legacy.gfmcontent");
+        let backup = dir.join("backup");
+        let postings = vec![
+            ContentPosting {
+                term: "alpha".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 2), FileId::new(VolumeId(1), 4)],
+                positions: Vec::new(),
+            },
+            ContentPosting {
+                term: "beta".to_string(),
+                ids: vec![FileId::new(VolumeId(2), 1)],
+                positions: Vec::new(),
+            },
+        ];
+        write_legacy_content_archive(&content, &postings);
+
+        let plan = plan_content_archive_migration(&content);
+        assert_eq!(plan.action, ContentArchiveMigrationAction::Migrate);
+
+        let migration = migrate_content_archive(&content, &backup).unwrap();
+
+        assert_eq!(migration.migrated_postings, 2);
+        assert_eq!(migration.after.status, ArchiveSchemaStatus::Current);
+        assert_eq!(read_content_postings(&content).unwrap(), postings);
+        assert!(MmapContentArchive::open(&content).unwrap().is_checksummed());
+        let backup_path = migration.backup_path.unwrap();
+        assert!(backup_path.exists());
+        assert_eq!(
+            inspect_archive_schema(ArchiveSchemaKind::Content, &backup_path).status,
+            ArchiveSchemaStatus::Legacy
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn current_record_archive_migration_is_noop() {
         let dir = temp_dir("gfm-schema-record-migration-current");
         let records = dir.join("current.gfmidx");
@@ -683,5 +900,42 @@ mod tests {
         path.push(format!("{prefix}-{nanos}"));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn write_legacy_content_archive(path: &Path, postings: &[ContentPosting]) {
+        let mut bytes = Vec::new();
+        bytes.extend(b"gfm-content-v1\n");
+        push_varint(&mut bytes, postings.len() as u64);
+        for posting in postings {
+            push_varint(&mut bytes, posting.term.len() as u64);
+            bytes.extend(posting.term.as_bytes());
+            write_legacy_file_ids(&mut bytes, &posting.ids);
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn write_legacy_file_ids(bytes: &mut Vec<u8>, ids: &[FileId]) {
+        let mut ids = ids.to_vec();
+        ids.sort();
+        push_varint(bytes, ids.len() as u64);
+        let mut previous = FileId::new(VolumeId(0), 0);
+        for id in ids {
+            push_varint(bytes, id.volume.0.saturating_sub(previous.volume.0));
+            let node_delta = if id.volume == previous.volume {
+                id.node.saturating_sub(previous.node)
+            } else {
+                id.node
+            };
+            push_varint(bytes, node_delta);
+            previous = id;
+        }
+    }
+
+    fn push_varint(bytes: &mut Vec<u8>, mut value: u64) {
+        while value >= 0x80 {
+            bytes.push(((value as u8) & 0x7f) | 0x80);
+            value >>= 7;
+        }
+        bytes.push(value as u8);
     }
 }
