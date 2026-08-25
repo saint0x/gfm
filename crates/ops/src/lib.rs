@@ -25,6 +25,7 @@ pub enum Operation {
     Rename { from: PathBuf, to: PathBuf },
     Delete { path: PathBuf },
     Trash { path: PathBuf },
+    EmptyTrash { path: PathBuf },
     Restore { from: PathBuf, to: PathBuf },
 }
 
@@ -35,7 +36,7 @@ impl Operation {
             | Self::Move { to, .. }
             | Self::Rename { to, .. }
             | Self::Restore { to, .. } => Some(to),
-            Self::Delete { .. } | Self::Trash { .. } => None,
+            Self::Delete { .. } | Self::Trash { .. } | Self::EmptyTrash { .. } => None,
         }
     }
 
@@ -54,10 +55,12 @@ impl Operation {
                     role: OperationAccessRole::DestinationParent,
                 },
             ],
-            Self::Delete { path } | Self::Trash { path } => vec![OperationAccessRequirement {
-                path: path.clone(),
-                role: OperationAccessRole::Target,
-            }],
+            Self::Delete { path } | Self::Trash { path } | Self::EmptyTrash { path } => {
+                vec![OperationAccessRequirement {
+                    path: path.clone(),
+                    role: OperationAccessRole::Target,
+                }]
+            }
         }
     }
 }
@@ -709,6 +712,9 @@ impl Operator {
             Operation::Trash { path } => {
                 trash_path(path, self.context.trash_metadata_path.as_deref(), progress)
             }
+            Operation::EmptyTrash { path } => {
+                empty_trash_path(path, self.context.trash_metadata_path.as_deref(), progress)
+            }
             Operation::Restore { from, to } => restore_path(
                 from,
                 to,
@@ -913,6 +919,7 @@ fn plan_operation_checked(
         | Operation::Rename { from, .. }
         | Operation::Restore { from, .. } => plan_path(from, cancellation),
         Operation::Delete { path } | Operation::Trash { path } => plan_path(path, cancellation),
+        Operation::EmptyTrash { path } => plan_empty_trash(path, cancellation),
     }
 }
 
@@ -933,6 +940,29 @@ fn plan_path(path: &Path, cancellation: &OperationCancellation) -> Result<Operat
             progress.total_items += child.total_items;
             progress.total_bytes += child.total_bytes;
         }
+    }
+    Ok(progress)
+}
+
+fn plan_empty_trash(
+    path: &Path,
+    cancellation: &OperationCancellation,
+) -> Result<OperationProgress> {
+    cancellation.check()?;
+    let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
+    if !metadata.is_dir() {
+        return Err(GfmError::Format(format!(
+            "empty trash requires a directory: {}",
+            path.display()
+        )));
+    }
+    let mut progress = OperationProgress::default();
+    for entry in fs::read_dir(path).map_err(|err| GfmError::io(path, err))? {
+        cancellation.check()?;
+        let entry = entry.map_err(|err| GfmError::io(path, err))?;
+        let child = plan_path(&entry.path(), cancellation)?;
+        progress.total_items += child.total_items;
+        progress.total_bytes += child.total_bytes;
     }
     Ok(progress)
 }
@@ -1633,6 +1663,50 @@ fn trash_path(
     }
     trash::delete(path).map_err(|err| GfmError::io(path, err))?;
     progress.complete()
+}
+
+fn empty_trash_path(
+    path: &Path,
+    metadata_path: Option<&Path>,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    progress.check_cancelled()?;
+    let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
+    if !metadata.is_dir() {
+        return Err(GfmError::Format(format!(
+            "empty trash requires a directory: {}",
+            path.display()
+        )));
+    }
+    let mut entries = fs::read_dir(path)
+        .map_err(|err| GfmError::io(path, err))?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|err| GfmError::io(path, err))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    entries.sort();
+    for entry in entries {
+        delete_trash_child(&entry, metadata_path, progress)?;
+    }
+    progress.complete()
+}
+
+fn delete_trash_child(
+    path: &Path,
+    metadata_path: Option<&Path>,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    progress.check_cancelled()?;
+    let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
+    delete_path_untracked(path)?;
+    remove_deleted_trash_metadata(metadata_path, path)?;
+    if metadata.is_dir() {
+        progress.finish_current_item()
+    } else {
+        progress.advance(&metadata)
+    }
 }
 
 fn restore_path(
@@ -2641,6 +2715,7 @@ fn resolve_operation_conflicts(
         }),
         Operation::Delete { path } => Ok(Operation::Delete { path }),
         Operation::Trash { path } => Ok(Operation::Trash { path }),
+        Operation::EmptyTrash { path } => Ok(Operation::EmptyTrash { path }),
         Operation::Restore { from, to } => Ok(Operation::Restore {
             from,
             to: keep_both_path(&to)?,
@@ -2796,6 +2871,7 @@ fn encode_operation(operation: &Operation) -> (&'static str, String, String) {
         Operation::Rename { from, to } => ("rename", path_string(from), path_string(to)),
         Operation::Delete { path } => ("delete", path_string(path), String::new()),
         Operation::Trash { path } => ("trash", path_string(path), String::new()),
+        Operation::EmptyTrash { path } => ("empty-trash", path_string(path), String::new()),
         Operation::Restore { from, to } => ("restore", path_string(from), path_string(to)),
     }
 }
@@ -2818,6 +2894,9 @@ fn decode_operation(kind: &str, from: &str, to: &str) -> std::result::Result<Ope
             path: PathBuf::from(from),
         }),
         "trash" => Ok(Operation::Trash {
+            path: PathBuf::from(from),
+        }),
+        "empty-trash" => Ok(Operation::EmptyTrash {
             path: PathBuf::from(from),
         }),
         "restore" => Ok(Operation::Restore {
@@ -4837,6 +4916,107 @@ mod tests {
         assert!(read_trash_metadata(&metadata)
             .unwrap()
             .contains_key("missing.md"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_trash_deletes_children_and_removes_metadata_after_success() {
+        let root = unique_temp_dir("gfm-ops-empty-trash");
+        let journal = root.join("journal.log");
+        let metadata = root.join("trash.tsv");
+        let trash_dir = root.join("Trash");
+        let trashed_file = trash_dir.join("report.md");
+        let trashed_dir = trash_dir.join("Old Folder");
+        fs::create_dir_all(trashed_dir.join("nested")).unwrap();
+        fs::write(&trashed_file, "delete file").unwrap();
+        fs::write(trashed_dir.join("nested").join("note.txt"), "delete folder").unwrap();
+        append_trash_metadata_entry(
+            &metadata,
+            &TrashRestoreMetadata {
+                name: "report.md".to_string(),
+                original_path: root.join("Documents").join("report.md"),
+                deleted_at_nanos: 11,
+                can_restore: true,
+                can_delete_permanently: true,
+                permission_issue: None,
+            },
+        )
+        .unwrap();
+        append_trash_metadata_entry(
+            &metadata,
+            &TrashRestoreMetadata {
+                name: "Old Folder".to_string(),
+                original_path: root.join("Documents").join("Old Folder"),
+                deleted_at_nanos: 12,
+                can_restore: true,
+                can_delete_permanently: true,
+                permission_issue: None,
+            },
+        )
+        .unwrap();
+
+        let mut progress = Vec::new();
+        let entry =
+            Operator::new(OperationContext::new(&journal).with_trash_metadata_path(&metadata))
+                .execute_with_progress(
+                    Operation::EmptyTrash {
+                        path: trash_dir.clone(),
+                    },
+                    |event| progress.push(event),
+                )
+                .unwrap();
+
+        assert_eq!(entry.status, OperationStatus::Completed);
+        assert!(trash_dir.exists());
+        assert!(fs::read_dir(&trash_dir).unwrap().next().is_none());
+        assert!(read_trash_metadata(&metadata).unwrap().is_empty());
+        assert_eq!(
+            read_journal(&journal).unwrap().last().unwrap().operation,
+            Operation::EmptyTrash { path: trash_dir }
+        );
+        assert_eq!(
+            progress.last().unwrap().progress.completed_items,
+            progress.last().unwrap().progress.total_items
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_trash_requires_directory_and_preserves_metadata() {
+        let root = unique_temp_dir("gfm-ops-empty-trash-file");
+        let journal = root.join("journal.log");
+        let metadata = root.join("trash.tsv");
+        let not_directory = root.join("Trash");
+        fs::write(&not_directory, "not a directory").unwrap();
+        append_trash_metadata_entry(
+            &metadata,
+            &TrashRestoreMetadata {
+                name: "Trash".to_string(),
+                original_path: root.join("Documents").join("Trash"),
+                deleted_at_nanos: 13,
+                can_restore: true,
+                can_delete_permanently: true,
+                permission_issue: None,
+            },
+        )
+        .unwrap();
+
+        let err =
+            Operator::new(OperationContext::new(&journal).with_trash_metadata_path(&metadata))
+                .execute(Operation::EmptyTrash {
+                    path: not_directory.clone(),
+                })
+                .unwrap_err();
+
+        assert!(
+            matches!(err, GfmError::Format(message) if message.contains("requires a directory"))
+        );
+        assert!(not_directory.exists());
+        assert!(read_trash_metadata(&metadata)
+            .unwrap()
+            .contains_key("Trash"));
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -2395,6 +2395,51 @@ fn permanently_deletes_trash_entry_from_binary_and_removes_metadata() {
 }
 
 #[test]
+fn empties_trash_from_binary_and_removes_metadata() {
+    let root = unique_temp_dir("gfm-cli-ops-empty-trash-root");
+    let journal = root.join("ops.journal");
+    let metadata = root.join("trash.tsv");
+    let trash_dir = root.join("Trash");
+    let trashed_file = trash_dir.join("report.md");
+    let trashed_dir = trash_dir.join("Old Folder");
+    fs::create_dir_all(trashed_dir.join("nested")).unwrap();
+    fs::write(&trashed_file, "delete file").unwrap();
+    fs::write(trashed_dir.join("nested").join("note.txt"), "delete folder").unwrap();
+    fs::write(
+        &metadata,
+        format!(
+            "report.md\t{}\t11\ttrue\ttrue\t\nOld Folder\t{}\t12\ttrue\ttrue\t\n",
+            root.join("Documents").join("report.md").to_string_lossy(),
+            root.join("Documents").join("Old Folder").to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .env("GFM_TRASH_METADATA", &metadata)
+        .args(["empty-trash", trash_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\tcompleted"), "{stdout}");
+    assert!(trash_dir.exists());
+    assert!(fs::read_dir(&trash_dir).unwrap().next().is_none());
+    assert!(fs::read_to_string(&metadata).unwrap().trim().is_empty());
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(journal_text.contains("\tempty-trash\t"), "{journal_text}");
+    assert!(journal_text.contains("\tcompleted\t"), "{journal_text}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn retries_failed_operation_from_binary_when_policy_allows_it() {
     let root = unique_temp_dir("gfm-cli-ops-retry-root");
     let journal = root.join("ops.journal");

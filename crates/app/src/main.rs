@@ -3221,6 +3221,10 @@ fn run() -> Result<()> {
             let path = required_path(args.next(), "trash requires a path")?;
             execute_operation(Operation::Trash { path }, ConflictPolicy::Fail)?;
         }
+        Some("empty-trash") => {
+            let path = required_path(args.next(), "empty-trash requires a trash directory path")?;
+            execute_operation(Operation::EmptyTrash { path }, ConflictPolicy::Fail)?;
+        }
         Some("restore") => {
             let from = required_path(args.next(), "restore requires a trash entry path")?;
             let mut restore_args = args.collect::<Vec<_>>();
@@ -3922,7 +3926,7 @@ fn operation_paths(operation: &Operation) -> Vec<&Path> {
             paths.push(from.as_path());
             paths.push(to.as_path());
         }
-        Operation::Delete { path } | Operation::Trash { path } => {
+        Operation::Delete { path } | Operation::Trash { path } | Operation::EmptyTrash { path } => {
             paths.push(path.as_path());
         }
     }
@@ -3947,7 +3951,9 @@ fn operation_volume(operation: &Operation) -> Option<VolumeId> {
         | Operation::Move { from, .. }
         | Operation::Rename { from, .. }
         | Operation::Restore { from, .. } => Some(from.as_path()),
-        Operation::Delete { path } | Operation::Trash { path } => Some(path.as_path()),
+        Operation::Delete { path } | Operation::Trash { path } | Operation::EmptyTrash { path } => {
+            Some(path.as_path())
+        }
     };
     primary
         .and_then(|path| detect_volume_id(path).ok())
@@ -4854,6 +4860,7 @@ fn operation_kind(operation: &Operation) -> &'static str {
         Operation::Rename { .. } => "rename",
         Operation::Delete { .. } => "delete",
         Operation::Trash { .. } => "trash",
+        Operation::EmptyTrash { .. } => "empty-trash",
         Operation::Restore { .. } => "restore",
     }
 }
@@ -5413,6 +5420,7 @@ fn print_usage() {
   gfm rename <source> <destination> [--replace|--keep-both|--merge|--skip]
   gfm delete <path>
   gfm trash <path>
+  gfm empty-trash <trash-dir>
   gfm restore <trash-entry> [original-path] [--replace|--keep-both|--merge|--skip]"
     );
 }
