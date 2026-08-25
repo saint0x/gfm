@@ -1,16 +1,25 @@
 use gfm_types::{GfmError, Result};
 use gpui::{
     div, prelude::*, px, rgb, size, App, AppContext, Application, Bounds, Context, IntoElement,
-    Render, Styled, Window, WindowBounds, WindowOptions,
+    Render, Styled, Subscription, Window, WindowBounds, WindowOptions,
 };
 use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
 
 mod menu;
+mod session;
 mod sidebar;
 mod titlebar;
 mod toolbar;
 
 pub use menu::{MenuCommandSpec, MenuCommandState, MenuContract};
+pub use session::{
+    ActivationPolicy, PlacementPolicy, RestorePolicy, TabPolicy, WindowPlacement,
+    WindowSessionContract, WindowSessionStore, WindowSessionWriter,
+};
 pub use sidebar::{SidebarContract, SidebarItemKind, SidebarItemSpec, SidebarVolumeSpec};
 pub use titlebar::{
     FullScreenPolicy, TitlebarContract, TitlebarFocusPolicy, TitlebarMaterialPolicy,
@@ -134,8 +143,11 @@ impl WindowLifecycleContract {
 pub fn run_native(spec: AppLaunchSpec) -> Result<()> {
     spec.validate()?;
     Application::new().run(move |cx: &mut App| {
-        install_native_menu(cx, spec.clone());
-        if let Err(err) = open_main_window(cx, spec) {
+        let window_counter = Arc::new(AtomicU32::new(1));
+        let session_store = WindowSessionStore::platform_default();
+        install_native_menu(cx);
+        install_new_window_action(cx, window_counter, spec.clone());
+        if let Err(err) = open_main_window(cx, spec, session_store, 0) {
             eprintln!("gfm-ui: {err}");
             cx.quit();
         }
@@ -143,11 +155,18 @@ pub fn run_native(spec: AppLaunchSpec) -> Result<()> {
     Ok(())
 }
 
-fn open_main_window(cx: &mut App, spec: AppLaunchSpec) -> anyhow::Result<()> {
-    let options = window_options(cx, &spec);
+fn open_main_window(
+    cx: &mut App,
+    spec: AppLaunchSpec,
+    session_store: WindowSessionStore,
+    ordinal: u32,
+) -> anyhow::Result<()> {
+    let options = window_options(cx, &spec, &session_store, ordinal);
     let activate = spec.activate_on_launch;
     cx.open_window(options, |_, cx| {
         cx.new(|_| RootView {
+            bounds_subscription: None,
+            session_writer: WindowSessionWriter::new(session_store),
             sidebar: sidebar::SidebarContract::discover(&spec.initial_path),
             initial_path: spec.initial_path,
         })
@@ -158,16 +177,8 @@ fn open_main_window(cx: &mut App, spec: AppLaunchSpec) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn install_native_menu(cx: &mut App, spec: AppLaunchSpec) {
+fn install_native_menu(cx: &mut App) {
     cx.bind_keys(menu::key_bindings());
-    cx.on_action({
-        let spec = spec.clone();
-        move |_: &menu::NewWindow, cx| {
-            if let Err(err) = open_main_window(cx, spec.clone()) {
-                eprintln!("gfm-ui: {err}");
-            }
-        }
-    });
     cx.on_action(|_: &menu::CloseWindow, cx| {
         if let Some(active_window) = cx.active_window() {
             let _ = active_window.update(cx, |_, window, _| window.remove_window());
@@ -177,8 +188,27 @@ fn install_native_menu(cx: &mut App, spec: AppLaunchSpec) {
     cx.set_menus(menu::native_menus());
 }
 
-fn window_options(cx: &App, spec: &AppLaunchSpec) -> WindowOptions {
-    let bounds = Bounds::centered(None, size(px(spec.width), px(spec.height)), cx);
+fn install_new_window_action(cx: &mut App, window_counter: Arc<AtomicU32>, spec: AppLaunchSpec) {
+    cx.on_action(move |_: &menu::NewWindow, cx| {
+        let ordinal = window_counter.fetch_add(1, Ordering::Relaxed);
+        let session_store = WindowSessionStore::platform_default();
+        if let Err(err) = open_main_window(cx, spec.clone(), session_store, ordinal) {
+            eprintln!("gfm-ui: {err}");
+        }
+    });
+}
+
+fn window_options(
+    cx: &App,
+    spec: &AppLaunchSpec,
+    session_store: &WindowSessionStore,
+    ordinal: u32,
+) -> WindowOptions {
+    let session = WindowSessionContract::from_spec(spec, session_store, ordinal);
+    let bounds = session
+        .placement
+        .and_then(WindowPlacement::to_bounds)
+        .unwrap_or_else(|| Bounds::centered(None, size(px(spec.width), px(spec.height)), cx));
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(
@@ -187,18 +217,31 @@ fn window_options(cx: &App, spec: &AppLaunchSpec) -> WindowOptions {
                 .into_options(),
         ),
         window_min_size: Some(size(px(spec.min_width), px(spec.min_height))),
-        tabbing_identifier: Some(spec.tabbing_identifier.clone()),
+        tabbing_identifier: Some(session.tabbing_identifier.clone()),
+        focus: session.focus_new_window,
+        show: session.show_on_open,
+        is_movable: session.movable,
+        is_resizable: session.resizable,
+        is_minimizable: session.minimizable,
         ..Default::default()
     }
 }
 
 struct RootView {
+    bounds_subscription: Option<Subscription>,
+    session_writer: WindowSessionWriter,
     sidebar: SidebarContract,
     initial_path: PathBuf,
 }
 
 impl Render for RootView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.bounds_subscription.is_none() {
+            self.bounds_subscription = Some(cx.observe_window_bounds(window, |this, window, _| {
+                this.session_writer.save_bounds(window.window_bounds());
+            }));
+        }
+
         div()
             .size_full()
             .flex()

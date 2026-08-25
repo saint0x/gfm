@@ -241,6 +241,16 @@
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-session-contract",
+        "/tmp/gfm",
+        "/tmp/gfm-fozzy-missing-window-session.tsv"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["ui-toolbar-contract", "/tmp/gfm"],
       "expect_exit": 0
     },

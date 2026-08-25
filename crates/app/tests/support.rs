@@ -119,6 +119,40 @@ fn reports_ui_titlebar_contract_from_binary() {
 }
 
 #[test]
+fn reports_ui_session_contract_from_binary() {
+    let store = std::env::temp_dir().join(format!(
+        "gfm-missing-window-session-contract-{}.tsv",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&store);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-session-contract")
+        .arg("/tmp/gfm")
+        .arg(&store)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "session\trestore=restore-last-window-bounds\tplacement-policy=persisted-or-centered"
+    ));
+    assert!(stdout.contains("tab-policy=native-macos-tab-group"));
+    assert!(stdout.contains("activation=activate-app-and-focus-new-window"));
+    assert!(stdout.contains("tabs=gfm-main-window"));
+    assert!(stdout.contains("placement=centered"));
+    assert!(
+        stdout.contains("focus=true\tshow=true\tmovable=true\tresizable=true\tminimizable=true")
+    );
+    let _ = std::fs::remove_file(store);
+}
+
+#[test]
 fn reports_ui_toolbar_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-toolbar-contract", "/tmp/gfm"])

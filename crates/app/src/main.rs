@@ -29,7 +29,7 @@ use gfm_testkit::{
 use gfm_types::{FileId, FileKind, Result, SearchHit, VolumeId};
 use gfm_ui::{
     AppLaunchSpec, MenuContract, SidebarContract, TitlebarContract, ToolbarContract,
-    WindowLifecycleContract,
+    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::env;
 use std::path::PathBuf;
@@ -70,6 +70,20 @@ fn run() -> Result<()> {
                 None => AppLaunchSpec::default(),
             };
             println!("{}", TitlebarContract::from_spec(&spec)?.as_tsv());
+        }
+        Some("ui-session-contract") => {
+            let spec = match args.next() {
+                Some(path) => AppLaunchSpec::new(path),
+                None => AppLaunchSpec::default(),
+            };
+            let store = args
+                .next()
+                .map(WindowSessionStore::new)
+                .unwrap_or_else(WindowSessionStore::platform_default);
+            println!(
+                "{}",
+                WindowSessionContract::from_spec(&spec, &store, 0).as_tsv()
+            );
         }
         Some("ui-toolbar-contract") => {
             let path = match args.next() {
@@ -819,6 +833,7 @@ fn print_usage() {
   gfm ui-contract [path]
   gfm ui-menu-contract
   gfm ui-titlebar-contract [path]
+  gfm ui-session-contract [path] [window-session.tsv]
   gfm ui-toolbar-contract [path]
   gfm ui-sidebar-contract [path]
   gfm list [path]
