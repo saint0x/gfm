@@ -38,7 +38,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 ## macOS Integration
 
 23. Finish native macOS bridges by replacing the implemented bridge registry's required surfaces with narrow Rust APIs for direct AppKit, Foundation, CoreServices, LaunchServices, Quick Look, Security, DiskArbitration, FileProvider, Spotlight, and FSEvents bindings, with ownership isolation, thread-affinity enforcement, error mapping, and host-version gates.
-24. Implement native file icons via LaunchServices and Finder-compatible badge composition.
+24. Finish native file icons by binding the implemented LaunchServices-targeted icon descriptor, type-hint, cache-key, and badge contract to direct LaunchServices/AppKit raster extraction, Finder custom icons, extension-hidden names, package/app/document icons, alias/iCloud/tag badge compositing, cache invalidation, and captured pixel baselines.
 25. Implement Quick Look previews and preview controller integration.
 26. Implement thumbnail generation through QuickLookThumbnailing with cache policy and invalidation.
 27. Implement Spotlight metadata ingestion and reconciliation without depending on Spotlight for primary correctness.

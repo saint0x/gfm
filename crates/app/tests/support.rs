@@ -83,6 +83,48 @@ fn reports_mac_bridge_contract_from_binary() {
 }
 
 #[test]
+fn reports_native_icon_descriptor_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-native-icon-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("GFM.app")).unwrap();
+    std::fs::write(root.join("Report.PDF"), "pdf").unwrap();
+
+    let app = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("native-icon")
+        .arg(root.join("GFM.app"))
+        .output()
+        .unwrap();
+    assert!(
+        app.status.success(),
+        "{}",
+        String::from_utf8_lossy(&app.stderr)
+    );
+    let app_stdout = String::from_utf8(app.stdout).unwrap();
+    assert_eq!(
+        app_stdout.trim(),
+        "native-icon\tapplication\tlaunchservices-application-icon\tcom.apple.application-bundle\tapplication:com.apple.application-bundle:package\tbadges=package"
+    );
+
+    let document = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("native-icon")
+        .arg(root.join("Report.PDF"))
+        .output()
+        .unwrap();
+    assert!(
+        document.status.success(),
+        "{}",
+        String::from_utf8_lossy(&document.stderr)
+    );
+    let document_stdout = String::from_utf8(document.stdout).unwrap();
+    assert_eq!(
+        document_stdout.trim(),
+        "native-icon\tdocument\tlaunchservices-document-icon\textension:pdf\tdocument:extension:pdf\tbadges="
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_ui_lifecycle_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-contract", "/tmp/gfm"])

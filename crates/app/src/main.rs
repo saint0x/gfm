@@ -5,7 +5,8 @@ use gfm_diagnostics::{
     StorageInspection,
 };
 use gfm_fs::{
-    read_directory, scan_tree, PackageTraversalMode, PackageTraversalReport, ScanOptions,
+    read_directory, record_for_path, scan_tree, PackageTraversalMode, PackageTraversalReport,
+    ScanOptions,
 };
 use gfm_index::{
     BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, Indexer, SearchStreamStage,
@@ -16,7 +17,7 @@ use gfm_jobs::{
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, FileEventStream, MacBridgeContract,
-    SupportMatrix, WatchRoot,
+    NativeIconDescriptor, SupportMatrix, WatchRoot,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_preview::{
@@ -717,6 +718,11 @@ fn run() -> Result<()> {
         }
         Some("mac-bridges") => {
             println!("{}", MacBridgeContract::finder_required().as_tsv());
+        }
+        Some("native-icon") => {
+            let path = required_path(args.next(), "native-icon requires a path")?;
+            let record = record_for_path(&path, None, false)?;
+            println!("{}", NativeIconDescriptor::for_record(&record).as_tsv());
         }
         Some("preview-check") => {
             let path = required_path(args.next(), "preview-check requires a path")?;
@@ -1484,6 +1490,7 @@ fn print_usage() {
   gfm support-check
   gfm permission-onboarding
   gfm mac-bridges
+  gfm native-icon <path>
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm preview-schedule
   gfm macrobench <workspace> [smoke|standard]
