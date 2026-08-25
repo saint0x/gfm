@@ -256,6 +256,7 @@ pub struct SearchIndex {
     tags: BTreeMap<String, BTreeSet<FileId>>,
     kind: HashMap<FileKind, BTreeSet<FileId>>,
     content_terms: BTreeMap<String, BTreeMap<FileId, Vec<u32>>>,
+    content_record_terms: HashMap<FileId, BTreeSet<String>>,
     pinned: BTreeSet<FileId>,
 }
 
@@ -506,12 +507,24 @@ impl SearchIndex {
             .unwrap_or(0)
     }
 
+    #[cfg(test)]
+    fn content_record_term_count(&self, id: FileId) -> usize {
+        self.content_record_terms
+            .get(&id)
+            .map(BTreeSet::len)
+            .unwrap_or(0)
+    }
+
     pub fn insert_content(&mut self, id: FileId, text: &str) {
         if !self.records.contains_key(&id) {
             return;
         }
         self.remove_content(id);
         for (position, token) in tokenize(&normalize(text)).into_iter().enumerate() {
+            self.content_record_terms
+                .entry(id)
+                .or_default()
+                .insert(token.clone());
             self.content_terms
                 .entry(token)
                 .or_default()
@@ -528,6 +541,10 @@ impl SearchIndex {
         for term in terms {
             let term = normalize(&term);
             if !term.is_empty() {
+                self.content_record_terms
+                    .entry(id)
+                    .or_default()
+                    .insert(term.clone());
                 self.content_terms
                     .entry(term)
                     .or_default()
@@ -545,6 +562,10 @@ impl SearchIndex {
             }
             for id in &posting.ids {
                 if self.records.contains_key(id) {
+                    self.content_record_terms
+                        .entry(*id)
+                        .or_default()
+                        .insert(term.clone());
                     self.content_terms
                         .entry(term.clone())
                         .or_default()
@@ -557,6 +578,10 @@ impl SearchIndex {
                     let mut normalized_positions = positions.positions.clone();
                     normalized_positions.sort_unstable();
                     normalized_positions.dedup();
+                    self.content_record_terms
+                        .entry(positions.id)
+                        .or_default()
+                        .insert(term.clone());
                     self.content_terms
                         .entry(term.clone())
                         .or_default()
@@ -567,11 +592,22 @@ impl SearchIndex {
     }
 
     pub fn remove_content(&mut self, id: FileId) {
-        for positions in self.content_terms.values_mut() {
-            positions.remove(&id);
+        let Some(terms) = self.content_record_terms.remove(&id) else {
+            for positions in self.content_terms.values_mut() {
+                positions.remove(&id);
+            }
+            self.content_terms
+                .retain(|_, positions| !positions.is_empty());
+            return;
+        };
+        for term in terms {
+            if let Some(positions) = self.content_terms.get_mut(&term) {
+                positions.remove(&id);
+                if positions.is_empty() {
+                    self.content_terms.remove(&term);
+                }
+            }
         }
-        self.content_terms
-            .retain(|_, positions| !positions.is_empty());
     }
 
     pub fn content_postings(&self) -> Vec<ContentPosting> {
@@ -1471,11 +1507,7 @@ impl SearchIndex {
         for token in &columns.metadata_tokens {
             remove_id(&mut self.metadata_terms, token, record.id);
         }
-        for positions in self.content_terms.values_mut() {
-            positions.remove(&record.id);
-        }
-        self.content_terms
-            .retain(|_, positions| !positions.is_empty());
+        self.remove_content(record.id);
     }
 
     fn add_fuzzy_term(&mut self, term: &str) {

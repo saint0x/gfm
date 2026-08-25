@@ -735,8 +735,16 @@ fn reindexed_content_replaces_stale_terms_and_positions() {
     let item = record(1, "/tmp/change.txt", "change.txt");
     index.insert(item);
     index.insert_content(FileId::new(VolumeId(1), 1), "oldtoken old phrase");
+    assert_eq!(
+        index.content_record_term_count(FileId::new(VolumeId(1), 1)),
+        3
+    );
     index.insert_content(FileId::new(VolumeId(1), 1), "newtoken new phrase");
 
+    assert_eq!(
+        index.content_record_term_count(FileId::new(VolumeId(1), 1)),
+        3
+    );
     assert!(index.query("oldtoken", 10).is_empty());
     assert!(index.query(r#""old phrase""#, 10).is_empty());
     assert_eq!(index.query("newtoken", 10).len(), 1);
@@ -767,7 +775,17 @@ fn imported_content_positions_are_sorted_once_for_phrase_lookup() {
         },
     ]);
 
+    assert_eq!(
+        index.content_record_term_count(FileId::new(VolumeId(1), 1)),
+        2
+    );
     assert_eq!(index.query(r#""alpha beta""#, 10).len(), 1);
+    index.remove_content(FileId::new(VolumeId(1), 1));
+    assert!(index.query(r#""alpha beta""#, 10).is_empty());
+    assert_eq!(
+        index.content_record_term_count(FileId::new(VolumeId(1), 1)),
+        0
+    );
 }
 
 #[test]
