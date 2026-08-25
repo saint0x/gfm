@@ -4,8 +4,10 @@ mod parity;
 mod pixel;
 
 pub use gates::{
-    evaluate_regression_gate, run_regression_gate, RegressionGateOptions, RegressionGateReport,
-    RegressionGateRun, RegressionGateViolation, RegressionInputs,
+    evaluate_regression_gate, parse_parity_gate_manifest, run_parity_gate,
+    run_parity_gate_manifest, run_regression_gate, ParityGateEntryReport, ParityGateInput,
+    ParityGateReport, RegressionGateOptions, RegressionGateReport, RegressionGateRun,
+    RegressionGateViolation, RegressionInputs,
 };
 pub use macrobench::{
     materialize_macrobench_fixture, run_macrobench, MacrobenchMeasurement, MacrobenchOptions,

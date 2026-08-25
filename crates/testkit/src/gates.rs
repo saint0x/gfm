@@ -1,10 +1,14 @@
 use crate::{
-    run_macrobench, MacrobenchOptions, MacrobenchReport, MacrobenchScenario, MacrobenchStage,
+    diff_rgba_files, evaluate_pixel_threshold, read_mask_file, run_macrobench, MacrobenchOptions,
+    MacrobenchReport, MacrobenchScenario, MacrobenchStage, ParitySurface, PixelDiffOptions,
+    PixelDiffReport, PixelDriftThreshold, PixelSize, PixelThresholdEvaluation,
 };
 use gfm_index::Indexer;
 use gfm_telemetry::{BudgetViolation, FrameTimingSummary, ResourceSummary};
 use gfm_types::{GfmError, Result};
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegressionInputs<'a> {
@@ -185,6 +189,160 @@ fn materialize_record_indexes(report: &MacrobenchReport) -> Result<u64> {
     Ok(total)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParityGateInput {
+    pub surface: ParitySurface,
+    pub expected_path: PathBuf,
+    pub actual_path: PathBuf,
+    pub size: PixelSize,
+    pub mask_path: Option<PathBuf>,
+}
+
+impl ParityGateInput {
+    pub fn new(
+        surface: ParitySurface,
+        expected_path: impl Into<PathBuf>,
+        actual_path: impl Into<PathBuf>,
+        size: PixelSize,
+    ) -> Self {
+        Self {
+            surface,
+            expected_path: expected_path.into(),
+            actual_path: actual_path.into(),
+            size,
+            mask_path: None,
+        }
+    }
+
+    pub fn with_mask(mut self, mask_path: impl Into<PathBuf>) -> Self {
+        self.mask_path = Some(mask_path.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParityGateReport {
+    pub manifest_path: Option<PathBuf>,
+    pub entries: Vec<ParityGateEntryReport>,
+}
+
+impl ParityGateReport {
+    pub fn passed(&self) -> bool {
+        self.entries.iter().all(ParityGateEntryReport::passed)
+    }
+
+    pub fn violations(&self) -> usize {
+        self.entries
+            .iter()
+            .map(|entry| entry.evaluation.violations.len())
+            .sum()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParityGateEntryReport {
+    pub input: ParityGateInput,
+    pub diff: PixelDiffReport,
+    pub evaluation: PixelThresholdEvaluation,
+}
+
+impl ParityGateEntryReport {
+    pub fn passed(&self) -> bool {
+        self.evaluation.passed
+    }
+}
+
+pub fn run_parity_gate_manifest(path: impl AsRef<Path>) -> Result<ParityGateReport> {
+    let path = path.as_ref();
+    let content = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+    let base = path.parent().unwrap_or_else(|| Path::new("."));
+    let inputs = parse_parity_gate_manifest(&content, base)?;
+    let mut report = run_parity_gate(inputs)?;
+    report.manifest_path = Some(path.to_path_buf());
+    Ok(report)
+}
+
+pub fn run_parity_gate(inputs: Vec<ParityGateInput>) -> Result<ParityGateReport> {
+    let mut entries = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let masks = input
+            .mask_path
+            .as_ref()
+            .map(|path| read_mask_file(path, input.size))
+            .transpose()?
+            .unwrap_or_default();
+        let options = PixelDiffOptions::strict(input.size).with_masks(masks);
+        let diff = diff_rgba_files(&input.expected_path, &input.actual_path, &options)?;
+        let threshold = PixelDriftThreshold::finder_strict(input.surface);
+        let evaluation = evaluate_pixel_threshold(&diff, threshold);
+        entries.push(ParityGateEntryReport {
+            input,
+            diff,
+            evaluation,
+        });
+    }
+    Ok(ParityGateReport {
+        manifest_path: None,
+        entries,
+    })
+}
+
+pub fn parse_parity_gate_manifest(content: &str, base: &Path) -> Result<Vec<ParityGateInput>> {
+    let mut inputs = Vec::new();
+    for (line_index, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() != 5 && fields.len() != 6 {
+            return Err(GfmError::Format(format!(
+                "parity gate manifest line {} must contain surface, expected, actual, width, height, and optional mask",
+                line_index + 1
+            )));
+        }
+        let surface = ParitySurface::from_str(fields[0]).map_err(GfmError::Format)?;
+        let expected_path = resolve_manifest_path(base, fields[1]);
+        let actual_path = resolve_manifest_path(base, fields[2]);
+        let width = parse_manifest_u32(line_index, "width", fields[3])?;
+        let height = parse_manifest_u32(line_index, "height", fields[4])?;
+        let mut input = ParityGateInput::new(
+            surface,
+            expected_path,
+            actual_path,
+            PixelSize::new(width, height),
+        );
+        if fields.len() == 6 && !fields[5].is_empty() {
+            input = input.with_mask(resolve_manifest_path(base, fields[5]));
+        }
+        inputs.push(input);
+    }
+    if inputs.is_empty() {
+        return Err(GfmError::Format(
+            "parity gate manifest does not contain any entries".to_string(),
+        ));
+    }
+    Ok(inputs)
+}
+
+fn resolve_manifest_path(base: &Path, value: &str) -> PathBuf {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    }
+}
+
+fn parse_manifest_u32(line_index: usize, name: &str, value: &str) -> Result<u32> {
+    value.parse::<u32>().map_err(|_| {
+        GfmError::Format(format!(
+            "parity gate manifest line {} has invalid {name}: {value}",
+            line_index + 1
+        ))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +451,77 @@ mod tests {
             .join("small.gfmidx")
             .exists());
         assert!(run.passed());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_gate_passes_only_explicitly_masked_drift() {
+        let root = unique_temp_dir("gfm-parity-gate");
+        let expected = root.join("expected.rgba");
+        let actual = root.join("actual.rgba");
+        let mask = root.join("mask.tsv");
+        fs::write(&expected, [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
+        fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
+        fs::write(&mask, "1\t0\t1\t1\n").unwrap();
+
+        let report = run_parity_gate(vec![ParityGateInput::new(
+            ParitySurface::Toolbar,
+            &expected,
+            &actual,
+            PixelSize::new(2, 1),
+        )
+        .with_mask(&mask)])
+        .unwrap();
+
+        assert!(report.passed());
+        assert_eq!(report.violations(), 0);
+        assert_eq!(report.entries[0].diff.masked_mismatches, 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_gate_fails_unapproved_drift() {
+        let root = unique_temp_dir("gfm-parity-gate-fail");
+        let expected = root.join("expected.rgba");
+        let actual = root.join("actual.rgba");
+        fs::write(&expected, [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
+        fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
+
+        let report = run_parity_gate(vec![ParityGateInput::new(
+            ParitySurface::Text,
+            &expected,
+            &actual,
+            PixelSize::new(2, 1),
+        )])
+        .unwrap();
+
+        assert!(!report.passed());
+        assert_eq!(report.violations(), 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_gate_manifest_resolves_relative_artifacts() {
+        let root = unique_temp_dir("gfm-parity-gate-manifest");
+        fs::write(root.join("expected.rgba"), [1, 2, 3, 255]).unwrap();
+        fs::write(root.join("actual.rgba"), [1, 2, 3, 255]).unwrap();
+        fs::write(
+            root.join("gate.tsv"),
+            "icon\texpected.rgba\tactual.rgba\t1\t1\n",
+        )
+        .unwrap();
+
+        let report = run_parity_gate_manifest(root.join("gate.tsv")).unwrap();
+
+        assert!(report.passed());
+        assert_eq!(report.entries.len(), 1);
+        assert!(report.entries[0]
+            .input
+            .expected_path
+            .ends_with("expected.rgba"));
 
         fs::remove_dir_all(root).unwrap();
     }

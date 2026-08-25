@@ -340,6 +340,17 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-parity-gate.tsv",
+      "data": "toolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-mask.tsv\n"
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["parity-gate", "tmp/gfm-parity-gate.tsv"],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["release-policy"],

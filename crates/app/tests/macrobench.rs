@@ -132,6 +132,42 @@ fn checks_pixel_threshold_from_binary() {
 }
 
 #[test]
+fn runs_parity_gate_from_binary_manifest() {
+    let root = unique_temp_dir("gfm-cli-parity-gate");
+    fs::write(root.join("expected.rgba"), [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
+    fs::write(root.join("actual.rgba"), [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
+    fs::write(root.join("mask.tsv"), "1\t0\t1\t1\n").unwrap();
+    fs::write(
+        root.join("gate.tsv"),
+        "toolbar\texpected.rgba\tactual.rgba\t2\t1\tmask.tsv\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["parity-gate", root.join("gate.tsv").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains("parity-gate\tmanifest="), "{stdout}");
+    assert!(
+        stdout.contains("entries=1\tviolations=0\tpassed=true"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("threshold\ttoolbar\tunmasked<=0"),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn runs_regression_gate_from_binary() {
     let root = unique_temp_dir("gfm-cli-regression-gate");
 

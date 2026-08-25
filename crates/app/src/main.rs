@@ -24,9 +24,9 @@ use gfm_preview::{
 use gfm_store::ContentArchive;
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
-    run_macrobench, run_regression_gate, MacrobenchOptions, MacrobenchScale, MacrobenchStage,
-    ParityFixtureOptions, ParityFixtureScale, ParitySurface, PixelDiffOptions, PixelDriftThreshold,
-    PixelSize, RegressionGateOptions,
+    run_macrobench, run_parity_gate_manifest, run_regression_gate, MacrobenchOptions,
+    MacrobenchScale, MacrobenchStage, ParityFixtureOptions, ParityFixtureScale, ParitySurface,
+    PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
 };
 use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
 use gfm_ui::{
@@ -656,6 +656,38 @@ fn run() -> Result<()> {
                 )));
             }
         }
+        Some("parity-gate") => {
+            let manifest = required_path(args.next(), "parity-gate requires a manifest path")?;
+            let report = run_parity_gate_manifest(&manifest)?;
+            println!(
+                "parity-gate\tmanifest={}\tentries={}\tviolations={}\tpassed={}",
+                manifest.display(),
+                report.entries.len(),
+                report.violations(),
+                report.passed()
+            );
+            for entry in &report.entries {
+                println!(
+                    "{}\tpassed={}\tmismatched={}\tunmasked={}\tmasked={}\texpected={}\tactual={}",
+                    entry.evaluation.threshold.as_tsv(),
+                    entry.evaluation.passed,
+                    entry.diff.mismatched_pixels,
+                    entry.diff.unmasked_mismatches,
+                    entry.diff.masked_mismatches,
+                    entry.input.expected_path.display(),
+                    entry.input.actual_path.display()
+                );
+                for violation in &entry.evaluation.violations {
+                    println!("{}\t{}", entry.input.surface.as_str(), violation.as_tsv());
+                }
+            }
+            if !report.passed() {
+                return Err(GfmError::Format(format!(
+                    "parity gate failed with {} violation(s)",
+                    report.violations()
+                )));
+            }
+        }
         Some("regression-gate") => {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
             let run = run_regression_gate(&options, RegressionGateOptions::default())?;
@@ -1070,6 +1102,7 @@ fn print_usage() {
   gfm parity-fixture <workspace> [smoke|standard]
   gfm pixel-diff <expected.rgba> <actual.rgba> <width> <height> [mask.tsv]
   gfm pixel-threshold-check <layout|text|icon|selection|focus|hover|toolbar|thumbnail|preview> <expected.rgba> <actual.rgba> <width> <height> [mask.tsv]
+  gfm parity-gate <manifest.tsv>
   gfm regression-gate <workspace> [smoke|standard]
   gfm release-policy
   gfm release-validate <GFM.app> [--allow-unsigned] [--skip-notarization] [--skip-gatekeeper]
