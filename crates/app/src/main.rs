@@ -38,11 +38,11 @@ use gfm_preview::{
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
 use gfm_store::{
-    dictionary_term_report_from_records, metadata_postings_from_records,
+    dictionary_term_report_from_records, inspect_archive_schema, metadata_postings_from_records,
     plan_content_manifest_recovery, recover_content_manifest, write_dictionary,
-    write_metadata_postings, write_record_columns, ContentArchive, ContentArchiveHealth,
-    MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary, MmapFuzzyArchive,
-    MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
+    write_metadata_postings, write_record_columns, ArchiveSchemaKind, ContentArchive,
+    ContentArchiveHealth, MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary,
+    MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_store::{
     fuzzy_postings_from_records, plan_sidecar_recovery, prefix_postings_from_records,
@@ -1467,6 +1467,18 @@ fn run() -> Result<()> {
                     "legacy"
                 }
             );
+        }
+        Some("archive-schema") => {
+            let kind = args
+                .next()
+                .and_then(|kind| ArchiveSchemaKind::parse(&kind))
+                .ok_or_else(|| {
+                    GfmError::Format(
+                        "archive-schema requires records, columns, metadata, prefixes, fuzzy, dictionary, content, or content-manifest".to_string(),
+                    )
+                })?;
+            let path = required_path(args.next(), "archive-schema requires an archive path")?;
+            println!("{}", inspect_archive_schema(kind, path).as_tsv());
         }
         Some("index-columns") => {
             let records = required_path(args.next(), "index-columns requires a records path")?;
@@ -3209,6 +3221,7 @@ fn print_usage() {
   gfm search-index-sidecars-budget <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <fuzzy.gfmfuzzy> <content.gfmcontent> <max-prefix-ids> <max-fuzzy-keys> <max-fuzzy-terms> <max-fuzzy-candidates> <query>
   gfm index-footprint <index.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <content-manifest.gfmmanifest|-> [segments.gfmseg...]
   gfm index-compaction-plan <index.gfmidx> <content-manifest.gfmmanifest|-> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> [segments.gfmseg...]
+  gfm archive-schema <records|columns|metadata|prefixes|fuzzy|dictionary|content|content-manifest> <archive-path>
   gfm records-verify <index.gfmidx>
   gfm index-columns <records.gfmidx> <columns.gfmcols>
   gfm columns-verify <columns.gfmcols>

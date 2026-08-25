@@ -68,6 +68,88 @@ fn indexes_and_searches_real_files_from_binary() {
 }
 
 #[test]
+fn inspects_archive_schema_from_binary() {
+    let root = unique_temp_dir("gfm-cli-archive-schema-root");
+    let index = unique_temp_path("gfm-cli-archive-schema", "gfmidx");
+    let prefixes = unique_temp_path("gfm-cli-archive-schema", "gfmprefix");
+    let unsupported = unique_temp_path("gfm-cli-archive-schema", "gfmidx");
+    fs::write(root.join("InstantSearch.md"), "alpha").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), index.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let records_schema = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["archive-schema", "records", index.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        records_schema.status.success(),
+        "{}",
+        String::from_utf8_lossy(&records_schema.stderr)
+    );
+    let records_stdout = String::from_utf8(records_schema.stdout).unwrap();
+    assert!(
+        records_stdout
+            .contains("archive-schema\tkind=records\tstatus=current\tschema=gfm-store-v3"),
+        "{records_stdout}"
+    );
+
+    let prefixes_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-prefixes",
+            index.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        prefixes_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prefixes_output.stderr)
+    );
+
+    let prefixes_schema = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["archive-schema", "prefixes", prefixes.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        prefixes_schema.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prefixes_schema.stderr)
+    );
+    let prefixes_stdout = String::from_utf8(prefixes_schema.stdout).unwrap();
+    assert!(
+        prefixes_stdout
+            .contains("archive-schema\tkind=prefixes\tstatus=current\tschema=gfm-prefix-v1"),
+        "{prefixes_stdout}"
+    );
+
+    fs::write(&unsupported, "not-gfm\n").unwrap();
+    let unsupported_schema = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["archive-schema", "records", unsupported.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(unsupported_schema.status.success());
+    let unsupported_stdout = String::from_utf8(unsupported_schema.stdout).unwrap();
+    assert!(
+        unsupported_stdout.contains("\tstatus=unsupported\t"),
+        "{unsupported_stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(index).unwrap();
+    fs::remove_file(prefixes).unwrap();
+    fs::remove_file(unsupported).unwrap();
+}
+
+#[test]
 fn persists_volume_index_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-index-state-root");
     let index = unique_temp_path("gfm-cli-index-state-records", "gfmidx");

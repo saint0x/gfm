@@ -9,6 +9,7 @@ mod ids;
 mod integrity;
 mod metadata;
 mod prefix;
+mod schema;
 mod sidecar;
 
 pub use columns::{write_record_columns, MmapRecordColumns, RecordColumn};
@@ -48,6 +49,9 @@ pub use metadata::{
 pub use prefix::{
     prefix_postings_from_records, read_prefix_postings, write_prefix_postings, MmapPrefixArchive,
     PrefixPosting,
+};
+pub use schema::{
+    inspect_archive_schema, ArchiveSchemaKind, ArchiveSchemaReport, ArchiveSchemaStatus,
 };
 pub use sidecar::{
     plan_sidecar_recovery, recover_sidecars, sidecar_kind_name, sidecar_recovery_action_name,

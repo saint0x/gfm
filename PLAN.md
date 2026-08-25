@@ -446,6 +446,10 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - the same bounded content merge policy used by background maintenance emits a deterministic schedule with merge segments, retained segments, tier, merge bytes, tombstone pressure, and a concrete scheduling reason;
   - live I/O pressure, thermal state, battery state, user activity, and index-density thresholds adapt the schedule into run, throttle, or defer actions with bounded effective merge bytes;
   - operator and CI surfaces can gate index density drift and compaction pressure without hydrating postings.
+- Archive schema inspection:
+  - records, columns, metadata, prefix, fuzzy, dictionary, content, and content-manifest archives are classified before migration or recovery work as current, legacy, unsupported, missing, or unreadable;
+  - current and legacy known schemas are validated through the same production mmap readers used by search and diagnostics, so a header-only or checksum-corrupt archive is reported as unreadable instead of trusted;
+  - the operator-facing `archive-schema` command emits deterministic TSV for CI gates, recovery audits, and future archive migration execution.
 - Persistent index recovery:
   - record archives and volume-state files are classified before startup use as ready, missing, unreadable, schema-mismatched, root-mismatched, path-mismatched, or count-mismatched;
   - valid records with missing, stale, unreadable, or migratable state rebuild the state file without rescanning the volume;

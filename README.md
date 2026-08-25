@@ -265,6 +265,8 @@ cargo run -p gfm -- content-manifest-recovery-plan content.gfmmanifest hot:conte
 cargo run -p gfm -- content-manifest-recover content.gfmmanifest quarantine hot:content.gfmcontent
 cargo run -p gfm -- sidecar-recovery-plan records.gfmidx columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
 cargo run -p gfm -- sidecar-recover records.gfmidx quarantine columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
+cargo run -p gfm -- archive-schema records records.gfmidx
+cargo run -p gfm -- archive-schema prefixes prefixes.gfmprefix
 ```
 
 `regression-gate` materializes benchmark indexes and real prefix/fuzzy sidecar archives, then fails on latency, index-density, prefix lookup, fuzzy lookup, cache-path, and sidecar-truncation drift.
@@ -272,6 +274,7 @@ cargo run -p gfm -- sidecar-recover records.gfmidx quarantine columns.gfmcols me
 `diagnostics-index-recovery-plan` and `diagnostics-index-recover` classify persistent record/state health, rebuild missing or stale state, and quarantine corrupt record archives before rebuilding.
 `content-manifest-recovery-plan` and `content-manifest-recover` classify content manifest health, prune invalid archives, and quarantine corrupt manifests before rebuilding from mmap-validated archives.
 `sidecar-recovery-plan` and `sidecar-recover` validate, quarantine, and rebuild search sidecars from the durable record archive.
+`archive-schema` classifies record, column, metadata, prefix, fuzzy, dictionary, content, and content-manifest archives as current, legacy, unsupported, missing, or unreadable while validating known schemas through the production mmap readers.
 
 Build, sign, and register the native app bundle:
 
@@ -315,6 +318,8 @@ cargo run -p gfm -- search-index-sidecars /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/
 cargo run -p gfm -- search-index-sidecars-budget /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmfuzzy /tmp/gfm.gfmcontent 4096 96 512 4096 PLAN
 cargo run -p gfm -- index-footprint /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmfuzzy /tmp/gfm.gfmmanifest /tmp/gfm-*.gfmseg
 cargo run -p gfm -- index-compaction-plan /tmp/gfm.gfmidx /tmp/gfm.gfmmanifest elevated serious battery active /tmp/gfm-*.gfmseg
+cargo run -p gfm -- archive-schema records /tmp/gfm.gfmidx
+cargo run -p gfm -- archive-schema content-manifest /tmp/gfm.gfmmanifest
 cargo run -p gfm -- records-verify /tmp/gfm.gfmidx
 cargo run -p gfm -- index-columns /tmp/gfm.gfmidx /tmp/gfm.gfmcols
 cargo run -p gfm -- columns-verify /tmp/gfm.gfmcols
