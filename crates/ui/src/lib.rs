@@ -9,6 +9,7 @@ use std::sync::{
     Arc,
 };
 
+mod column;
 mod context;
 mod dialog;
 mod icon;
@@ -19,6 +20,10 @@ mod sidebar;
 mod titlebar;
 mod toolbar;
 
+pub use column::{
+    render as render_column_view, ColumnKeyboardFlow, ColumnRowSpec, ColumnSortMode, ColumnSource,
+    ColumnSpec, ColumnViewContract, ColumnViewOptions, PreviewColumnSpec, PreviewRole,
+};
 pub use context::{
     ContextItemKind, ContextMenuContract, ContextMenuInput, ContextMenuItemSpec, ContextSurface,
 };

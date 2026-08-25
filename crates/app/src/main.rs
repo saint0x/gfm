@@ -32,10 +32,11 @@ use gfm_testkit::{
 };
 use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
 use gfm_ui::{
-    AppLaunchSpec, ContextMenuContract, ContextMenuInput, ContextSurface, DialogContract,
-    DialogSurface, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
-    MenuContract, SidebarContract, TitlebarContract, ToolbarContract, WindowLifecycleContract,
-    WindowSessionContract, WindowSessionStore,
+    AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
+    ContextMenuInput, ContextSurface, DialogContract, DialogSurface, IconViewContract,
+    IconViewOptions, ListViewContract, ListViewOptions, MenuContract, SidebarContract,
+    TitlebarContract, ToolbarContract, WindowLifecycleContract, WindowSessionContract,
+    WindowSessionStore,
 };
 use std::env;
 use std::path::PathBuf;
@@ -202,6 +203,41 @@ fn run() -> Result<()> {
             println!(
                 "{}",
                 ListViewContract::from_records(&page.entries, options).as_tsv()
+            );
+        }
+        Some("ui-column-view-contract") => {
+            let path = required_path(
+                args.next(),
+                "ui-column-view-contract requires a directory path",
+            )?;
+            let viewport_rows = args
+                .next()
+                .map(|value| parse_u16(&value, "viewport-rows"))
+                .transpose()?
+                .unwrap_or(24);
+            let scroll_row = args
+                .next()
+                .map(|value| parse_u32(&value, "scroll-row"))
+                .transpose()?
+                .unwrap_or(0);
+            let selected_name = args.next();
+            let page = read_directory(&path)?;
+            let selected_record = selected_name
+                .as_deref()
+                .and_then(|name| page.entries.iter().find(|record| record.name == name));
+            let mut sources = vec![ColumnSource::new(path.clone(), page.entries.clone())
+                .with_scroll_row(scroll_row)
+                .with_selected(selected_record.map(|record| record.id))];
+            if let Some(record) =
+                selected_record.filter(|record| record.kind == FileKind::Directory)
+            {
+                let child_page = read_directory(&record.path)?;
+                sources.push(ColumnSource::new(record.path.clone(), child_page.entries));
+            }
+            let options = ColumnViewOptions::default().with_viewport_rows(viewport_rows);
+            println!(
+                "{}",
+                ColumnViewContract::from_sources(sources, options).as_tsv()
             );
         }
         Some("list") => {
