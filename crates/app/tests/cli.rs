@@ -287,6 +287,27 @@ fn searches_text_content_from_binary() {
 }
 
 #[test]
+fn searches_pdf_content_from_binary() {
+    let root = unique_temp_dir("gfm-cli-pdf-content-root");
+    fs::write(root.join("brief.pdf"), minimal_pdf("pdfneedle lives here")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-content", root.to_str().unwrap(), "pdfneedle"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("brief.pdf"), "{stdout}");
+    assert!(stdout.contains("[[pdfneedle]]"), "{stdout}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn search_content_skips_disguised_binary_from_binary() {
     let root = unique_temp_dir("gfm-cli-disguised-binary-root");
     fs::write(
@@ -762,4 +783,23 @@ fn unique_temp_path(prefix: &str, extension: &str) -> std::path::PathBuf {
         name.push_str(extension);
     }
     std::env::temp_dir().join(name)
+}
+
+fn minimal_pdf(text: &str) -> Vec<u8> {
+    format!(
+        "%PDF-1.4
+1 0 obj
+<< /Type /Page /Contents 2 0 R >>
+endobj
+2 0 obj
+<< /Length {} >>
+stream
+BT /F1 12 Tf 72 720 Td ({}) Tj ET
+endstream
+endobj
+%%EOF",
+        text.len() + 31,
+        text
+    )
+    .into_bytes()
 }

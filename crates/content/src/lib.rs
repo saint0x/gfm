@@ -1,4 +1,7 @@
+mod pdf;
+
 use gfm_types::{FileKind, FileRecord, GfmError, Result, SearchSnippet, SnippetHighlight};
+use pdf::{extract_pdf, PdfExtractStatus};
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
@@ -7,6 +10,9 @@ use std::path::Path;
 #[derive(Debug, Clone)]
 pub struct ExtractionPolicy {
     pub max_bytes: u64,
+    pub max_pdf_bytes: u64,
+    pub max_pdf_pages: usize,
+    pub max_pdf_objects: usize,
     pub extensions: BTreeSet<String>,
 }
 
@@ -14,6 +20,9 @@ impl Default for ExtractionPolicy {
     fn default() -> Self {
         Self {
             max_bytes: 2 * 1024 * 1024,
+            max_pdf_bytes: 16 * 1024 * 1024,
+            max_pdf_pages: 256,
+            max_pdf_objects: 20_000,
             extensions: text_extensions(),
         }
     }
@@ -36,7 +45,15 @@ impl Extractor {
     }
 
     pub fn extract_record(&self, record: &FileRecord) -> Result<Option<ContentDocument>> {
-        if record.kind != FileKind::File || record.len > self.policy.max_bytes {
+        if record.kind != FileKind::File {
+            return Ok(None);
+        }
+        let max_bytes = if path_is_pdf(&record.path) {
+            self.policy.max_pdf_bytes
+        } else {
+            self.policy.max_bytes
+        };
+        if record.len > max_bytes {
             return Ok(None);
         }
         if !self.accepts_path(&record.path) {
@@ -69,15 +86,32 @@ impl Extractor {
             return Ok(None);
         }
         let metadata = std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?;
-        if metadata.len() > self.policy.max_bytes {
+        let is_pdf = path_is_pdf(path);
+        let max_bytes = if is_pdf {
+            self.policy.max_pdf_bytes
+        } else {
+            self.policy.max_bytes
+        };
+        if metadata.len() > max_bytes {
             return Ok(None);
         }
 
         let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
-        let mut bytes = Vec::with_capacity(metadata.len().min(self.policy.max_bytes) as usize);
-        file.take(self.policy.max_bytes)
+        let mut bytes = Vec::with_capacity(metadata.len().min(max_bytes) as usize);
+        file.take(max_bytes)
             .read_to_end(&mut bytes)
             .map_err(|err| GfmError::io(path, err))?;
+
+        if is_pdf {
+            let (status, document) = extract_pdf(&bytes, &self.policy);
+            return match status {
+                PdfExtractStatus::Extracted
+                | PdfExtractStatus::Unsupported
+                | PdfExtractStatus::TooLarge
+                | PdfExtractStatus::TooManyPages
+                | PdfExtractStatus::TooManyObjects => Ok(document),
+            };
+        }
 
         if is_binary(&bytes) {
             return Ok(None);
@@ -95,11 +129,19 @@ impl Extractor {
     }
 
     fn accepts_path(&self, path: &Path) -> bool {
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| self.policy.extensions.contains(&extension.to_lowercase()))
-            .unwrap_or(false)
+        path_is_pdf(path)
+            || path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(|extension| self.policy.extensions.contains(&extension.to_lowercase()))
+                .unwrap_or(false)
     }
+}
+
+fn path_is_pdf(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
 }
 
 fn build_snippet(
@@ -356,6 +398,63 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn extracts_uncompressed_pdf_text() {
+        let root = unique_temp_dir("gfm-content-pdf");
+        let path = root.join("brief.pdf");
+        fs::write(&path, minimal_pdf("pdfneedle inside document")).unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
+
+        assert!(doc.text.contains("pdfneedle inside document"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn applies_pdf_byte_budget_to_records() {
+        let root = unique_temp_dir("gfm-content-pdf-budget");
+        let path = root.join("large.pdf");
+        fs::write(&path, minimal_pdf("large pdf text")).unwrap();
+        let record = FileRecord {
+            id: FileId::new(VolumeId(1), 1),
+            parent: None,
+            path: path.clone(),
+            name: "large.pdf".to_string(),
+            kind: FileKind::File,
+            len: fs::metadata(&path).unwrap().len(),
+            created: None,
+            modified: None,
+            changed: None,
+            hidden: false,
+            tags: Vec::new(),
+        };
+        let extractor = Extractor::new(ExtractionPolicy {
+            max_pdf_bytes: 12,
+            ..ExtractionPolicy::default()
+        });
+
+        let doc = extractor.extract_record(&record).unwrap();
+
+        assert!(doc.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn skips_pdf_when_page_budget_is_exceeded() {
+        let root = unique_temp_dir("gfm-content-pdf-pages");
+        let path = root.join("many.pdf");
+        fs::write(&path, multi_page_pdf(4)).unwrap();
+        let extractor = Extractor::new(ExtractionPolicy {
+            max_pdf_pages: 3,
+            ..ExtractionPolicy::default()
+        });
+
+        let doc = extractor.extract_path(&path).unwrap();
+
+        assert!(doc.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "{}-{}",
@@ -367,5 +466,33 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn minimal_pdf(text: &str) -> Vec<u8> {
+        format!(
+            "%PDF-1.4
+1 0 obj
+<< /Type /Page /Contents 2 0 R >>
+endobj
+2 0 obj
+<< /Length {} >>
+stream
+BT /F1 12 Tf 72 720 Td ({}) Tj ET
+endstream
+endobj
+%%EOF",
+            text.len() + 31,
+            text
+        )
+        .into_bytes()
+    }
+
+    fn multi_page_pdf(pages: usize) -> Vec<u8> {
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        for index in 0..pages {
+            pdf.extend(format!("{index} 0 obj << /Type /Page >> endobj\n").as_bytes());
+        }
+        pdf.extend(b"%%EOF");
+        pdf
     }
 }

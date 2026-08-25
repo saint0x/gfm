@@ -63,7 +63,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Content Extraction
 
-43. Implement PDF text extraction with sandboxing, page limits, incremental updates, and corrupt-file isolation.
+43. Complete PDF extraction with sandboxed workers, compressed/encrypted PDF coverage, incremental updates, extractor-version invalidation, and corrupt-file quarantine beyond the bounded in-process text-stream extractor.
 44. Implement Office document extraction for DOCX, XLSX, PPTX, and legacy formats where practical.
 45. Implement rich text, HTML, Markdown, source code, plist, JSON, CSV, log, email, and archive metadata extraction policies.
 46. Implement OCR strategy for image-only PDFs and screenshots without blocking primary indexing.
