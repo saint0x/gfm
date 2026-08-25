@@ -167,6 +167,7 @@ cargo run -p gfm -- ui-sidebar-contract ~/Desktop
 cargo run -p gfm -- ui-icon-view-contract ~/Desktop 6 4 0
 cargo run -p gfm -- ui-list-view-contract ~/Desktop 12 0
 cargo run -p gfm -- ui-column-view-contract ~/Desktop 12 0 Documents
+cargo run -p gfm -- ui-gallery-view-contract ~/Desktop 8 0 Screenshot.png
 ```
 
 Search directly:

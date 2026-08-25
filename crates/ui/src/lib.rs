@@ -12,6 +12,7 @@ use std::sync::{
 mod column;
 mod context;
 mod dialog;
+mod gallery;
 mod icon;
 mod list;
 mod menu;
@@ -30,6 +31,11 @@ pub use context::{
 pub use dialog::{
     DialogButtonRole, DialogButtonSpec, DialogContract, DialogFieldKind, DialogFieldSpec,
     DialogPresentation, DialogSurface,
+};
+pub use gallery::{
+    render as render_gallery_view, GalleryFilmstripItemSpec, GalleryKeyboardFlow,
+    GalleryMetadataSpec, GalleryPreviewRole, GalleryPreviewSpec, GalleryQuickActionSpec,
+    GallerySortMode, GalleryViewContract, GalleryViewOptions,
 };
 pub use icon::{
     IconBadge, IconCellSpec, IconRole, IconSortMode, IconViewContract, IconViewOptions,

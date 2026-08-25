@@ -29,7 +29,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 15. Finish icon view by binding the implemented grid/selection/badge/virtualization contract to captured Finder spacing, snap behavior, grouping controls, thumbnail/icon providers, drag images, inline rename, Desktop placement, keyboard navigation, and pixel baselines.
 16. Finish list view by binding the implemented column/disclosure/sorting/selection/alternating-row/virtualization contract to captured Finder column metrics, resizing behavior, grouping controls, inline rename, keyboard navigation, huge-directory rendering, and pixel baselines.
 17. Finish column view by binding the implemented column sizing, branch-selection, preview-column, keyboard-flow, scroll-position, branch-loading, selection-persistence, and virtualization contract to captured Finder column metrics, preview behavior, keyboard timing, scroll physics, and pixel baselines.
-18. Implement gallery view with Finder-matched preview area, filmstrip behavior, metadata panel, quick actions, keyboard flow, and thumbnail loading.
+18. Finish gallery view by binding the implemented preview-area, filmstrip, metadata-panel, quick-action, keyboard-flow, selection, and virtualization contract to captured Finder preview sizing, filmstrip behavior, thumbnail loading, metadata layout, quick-action availability, keyboard timing, and pixel baselines.
 19. Implement search results view with Finder-matched scopes, grouping, metadata columns, ranking display behavior, and progressive result refinement.
 20. Implement Trash view behavior, including restore location metadata, permanent delete flows, empty Trash, and permission failures.
 21. Implement package traversal behavior for app bundles and document packages.

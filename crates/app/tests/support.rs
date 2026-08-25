@@ -364,6 +364,44 @@ fn reports_ui_column_view_contract_from_binary() {
 }
 
 #[test]
+fn reports_ui_gallery_view_contract_from_binary() {
+    let root =
+        std::env::temp_dir().join(format!("gfm-gallery-view-contract-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("Folder")).unwrap();
+    std::fs::write(root.join("Image.png"), "image").unwrap();
+    std::fs::write(root.join("Note.txt"), "note").unwrap();
+    std::fs::write(root.join(".hidden"), "hidden").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-gallery-view-contract")
+        .arg(&root)
+        .args(["6", "0", "Image.png"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("gallery-view\tsort=finder-name\tpreview=720x420"));
+    assert!(stdout.contains("\ttotal=3\t"));
+    assert!(stdout.contains("hidden-filtered=1"));
+    assert!(stdout.contains("keyboard=finder-left-right-filmstrip-navigation"));
+    assert!(stdout.contains("preview\t"));
+    assert!(stdout.contains("\timage-preview\tImage.png"));
+    assert!(stdout.contains("metadata\t"));
+    assert!(stdout.contains("quick-action\trotate-left\tRotate Left\tenabled=true"));
+    assert!(stdout.contains("quick-action\tmarkup\tMarkup\tenabled=true"));
+    assert!(stdout.contains("filmstrip\t"));
+    assert!(stdout.contains("\tImage.png\tselected=true"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_preview_security_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["preview-check", "/tmp/example.app", "quick-look"])

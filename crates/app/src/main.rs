@@ -33,10 +33,10 @@ use gfm_testkit::{
 use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
 use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
-    ContextMenuInput, ContextSurface, DialogContract, DialogSurface, IconViewContract,
-    IconViewOptions, ListViewContract, ListViewOptions, MenuContract, SidebarContract,
-    TitlebarContract, ToolbarContract, WindowLifecycleContract, WindowSessionContract,
-    WindowSessionStore,
+    ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
+    GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
+    MenuContract, SidebarContract, TitlebarContract, ToolbarContract, WindowLifecycleContract,
+    WindowSessionContract, WindowSessionStore,
 };
 use std::env;
 use std::path::PathBuf;
@@ -238,6 +238,36 @@ fn run() -> Result<()> {
             println!(
                 "{}",
                 ColumnViewContract::from_sources(sources, options).as_tsv()
+            );
+        }
+        Some("ui-gallery-view-contract") => {
+            let path = required_path(
+                args.next(),
+                "ui-gallery-view-contract requires a directory path",
+            )?;
+            let viewport_items = args
+                .next()
+                .map(|value| parse_u16(&value, "viewport-items"))
+                .transpose()?
+                .unwrap_or(8);
+            let scroll_item = args
+                .next()
+                .map(|value| parse_u32(&value, "scroll-item"))
+                .transpose()?
+                .unwrap_or(0);
+            let selected_name = args.next();
+            let page = read_directory(&path)?;
+            let selected = selected_name
+                .as_deref()
+                .and_then(|name| page.entries.iter().find(|record| record.name == name))
+                .map(|record| record.id);
+            let options = GalleryViewOptions::default()
+                .with_viewport_items(viewport_items)
+                .with_scroll_item(scroll_item)
+                .with_selected(selected);
+            println!(
+                "{}",
+                GalleryViewContract::from_records(&page.entries, options).as_tsv()
             );
         }
         Some("list") => {
