@@ -1,0 +1,18 @@
+[package]
+name = "gfm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gfm-content = { path = "../content" }
+gfm-fs = { path = "../fs" }
+gfm-index = { path = "../index" }
+gfm-jobs = { path = "../jobs" }
+gfm-mac = { path = "../mac" }
+gfm-ops = { path = "../ops" }
+gfm-store = { path = "../store" }
+gfm-types = { path = "../types" }
+
+[lints]
+workspace = true

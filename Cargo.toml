@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/app",
+    "crates/content",
+    "crates/fs",
+    "crates/index",
+    "crates/jobs",
+    "crates/mac",
+    "crates/ops",
+    "crates/search",
+    "crates/store",
+    "crates/telemetry",
+    "crates/types",
+]
+
+[workspace.package]
+edition = "2021"
+license = "UNLICENSED"
+repository = ""
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

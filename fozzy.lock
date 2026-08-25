@@ -1,0 +1,12 @@
+{
+  "dependencyGraphHash": "c6488cd482ed297909c3e9b981dd1f4b7412c95e81e9aea3ff6db2188e8cbb7c",
+  "graph": {
+    "deps": [],
+    "package": {
+      "manifestHash": "07172cc6c3fc399e04bd148361a479fa66b88a44c9d707aa390d92d1c5f7f0b0",
+      "name": "gfm",
+      "version": "0.1.0"
+    }
+  },
+  "schemaVersion": "fozzylang.lock.v0"
+}

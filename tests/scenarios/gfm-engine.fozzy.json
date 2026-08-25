@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "name": "gfm-engine",
+  "steps": [
+    {
+      "type": "trace_event",
+      "name": "engine-start"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-engine.txt",
+      "data": "finder-fast-search"
+    },
+    {
+      "type": "fs_read_assert",
+      "path": "tmp/gfm-engine.txt",
+      "equals": "finder-fast-search"
+    }
+  ]
+}

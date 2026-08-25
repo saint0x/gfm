@@ -1,0 +1,13 @@
+target/
+.fozzy/runs/
+.fozzy/tmp/
+artifacts/*.trace.fozzy
+artifacts/*.fozzy
+
+.DS_Store
+*.swp
+*.swo
+*~
+
+/tmp/
+/dist/
