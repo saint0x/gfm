@@ -45,6 +45,30 @@ pub struct ExtractionPolicy {
     pub extensions: BTreeSet<String>,
 }
 
+impl ExtractionPolicy {
+    fn scaled(&self, percent: u64) -> Self {
+        let percent = percent.clamp(1, 100);
+        Self {
+            max_bytes: scale_u64(self.max_bytes, percent).max(16 * 1024),
+            max_pdf_bytes: scale_u64(self.max_pdf_bytes, percent).max(256 * 1024),
+            max_pdf_pages: scale_usize(self.max_pdf_pages, percent).max(1),
+            max_pdf_objects: scale_usize(self.max_pdf_objects, percent).max(128),
+            max_pdf_stream_bytes: scale_usize(self.max_pdf_stream_bytes, percent).max(128 * 1024),
+            max_office_bytes: scale_u64(self.max_office_bytes, percent).max(512 * 1024),
+            max_office_entries: scale_usize(self.max_office_entries, percent).max(64),
+            max_office_entry_bytes: scale_u64(self.max_office_entry_bytes, percent).max(128 * 1024),
+            max_office_text_bytes: scale_usize(self.max_office_text_bytes, percent).max(64 * 1024),
+            max_archive_bytes: scale_u64(self.max_archive_bytes, percent).max(512 * 1024),
+            max_archive_entries: scale_usize(self.max_archive_entries, percent).max(64),
+            max_archive_text_bytes: scale_usize(self.max_archive_text_bytes, percent)
+                .max(64 * 1024),
+            max_structured_text_bytes: scale_usize(self.max_structured_text_bytes, percent)
+                .max(64 * 1024),
+            extensions: self.extensions.clone(),
+        }
+    }
+}
+
 impl Default for ExtractionPolicy {
     fn default() -> Self {
         Self {
@@ -63,6 +87,114 @@ impl Default for ExtractionPolicy {
             max_structured_text_bytes: 4 * 1024 * 1024,
             extensions: text_extensions(),
         }
+    }
+}
+
+const fn min_percent(left: u64, right: u64) -> u64 {
+    if left < right {
+        left
+    } else {
+        right
+    }
+}
+
+fn scale_u64(value: u64, percent: u64) -> u64 {
+    value.saturating_mul(percent).div_ceil(100)
+}
+
+fn scale_usize(value: usize, percent: u64) -> usize {
+    let scaled = (value as u64).saturating_mul(percent).div_ceil(100);
+    scaled.min(usize::MAX as u64) as usize
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtractionVolumeClass {
+    Local,
+    External,
+    Network,
+    Cloud,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtractionThermalState {
+    Nominal,
+    Fair,
+    Serious,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtractionBatteryState {
+    AcPower,
+    Battery,
+    LowPower,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtractionUserActivity {
+    Idle,
+    Active,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtractionBudgetProfile {
+    pub volume: ExtractionVolumeClass,
+    pub thermal: ExtractionThermalState,
+    pub battery: ExtractionBatteryState,
+    pub user_activity: ExtractionUserActivity,
+}
+
+impl Default for ExtractionBudgetProfile {
+    fn default() -> Self {
+        Self {
+            volume: ExtractionVolumeClass::Local,
+            thermal: ExtractionThermalState::Nominal,
+            battery: ExtractionBatteryState::AcPower,
+            user_activity: ExtractionUserActivity::Idle,
+        }
+    }
+}
+
+impl ExtractionBudgetProfile {
+    pub fn policy(self) -> ExtractionPolicy {
+        self.policy_from(ExtractionPolicy::default())
+    }
+
+    pub fn policy_from(self, base: ExtractionPolicy) -> ExtractionPolicy {
+        base.scaled(self.scale_percent())
+    }
+
+    pub const fn scale_percent(self) -> u64 {
+        let mut percent = match self.volume {
+            ExtractionVolumeClass::Local => 100,
+            ExtractionVolumeClass::External => 80,
+            ExtractionVolumeClass::Cloud => 60,
+            ExtractionVolumeClass::Network => 50,
+        };
+        percent = min_percent(
+            percent,
+            match self.thermal {
+                ExtractionThermalState::Nominal => 100,
+                ExtractionThermalState::Fair => 80,
+                ExtractionThermalState::Serious => 50,
+                ExtractionThermalState::Critical => 25,
+            },
+        );
+        percent = min_percent(
+            percent,
+            match self.battery {
+                ExtractionBatteryState::AcPower => 100,
+                ExtractionBatteryState::Battery => 80,
+                ExtractionBatteryState::LowPower => 50,
+            },
+        );
+        min_percent(
+            percent,
+            match self.user_activity {
+                ExtractionUserActivity::Idle => 100,
+                ExtractionUserActivity::Active => 60,
+            },
+        )
     }
 }
 
@@ -198,6 +330,10 @@ pub struct Extractor {
 impl Extractor {
     pub fn new(policy: ExtractionPolicy) -> Self {
         Self { policy }
+    }
+
+    pub fn with_budget_profile(profile: ExtractionBudgetProfile) -> Self {
+        Self::new(profile.policy())
     }
 
     pub fn extract_record(&self, record: &FileRecord) -> Result<Option<ContentDocument>> {
@@ -689,6 +825,42 @@ mod tests {
             .unwrap();
 
         assert_eq!(doc.text, "hello content index");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extraction_budget_profile_scales_by_volume_and_host_pressure() {
+        let profile = ExtractionBudgetProfile {
+            volume: ExtractionVolumeClass::Network,
+            thermal: ExtractionThermalState::Serious,
+            battery: ExtractionBatteryState::LowPower,
+            user_activity: ExtractionUserActivity::Active,
+        };
+
+        let policy = profile.policy();
+
+        assert_eq!(profile.scale_percent(), 50);
+        assert_eq!(policy.max_bytes, 1024 * 1024);
+        assert_eq!(policy.max_pdf_bytes, 8 * 1024 * 1024);
+        assert_eq!(policy.max_office_entries, 5_000);
+    }
+
+    #[test]
+    fn pressure_budget_skips_large_text_before_reading_content() {
+        let root = unique_temp_dir("gfm-content-pressure-budget");
+        let path = root.join("large.txt");
+        fs::write(&path, "x".repeat(1024 * 1024 + 1)).unwrap();
+        let extractor = Extractor::with_budget_profile(ExtractionBudgetProfile {
+            volume: ExtractionVolumeClass::Network,
+            thermal: ExtractionThermalState::Serious,
+            battery: ExtractionBatteryState::LowPower,
+            user_activity: ExtractionUserActivity::Active,
+        });
+
+        let report = extractor.extract_path_report(&path).unwrap();
+
+        assert_eq!(report.status, ExtractionStatus::Skipped("too-large"));
+        assert!(report.document.is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

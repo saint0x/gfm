@@ -273,6 +273,7 @@ gfm/
 - Persists background content indexing job volume identity and resumes that job through the same isolated, journaled, capped-retry worker path.
 - Admits sidecar repair, persistent index repair, and diagnostics index rebuild jobs through volume-isolated worker admission before scanning, rebuilding, quarantining, or publishing repaired archives.
 - Applies the jobs-layer adaptive scheduling policy to background content indexing so saturated I/O or critical thermal pressure defers heavy extraction, while elevated pressure, low power, or active user input throttles worker admission instead of competing with visible work.
+- Derives background content extraction budgets from file type, size ceilings, volume class, thermal state, battery state, and user activity before extractor reads are admitted.
 - Applies the same adaptive scheduling policy to content segment maintenance before archive compaction, manifest promotion, or cleanup publication starts.
 - Applies the same adaptive scheduling policy to sidecar repair before derived sidecars are rebuilt or corrupt sidecars are quarantined.
 - Applies the same adaptive scheduling policy to persistent index repair before state rebuilds, record quarantine, or recovery publication starts.

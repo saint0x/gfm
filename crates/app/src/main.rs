@@ -1,6 +1,8 @@
 use gfm_config::ConfigStore;
 use gfm_content::{
-    CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor, QuarantineFailureKind,
+    CachedExtractor, ExtractionBatteryState, ExtractionBudgetProfile, ExtractionFingerprint,
+    ExtractionQuarantine, ExtractionThermalState, ExtractionUserActivity, ExtractionVolumeClass,
+    Extractor, QuarantineFailureKind,
 };
 use gfm_diagnostics::{
     export_operator_trace, inspect_storage, plan_index_recovery, rebuild_index, recover_index,
@@ -3138,6 +3140,50 @@ fn parse_user_activity(value: String) -> Result<UserActivity> {
     }
 }
 
+fn extraction_budget_profile(root: &Path, pressure: SchedulingPressure) -> ExtractionBudgetProfile {
+    ExtractionBudgetProfile {
+        volume: extraction_volume_class_for_path(root),
+        thermal: match pressure.thermal {
+            JobThermalState::Nominal => ExtractionThermalState::Nominal,
+            JobThermalState::Fair => ExtractionThermalState::Fair,
+            JobThermalState::Serious => ExtractionThermalState::Serious,
+            JobThermalState::Critical => ExtractionThermalState::Critical,
+        },
+        battery: match pressure.battery {
+            JobBatteryState::AcPower => ExtractionBatteryState::AcPower,
+            JobBatteryState::Battery => ExtractionBatteryState::Battery,
+            JobBatteryState::LowPower => ExtractionBatteryState::LowPower,
+        },
+        user_activity: match pressure.user_activity {
+            JobUserActivity::Idle => ExtractionUserActivity::Idle,
+            JobUserActivity::Active => ExtractionUserActivity::Active,
+        },
+    }
+}
+
+fn extraction_volume_class_for_path(path: &Path) -> ExtractionVolumeClass {
+    let normalized = path
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .replace('\\', "/");
+    if normalized.contains("/network/")
+        || normalized.contains("/net/")
+        || normalized.contains("/smb/")
+        || normalized.contains("/nfs/")
+    {
+        ExtractionVolumeClass::Network
+    } else if normalized.contains("/mobile documents/")
+        || normalized.contains("cloud")
+        || normalized.contains("fileprovider")
+    {
+        ExtractionVolumeClass::Cloud
+    } else if normalized.starts_with("/volumes/") {
+        ExtractionVolumeClass::External
+    } else {
+        ExtractionVolumeClass::Local
+    }
+}
+
 fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeDescriptor {
     IndexVolumeDescriptor::new(
         volume.label.clone(),
@@ -3666,7 +3712,8 @@ fn run_content_job(
             deferred: true,
         });
     }
-    let worker = BackgroundContentIndexer::new(Extractor::default(), spec.options());
+    let extractor = Extractor::with_budget_profile(extraction_budget_profile(&spec.root, pressure));
+    let worker = BackgroundContentIndexer::new(extractor, spec.options());
     let content_report = Arc::new(Mutex::new(None));
     let content_report_task = Arc::clone(&content_report);
     let mut scheduler = Scheduler::new();

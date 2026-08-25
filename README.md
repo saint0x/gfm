@@ -146,6 +146,8 @@ Background content indexing persists its `VolumeId` in the durable job spec and 
 
 Background content indexing also consumes explicit runtime pressure signals: saturated I/O or critical thermal pressure defers the durable job before extraction starts, while elevated pressure, low power, or active user input throttles worker admission.
 
+Background content extraction budgets are derived from file type, size ceilings, volume class, thermal state, battery state, and user activity before extractor reads are admitted.
+
 Content segment maintenance uses the same adaptive scheduling policy before compaction, manifest promotion, or cleanup publication starts.
 
 Sidecar repair uses the same adaptive scheduling policy before rebuilding derived sidecars or quarantining corrupt sidecar archives.

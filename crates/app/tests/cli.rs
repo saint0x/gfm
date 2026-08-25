@@ -3463,6 +3463,72 @@ fn defers_background_content_indexer_under_saturated_io_from_binary() {
 }
 
 #[test]
+fn throttled_background_content_indexer_applies_pressure_budgets_from_binary() {
+    let root = unique_temp_dir("gfm-cli-background-content-budget-root");
+    let segments = unique_temp_dir("gfm-cli-background-content-budget-segments");
+    let records = unique_temp_path("gfm-cli-background-budget-records", "gfmidx");
+    let content = unique_temp_path("gfm-cli-background-budget-content", "gfmcontent");
+    let journal = unique_temp_path("gfm-cli-background-budget-jobs", "journal");
+    let spec = unique_temp_path("gfm-cli-background-budget-content", "job");
+    let mut body = "x".repeat(1024 * 1024 + 1);
+    body.push_str(" pressurebudgetmarker");
+    fs::write(root.join("large.md"), body).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_CONTENT_JOB", &spec)
+        .args([
+            "index-content-background",
+            root.to_str().unwrap(),
+            segments.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "elevated",
+            "serious",
+            "low",
+            "active",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("action=Throttle"), "{stderr}");
+    assert!(
+        stderr.contains("background-content-indexed 0 files"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("terms 0"), "{stderr}");
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index",
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "pressurebudgetmarker",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(!stdout.contains("large.md"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(spec).unwrap();
+}
+
+#[test]
 fn resumes_content_index_job_from_binary() {
     let root = unique_temp_dir("gfm-cli-resume-content-root");
     let segments = unique_temp_dir("gfm-cli-resume-content-segments");
