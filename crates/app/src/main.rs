@@ -24,10 +24,10 @@ use gfm_index::{
     SearchStreamStage, ThermalState, UserActivity, VolumeIndexPolicy,
 };
 use gfm_jobs::{
-    Cancellation, JobBatteryState, JobIoPressure, JobJournal, JobPayloadCatalog, JobPayloadKind,
-    JobPayloadRecord, JobThermalState, JobUserActivity, Priority, RecoveryReason, RetriableTask,
-    RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, Task, TaskStatus,
-    VolumeConcurrencyPolicy, WorkerPool,
+    Cancellation, JobBatteryState, JobClass, JobFairnessPlanner, JobFairnessPolicy, JobIoPressure,
+    JobJournal, JobPayloadCatalog, JobPayloadKind, JobPayloadRecord, JobThermalState,
+    JobUserActivity, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler,
+    SchedulingAction, SchedulingPressure, Task, TaskStatus, VolumeConcurrencyPolicy, WorkerPool,
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, parse_spotlight_fixture, AccessIntent,
@@ -3061,6 +3061,33 @@ fn run() -> Result<()> {
                 println!("{}", record.as_tsv());
             }
         }
+        Some("jobs-fairness-plan") => {
+            let plan = sample_fairness_plan();
+            for job in plan.ready {
+                println!(
+                    "ready\t{}\t{}\t{}\t{}",
+                    job.id.value(),
+                    job.class.as_str(),
+                    priority_name(job.priority),
+                    job.label
+                );
+            }
+            for job in plan.blocked {
+                let missing = job
+                    .missing_dependencies
+                    .iter()
+                    .map(|dependency| dependency.value().to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                println!(
+                    "blocked\t{}\t{}\t{}\t{}",
+                    job.id.value(),
+                    job.class.as_str(),
+                    missing,
+                    job.label
+                );
+            }
+        }
         Some("ops-recover") => {
             let (journal, policy) = parse_ops_recover_args(&mut args)?;
             let report =
@@ -4516,6 +4543,49 @@ fn sample_payload_catalog_records() -> Vec<JobPayloadRecord> {
     .collect()
 }
 
+fn sample_fairness_plan() -> gfm_jobs::JobFairnessPlan {
+    let mut scheduler = Scheduler::new();
+    scheduler.schedule_in_class(Priority::Interactive, JobClass::Foreground, "open folder");
+    scheduler.schedule_in_class(Priority::Visible, JobClass::Visible, "render visible rows");
+    scheduler.schedule_in_class(Priority::Background, JobClass::Background, "index content");
+    let compact = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "compact sidecars",
+    );
+    scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair derived sidecar",
+        [compact.id],
+    );
+    scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair missing thumbnail",
+        [gfm_jobs::JobId::from_raw(999)],
+    );
+
+    JobFairnessPlanner::new(
+        JobFairnessPolicy::new()
+            .with_quota(JobClass::Foreground, 1)
+            .with_quota(JobClass::Visible, 1)
+            .with_quota(JobClass::Background, 1)
+            .with_quota(JobClass::Maintenance, 1)
+            .with_quota(JobClass::Repair, 1),
+    )
+    .plan(scheduler.drain_ready())
+}
+
+fn priority_name(priority: Priority) -> &'static str {
+    match priority {
+        Priority::Background => "background",
+        Priority::Normal => "normal",
+        Priority::Visible => "visible",
+        Priority::Interactive => "interactive",
+    }
+}
+
 fn stream_stage(stage: SearchStreamStage) -> &'static str {
     match stage {
         SearchStreamStage::Hot => "hot",
@@ -4805,6 +4875,7 @@ fn print_usage() {
   gfm jobs-recover [jobs.journal]
   gfm jobs-retry-plan <max-attempts> <attempts> <failure-message...>
   gfm jobs-payload-catalog <catalog.gfmjobs>
+  gfm jobs-fairness-plan
   gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
   gfm watch-once <root>
   gfm copy <source> <destination>

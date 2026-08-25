@@ -33,6 +33,82 @@ fn drains_ready_jobs_in_priority_order() {
 }
 
 #[test]
+fn fairness_planner_interleaves_job_classes_by_quota() {
+    let mut scheduler = Scheduler::new();
+    for index in 0..4 {
+        scheduler.schedule_in_class(
+            Priority::Interactive,
+            JobClass::Foreground,
+            format!("foreground-{index}"),
+        );
+    }
+    for index in 0..3 {
+        scheduler.schedule_in_class(
+            Priority::Background,
+            JobClass::Background,
+            format!("background-{index}"),
+        );
+    }
+    scheduler.schedule_in_class(Priority::Background, JobClass::Maintenance, "compact");
+
+    let jobs = scheduler.drain_ready();
+    let plan = JobFairnessPlanner::new(
+        JobFairnessPolicy::new()
+            .with_quota(JobClass::Foreground, 2)
+            .with_quota(JobClass::Background, 1)
+            .with_quota(JobClass::Maintenance, 1),
+    )
+    .plan(jobs);
+
+    assert_eq!(
+        plan.labels(),
+        [
+            "foreground-0",
+            "foreground-1",
+            "background-0",
+            "compact",
+            "foreground-2",
+            "foreground-3",
+            "background-1",
+            "background-2",
+        ]
+    );
+    assert!(plan.blocked.is_empty());
+}
+
+#[test]
+fn fairness_planner_honors_dependencies_and_reports_blocked_jobs() {
+    let mut scheduler = Scheduler::new();
+    let metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "rebuild metadata",
+    );
+    scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair search sidecars",
+        vec![metadata.id],
+    );
+    scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair missing thumbnail",
+        vec![JobId::from_raw(99)],
+    );
+
+    let plan = JobFairnessPlanner::new(JobFairnessPolicy::default()).plan(scheduler.drain_ready());
+
+    assert_eq!(
+        plan.labels(),
+        ["rebuild metadata", "repair search sidecars"]
+    );
+    assert_eq!(plan.blocked.len(), 1);
+    assert_eq!(plan.blocked[0].label, "repair missing thumbnail");
+    assert_eq!(plan.blocked[0].missing_dependencies, [JobId::from_raw(99)]);
+}
+
+#[test]
 fn scheduling_pressure_defers_background_under_saturated_io() {
     let pressure = SchedulingPressure {
         io: JobIoPressure::Saturated,

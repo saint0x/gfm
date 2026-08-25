@@ -33,6 +33,35 @@ pub enum Priority {
     Interactive,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum JobClass {
+    Foreground,
+    Visible,
+    Background,
+    Maintenance,
+    Repair,
+}
+
+impl JobClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Foreground => "foreground",
+            Self::Visible => "visible",
+            Self::Background => "background",
+            Self::Maintenance => "maintenance",
+            Self::Repair => "repair",
+        }
+    }
+
+    pub const fn from_priority(priority: Priority) -> Self {
+        match priority {
+            Priority::Interactive => Self::Foreground,
+            Priority::Visible => Self::Visible,
+            Priority::Normal | Priority::Background => Self::Background,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SchedulingPressure {
     pub io: JobIoPressure,
@@ -147,8 +176,10 @@ fn throttle_limit(limit: usize) -> usize {
 pub struct Job {
     pub id: JobId,
     pub priority: Priority,
+    pub class: JobClass,
     pub label: String,
     pub volume: Option<VolumeId>,
+    pub dependencies: Vec<JobId>,
     cancel: Cancellation,
 }
 
@@ -195,6 +226,46 @@ impl Scheduler {
         self.schedule_with_volume(priority, label, None)
     }
 
+    pub fn schedule_in_class(
+        &mut self,
+        priority: Priority,
+        class: JobClass,
+        label: impl Into<String>,
+    ) -> Job {
+        self.schedule_with_options(priority, class, label, None, Vec::new())
+    }
+
+    pub fn schedule_with_dependencies(
+        &mut self,
+        priority: Priority,
+        label: impl Into<String>,
+        dependencies: impl IntoIterator<Item = JobId>,
+    ) -> Job {
+        self.schedule_with_options(
+            priority,
+            JobClass::from_priority(priority),
+            label,
+            None,
+            dependencies.into_iter().collect(),
+        )
+    }
+
+    pub fn schedule_in_class_with_dependencies(
+        &mut self,
+        priority: Priority,
+        class: JobClass,
+        label: impl Into<String>,
+        dependencies: impl IntoIterator<Item = JobId>,
+    ) -> Job {
+        self.schedule_with_options(
+            priority,
+            class,
+            label,
+            None,
+            dependencies.into_iter().collect(),
+        )
+    }
+
     pub fn schedule_on_volume(
         &mut self,
         priority: Priority,
@@ -204,18 +275,80 @@ impl Scheduler {
         self.schedule_with_volume(priority, label, Some(volume))
     }
 
+    pub fn schedule_on_volume_in_class(
+        &mut self,
+        priority: Priority,
+        class: JobClass,
+        label: impl Into<String>,
+        volume: VolumeId,
+    ) -> Job {
+        self.schedule_with_options(priority, class, label, Some(volume), Vec::new())
+    }
+
+    pub fn schedule_on_volume_with_dependencies(
+        &mut self,
+        priority: Priority,
+        label: impl Into<String>,
+        volume: VolumeId,
+        dependencies: impl IntoIterator<Item = JobId>,
+    ) -> Job {
+        self.schedule_with_options(
+            priority,
+            JobClass::from_priority(priority),
+            label,
+            Some(volume),
+            dependencies.into_iter().collect(),
+        )
+    }
+
+    pub fn schedule_on_volume_in_class_with_dependencies(
+        &mut self,
+        priority: Priority,
+        class: JobClass,
+        label: impl Into<String>,
+        volume: VolumeId,
+        dependencies: impl IntoIterator<Item = JobId>,
+    ) -> Job {
+        self.schedule_with_options(
+            priority,
+            class,
+            label,
+            Some(volume),
+            dependencies.into_iter().collect(),
+        )
+    }
+
     fn schedule_with_volume(
         &mut self,
         priority: Priority,
         label: impl Into<String>,
         volume: Option<VolumeId>,
     ) -> Job {
+        self.schedule_with_options(
+            priority,
+            JobClass::from_priority(priority),
+            label,
+            volume,
+            Vec::new(),
+        )
+    }
+
+    fn schedule_with_options(
+        &mut self,
+        priority: Priority,
+        class: JobClass,
+        label: impl Into<String>,
+        volume: Option<VolumeId>,
+        dependencies: Vec<JobId>,
+    ) -> Job {
         let id = JobId(self.next.fetch_add(1, AtomicOrdering::SeqCst) + 1);
         let job = Job {
             id,
             priority,
+            class,
             label: label.into(),
             volume,
+            dependencies,
             cancel: Cancellation::default(),
         };
         self.queue.push(QueuedJob(job.clone()));
@@ -244,6 +377,138 @@ impl Scheduler {
         }
         jobs
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobFairnessPolicy {
+    quotas: HashMap<JobClass, usize>,
+}
+
+impl JobFairnessPolicy {
+    pub fn new() -> Self {
+        Self {
+            quotas: [
+                (JobClass::Foreground, 3),
+                (JobClass::Visible, 3),
+                (JobClass::Background, 1),
+                (JobClass::Maintenance, 1),
+                (JobClass::Repair, 1),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    pub fn with_quota(mut self, class: JobClass, quota: usize) -> Self {
+        self.quotas.insert(class, quota.max(1));
+        self
+    }
+
+    fn quota(&self, class: JobClass) -> usize {
+        self.quotas.get(&class).copied().unwrap_or(1).max(1)
+    }
+}
+
+impl Default for JobFairnessPolicy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockedJob {
+    pub id: JobId,
+    pub label: String,
+    pub class: JobClass,
+    pub missing_dependencies: Vec<JobId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct JobFairnessPlan {
+    pub ready: Vec<Job>,
+    pub blocked: Vec<BlockedJob>,
+}
+
+impl JobFairnessPlan {
+    pub fn labels(&self) -> Vec<&str> {
+        self.ready.iter().map(|job| job.label.as_str()).collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JobFairnessPlanner {
+    policy: JobFairnessPolicy,
+    completed: HashSet<JobId>,
+}
+
+impl JobFairnessPlanner {
+    pub fn new(policy: JobFairnessPolicy) -> Self {
+        Self {
+            policy,
+            completed: HashSet::new(),
+        }
+    }
+
+    pub fn with_completed(mut self, completed: impl IntoIterator<Item = JobId>) -> Self {
+        self.completed.extend(completed);
+        self
+    }
+
+    pub fn plan(&self, jobs: impl IntoIterator<Item = Job>) -> JobFairnessPlan {
+        let mut pending: VecDeque<Job> = jobs.into_iter().collect();
+        let mut satisfied = self.completed.clone();
+        let mut ready = Vec::new();
+
+        loop {
+            let mut progressed = false;
+            for class in JOB_CLASS_ORDER {
+                for _ in 0..self.policy.quota(class) {
+                    let Some(index) = pending.iter().position(|job| {
+                        job.class == class && dependencies_satisfied(job, &satisfied)
+                    }) else {
+                        break;
+                    };
+                    let job = pending.remove(index).expect("fairness job vanished");
+                    satisfied.insert(job.id);
+                    ready.push(job);
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+
+        let blocked = pending
+            .into_iter()
+            .map(|job| BlockedJob {
+                id: job.id,
+                label: job.label,
+                class: job.class,
+                missing_dependencies: job
+                    .dependencies
+                    .into_iter()
+                    .filter(|dependency| !satisfied.contains(dependency))
+                    .collect(),
+            })
+            .collect();
+
+        JobFairnessPlan { ready, blocked }
+    }
+}
+
+const JOB_CLASS_ORDER: [JobClass; 5] = [
+    JobClass::Foreground,
+    JobClass::Visible,
+    JobClass::Background,
+    JobClass::Maintenance,
+    JobClass::Repair,
+];
+
+fn dependencies_satisfied(job: &Job, satisfied: &HashSet<JobId>) -> bool {
+    job.dependencies
+        .iter()
+        .all(|dependency| satisfied.contains(dependency))
 }
 
 pub struct Task {

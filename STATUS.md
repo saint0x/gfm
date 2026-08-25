@@ -71,7 +71,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 ## Jobs And Runtime
 
 44. Complete automatic producer integration for the durable job payload catalog across operation, indexing, extraction, thumbnail, preview, and repair jobs beyond the implemented schema-checked typed catalog, round-trip storage, escaped payload metadata, and operator catalog report.
-45. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
+45. Complete automatic producer integration for dependency-aware fair scheduling across foreground, visible, background, maintenance, and repair queues beyond the implemented classed job API, dependency planner, weighted quotas, deterministic blocked-dependency reporting, and operator fairness report.
 46. Implement persistent progress snapshots and user-visible progress restoration after restart.
 47. Bind thermal, battery, IO pressure, and user-activity adaptive scheduling into remaining foreground, preview, and thumbnail producers beyond the implemented jobs-layer policy, background content indexing hook, content maintenance hook, sidecar repair hook, persistent-index repair hook, and diagnostics-rebuild hook.
 48. Complete structured cancellation propagation across nested jobs and remaining producers beyond the implemented search/index cancellation contracts, operation cancellation checkpoints, preview offscreen cancellation, and adaptive extraction subprocess cancellation supervision.

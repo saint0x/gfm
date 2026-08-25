@@ -3949,6 +3949,45 @@ fn reports_job_payload_catalog_from_binary() {
     fs::remove_file(catalog).unwrap();
 }
 
+#[test]
+fn reports_job_fairness_plan_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("jobs-fairness-plan")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("ready\t1\tforeground\tinteractive\topen folder"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ready\t2\tvisible\tvisible\trender visible rows"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ready\t3\tbackground\tbackground\tindex content"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ready\t4\tmaintenance\tbackground\tcompact sidecars"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ready\t5\trepair\tvisible\trepair derived sidecar"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("blocked\t6\trepair\t999\trepair missing thumbnail"),
+        "{stdout}"
+    );
+}
+
 fn run_gfm<const N: usize>(journal: &std::path::Path, args: [&str; N]) {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_OPS_JOURNAL", journal)
