@@ -1254,6 +1254,94 @@ fn searches_persisted_tags_from_binary() {
 }
 
 #[test]
+fn recovers_missing_and_corrupt_sidecars_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-recovery-root");
+    let records = unique_temp_path("gfm-cli-sidecar-recovery", "gfmidx");
+    let prefixes = unique_temp_path("gfm-cli-sidecar-recovery", "gfmprefix");
+    let dictionary = unique_temp_path("gfm-cli-sidecar-recovery", "gfmdict");
+    let quarantine = unique_temp_dir("gfm-cli-sidecar-recovery-quarantine");
+    fs::write(root.join("ProjectPlan.md"), "sidecar").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+    fs::write(&dictionary, "not-a-dictionary").unwrap();
+
+    let plan_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "sidecar-recovery-plan",
+            records.to_str().unwrap(),
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            dictionary.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        plan_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan_output.stderr)
+    );
+    let plan_stdout = String::from_utf8(plan_output.stdout).unwrap();
+    assert!(
+        plan_stdout.contains("action=rebuild")
+            && plan_stdout.contains("reason=missing-sidecar")
+            && plan_stdout.contains("invalid=2"),
+        "{plan_stdout}"
+    );
+
+    let recover_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "sidecar-recover",
+            records.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            dictionary.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        recover_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recover_output.stderr)
+    );
+    let recover_stdout = String::from_utf8(recover_output.stdout).unwrap();
+    assert!(
+        recover_stdout.contains("sidecar-recovery\trebuilt=2\tquarantined=1")
+            && recover_stdout.contains("action=ready"),
+        "{recover_stdout}"
+    );
+
+    let prefix_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["prefix-verify", prefixes.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(prefix_verify.status.success());
+    let dictionary_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["dictionary-verify", dictionary.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(dictionary_verify.status.success());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(prefixes).unwrap();
+    fs::remove_file(dictionary).unwrap();
+    fs::remove_dir_all(quarantine).unwrap();
+}
+
+#[test]
 fn searches_with_scope_prefixes_from_binary() {
     let root = unique_temp_dir("gfm-cli-scope-root");
     fs::create_dir_all(root.join("Desktop")).unwrap();

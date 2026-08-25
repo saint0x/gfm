@@ -45,8 +45,9 @@ use gfm_store::{
     MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_store::{
-    fuzzy_postings_from_records, prefix_postings_from_records, write_fuzzy_postings,
-    write_prefix_postings,
+    fuzzy_postings_from_records, plan_sidecar_recovery, prefix_postings_from_records,
+    recover_sidecars, sidecar_kind_name, write_fuzzy_postings, write_prefix_postings,
+    SidecarHealth, SidecarPaths,
 };
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
@@ -1549,6 +1550,34 @@ fn run() -> Result<()> {
             write_fuzzy_postings(output, &postings)?;
             eprintln!("fuzzy-indexed {} keys", postings.len());
         }
+        Some("sidecar-recovery-plan") => {
+            let records =
+                required_path(args.next(), "sidecar-recovery-plan requires a records path")?;
+            let sidecars = parse_sidecar_paths(&mut args, "sidecar-recovery-plan")?;
+            let plan = plan_sidecar_recovery(&records, &sidecars);
+            println!("{}", plan.as_tsv());
+            print_sidecar_health("invalid", &plan.invalid_sidecars);
+        }
+        Some("sidecar-recover") => {
+            let records = required_path(args.next(), "sidecar-recover requires a records path")?;
+            let quarantine = required_path(
+                args.next(),
+                "sidecar-recover requires a quarantine directory",
+            )?;
+            let sidecars = parse_sidecar_paths(&mut args, "sidecar-recover")?;
+            let report = recover_sidecars(&records, &sidecars, &quarantine)?;
+            println!("{}", report.before.as_tsv());
+            println!(
+                "sidecar-recovery\trebuilt={}\tquarantined={}",
+                report.rebuilt_sidecars.len(),
+                report.quarantined_sidecars.len()
+            );
+            println!("{}", report.after.as_tsv());
+            print_sidecar_health("invalid-before", &report.before.invalid_sidecars);
+            for path in report.quarantined_sidecars {
+                println!("quarantined\t{}", path.display());
+            }
+        }
         Some("fuzzy-terms-mmap") => {
             let fuzzy = required_path(args.next(), "fuzzy-terms-mmap requires a fuzzy path")?;
             let key = args
@@ -2480,6 +2509,34 @@ fn optional_path_arg(value: Option<String>, message: &str) -> Result<Option<Path
     Ok((value != "-").then(|| PathBuf::from(value)))
 }
 
+fn parse_sidecar_paths(
+    args: &mut impl Iterator<Item = String>,
+    command: &str,
+) -> Result<SidecarPaths> {
+    Ok(SidecarPaths {
+        columns: optional_path_arg(
+            args.next(),
+            &format!("{command} requires a columns path or -"),
+        )?,
+        metadata: optional_path_arg(
+            args.next(),
+            &format!("{command} requires a metadata path or -"),
+        )?,
+        prefixes: optional_path_arg(
+            args.next(),
+            &format!("{command} requires a prefixes path or -"),
+        )?,
+        fuzzy: optional_path_arg(
+            args.next(),
+            &format!("{command} requires a fuzzy path or -"),
+        )?,
+        dictionary: optional_path_arg(
+            args.next(),
+            &format!("{command} requires a dictionary path or -"),
+        )?,
+    })
+}
+
 fn required_string(value: Option<String>, message: &str) -> Result<String> {
     value.ok_or_else(|| GfmError::Format(message.to_string()))
 }
@@ -3038,6 +3095,18 @@ fn print_content_archive_health(label: &str, archives: &[ContentArchiveHealth]) 
     }
 }
 
+fn print_sidecar_health(label: &str, sidecars: &[SidecarHealth]) {
+    for sidecar in sidecars {
+        println!(
+            "{}\t{}\t{}\t{}",
+            label,
+            sidecar_kind_name(sidecar.kind),
+            sidecar.path.display(),
+            sidecar.detail.as_deref().unwrap_or("-")
+        );
+    }
+}
+
 fn print_usage() {
     println!(
         "gfm commands:
@@ -3103,6 +3172,8 @@ fn print_usage() {
   gfm index-dictionary <records.gfmidx> <dictionary.gfmdict>
   gfm index-prefixes <records.gfmidx> <prefixes.gfmprefix>
   gfm index-fuzzy <records.gfmidx> <fuzzy.gfmfuzzy>
+  gfm sidecar-recovery-plan <records.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <dictionary.gfmdict|->
+  gfm sidecar-recover <records.gfmidx> <quarantine-dir> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <dictionary.gfmdict|->
   gfm fuzzy-terms-mmap <fuzzy.gfmfuzzy> <key>
   gfm fuzzy-verify <fuzzy.gfmfuzzy>
   gfm prefix-ids-mmap <prefixes.gfmprefix> <prefix>

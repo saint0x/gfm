@@ -262,11 +262,14 @@ cargo run -p gfm -- diagnostics-index-recovery-plan /tmp/root records.gfmidx sta
 cargo run -p gfm -- diagnostics-index-recover /tmp/root records.gfmidx state.gfmstate quarantine
 cargo run -p gfm -- content-manifest-recovery-plan content.gfmmanifest hot:content.gfmcontent
 cargo run -p gfm -- content-manifest-recover content.gfmmanifest quarantine hot:content.gfmcontent
+cargo run -p gfm -- sidecar-recovery-plan records.gfmidx columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
+cargo run -p gfm -- sidecar-recover records.gfmidx quarantine columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
 ```
 
 `regression-gate` materializes the benchmark indexes and fails on latency, index-density, prefix lookup, fuzzy lookup, and sidecar-truncation drift.
 `diagnostics-index-recovery-plan` and `diagnostics-index-recover` classify persistent record/state health, rebuild missing or stale state, and quarantine corrupt record archives before rebuilding.
 `content-manifest-recovery-plan` and `content-manifest-recover` classify content manifest health, prune invalid archives, and quarantine corrupt manifests before rebuilding from mmap-validated archives.
+`sidecar-recovery-plan` and `sidecar-recover` validate, quarantine, and rebuild search sidecars from the durable record archive.
 
 Build, sign, and register the native app bundle:
 

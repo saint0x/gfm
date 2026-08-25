@@ -9,6 +9,7 @@ mod ids;
 mod integrity;
 mod metadata;
 mod prefix;
+mod sidecar;
 
 pub use columns::{write_record_columns, MmapRecordColumns, RecordColumn};
 pub use content::{
@@ -47,6 +48,11 @@ pub use metadata::{
 pub use prefix::{
     prefix_postings_from_records, read_prefix_postings, write_prefix_postings, MmapPrefixArchive,
     PrefixPosting,
+};
+pub use sidecar::{
+    plan_sidecar_recovery, recover_sidecars, sidecar_kind_name, sidecar_recovery_action_name,
+    sidecar_recovery_reason_name, SidecarHealth, SidecarKind, SidecarPaths, SidecarRecovery,
+    SidecarRecoveryAction, SidecarRecoveryPlan, SidecarRecoveryReason,
 };
 
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};

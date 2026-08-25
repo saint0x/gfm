@@ -58,7 +58,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 ## Storage Engine
 
 37. Finish benchmark-proven prefix/fuzzy lookup budgets for multi-million-entry indexes by adding adaptive prefix cutoffs, cache hit telemetry, and realistic multi-million-entry fixtures around the enforced lookup caps and regression gates.
-38. Complete storage durability beyond persistent record/state and content manifest recovery by adding archive schema migrations, crash recovery for sidecar manifests, corruption quarantine for every remaining storage family, and rebuild plans across all archive types.
+38. Complete storage durability beyond persistent record/state, content manifest, and search sidecar recovery by adding archive schema migrations, crash recovery for remaining manifest-like state, and rebuild plans across all archive types.
 39. Implement benchmark fixtures for millions of files and realistic developer, media, documents, and iCloud trees.
 
 ## File Operations

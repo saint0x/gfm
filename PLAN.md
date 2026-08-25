@@ -455,6 +455,11 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - unreadable manifests are quarantined before being replaced by a discovered-archive manifest so corrupt bytes remain available for diagnostics;
   - manifests with missing or corrupt archive entries are pruned only when at least one valid archive remains searchable;
   - recovery commands expose dry-run plans, invalid archive details, quarantine paths, and before/after recovery transcripts.
+- Search sidecar recovery:
+  - record columns, metadata postings, prefix postings, fuzzy postings, and dictionary archives are validated through their mmap checksum readers before startup use;
+  - missing or unreadable sidecars are rebuilt from the durable record archive using the same production encoders as indexing;
+  - corrupt existing sidecar files are quarantined before rebuild so diagnostics can retain the failing bytes;
+  - recovery reports classify healthy, missing, unreadable, and records-unreadable states and expose rebuilt/quarantined counts for CI and operator gates.
 
 ### Query Pipeline
 

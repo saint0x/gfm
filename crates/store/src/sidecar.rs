@@ -1,0 +1,393 @@
+use crate::{
+    dictionary_terms_from_records, fuzzy_postings_from_records, metadata_postings_from_records,
+    prefix_postings_from_records, read_records, write_dictionary, write_fuzzy_postings,
+    write_metadata_postings, write_prefix_postings, write_record_columns, MmapDictionary,
+    MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordColumns,
+};
+use gfm_types::{FileRecord, GfmError, Result};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SidecarKind {
+    Columns,
+    Metadata,
+    Prefixes,
+    Fuzzy,
+    Dictionary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidecarRecoveryAction {
+    Ready,
+    Rebuild,
+    CannotRecover,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidecarRecoveryReason {
+    Healthy,
+    UnreadableRecords,
+    MissingSidecar,
+    UnreadableSidecar,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SidecarPaths {
+    pub columns: Option<PathBuf>,
+    pub metadata: Option<PathBuf>,
+    pub prefixes: Option<PathBuf>,
+    pub fuzzy: Option<PathBuf>,
+    pub dictionary: Option<PathBuf>,
+}
+
+impl SidecarPaths {
+    pub fn iter(&self) -> impl Iterator<Item = (SidecarKind, &PathBuf)> {
+        [
+            (SidecarKind::Columns, self.columns.as_ref()),
+            (SidecarKind::Metadata, self.metadata.as_ref()),
+            (SidecarKind::Prefixes, self.prefixes.as_ref()),
+            (SidecarKind::Fuzzy, self.fuzzy.as_ref()),
+            (SidecarKind::Dictionary, self.dictionary.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(kind, path)| path.map(|path| (kind, path)))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.iter().next().is_none()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidecarHealth {
+    pub kind: SidecarKind,
+    pub path: PathBuf,
+    pub valid: bool,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidecarRecoveryPlan {
+    pub action: SidecarRecoveryAction,
+    pub reason: SidecarRecoveryReason,
+    pub records_path: PathBuf,
+    pub record_count: Option<usize>,
+    pub valid_sidecars: Vec<SidecarHealth>,
+    pub invalid_sidecars: Vec<SidecarHealth>,
+    pub detail: Option<String>,
+}
+
+impl SidecarRecoveryPlan {
+    pub fn ready(&self) -> bool {
+        self.action == SidecarRecoveryAction::Ready
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "sidecar-recovery-plan\taction={}\treason={}\trecords={}\trecord-count={}\tvalid={}\tinvalid={}\tdetail={}",
+            sidecar_recovery_action_name(self.action),
+            sidecar_recovery_reason_name(self.reason),
+            self.records_path.display(),
+            self.record_count
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.valid_sidecars.len(),
+            self.invalid_sidecars.len(),
+            self.detail.as_deref().unwrap_or("-")
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidecarRecovery {
+    pub before: SidecarRecoveryPlan,
+    pub after: SidecarRecoveryPlan,
+    pub rebuilt_sidecars: Vec<SidecarKind>,
+    pub quarantined_sidecars: Vec<PathBuf>,
+}
+
+pub fn sidecar_kind_name(kind: SidecarKind) -> &'static str {
+    match kind {
+        SidecarKind::Columns => "columns",
+        SidecarKind::Metadata => "metadata",
+        SidecarKind::Prefixes => "prefixes",
+        SidecarKind::Fuzzy => "fuzzy",
+        SidecarKind::Dictionary => "dictionary",
+    }
+}
+
+pub fn sidecar_recovery_action_name(action: SidecarRecoveryAction) -> &'static str {
+    match action {
+        SidecarRecoveryAction::Ready => "ready",
+        SidecarRecoveryAction::Rebuild => "rebuild",
+        SidecarRecoveryAction::CannotRecover => "cannot-recover",
+    }
+}
+
+pub fn sidecar_recovery_reason_name(reason: SidecarRecoveryReason) -> &'static str {
+    match reason {
+        SidecarRecoveryReason::Healthy => "healthy",
+        SidecarRecoveryReason::UnreadableRecords => "unreadable-records",
+        SidecarRecoveryReason::MissingSidecar => "missing-sidecar",
+        SidecarRecoveryReason::UnreadableSidecar => "unreadable-sidecar",
+    }
+}
+
+pub fn plan_sidecar_recovery(
+    records_path: impl AsRef<Path>,
+    sidecars: &SidecarPaths,
+) -> SidecarRecoveryPlan {
+    let records_path = records_path.as_ref().to_path_buf();
+    let records = match read_records(&records_path) {
+        Ok(records) => records,
+        Err(err) => {
+            return SidecarRecoveryPlan {
+                action: SidecarRecoveryAction::CannotRecover,
+                reason: SidecarRecoveryReason::UnreadableRecords,
+                records_path,
+                record_count: None,
+                valid_sidecars: Vec::new(),
+                invalid_sidecars: Vec::new(),
+                detail: Some(err.to_string()),
+            }
+        }
+    };
+
+    let (valid_sidecars, invalid_sidecars) = classify_sidecars(sidecars);
+    if invalid_sidecars.is_empty() {
+        return SidecarRecoveryPlan {
+            action: SidecarRecoveryAction::Ready,
+            reason: SidecarRecoveryReason::Healthy,
+            records_path,
+            record_count: Some(records.len()),
+            valid_sidecars,
+            invalid_sidecars,
+            detail: None,
+        };
+    }
+
+    SidecarRecoveryPlan {
+        action: SidecarRecoveryAction::Rebuild,
+        reason: invalid_sidecar_reason(&invalid_sidecars),
+        records_path,
+        record_count: Some(records.len()),
+        valid_sidecars,
+        invalid_sidecars,
+        detail: None,
+    }
+}
+
+pub fn recover_sidecars(
+    records_path: impl AsRef<Path>,
+    sidecars: &SidecarPaths,
+    quarantine_dir: impl AsRef<Path>,
+) -> Result<SidecarRecovery> {
+    let records_path = records_path.as_ref();
+    let quarantine_dir = quarantine_dir.as_ref();
+    let before = plan_sidecar_recovery(records_path, sidecars);
+    if before.action == SidecarRecoveryAction::CannotRecover {
+        return Err(GfmError::Format(format!(
+            "{} cannot rebuild sidecars: {}",
+            records_path.display(),
+            before.detail.as_deref().unwrap_or("records are unreadable")
+        )));
+    }
+
+    let mut rebuilt_sidecars = Vec::new();
+    let mut quarantined_sidecars = Vec::new();
+    if before.action == SidecarRecoveryAction::Rebuild {
+        let records = read_records(records_path)?;
+        for health in &before.invalid_sidecars {
+            if health.path.exists() {
+                quarantined_sidecars.push(quarantine_sidecar(&health.path, quarantine_dir)?);
+            }
+            rebuild_sidecar(health.kind, &health.path, &records)?;
+            rebuilt_sidecars.push(health.kind);
+        }
+    }
+
+    let after = plan_sidecar_recovery(records_path, sidecars);
+    Ok(SidecarRecovery {
+        before,
+        after,
+        rebuilt_sidecars,
+        quarantined_sidecars,
+    })
+}
+
+fn classify_sidecars(sidecars: &SidecarPaths) -> (Vec<SidecarHealth>, Vec<SidecarHealth>) {
+    let mut valid = Vec::new();
+    let mut invalid = Vec::new();
+    for (kind, path) in sidecars.iter() {
+        let detail = if path.exists() {
+            open_sidecar(kind, path).err().map(|err| err.to_string())
+        } else {
+            Some("missing sidecar archive".to_string())
+        };
+        let health = SidecarHealth {
+            kind,
+            path: path.clone(),
+            valid: detail.is_none(),
+            detail,
+        };
+        if health.valid {
+            valid.push(health);
+        } else {
+            invalid.push(health);
+        }
+    }
+    (valid, invalid)
+}
+
+fn open_sidecar(kind: SidecarKind, path: &Path) -> Result<()> {
+    match kind {
+        SidecarKind::Columns => MmapRecordColumns::open(path).map(|_| ()),
+        SidecarKind::Metadata => MmapMetadataArchive::open(path).map(|_| ()),
+        SidecarKind::Prefixes => MmapPrefixArchive::open(path).map(|_| ()),
+        SidecarKind::Fuzzy => MmapFuzzyArchive::open(path).map(|_| ()),
+        SidecarKind::Dictionary => MmapDictionary::open(path).map(|_| ()),
+    }
+}
+
+fn rebuild_sidecar(kind: SidecarKind, path: &Path, records: &[FileRecord]) -> Result<()> {
+    match kind {
+        SidecarKind::Columns => write_record_columns(path, records),
+        SidecarKind::Metadata => {
+            write_metadata_postings(path, &metadata_postings_from_records(records))
+        }
+        SidecarKind::Prefixes => {
+            write_prefix_postings(path, &prefix_postings_from_records(records))
+        }
+        SidecarKind::Fuzzy => write_fuzzy_postings(path, &fuzzy_postings_from_records(records)),
+        SidecarKind::Dictionary => write_dictionary(path, &dictionary_terms_from_records(records)),
+    }
+}
+
+fn invalid_sidecar_reason(invalid_sidecars: &[SidecarHealth]) -> SidecarRecoveryReason {
+    if invalid_sidecars
+        .iter()
+        .any(|sidecar| sidecar.detail.as_deref() == Some("missing sidecar archive"))
+    {
+        SidecarRecoveryReason::MissingSidecar
+    } else {
+        SidecarRecoveryReason::UnreadableSidecar
+    }
+}
+
+fn quarantine_sidecar(path: &Path, quarantine_dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(quarantine_dir).map_err(|err| GfmError::io(quarantine_dir, err))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("sidecar.archive");
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let quarantine_path =
+        quarantine_dir.join(format!("{name}.corrupt.{}.{}", std::process::id(), nanos));
+    fs::rename(path, &quarantine_path).map_err(|err| GfmError::io(path, err))?;
+    Ok(quarantine_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{read_dictionary, write_records};
+    use gfm_types::{FileId, FileKind, VolumeId};
+
+    #[test]
+    fn sidecar_recovery_rebuilds_missing_sidecars_from_records() {
+        let dir = temp_dir("gfm-sidecar-recovery-missing");
+        let records = dir.join("records.gfmidx");
+        let columns = dir.join("records.gfmcols");
+        let prefixes = dir.join("records.gfmprefix");
+        fs::create_dir_all(&dir).unwrap();
+        write_records(&records, &[record("ProjectPlan.md")]).unwrap();
+        let paths = SidecarPaths {
+            columns: Some(columns.clone()),
+            prefixes: Some(prefixes.clone()),
+            ..SidecarPaths::default()
+        };
+
+        let plan = plan_sidecar_recovery(&records, &paths);
+        assert_eq!(plan.action, SidecarRecoveryAction::Rebuild);
+        assert_eq!(plan.reason, SidecarRecoveryReason::MissingSidecar);
+        assert_eq!(plan.invalid_sidecars.len(), 2);
+
+        let recovery = recover_sidecars(&records, &paths, dir.join("quarantine")).unwrap();
+
+        assert_eq!(recovery.rebuilt_sidecars.len(), 2);
+        assert!(recovery.after.ready());
+        assert!(MmapRecordColumns::open(columns).unwrap().is_checksummed());
+        assert!(MmapPrefixArchive::open(prefixes).unwrap().is_checksummed());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sidecar_recovery_quarantines_corrupt_sidecar_before_rebuild() {
+        let dir = temp_dir("gfm-sidecar-recovery-corrupt");
+        let records = dir.join("records.gfmidx");
+        let dictionary = dir.join("records.gfmdict");
+        let quarantine = dir.join("quarantine");
+        fs::create_dir_all(&dir).unwrap();
+        write_records(&records, &[record("ProjectPlan.md")]).unwrap();
+        fs::write(&dictionary, "not-a-dictionary").unwrap();
+        let paths = SidecarPaths {
+            dictionary: Some(dictionary.clone()),
+            ..SidecarPaths::default()
+        };
+
+        let plan = plan_sidecar_recovery(&records, &paths);
+        assert_eq!(plan.action, SidecarRecoveryAction::Rebuild);
+        assert_eq!(plan.reason, SidecarRecoveryReason::UnreadableSidecar);
+
+        let recovery = recover_sidecars(&records, &paths, &quarantine).unwrap();
+
+        assert_eq!(recovery.rebuilt_sidecars, vec![SidecarKind::Dictionary]);
+        assert!(recovery
+            .quarantined_sidecars
+            .iter()
+            .any(|path| path.exists()));
+        assert!(recovery.after.ready());
+        assert!(read_dictionary(&dictionary)
+            .unwrap()
+            .iter()
+            .any(|term| term.contains("projectplan")));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn record(name: &str) -> FileRecord {
+        FileRecord {
+            id: FileId::new(VolumeId(1), 1),
+            parent: None,
+            path: PathBuf::from(format!("/tmp/{name}")),
+            name: name.to_string(),
+            kind: FileKind::File,
+            len: 4,
+            mode: 0,
+            owner: 0,
+            group: 0,
+            xattrs_digest: 0,
+            created: None,
+            modified: None,
+            changed: None,
+            hidden: false,
+            tags: vec!["Important".to_string()],
+            finder_comment: Some("Launch notes".to_string()),
+        }
+    }
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "{}-{}",
+            prefix,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+}
