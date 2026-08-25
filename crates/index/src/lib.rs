@@ -15,8 +15,13 @@ use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+mod cursor;
 mod state;
 
+pub use cursor::{
+    FseventsCursor, FseventsCursorHealth, FseventsResumeAction, FseventsResumePlan,
+    FSEVENTS_CURSOR_SCHEMA_VERSION,
+};
 pub use state::{IndexVolumeState, INDEX_STATE_SCHEMA_VERSION};
 
 #[derive(Debug, Clone)]
@@ -516,6 +521,28 @@ impl Indexer {
         let state = snapshot.volume_state(records_path.to_path_buf(), previous.as_ref())?;
         state.write(state_path)?;
         Ok(state)
+    }
+
+    pub fn checkpoint_fsevents_cursor(
+        &self,
+        state_path: impl AsRef<Path>,
+        cursor_path: impl AsRef<Path>,
+        last_event_id: u64,
+        health: FseventsCursorHealth,
+    ) -> Result<FseventsCursor> {
+        let volume = IndexVolumeState::read(state_path)?;
+        let cursor = FseventsCursor::checkpoint(&volume, last_event_id, health);
+        cursor.write(cursor_path)?;
+        Ok(cursor)
+    }
+
+    pub fn fsevents_resume_plan(
+        &self,
+        state_path: impl AsRef<Path>,
+        cursor_path: impl AsRef<Path>,
+    ) -> Result<FseventsResumePlan> {
+        let volume = IndexVolumeState::read(state_path)?;
+        FseventsResumePlan::read(&volume, cursor_path)
     }
 
     pub fn load(&self, path: impl AsRef<Path>) -> Result<IndexSnapshot> {

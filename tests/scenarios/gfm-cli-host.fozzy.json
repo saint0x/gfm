@@ -70,6 +70,27 @@
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fsevents-cursor-checkpoint",
+        "/tmp/gfm-fozzy-host.gfmstate",
+        "/tmp/gfm-fozzy-host.gfmcursor",
+        "123"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fsevents-cursor-resume",
+        "/tmp/gfm-fozzy-host.gfmstate",
+        "/tmp/gfm-fozzy-host.gfmcursor"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["index-content-segment", ".", "/tmp/gfm-fozzy-host.gfmseg"],
       "expect_exit": 0
     },

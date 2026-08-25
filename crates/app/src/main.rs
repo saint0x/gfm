@@ -9,8 +9,8 @@ use gfm_fs::{
     PackageTraversalReport, ScanOptions,
 };
 use gfm_index::{
-    BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, IndexVolumeState, Indexer,
-    SearchStreamStage,
+    BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, FseventsCursor,
+    FseventsCursorHealth, IndexVolumeState, Indexer, SearchStreamStage,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -435,6 +435,49 @@ fn run() -> Result<()> {
                 "index-state-inspect requires an index state path",
             )?;
             println!("{}", IndexVolumeState::read(state)?.as_tsv());
+        }
+        Some("fsevents-cursor-checkpoint") => {
+            let state = required_path(
+                args.next(),
+                "fsevents-cursor-checkpoint requires an index state path",
+            )?;
+            let cursor = required_path(
+                args.next(),
+                "fsevents-cursor-checkpoint requires a cursor path",
+            )?;
+            let event_id = parse_u64_arg(
+                args.next(),
+                "fsevents-cursor-checkpoint requires a last event id",
+            )?;
+            let health = args
+                .next()
+                .map(|value| FseventsCursorHealth::parse(&value))
+                .transpose()?
+                .unwrap_or(FseventsCursorHealth::Clean);
+            let cursor =
+                Indexer::default().checkpoint_fsevents_cursor(state, cursor, event_id, health)?;
+            println!("{}", cursor.as_tsv());
+        }
+        Some("fsevents-cursor-inspect") => {
+            let cursor = required_path(
+                args.next(),
+                "fsevents-cursor-inspect requires a cursor path",
+            )?;
+            println!("{}", FseventsCursor::read(cursor)?.as_tsv());
+        }
+        Some("fsevents-cursor-resume") => {
+            let state = required_path(
+                args.next(),
+                "fsevents-cursor-resume requires an index state path",
+            )?;
+            let cursor =
+                required_path(args.next(), "fsevents-cursor-resume requires a cursor path")?;
+            println!(
+                "{}",
+                Indexer::default()
+                    .fsevents_resume_plan(state, cursor)?
+                    .as_tsv()
+            );
         }
         Some("index-content") => {
             let root = required_path(args.next(), "index-content requires a root path")?;
@@ -1172,6 +1215,13 @@ fn parse_u32_arg(value: Option<String>, message: &str) -> Result<u32> {
         .map_err(|_| GfmError::Format(format!("{message}; got `{value}`")))
 }
 
+fn parse_u64_arg(value: Option<String>, message: &str) -> Result<u64> {
+    let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
+    value
+        .parse()
+        .map_err(|_| GfmError::Format(format!("{message}; got `{value}`")))
+}
+
 fn parse_usize_arg(value: Option<String>, message: &str) -> Result<usize> {
     let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
     value
@@ -1572,6 +1622,9 @@ fn print_usage() {
   gfm index <root> <output.gfmidx>
   gfm index-state <root> <records.gfmidx> <state.gfmstate>
   gfm index-state-inspect <state.gfmstate>
+  gfm fsevents-cursor-checkpoint <state.gfmstate> <cursor.gfmcursor> <last-event-id> [clean|repair-required]
+  gfm fsevents-cursor-inspect <cursor.gfmcursor>
+  gfm fsevents-cursor-resume <state.gfmstate> <cursor.gfmcursor>
   gfm index-content <root> <records.gfmidx> <content.gfmcontent>
   gfm index-content-segment <root> <output.gfmseg>
   gfm compact-content <output.gfmcontent> <segments.gfmseg...>

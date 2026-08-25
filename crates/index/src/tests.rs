@@ -369,6 +369,103 @@ fn index_state_rejects_unsupported_schema_versions() {
     fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn fsevents_cursor_checkpoints_and_resumes_from_next_event() {
+    let root = unique_temp_dir("gfm-fsevents-cursor-root");
+    let records = unique_temp_path("gfm-fsevents-cursor-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-fsevents-cursor-state", "gfmstate");
+    let cursor_path = unique_temp_path("gfm-fsevents-cursor", "gfmcursor");
+    fs::write(root.join("Evented.md"), "cursor").unwrap();
+
+    let indexer = Indexer::default();
+    indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    let cursor = indexer
+        .checkpoint_fsevents_cursor(&state_path, &cursor_path, 42, FseventsCursorHealth::Clean)
+        .unwrap();
+    let plan = indexer
+        .fsevents_resume_plan(&state_path, &cursor_path)
+        .unwrap();
+
+    assert_eq!(cursor.last_event_id, 42);
+    assert_eq!(plan.action, FseventsResumeAction::Continue);
+    assert_eq!(plan.from_event_id, Some(43));
+    assert_eq!(plan.reason, "cursor-clean");
+    assert!(cursor.as_tsv().starts_with("fsevents-cursor\t"));
+    assert_eq!(
+        plan.as_tsv(),
+        "fsevents-resume\taction=continue\tfrom-event-id=43\treason=cursor-clean"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+    fs::remove_file(cursor_path).unwrap();
+}
+
+#[test]
+fn fsevents_cursor_requires_rescan_for_missing_or_stale_state() {
+    let root = unique_temp_dir("gfm-fsevents-rescan-root");
+    let records = unique_temp_path("gfm-fsevents-rescan-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-fsevents-rescan-state", "gfmstate");
+    let cursor_path = unique_temp_path("gfm-fsevents-rescan", "gfmcursor");
+    fs::write(root.join("Repair.md"), "cursor").unwrap();
+
+    let indexer = Indexer::default();
+    let first = indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    let missing = indexer
+        .fsevents_resume_plan(&state_path, &cursor_path)
+        .unwrap();
+    indexer
+        .checkpoint_fsevents_cursor(
+            &state_path,
+            &cursor_path,
+            100,
+            FseventsCursorHealth::RepairRequired,
+        )
+        .unwrap();
+    let repair = indexer
+        .fsevents_resume_plan(&state_path, &cursor_path)
+        .unwrap();
+    let second = indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    let stale_epoch = indexer
+        .fsevents_resume_plan(&state_path, &cursor_path)
+        .unwrap();
+
+    assert_eq!(missing.action, FseventsResumeAction::Rescan);
+    assert_eq!(missing.reason, "missing-cursor");
+    assert_eq!(repair.action, FseventsResumeAction::Rescan);
+    assert_eq!(repair.reason, "repair-required");
+    assert_eq!(second.scan_epoch, first.scan_epoch + 1);
+    assert_eq!(stale_epoch.action, FseventsResumeAction::Rescan);
+    assert_eq!(stale_epoch.reason, "scan-epoch-changed");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+    fs::remove_file(cursor_path).unwrap();
+}
+
+#[test]
+fn fsevents_cursor_rejects_unsupported_schema_versions() {
+    let path = unique_temp_path("gfm-fsevents-cursor-bad", "gfmcursor");
+    fs::write(
+        &path,
+        "gfm-fsevents-cursor-v1\nschema_version\t999\nvolume_id\t1\nmount_id\tdev:1:root:/tmp/root\nscan_epoch\t1\nlast_event_id\t10\nhealth\tclean\n",
+    )
+    .unwrap();
+
+    let error = FseventsCursor::read(&path).unwrap_err();
+
+    assert!(format!("{error}").contains("unsupported FSEvents cursor schema version 999"));
+    fs::remove_file(path).unwrap();
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let path = unique_temp_path(prefix, "");
     fs::create_dir_all(&path).unwrap();

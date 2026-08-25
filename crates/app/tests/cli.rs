@@ -123,6 +123,123 @@ fn persists_volume_index_state_from_binary() {
 }
 
 #[test]
+fn persists_fsevents_cursor_from_binary() {
+    let root = unique_temp_dir("gfm-cli-fsevents-root");
+    let index = unique_temp_path("gfm-cli-fsevents-records", "gfmidx");
+    let state = unique_temp_path("gfm-cli-fsevents-state", "gfmstate");
+    let cursor = unique_temp_path("gfm-cli-fsevents-cursor", "gfmcursor");
+    fs::write(root.join("CursorSearch.md"), "alpha").unwrap();
+
+    let index_state = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            root.to_str().unwrap(),
+            index.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        index_state.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_state.stderr)
+    );
+
+    let checkpoint = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-cursor-checkpoint",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "123",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        checkpoint.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checkpoint.stderr)
+    );
+    let checkpoint_stdout = String::from_utf8(checkpoint.stdout).unwrap();
+    assert!(
+        checkpoint_stdout.starts_with("fsevents-cursor\t"),
+        "{checkpoint_stdout}"
+    );
+    assert!(
+        checkpoint_stdout.contains("\tlast-event-id=123\thealth=clean"),
+        "{checkpoint_stdout}"
+    );
+
+    let inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["fsevents-cursor-inspect", cursor.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        inspect.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+    let inspect_stdout = String::from_utf8(inspect.stdout).unwrap();
+    assert_eq!(inspect_stdout, checkpoint_stdout);
+
+    let resume = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-cursor-resume",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        resume.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resume.stderr)
+    );
+    let resume_stdout = String::from_utf8(resume.stdout).unwrap();
+    assert_eq!(
+        resume_stdout.trim(),
+        "fsevents-resume\taction=continue\tfrom-event-id=124\treason=cursor-clean"
+    );
+
+    let reindex = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            root.to_str().unwrap(),
+            index.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        reindex.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reindex.stderr)
+    );
+    let stale = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-cursor-resume",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        stale.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+    let stale_stdout = String::from_utf8(stale.stdout).unwrap();
+    assert_eq!(
+        stale_stdout.trim(),
+        "fsevents-resume\taction=rescan\tfrom-event-id=-\treason=scan-epoch-changed"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(index).unwrap();
+    fs::remove_file(state).unwrap();
+    fs::remove_file(cursor).unwrap();
+}
+
+#[test]
 fn searches_with_structured_filters_from_binary() {
     let root = unique_temp_dir("gfm-cli-filter-root");
     fs::create_dir_all(root.join("Desktop").join("Client Work")).unwrap();
