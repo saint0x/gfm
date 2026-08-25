@@ -1380,32 +1380,71 @@ fn copy_directory(
 ) -> Result<()> {
     progress.check_cancelled()?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
-    if mode != CopyExistingMode::Fresh && path_exists_or_symlink(to) {
-        let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
-        if !destination_metadata.is_dir() {
-            return Err(GfmError::Conflict {
-                path: to.to_path_buf(),
-                message: format!(
-                    "{} destination exists but is not a directory",
-                    copy_mode_label(mode)
-                ),
-            });
+    let rollback_incomplete_package = mode == CopyExistingMode::Fresh
+        && metadata.is_dir()
+        && is_finder_package_dir(from, &metadata);
+    let mut created_destination = false;
+    let result = (|| {
+        if mode != CopyExistingMode::Fresh && path_exists_or_symlink(to) {
+            let destination_metadata =
+                fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
+            if !destination_metadata.is_dir() {
+                return Err(GfmError::Conflict {
+                    path: to.to_path_buf(),
+                    message: format!(
+                        "{} destination exists but is not a directory",
+                        copy_mode_label(mode)
+                    ),
+                });
+            }
+        } else {
+            create_new_directory(to)?;
+            created_destination = true;
         }
-    } else {
-        create_new_directory(to)?;
-    }
-    preserve_metadata(from, to, &metadata)?;
-    progress.advance(&metadata)?;
+        preserve_metadata(from, to, &metadata)?;
+        progress.advance(&metadata)?;
 
-    for entry in fs::read_dir(from).map_err(|err| GfmError::io(from, err))? {
-        progress.check_cancelled()?;
-        let entry = entry.map_err(|err| GfmError::io(from, err))?;
-        let source = entry.path();
-        let destination = to.join(entry.file_name());
-        let child_metadata =
-            fs::symlink_metadata(&source).map_err(|err| GfmError::io(&source, err))?;
-        if child_metadata.file_type().is_symlink() {
-            if mode == CopyExistingMode::Resume && path_exists_or_symlink(&destination) {
+        for entry in fs::read_dir(from).map_err(|err| GfmError::io(from, err))? {
+            progress.check_cancelled()?;
+            let entry = entry.map_err(|err| GfmError::io(from, err))?;
+            let source = entry.path();
+            let destination = to.join(entry.file_name());
+            let child_metadata =
+                fs::symlink_metadata(&source).map_err(|err| GfmError::io(&source, err))?;
+            if child_metadata.file_type().is_symlink() {
+                if mode == CopyExistingMode::Resume && path_exists_or_symlink(&destination) {
+                    copy_path_existing(
+                        &source,
+                        &destination,
+                        &child_metadata,
+                        verification,
+                        volume_copy_policy,
+                        CopyExistingMode::Resume,
+                        progress,
+                    )?;
+                } else if mode == CopyExistingMode::Merge && path_exists_or_symlink(&destination) {
+                    copy_path_existing(
+                        &source,
+                        &destination,
+                        &child_metadata,
+                        verification,
+                        volume_copy_policy,
+                        CopyExistingMode::Merge,
+                        progress,
+                    )?;
+                } else {
+                    copy_symlink(&source, &destination, progress)?;
+                }
+            } else if child_metadata.is_dir() {
+                copy_directory(
+                    &source,
+                    &destination,
+                    verification,
+                    volume_copy_policy,
+                    mode,
+                    progress,
+                )?;
+            } else if mode == CopyExistingMode::Resume && path_exists_or_symlink(&destination) {
                 copy_path_existing(
                     &source,
                     &destination,
@@ -1426,48 +1465,26 @@ fn copy_directory(
                     progress,
                 )?;
             } else {
-                copy_symlink(&source, &destination, progress)?;
+                let _ = copy_file_tracked(
+                    &source,
+                    &destination,
+                    verification,
+                    volume_copy_policy,
+                    progress,
+                )?;
             }
-        } else if child_metadata.is_dir() {
-            copy_directory(
-                &source,
-                &destination,
-                verification,
-                volume_copy_policy,
-                mode,
-                progress,
-            )?;
-        } else if mode == CopyExistingMode::Resume && path_exists_or_symlink(&destination) {
-            copy_path_existing(
-                &source,
-                &destination,
-                &child_metadata,
-                verification,
-                volume_copy_policy,
-                CopyExistingMode::Resume,
-                progress,
-            )?;
-        } else if mode == CopyExistingMode::Merge && path_exists_or_symlink(&destination) {
-            copy_path_existing(
-                &source,
-                &destination,
-                &child_metadata,
-                verification,
-                volume_copy_policy,
-                CopyExistingMode::Merge,
-                progress,
-            )?;
-        } else {
-            let _ = copy_file_tracked(
-                &source,
-                &destination,
-                verification,
-                volume_copy_policy,
-                progress,
-            )?;
         }
+        Ok(())
+    })();
+    if rollback_incomplete_package
+        && created_destination
+        && result
+            .as_ref()
+            .is_err_and(|err| !matches!(err, GfmError::Paused))
+    {
+        let _ = delete_path_untracked(to);
     }
-    Ok(())
+    result
 }
 
 fn copy_path_existing(
@@ -3287,6 +3304,46 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].status, OperationStatus::Started);
         assert_eq!(entries[1].status, OperationStatus::Failed);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_fresh_package_copy_removes_incomplete_bundle() {
+        let root = unique_temp_dir("gfm-ops-package-cancel");
+        let journal = root.join("journal.log");
+        let source = root.join("Demo.app");
+        let destination = root.join("Demo Copy.app");
+        fs::create_dir_all(source.join("Contents").join("Resources")).unwrap();
+        fs::write(source.join("Contents").join("Info.plist"), "plist").unwrap();
+        fs::write(
+            source.join("Contents").join("Resources").join("asset.txt"),
+            "asset",
+        )
+        .unwrap();
+        let cancellation = OperationCancellation::default();
+        let cancellation_callback = cancellation.clone();
+
+        let err = Operator::new(OperationContext::new(&journal).with_cancellation(cancellation))
+            .execute_with_progress(
+                Operation::Copy {
+                    from: source.clone(),
+                    to: destination.clone(),
+                },
+                |event| {
+                    if event.phase == OperationProgressPhase::Advanced
+                        && event.progress.completed_items == 1
+                    {
+                        cancellation_callback.cancel();
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert!(!path_exists_or_symlink(&destination));
+        let entries = read_journal(&journal).unwrap();
+        assert_eq!(entries[1].status, OperationStatus::Cancelled);
 
         fs::remove_dir_all(root).unwrap();
     }
