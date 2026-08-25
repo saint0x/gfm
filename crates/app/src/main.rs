@@ -17,7 +17,7 @@ use gfm_jobs::{
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, parse_spotlight_fixture, FileEventStream,
-    MacBridgeContract, NativeIconDescriptor, SpotlightMetadataReader,
+    FileProviderStateReport, MacBridgeContract, NativeIconDescriptor, SpotlightMetadataReader,
     SpotlightReconciliationReport, SupportMatrix, WatchRoot,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
@@ -729,6 +729,10 @@ fn run() -> Result<()> {
             let path = required_path(args.next(), "native-icon requires a path")?;
             let record = record_for_path(&path, None, false)?;
             println!("{}", NativeIconDescriptor::for_record(&record).as_tsv());
+        }
+        Some("fileprovider-state") => {
+            let path = required_path(args.next(), "fileprovider-state requires a path")?;
+            println!("{}", FileProviderStateReport::read_path(path)?.as_tsv());
         }
         Some("spotlight-reconcile") => {
             let path = required_path(args.next(), "spotlight-reconcile requires a path")?;
@@ -1552,6 +1556,7 @@ fn print_usage() {
   gfm permission-onboarding
   gfm mac-bridges
   gfm native-icon <path>
+  gfm fileprovider-state <path>
   gfm spotlight-reconcile <path> [spotlight-fixture.tsv]
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm quicklook-session <path>

@@ -6,12 +6,17 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 
 mod bridge;
+mod fileprovider;
 mod icon;
 mod permissions;
 mod spotlight;
 
 pub use bridge::{
     MacBridgeContract, MacBridgeSpec, MacBridgeStatus, MacBridgeThreadPolicy, MacFramework,
+};
+pub use fileprovider::{
+    CloudBadge, CloudCommandPolicy, CloudCommandState, CloudStorageState, FileProviderDomain,
+    FileProviderStateReport,
 };
 pub use icon::{NativeIconBadge, NativeIconDescriptor, NativeIconProvider, NativeIconRole};
 pub use permissions::{

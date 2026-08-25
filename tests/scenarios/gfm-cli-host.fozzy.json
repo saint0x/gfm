@@ -180,6 +180,17 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-downloaded.icloud.md",
+      "data": "icloud downloaded"
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["fileprovider-state", "tmp/gfm-fozzy-downloaded.icloud.md"],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

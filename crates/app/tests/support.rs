@@ -165,6 +165,67 @@ fn reports_spotlight_reconciliation_from_binary() {
 }
 
 #[test]
+fn reports_fileprovider_state_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-fileprovider-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let downloaded = root.join("Downloaded.icloud.md");
+    let evicted = root.join("Evicted.icloud-placeholder");
+    let conflict = root.join("Conflict.icloud-conflict.md");
+    std::fs::write(&downloaded, "downloaded").unwrap();
+    std::fs::write(&evicted, "placeholder").unwrap();
+    std::fs::write(&conflict, "conflict").unwrap();
+
+    let downloaded_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-state")
+        .arg(&downloaded)
+        .output()
+        .unwrap();
+    assert!(
+        downloaded_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&downloaded_output.stderr)
+    );
+    let downloaded_stdout = String::from_utf8(downloaded_output.stdout).unwrap();
+    assert!(downloaded_stdout.starts_with("fileprovider-state\t"));
+    assert!(downloaded_stdout.contains("\tdomain=icloud-drive\tstate=downloaded\t"));
+    assert!(downloaded_stdout.contains("\tbadges=available-offline\t"));
+    assert!(downloaded_stdout.contains("\tdownload=disabled\tevict=enabled\t"));
+
+    let evicted_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-state")
+        .arg(&evicted)
+        .output()
+        .unwrap();
+    assert!(
+        evicted_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&evicted_output.stderr)
+    );
+    let evicted_stdout = String::from_utf8(evicted_output.stdout).unwrap();
+    assert!(evicted_stdout.contains("\tstate=evicted\toffline=true\t"));
+    assert!(evicted_stdout.contains("\tbadges=cloud\t"));
+    assert!(evicted_stdout.contains("\tdownload=enabled\tevict=disabled\t"));
+
+    let conflict_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-state")
+        .arg(&conflict)
+        .output()
+        .unwrap();
+    assert!(
+        conflict_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&conflict_output.stderr)
+    );
+    let conflict_stdout = String::from_utf8(conflict_output.stdout).unwrap();
+    assert!(conflict_stdout.contains("\tstate=conflict\toffline=false\tconflict=true\t"));
+    assert!(conflict_stdout.contains("\tbadges=conflict\t"));
+    assert!(conflict_stdout.contains("\treveal-conflict=enabled\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_ui_lifecycle_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-contract", "/tmp/gfm"])

@@ -1711,6 +1711,7 @@ dependencies = [
  "gfm-types",
  "notify",
  "plist",
+ "xattr 1.6.1",
 ]
 
 [[package]]
