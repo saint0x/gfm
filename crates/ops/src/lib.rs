@@ -1924,7 +1924,8 @@ fn preserve_metadata(from: &Path, to: &Path, metadata: &fs::Metadata) -> Result<
     preserve_permissions(to, metadata)?;
     preserve_times(to, metadata)?;
     preserve_xattrs(from, to)?;
-    preserve_acls(from, to)
+    preserve_acls(from, to)?;
+    preserve_file_flags(to, metadata)
 }
 
 #[cfg(unix)]
@@ -2092,6 +2093,44 @@ fn acl_copy_unsupported(err: &io::Error) -> bool {
         err.kind(),
         io::ErrorKind::Unsupported | io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
     )
+}
+
+#[cfg(target_vendor = "apple")]
+fn preserve_file_flags(to: &Path, metadata: &fs::Metadata) -> Result<()> {
+    use nix::sys::stat::FileFlag;
+    use std::os::darwin::fs::MetadataExt;
+
+    let flags = metadata.st_flags();
+    if flags == 0 || metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    match nix::unistd::chflags(to, FileFlag::from_bits_retain(flags)) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let err = io::Error::from_raw_os_error(err as i32);
+            if file_flag_preservation_unsupported(&err) {
+                Ok(())
+            } else {
+                Err(GfmError::io(to, err))
+            }
+        }
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+fn file_flag_preservation_unsupported(err: &io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(libc::ENOTSUP) | Some(libc::EPERM) | Some(libc::EACCES) | Some(libc::EROFS)
+    ) || matches!(
+        err.kind(),
+        io::ErrorKind::Unsupported | io::ErrorKind::PermissionDenied
+    )
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn preserve_file_flags(_to: &Path, _metadata: &fs::Metadata) -> Result<()> {
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -3076,6 +3115,45 @@ mod tests {
             created
         );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn copy_preserves_bsd_file_flags_when_host_supports_them() {
+        use nix::sys::stat::FileFlag;
+        use std::os::darwin::fs::MetadataExt;
+
+        let root = unique_temp_dir("gfm-ops-bsd-flags");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "flags").unwrap();
+        let flags = FileFlag::UF_HIDDEN;
+        match nix::unistd::chflags(&source, flags) {
+            Ok(()) => {}
+            Err(err) => {
+                let err = io::Error::from_raw_os_error(err as i32);
+                if file_flag_preservation_unsupported(&err) {
+                    fs::remove_dir_all(root).unwrap();
+                    return;
+                }
+                panic!("unexpected file flag setup failure: {err}");
+            }
+        }
+
+        Operator::new(OperationContext::new(&journal))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        let copied_flags = fs::metadata(&destination).unwrap().st_flags();
+        assert_eq!(copied_flags & flags.bits(), flags.bits());
+
+        nix::unistd::chflags(&source, FileFlag::empty()).unwrap();
+        nix::unistd::chflags(&destination, FileFlag::empty()).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

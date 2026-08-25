@@ -10,6 +10,7 @@ filetime = "0.2.29"
 gfm-fs = { path = "../fs" }
 gfm-types = { path = "../types" }
 libc = "0.2.177"
+nix = { version = "0.31.3", features = ["fs"] }
 rustix = { version = "1.1.4", features = ["fs"] }
 trash = "5.2.6"
 xattr = "1.6.1"
