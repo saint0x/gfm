@@ -63,7 +63,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Search Engine
 
-- Implement remaining query parser support for tag filters, scope prefixes, and content-backed phrase semantics.
+- Implement remaining query parser support for scope prefixes and content-backed phrase semantics.
 - Implement streaming search results with immediate hot-index results and progressive deeper results.
 - Implement metadata ranking that cleanly composes exact, prefix, substring, fuzzy, path, recency, frequency, kind, user-pinned, tag, and content signals.
 - Implement typo-tolerant fuzzy retrieval that avoids full-record scans at machine scale.

@@ -88,6 +88,7 @@ pub enum QueryFilter {
     Name(String, bool),
     Path(String, bool),
     Extension(String, bool),
+    Tag(String, bool),
     Kind(QueryKind, bool),
     Size(SizeComparison, bool),
     Date(DateField, DateComparison, bool),
@@ -104,6 +105,7 @@ impl QueryFilter {
             "name" => Some(Self::Name(normalize(value), negative)),
             "path" | "in" => Some(Self::Path(normalize(value), negative)),
             "ext" | "extension" => Some(Self::Extension(normalize_extension(value), negative)),
+            "tag" | "label" => Some(Self::Tag(normalize(value), negative)),
             "kind" | "type" => QueryKind::parse(value).map(|kind| Self::Kind(kind, negative)),
             "size" => SizeComparison::parse(value).map(|size| Self::Size(size, negative)),
             "date" | "modified" | "mtime" => DateComparison::parse(value)
@@ -124,6 +126,7 @@ impl QueryFilter {
                 .extension()
                 .map(normalize_extension)
                 .is_some_and(|extension| extension == *value),
+            Self::Tag(value, _) => record.tags.iter().any(|tag| normalize(tag) == *value),
             Self::Kind(kind, _) => kind.matches(record.kind),
             Self::Size(size, _) => size.matches(record.len),
             Self::Date(field, date, _) => field.time(record).is_some_and(|time| date.matches(time)),
@@ -140,6 +143,7 @@ impl QueryFilter {
             Self::Name(_, negative)
             | Self::Path(_, negative)
             | Self::Extension(_, negative)
+            | Self::Tag(_, negative)
             | Self::Kind(_, negative)
             | Self::Size(_, negative)
             | Self::Date(_, _, negative) => *negative,
@@ -674,6 +678,20 @@ mod tests {
                 QueryFilter::Path("desktop".to_string(), false),
                 QueryFilter::Extension("md".to_string(), false),
                 QueryFilter::Kind(QueryKind::File, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_tag_filters() {
+        let query = SearchQuery::parse("tag:Important label:Client -tag:Later");
+
+        assert_eq!(
+            query.filters,
+            vec![
+                QueryFilter::Tag("client".to_string(), false),
+                QueryFilter::Tag("important".to_string(), false),
+                QueryFilter::Tag("later".to_string(), true),
             ]
         );
     }

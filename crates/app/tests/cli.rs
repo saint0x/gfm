@@ -155,6 +155,32 @@ fn searches_with_boolean_groups_from_binary() {
 }
 
 #[test]
+fn searches_persisted_tags_from_binary() {
+    let index = unique_temp_path("gfm-cli-tags", "gfmidx");
+    fs::write(
+        &index,
+        "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\tImportant,Client\t/tmp/tagged.md\n2\t2\t0\tf\t5\t0\t0\t0\t0\tLater\t/tmp/other.md\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-index", index.to_str().unwrap(), "tag:Important"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("tagged.md"), "{stdout}");
+    assert!(!stdout.contains("other.md"), "{stdout}");
+
+    fs::remove_file(index).unwrap();
+}
+
+#[test]
 fn performs_journaled_copy_move_and_delete_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-root");
     let journal = root.join("ops.journal");

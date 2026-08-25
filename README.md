@@ -151,6 +151,7 @@ cargo run -p gfm -- search . PLAN
 cargo run -p gfm -- search . 'PLAN kind:file ext:md size:>1b'
 cargo run -p gfm -- search . 'PLAN modified:>=2026-01-01'
 cargo run -p gfm -- search . '(PLAN OR README) NOT draft kind:file'
+cargo run -p gfm -- search . 'tag:Important kind:file'
 cargo run -p gfm -- search-content . "Finder parity"
 ```
 

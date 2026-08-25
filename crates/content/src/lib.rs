@@ -144,6 +144,7 @@ mod tests {
             modified: None,
             changed: None,
             hidden: false,
+            tags: Vec::new(),
         };
 
         let doc = Extractor::default()

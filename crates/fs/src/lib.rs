@@ -3,6 +3,7 @@ use gfm_types::{
 };
 use std::collections::VecDeque;
 use std::fs::{self, Metadata};
+use std::io::Cursor;
 use std::path::Path;
 
 #[cfg(unix)]
@@ -148,6 +149,7 @@ pub fn record_for_path(
     Ok(FileRecord {
         id: file_id(&metadata),
         parent,
+        tags: finder_tags(&path),
         path,
         name,
         kind,
@@ -157,6 +159,38 @@ pub fn record_for_path(
         changed: changed_time(&metadata),
         hidden,
     })
+}
+
+fn finder_tags(path: &Path) -> Vec<String> {
+    let Some(raw) = xattr::get(path, "com.apple.metadata:_kMDItemUserTags")
+        .ok()
+        .flatten()
+    else {
+        return Vec::new();
+    };
+    let Ok(plist::Value::Array(values)) = plist::Value::from_reader(Cursor::new(raw)) else {
+        return Vec::new();
+    };
+
+    let mut tags: Vec<_> = values
+        .into_iter()
+        .filter_map(|value| match value {
+            plist::Value::String(tag) => finder_tag_name(&tag),
+            _ => None,
+        })
+        .collect();
+    tags.sort();
+    tags.dedup();
+    tags
+}
+
+fn finder_tag_name(raw: &str) -> Option<String> {
+    let tag = raw
+        .split_once('\n')
+        .map(|(tag, _)| tag)
+        .unwrap_or(raw)
+        .trim();
+    (!tag.is_empty()).then(|| tag.to_string())
 }
 
 fn finder_order(record: &FileRecord) -> (u8, String) {
@@ -226,6 +260,32 @@ mod tests {
         assert!(page.entries.iter().any(|record| record.name == "note.txt"));
         assert!(page.inaccessible.is_empty());
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parses_finder_tag_names() {
+        assert_eq!(finder_tag_name("Important\n6").unwrap(), "Important");
+        assert_eq!(finder_tag_name("Plain").unwrap(), "Plain");
+        assert!(finder_tag_name("\n6").is_none());
+    }
+
+    #[test]
+    fn reads_finder_tags_from_xattr_when_supported() {
+        let root = unique_temp_dir();
+        let path = root.join("tagged.txt");
+        fs::write(&path, "tagged").unwrap();
+        let value = plist::Value::Array(vec![plist::Value::String("Important\n6".to_string())]);
+        let mut payload = Vec::new();
+        value.to_writer_binary(&mut payload).unwrap();
+        if xattr::set(&path, "com.apple.metadata:_kMDItemUserTags", &payload).is_err() {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+
+        let record = record_for_path(&path, None, false).unwrap();
+
+        assert_eq!(record.tags, vec!["Important"]);
         fs::remove_dir_all(root).unwrap();
     }
 

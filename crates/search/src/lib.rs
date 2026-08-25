@@ -16,6 +16,7 @@ pub struct SearchIndex {
     name_terms: BTreeMap<String, BTreeSet<FileId>>,
     path_terms: BTreeMap<String, BTreeSet<FileId>>,
     extension: BTreeMap<String, BTreeSet<FileId>>,
+    tags: BTreeMap<String, BTreeSet<FileId>>,
     content_terms: BTreeMap<String, BTreeSet<FileId>>,
 }
 
@@ -167,6 +168,9 @@ impl SearchIndex {
             if let Some(ids) = self.extension.get(term) {
                 add_scores(&mut scores, ids, 350, MatchReason::Extension);
             }
+            if let Some(ids) = self.tags.get(term) {
+                add_scores(&mut scores, ids, 325, MatchReason::Tag);
+            }
             if let Some(ids) = self.content_terms.get(term) {
                 add_scores(&mut scores, ids, 150, MatchReason::Content);
             }
@@ -308,6 +312,12 @@ impl SearchIndex {
                 .or_default()
                 .insert(record.id);
         }
+        for tag in &record.tags {
+            let tag = normalize(tag);
+            if !tag.is_empty() {
+                self.tags.entry(tag).or_default().insert(record.id);
+            }
+        }
     }
 
     fn remove_terms(&mut self, record: &FileRecord) {
@@ -327,6 +337,9 @@ impl SearchIndex {
         if let Some(ext) = record.extension() {
             remove_id(&mut self.extension, &normalize(ext), record.id);
         }
+        for tag in &record.tags {
+            remove_id(&mut self.tags, &normalize(tag), record.id);
+        }
         for ids in self.content_terms.values_mut() {
             ids.remove(&record.id);
         }
@@ -339,7 +352,9 @@ fn path_key(path: &std::path::Path) -> String {
 }
 
 fn record_contains_term(record: &FileRecord, term: &str) -> bool {
-    normalize(&record.name).contains(term) || normalize_path(&record.path).contains(term)
+    normalize(&record.name).contains(term)
+        || normalize_path(&record.path).contains(term)
+        || record.tags.iter().any(|tag| normalize(tag).contains(term))
 }
 
 fn record_matches_phrase(record: &FileRecord, phrase: &str) -> bool {
@@ -606,6 +621,38 @@ mod tests {
         assert_eq!(names, vec!["invoice.pdf", "report.md"]);
     }
 
+    #[test]
+    fn searches_and_filters_finder_tags() {
+        let mut index = SearchIndex::new();
+        let mut keep = record(1, "/tmp/report.md", "report.md");
+        keep.tags = vec!["Important".to_string(), "Client".to_string()];
+        let mut skip = record(2, "/tmp/draft.md", "draft.md");
+        skip.tags = vec!["Later".to_string()];
+        index.insert(keep);
+        index.insert(skip);
+
+        let filtered = index.query("tag:important", 10);
+        let plain = index.query("client", 10);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].record.name, "report.md");
+        assert_eq!(plain.len(), 1);
+        assert_eq!(plain[0].reason, MatchReason::Tag);
+    }
+
+    #[test]
+    fn removes_reindexed_tag_postings() {
+        let mut index = SearchIndex::new();
+        let mut item = record(1, "/tmp/report.md", "report.md");
+        item.tags = vec!["Important".to_string()];
+        index.insert(item.clone());
+        item.tags = vec!["Later".to_string()];
+        index.insert(item);
+
+        assert!(index.query("tag:important", 10).is_empty());
+        assert_eq!(index.query("tag:later", 10).len(), 1);
+    }
+
     fn record(node: u64, path: &str, name: &str) -> FileRecord {
         FileRecord {
             id: FileId::new(VolumeId(1), node),
@@ -618,6 +665,7 @@ mod tests {
             modified: None,
             changed: None,
             hidden: false,
+            tags: Vec::new(),
         }
     }
 

@@ -37,6 +37,7 @@ pub struct FileRecord {
     pub modified: Option<SystemTime>,
     pub changed: Option<SystemTime>,
     pub hidden: bool,
+    pub tags: Vec<String>,
 }
 
 impl FileRecord {
@@ -88,6 +89,7 @@ pub enum MatchReason {
     SubstringName,
     Extension,
     PathComponent,
+    Tag,
     Content,
     FuzzyName,
 }

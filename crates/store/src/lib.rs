@@ -7,22 +7,29 @@ use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const MAGIC: &str = "gfm-store-v1";
+const MAGIC_V1: &str = "gfm-store-v1";
+const MAGIC_V2: &str = "gfm-store-v2";
 const CONTENT_MAGIC_V1: &[u8] = b"gfm-content-v1\n";
 const CONTENT_MAGIC_V2: &[u8] = b"gfm-content-v2\n";
 const CONTENT_SEGMENT_MAGIC: &[u8] = b"gfm-content-segment-v1\n";
 const CONTENT_INDEX_FOOTER: &[u8] = b"gfm-content-index-v1\n";
 const CONTENT_FOOTER_LEN: u64 = 8 + CONTENT_INDEX_FOOTER.len() as u64;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoreVersion {
+    V1,
+    V2,
+}
+
 pub fn write_records(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<()> {
     let path = path.as_ref();
     let file = File::create(path).map_err(|err| GfmError::io(path, err))?;
     let mut writer = BufWriter::new(file);
-    writeln!(writer, "{MAGIC}").map_err(|err| GfmError::io(path, err))?;
+    writeln!(writer, "{MAGIC_V2}").map_err(|err| GfmError::io(path, err))?;
     for record in records {
         writeln!(
             writer,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             record.id.volume.0,
             record.id.node,
             record.parent.map(|id| id.node).unwrap_or(0),
@@ -32,6 +39,7 @@ pub fn write_records(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<(
             encode_time(record.modified),
             encode_time(record.changed),
             u8::from(record.hidden),
+            encode_tags(&record.tags),
             escape(&record.path.to_string_lossy()),
         )
         .map_err(|err| GfmError::io(path, err))?;
@@ -43,8 +51,9 @@ pub fn read_records(path: impl AsRef<Path>) -> Result<Vec<FileRecord>> {
     let path = path.as_ref();
     let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
     let mut lines = BufReader::new(file).lines();
-    match lines.next() {
-        Some(Ok(header)) if header == MAGIC => {}
+    let version = match lines.next() {
+        Some(Ok(header)) if header == MAGIC_V1 => StoreVersion::V1,
+        Some(Ok(header)) if header == MAGIC_V2 => StoreVersion::V2,
         Some(Ok(header)) => {
             return Err(GfmError::Format(format!(
                 "unsupported store header `{header}` in {}",
@@ -53,12 +62,12 @@ pub fn read_records(path: impl AsRef<Path>) -> Result<Vec<FileRecord>> {
         }
         Some(Err(err)) => return Err(GfmError::io(path, err)),
         None => return Err(GfmError::Format(format!("empty store {}", path.display()))),
-    }
+    };
 
     let mut records = Vec::new();
     for (index, line) in lines.enumerate() {
         let line = line.map_err(|err| GfmError::io(path, err))?;
-        records.push(parse_record(&line).map_err(|err| {
+        records.push(parse_record(&line, version).map_err(|err| {
             GfmError::Format(format!("{} line {}: {}", path.display(), index + 2, err))
         })?);
     }
@@ -464,10 +473,14 @@ fn read_file_ids(mut reader: impl Read, path: &Path) -> Result<Vec<FileId>> {
     Ok(ids)
 }
 
-fn parse_record(line: &str) -> std::result::Result<FileRecord, String> {
+fn parse_record(line: &str, version: StoreVersion) -> std::result::Result<FileRecord, String> {
     let parts: Vec<_> = line.split('\t').collect();
-    if parts.len() != 10 {
-        return Err(format!("expected 10 fields, got {}", parts.len()));
+    let expected = match version {
+        StoreVersion::V1 => 10,
+        StoreVersion::V2 => 11,
+    };
+    if parts.len() != expected {
+        return Err(format!("expected {expected} fields, got {}", parts.len()));
     }
 
     let volume = parse_u64(parts[0], "volume")?;
@@ -483,7 +496,11 @@ fn parse_record(line: &str) -> std::result::Result<FileRecord, String> {
         "1" => true,
         other => return Err(format!("invalid hidden flag `{other}`")),
     };
-    let path = PathBuf::from(unescape(parts[9])?);
+    let (tags, path_index) = match version {
+        StoreVersion::V1 => (Vec::new(), 9),
+        StoreVersion::V2 => (decode_tags(parts[9])?, 10),
+    };
+    let path = PathBuf::from(unescape(parts[path_index])?);
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -501,6 +518,7 @@ fn parse_record(line: &str) -> std::result::Result<FileRecord, String> {
         modified,
         changed,
         hidden,
+        tags,
     })
 }
 
@@ -563,6 +581,49 @@ fn encode_time(time: Option<SystemTime>) -> u128 {
         .unwrap_or(0)
 }
 
+fn encode_tags(tags: &[String]) -> String {
+    tags.iter()
+        .map(|tag| escape(tag))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn decode_tags(input: &str) -> std::result::Result<Vec<String>, String> {
+    if input.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut tags: Vec<_> = split_escaped(input)
+        .into_iter()
+        .map(unescape)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|tag| !tag.trim().is_empty())
+        .collect();
+    tags.sort();
+    tags.dedup();
+    Ok(tags)
+}
+
+fn split_escaped(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut escaped = false;
+    for (index, ch) in input.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+        } else if ch == ',' {
+            parts.push(&input[start..index]);
+            start = index + ch.len_utf8();
+        }
+    }
+    parts.push(&input[start..]);
+    parts
+}
+
 fn decode_time(value: &str) -> std::result::Result<Option<SystemTime>, String> {
     let nanos: u128 = value
         .parse()
@@ -576,6 +637,7 @@ fn escape(input: &str) -> String {
     for ch in input.chars() {
         match ch {
             '\\' => output.push_str("\\\\"),
+            ',' => output.push_str("\\,"),
             '\t' => output.push_str("\\t"),
             '\n' => output.push_str("\\n"),
             '\r' => output.push_str("\\r"),
@@ -595,6 +657,7 @@ fn unescape(input: &str) -> std::result::Result<String, String> {
         }
         match chars.next() {
             Some('\\') => output.push('\\'),
+            Some(',') => output.push(','),
             Some('t') => output.push('\t'),
             Some('n') => output.push('\n'),
             Some('r') => output.push('\r'),
@@ -629,12 +692,30 @@ mod tests {
             modified: Some(UNIX_EPOCH + Duration::from_secs(10)),
             changed: None,
             hidden: false,
+            tags: vec!["Important".to_string(), "Review, Later".to_string()],
         }];
 
         write_records(&path, &records).unwrap();
         let read = read_records(&path).unwrap();
 
         assert_eq!(read, records);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn reads_legacy_record_store_without_tags() {
+        let path = temp_path("gfm-store-legacy", "idx");
+        std::fs::write(
+            &path,
+            "gfm-store-v1\n4\t12\t1\tf\t42\t0\t0\t0\t0\t/tmp/legacy.txt\n",
+        )
+        .unwrap();
+
+        let read = read_records(&path).unwrap();
+
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].name, "legacy.txt");
+        assert!(read[0].tags.is_empty());
         std::fs::remove_file(path).unwrap();
     }
 
