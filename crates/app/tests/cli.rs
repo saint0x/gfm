@@ -1,3 +1,4 @@
+use flate2::{write::GzEncoder, Compression};
 use gfm_content::EXTRACTOR_VERSION;
 use gfm_store::{
     content_manifest_promotion_journal_path, read_records, write_content_postings,
@@ -2780,6 +2781,56 @@ fn searches_zip_archive_metadata_from_binary() {
 }
 
 #[test]
+fn searches_tar_archive_metadata_from_binary() {
+    let root = unique_temp_dir("gfm-cli-tar-content-root");
+    fs::write(
+        root.join("bundle.tar"),
+        tar_package(&[("docs/tarneedle.txt", "payload")]),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-content", root.to_str().unwrap(), "tarneedle"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("bundle.tar"), "{stdout}");
+    assert!(stdout.contains("[[tarneedle]]"), "{stdout}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn searches_compressed_tar_archive_metadata_from_binary() {
+    let root = unique_temp_dir("gfm-cli-targz-content-root");
+    fs::write(
+        root.join("bundle.tar.gz"),
+        tar_gz_package(&[("docs/targzneedle.txt", "payload")]),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-content", root.to_str().unwrap(), "targzneedle"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("bundle.tar.gz"), "{stdout}");
+    assert!(stdout.contains("[[targzneedle]]"), "{stdout}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_json_content_from_binary() {
     let root = unique_temp_dir("gfm-cli-json-content-root");
     fs::write(
@@ -4939,4 +4990,53 @@ fn ooxml_package(parts: &[(&str, &str)]) -> Vec<u8> {
         writer.write_all(text.as_bytes()).unwrap();
     }
     writer.finish().unwrap().into_inner()
+}
+
+fn tar_gz_package(parts: &[(&str, &str)]) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&tar_package(parts)).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn tar_package(parts: &[(&str, &str)]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for (name, text) in parts {
+        let payload = text.as_bytes();
+        let mut header = [0u8; 512];
+        write_tar_string(&mut header[0..100], name);
+        write_tar_octal(&mut header[100..108], 0o644);
+        write_tar_octal(&mut header[108..116], 0);
+        write_tar_octal(&mut header[116..124], 0);
+        write_tar_octal(&mut header[124..136], payload.len() as u64);
+        write_tar_octal(&mut header[136..148], 0);
+        for byte in &mut header[148..156] {
+            *byte = b' ';
+        }
+        header[156] = b'0';
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        let checksum: u64 = header.iter().map(|byte| u64::from(*byte)).sum();
+        write_tar_octal(&mut header[148..156], checksum);
+        bytes.extend_from_slice(&header);
+        bytes.extend_from_slice(payload);
+        let padding = (512 - payload.len() % 512) % 512;
+        bytes.extend(std::iter::repeat_n(0, padding));
+    }
+    bytes.extend([0u8; 1024]);
+    bytes
+}
+
+fn write_tar_string(field: &mut [u8], value: &str) {
+    let bytes = value.as_bytes();
+    let len = bytes.len().min(field.len());
+    field[..len].copy_from_slice(&bytes[..len]);
+}
+
+fn write_tar_octal(field: &mut [u8], value: u64) {
+    field.fill(0);
+    let encoded = format!("{value:0width$o}", width = field.len().saturating_sub(1));
+    let bytes = encoded.as_bytes();
+    let start = field.len().saturating_sub(1 + bytes.len());
+    field[start..start + bytes.len()].copy_from_slice(bytes);
+    field[field.len() - 1] = 0;
 }

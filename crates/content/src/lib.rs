@@ -25,7 +25,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use structured::{extract_structured, StructuredExtractStatus, StructuredKind};
 
-pub const EXTRACTOR_VERSION: u32 = 3;
+pub const EXTRACTOR_VERSION: u32 = 4;
 
 #[derive(Debug, Clone)]
 pub struct ExtractionPolicy {
@@ -634,7 +634,12 @@ fn rich_kind(path: &Path) -> Option<RichKind> {
 }
 
 fn archive_kind(path: &Path) -> Option<ArchiveKind> {
+    let file_name = path.file_name()?.to_str()?.to_ascii_lowercase();
+    if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
+        return Some(ArchiveKind::TarGz);
+    }
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "tar" => Some(ArchiveKind::Tar),
         "zip" => Some(ArchiveKind::Zip),
         _ => None,
     }
