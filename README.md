@@ -100,7 +100,7 @@ The index is compact and incremental:
 - archive-backed prefix, substring, and fuzzy lookup with explicit candidate budgets, adaptive prefix cutoffs, lookup cache telemetry, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
 - cached score/name/path/id sort keys during bounded top-k ranking so deterministic ordering does not repeatedly allocate while results are merged
 - direct content-posting scoring for normal content-term queries without temporary ID-set materialization
-- exact phrase and `near:N:alpha,beta` positional content retrieval, with proximity candidates anchored on the rarest posting list instead of temporary full-term ID sets
+- exact phrase and `near:N:alpha,beta` positional content retrieval, with phrase and proximity candidates anchored on the rarest posting lists instead of full-record scans or temporary full-term ID sets
 - bounded snippets with highlighted content matches
 - binary-signature and control-byte classification before content extraction
 - bounded PDF text-stream extraction with PDF-specific byte, page, and object budgets

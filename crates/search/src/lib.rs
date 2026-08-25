@@ -799,21 +799,21 @@ impl SearchIndex {
 
         for phrase in &query.phrases {
             cancellation.check()?;
-            for record in self.records.values().filter(|record| {
-                self.record_matches_phrase(record, phrase)
-                    || (pass.includes_deep() && self.content_matches_phrase(record.id, phrase))
-            }) {
+            let mut phrase_matches = HashMap::new();
+            for id in self.record_phrase_ids(phrase) {
+                phrase_matches.insert(id, MatchReason::PathComponent);
+            }
+            if pass.includes_deep() {
+                for id in self.content_phrase_ids(phrase) {
+                    phrase_matches.insert(id, MatchReason::Content);
+                }
+            }
+            for (id, reason) in phrase_matches {
                 cancellation.check()?;
                 scores
-                    .entry(record.id)
-                    .and_modify(|score| score.add(PHRASE, MatchReason::PathComponent))
-                    .or_insert_with(|| {
-                        if pass.includes_deep() && self.content_matches_phrase(record.id, phrase) {
-                            RankAccumulator::new(PHRASE, MatchReason::Content)
-                        } else {
-                            RankAccumulator::new(PHRASE, MatchReason::PathComponent)
-                        }
-                    });
+                    .entry(id)
+                    .and_modify(|score| score.add(PHRASE, reason.clone()))
+                    .or_insert_with(|| RankAccumulator::new(PHRASE, reason));
             }
         }
 
@@ -869,7 +869,11 @@ impl SearchIndex {
             .expression
             .as_ref()
             .is_some_and(expression_needs_universe)
-            || (scores.is_empty() && (!query.filters.is_empty() || !query.phrases.is_empty()))
+            || (scores.is_empty()
+                && !query.filters.is_empty()
+                && query.terms.is_empty()
+                && query.phrases.is_empty()
+                && query.proximities.is_empty())
         {
             for record in self.records.values() {
                 cancellation.check()?;
@@ -1219,6 +1223,72 @@ impl SearchIndex {
         })
     }
 
+    fn record_phrase_ids(&self, phrase: &str) -> Vec<FileId> {
+        let terms = tokenize(&normalize(phrase));
+        if terms.is_empty() {
+            return self
+                .records
+                .values()
+                .filter(|record| self.record_matches_phrase(record, phrase))
+                .map(|record| record.id)
+                .collect();
+        }
+
+        let mut ids = BTreeSet::new();
+        self.add_record_phrase_ids_for_field(
+            &terms,
+            phrase,
+            &self.name_terms,
+            |columns, phrase| columns.matches_name_phrase(phrase),
+            &mut ids,
+        );
+        self.add_record_phrase_ids_for_field(
+            &terms,
+            phrase,
+            &self.path_terms,
+            |columns, phrase| columns.matches_path_phrase(phrase),
+            &mut ids,
+        );
+        self.add_record_phrase_ids_for_field(
+            &terms,
+            phrase,
+            &self.metadata_terms,
+            |columns, phrase| columns.matches_comment_phrase(phrase),
+            &mut ids,
+        );
+        ids.into_iter().collect()
+    }
+
+    fn add_record_phrase_ids_for_field(
+        &self,
+        terms: &[String],
+        phrase: &str,
+        postings: &BTreeMap<String, BTreeSet<FileId>>,
+        matches: impl Fn(&RecordColumns, &str) -> bool,
+        ids: &mut BTreeSet<FileId>,
+    ) {
+        let Some(candidates) = rarest_term_postings(terms, postings) else {
+            return;
+        };
+        ids.extend(candidates.iter().copied().filter(|id| {
+            self.columns
+                .get(id)
+                .is_some_and(|columns| matches(columns, phrase))
+        }));
+    }
+
+    fn content_phrase_ids(&self, phrase: &str) -> Vec<FileId> {
+        let terms = tokenize(&normalize(phrase));
+        let Some(candidates) = rarest_content_postings(&terms, &self.content_terms) else {
+            return Vec::new();
+        };
+        candidates
+            .keys()
+            .copied()
+            .filter(|id| self.content_matches_phrase(*id, phrase))
+            .collect()
+    }
+
     fn content_proximity_ids(&self, proximity: &QueryProximity) -> Vec<FileId> {
         let postings: Option<Vec<_>> = proximity
             .terms
@@ -1508,6 +1578,30 @@ fn expression_needs_universe(expression: &QueryExpr) -> bool {
         }
         QueryExpr::Term(_) | QueryExpr::Phrase(_) | QueryExpr::Proximity(_) => false,
     }
+}
+
+fn rarest_term_postings<'a>(
+    terms: &[String],
+    postings: &'a BTreeMap<String, BTreeSet<FileId>>,
+) -> Option<&'a BTreeSet<FileId>> {
+    terms
+        .iter()
+        .map(|term| postings.get(term))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .min_by_key(|ids| ids.len())
+}
+
+fn rarest_content_postings<'a>(
+    terms: &[String],
+    postings: &'a BTreeMap<String, BTreeMap<FileId, Vec<u32>>>,
+) -> Option<&'a BTreeMap<FileId, Vec<u32>>> {
+    terms
+        .iter()
+        .map(|term| postings.get(term))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .min_by_key(|ids| ids.len())
 }
 
 fn add_scores(

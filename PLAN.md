@@ -416,7 +416,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
    - Background content indexing is delta-based: it compares current records to the previously published record archive, tombstones changed or deleted file IDs, re-extracts only new or content-modified records, and atomically rewrites the searchable content archive from the prior postings plus delta segments.
    - Background content indexing consults and persists the extraction quarantine store, reselecting unchanged files with outstanding failure history until they are cleared by success or blocked before extraction after repeated corrupt/encrypted failures.
    - Normal content-term query scoring walks the content postings map directly instead of materializing temporary ID sets; proximity query execution anchors candidates on the rarest posting list and filters against existing posting maps without constructing full temporary term-ID sets.
-   - Positional postings support exact quoted phrases and explicit `near:N:alpha,beta` proximity windows after durable reload.
+   - Positional postings support exact quoted phrases and explicit `near:N:alpha,beta` proximity windows after durable reload, with phrase and proximity execution anchored on rarest posting lists rather than full-record scans.
 
 5. Recency and usage index
    - Opened, previewed, moved, copied, renamed, searched, selected.

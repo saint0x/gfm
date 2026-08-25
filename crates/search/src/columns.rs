@@ -111,12 +111,23 @@ impl RecordColumns {
     }
 
     pub(super) fn matches_phrase(&self, phrase: &str) -> bool {
+        self.matches_name_phrase(phrase)
+            || self.matches_path_phrase(phrase)
+            || self.matches_comment_phrase(phrase)
+    }
+
+    pub(super) fn matches_name_phrase(&self, phrase: &str) -> bool {
         self.name.contains(phrase)
-            || self.path.contains(phrase)
-            || self
-                .comment
-                .as_deref()
-                .is_some_and(|comment| comment.contains(phrase))
+    }
+
+    pub(super) fn matches_path_phrase(&self, phrase: &str) -> bool {
+        self.path.contains(phrase)
+    }
+
+    pub(super) fn matches_comment_phrase(&self, phrase: &str) -> bool {
+        self.comment
+            .as_deref()
+            .is_some_and(|comment| comment.contains(phrase))
     }
 }
 

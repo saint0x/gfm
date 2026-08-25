@@ -702,6 +702,32 @@ fn matches_content_phrases_by_token_position() {
 }
 
 #[test]
+fn content_phrase_uses_rarest_posting_candidates_without_record_scan() {
+    let mut index = SearchIndex::new();
+    for node in 1..=64 {
+        let item = record(
+            node,
+            &format!("/tmp/noisy-phrase-{node}.txt"),
+            &format!("noisy-phrase-{node}.txt"),
+        );
+        index.insert(item.clone());
+        index.insert_content(item.id, "instant filler filler filler");
+    }
+
+    let keep = record(100, "/tmp/a/phrase.txt", "phrase.txt");
+    let skip = record(101, "/tmp/b/reordered.txt", "reordered.txt");
+    index.insert(keep.clone());
+    index.insert(skip.clone());
+    index.insert_content(keep.id, "instant content search");
+    index.insert_content(skip.id, "instant search content");
+
+    let hits = index.query(r#""instant content search""#, 10);
+    let paths: Vec<_> = hits.into_iter().map(|hit| hit.record.path).collect();
+
+    assert_eq!(paths, vec![PathBuf::from("/tmp/a/phrase.txt")]);
+}
+
+#[test]
 fn supports_boolean_content_phrase_queries() {
     let mut index = SearchIndex::new();
     let first = record(1, "/tmp/first.txt", "first.txt");
