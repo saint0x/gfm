@@ -277,6 +277,11 @@ gfm/
 - Records IO byte/op counters, CPU sample means and peaks, memory and allocation peaks, queue depth summaries, compaction summaries, cache hit rates, slow paths, index lag, and operation failures.
 - Exports local-only aggregate diagnostics atomically and rejects path, query-text, or user-identifier inclusion before writing any artifact.
 
+`testkit`
+
+- Owns deterministic filesystem fixture generation and repeatable macrobenchmarks for small, medium, huge, developer, media, iCloud, external-volume, and network-volume shaped trees.
+- Runs macrobenchmarks through the real index build, hot search, streaming search, and content search paths, then evaluates observations against telemetry budgets.
+
 ## Data Model
 
 ### Core Identity

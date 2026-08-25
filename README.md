@@ -61,7 +61,7 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 - `crates/jobs`: scheduling, cancellation, prioritization, fairness, progress, and backpressure.
 - `crates/config`: versioned TOML config, Finder parity profiles, user settings, feature flags, diagnostics toggles, validation, and atomic persistence.
 - `crates/telemetry`: bounded latency histograms, hard performance budgets, frame timing, UI-thread stall detection, IO/CPU/memory/allocation/queue/compaction summaries, counters, traces, and local-only diagnostics export with privacy review.
-- `crates/testkit`: filesystem fixtures, synthetic trees, macOS capture harnesses, pixel diffing, and benchmark utilities.
+- `crates/testkit`: filesystem fixtures, synthetic trees, repeatable macrobenchmarks, macOS capture harnesses, pixel diffing, and benchmark utilities.
 
 No UI render/update path performs blocking filesystem work. No performance-critical search, ranking, scheduling, virtualization, storage, or operation orchestration path is outsourced to a generic black box. Dependencies exist for platform access and standards compliance; GFM owns the contracts.
 
@@ -176,6 +176,13 @@ cargo run -p gfm -- config-path
 cargo run -p gfm -- config-init ~/Library/Application\ Support/GFM/config.toml
 cargo run -p gfm -- config-check ~/Library/Application\ Support/GFM/config.toml
 cargo run -p gfm -- config-dump ~/Library/Application\ Support/GFM/config.toml
+```
+
+Run repeatable macrobenchmarks:
+
+```sh
+cargo run -p gfm -- macrobench /tmp/gfm-bench smoke
+cargo run -p gfm -- macrobench /tmp/gfm-bench standard
 ```
 
 Build and query record indexes:

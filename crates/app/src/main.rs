@@ -11,6 +11,7 @@ use gfm_jobs::{
 use gfm_mac::{FileEventStream, WatchRoot};
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_store::ContentArchive;
+use gfm_testkit::{run_macrobench, MacrobenchOptions, MacrobenchScale, MacrobenchStage};
 use gfm_types::{FileKind, Result, SearchHit};
 use std::env;
 use std::path::PathBuf;
@@ -237,6 +238,34 @@ fn run() -> Result<()> {
             let store = config_store(args.next())?;
             let config = store.load_or_create_default()?;
             print!("{}", config.to_toml()?);
+        }
+        Some("macrobench") => {
+            let root = required_path(args.next(), "macrobench requires a workspace path")?;
+            let mut options = MacrobenchOptions::smoke(root);
+            if matches!(args.next().as_deref(), Some("standard")) {
+                options.scale = MacrobenchScale::standard();
+                options.limit = 50;
+            }
+            let report = run_macrobench(&options)?;
+            println!(
+                "fixture\t{}\tfiles\t{}\tpassed\t{}",
+                report.fixture_root.display(),
+                report.files_materialized,
+                report.passed()
+            );
+            for measurement in report.measurements {
+                println!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    measurement.scenario.directory(),
+                    macrobench_stage(measurement.stage),
+                    measurement.duration.as_nanos(),
+                    measurement.records,
+                    measurement.hits
+                );
+            }
+            for violation in report.budget_violations {
+                eprintln!("budget-violation\t{violation:?}");
+            }
         }
         Some("jobs-recover") => {
             let journal = args
@@ -482,6 +511,15 @@ fn stream_stage(stage: SearchStreamStage) -> &'static str {
     }
 }
 
+fn macrobench_stage(stage: MacrobenchStage) -> &'static str {
+    match stage {
+        MacrobenchStage::IndexBuild => "index-build",
+        MacrobenchStage::HotSearch => "hot-search",
+        MacrobenchStage::StreamSearch => "stream-search",
+        MacrobenchStage::ContentSearch => "content-search",
+    }
+}
+
 fn print_usage() {
     println!(
         "gfm commands:
@@ -502,6 +540,7 @@ fn print_usage() {
   gfm config-init [config.toml]
   gfm config-check [config.toml]
   gfm config-dump [config.toml]
+  gfm macrobench <workspace> [smoke|standard]
   gfm jobs-recover [jobs.journal]
   gfm watch-once <root>
   gfm copy <source> <destination>

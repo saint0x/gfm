@@ -177,6 +177,7 @@ dependencies = [
  "gfm-mac",
  "gfm-ops",
  "gfm-store",
+ "gfm-testkit",
  "gfm-types",
  "zip",
 ]
@@ -261,6 +262,16 @@ dependencies = [
 [[package]]
 name = "gfm-telemetry"
 version = "0.1.0"
+
+[[package]]
+name = "gfm-testkit"
+version = "0.1.0"
+dependencies = [
+ "gfm-content",
+ "gfm-index",
+ "gfm-telemetry",
+ "gfm-types",
+]
 
 [[package]]
 name = "gfm-types"

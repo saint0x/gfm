@@ -1,0 +1,14 @@
+[package]
+name = "gfm-testkit"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gfm-content = { path = "../content" }
+gfm-index = { path = "../index" }
+gfm-telemetry = { path = "../telemetry" }
+gfm-types = { path = "../types" }
+
+[lints]
+workspace = true

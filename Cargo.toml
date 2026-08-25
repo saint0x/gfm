@@ -11,6 +11,7 @@ members = [
     "crates/ops",
     "crates/search",
     "crates/store",
+    "crates/testkit",
     "crates/telemetry",
     "crates/types",
 ]
