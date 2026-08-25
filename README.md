@@ -192,7 +192,15 @@ Build, sign, and register the native app bundle:
 ```sh
 cargo build -p gfm --release
 cargo run -p gfm -- bundle-app target/release/gfm assets/GFM.icns dist --ad-hoc
+cargo run -p gfm -- notarize-app dist/GFM.app dist --keychain-profile gfm-release
 cargo run -p gfm -- register-app dist/GFM.app
+```
+
+Notarization also accepts Apple ID credentials or App Store Connect API key credentials:
+
+```sh
+cargo run -p gfm -- notarize-app dist/GFM.app dist --apple-id you@example.com --team-id TEAMID --password app-specific-password
+cargo run -p gfm -- notarize-app dist/GFM.app dist --api-key AuthKey_KEYID.p8 --key-id KEYID --issuer ISSUERID
 ```
 
 Build and query record indexes:

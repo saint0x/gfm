@@ -10,7 +10,10 @@ use gfm_jobs::{
 };
 use gfm_mac::{FileEventStream, WatchRoot};
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
-use gfm_packaging::{build_app_bundle, register_launch_services, AppBundleSpec, SigningIdentity};
+use gfm_packaging::{
+    build_app_bundle, notarize_app_bundle, register_launch_services, AppBundleSpec,
+    NotarizationCredentials, NotarizationSpec, SigningIdentity,
+};
 use gfm_store::ContentArchive;
 use gfm_testkit::{
     run_macrobench, run_regression_gate, MacrobenchOptions, MacrobenchScale, MacrobenchStage,
@@ -309,6 +312,21 @@ fn run() -> Result<()> {
             register_launch_services(&app_path)?;
             println!("{}", app_path.display());
         }
+        Some("notarize-app") => {
+            let app_path = required_path(args.next(), "notarize-app requires an .app path")?;
+            let output_dir =
+                required_path(args.next(), "notarize-app requires an output directory")?;
+            let credentials = notarization_credentials(&mut args)?;
+            let ticket =
+                notarize_app_bundle(&NotarizationSpec::new(app_path, output_dir, credentials))?;
+            println!(
+                "{}\t{}\t{:?}\t{}",
+                ticket.submission_id,
+                ticket.archive_path.display(),
+                ticket.status,
+                ticket.stapled
+            );
+        }
         Some("jobs-recover") => {
             let journal = args
                 .next()
@@ -392,6 +410,107 @@ fn macrobench_options(
         }
     }
     Ok(options)
+}
+
+fn notarization_credentials(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<NotarizationCredentials> {
+    match args.next().as_deref() {
+        Some("--keychain-profile") => args
+            .next()
+            .map(NotarizationCredentials::KeychainProfile)
+            .ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "notarize-app --keychain-profile requires a profile name".to_string(),
+                )
+            }),
+        Some("--apple-id") => {
+            let apple_id = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "notarize-app --apple-id requires an Apple ID".to_string(),
+                )
+            })?;
+            let Some(team_flag) = args.next() else {
+                return Err(gfm_types::GfmError::Format(
+                    "notarize-app --apple-id requires --team-id".to_string(),
+                ));
+            };
+            if team_flag != "--team-id" {
+                return Err(gfm_types::GfmError::Format(format!(
+                    "expected --team-id after --apple-id, got {team_flag}"
+                )));
+            }
+            let team_id = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format("notarize-app --team-id requires a team ID".to_string())
+            })?;
+            let Some(password_flag) = args.next() else {
+                return Err(gfm_types::GfmError::Format(
+                    "notarize-app --apple-id requires --password".to_string(),
+                ));
+            };
+            if password_flag != "--password" {
+                return Err(gfm_types::GfmError::Format(format!(
+                    "expected --password after --team-id, got {password_flag}"
+                )));
+            }
+            let password = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "notarize-app --password requires an app-specific password".to_string(),
+                )
+            })?;
+            Ok(NotarizationCredentials::AppleId {
+                apple_id,
+                team_id,
+                password,
+            })
+        }
+        Some("--api-key") => {
+            let key_path = required_path(
+                args.next(),
+                "notarize-app --api-key requires a .p8 key path",
+            )?;
+            let Some(key_id_flag) = args.next() else {
+                return Err(gfm_types::GfmError::Format(
+                    "notarize-app --api-key requires --key-id".to_string(),
+                ));
+            };
+            if key_id_flag != "--key-id" {
+                return Err(gfm_types::GfmError::Format(format!(
+                    "expected --key-id after --api-key, got {key_id_flag}"
+                )));
+            }
+            let key_id = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format("notarize-app --key-id requires a key ID".to_string())
+            })?;
+            let Some(issuer_flag) = args.next() else {
+                return Err(gfm_types::GfmError::Format(
+                    "notarize-app --api-key requires --issuer".to_string(),
+                ));
+            };
+            if issuer_flag != "--issuer" {
+                return Err(gfm_types::GfmError::Format(format!(
+                    "expected --issuer after --key-id, got {issuer_flag}"
+                )));
+            }
+            let issuer_id = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "notarize-app --issuer requires an issuer ID".to_string(),
+                )
+            })?;
+            Ok(NotarizationCredentials::ApiKey {
+                key_id,
+                issuer_id,
+                key_path,
+            })
+        }
+        Some(other) => Err(gfm_types::GfmError::Format(format!(
+            "unknown notarize-app credential flag {other}"
+        ))),
+        None => Err(gfm_types::GfmError::Format(
+            "notarize-app requires --keychain-profile, --apple-id, or --api-key credentials"
+                .to_string(),
+        )),
+    }
 }
 
 fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<()> {
@@ -608,6 +727,9 @@ fn print_usage() {
   gfm regression-gate <workspace> [smoke|standard]
   gfm bundle-app <executable> <GFM.icns> <output-dir> [--ad-hoc|--unsigned|developer-id]
   gfm register-app <GFM.app>
+  gfm notarize-app <GFM.app> <output-dir> --keychain-profile <profile>
+  gfm notarize-app <GFM.app> <output-dir> --apple-id <email> --team-id <team> --password <password>
+  gfm notarize-app <GFM.app> <output-dir> --api-key <AuthKey.p8> --key-id <key> --issuer <issuer>
   gfm jobs-recover [jobs.journal]
   gfm watch-once <root>
   gfm copy <source> <destination>

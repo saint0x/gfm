@@ -290,6 +290,8 @@ gfm/
 - Copies the native binary and icon resources into the canonical app bundle layout.
 - Generates signing entitlements as release inputs and signs bundles with ad-hoc or Developer ID identities.
 - Enables hardened runtime during signing and verifies the signature after bundle creation.
+- Archives signed bundles through `xcrun ditto`, submits notarization through `xcrun notarytool`, waits for Apple acceptance, staples the ticket through `xcrun stapler`, and validates the stapled app.
+- Supports keychain-profile, Apple ID, and App Store Connect API key credential modes without storing secrets in project files.
 - Exposes Launch Services registration as an explicit operator command so release/install flows can register GFM without hiding host mutation inside validation.
 
 ## Data Model

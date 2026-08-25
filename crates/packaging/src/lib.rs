@@ -3,6 +3,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod notarize;
+
+pub use notarize::{
+    notarize_app_bundle, NotarizationCredentials, NotarizationSpec, NotarizationStatus,
+    NotarizationTicket,
+};
+
 const DEFAULT_MINIMUM_SYSTEM_VERSION: &str = "14.0";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
