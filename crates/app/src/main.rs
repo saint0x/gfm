@@ -3180,6 +3180,7 @@ fn operation_status(status: gfm_ops::OperationStatus) -> &'static str {
     match status {
         gfm_ops::OperationStatus::Started => "started",
         gfm_ops::OperationStatus::Completed => "completed",
+        gfm_ops::OperationStatus::Cancelled => "cancelled",
         gfm_ops::OperationStatus::Failed => "failed",
     }
 }

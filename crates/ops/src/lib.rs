@@ -3,6 +3,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +35,7 @@ impl Operation {
 pub enum OperationStatus {
     Started,
     Completed,
+    Cancelled,
     Failed,
 }
 
@@ -75,6 +78,7 @@ pub struct JournalEntry {
 pub struct OperationContext {
     pub conflict: ConflictPolicy,
     pub journal_path: PathBuf,
+    pub cancellation: OperationCancellation,
 }
 
 impl OperationContext {
@@ -82,12 +86,35 @@ impl OperationContext {
         Self {
             conflict: ConflictPolicy::Fail,
             journal_path: journal_path.into(),
+            cancellation: OperationCancellation::default(),
         }
     }
 
     pub fn with_conflict(mut self, conflict: ConflictPolicy) -> Self {
         self.conflict = conflict;
         self
+    }
+
+    pub fn with_cancellation(mut self, cancellation: OperationCancellation) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OperationCancellation(Arc<AtomicBool>);
+
+impl OperationCancellation {
+    pub fn cancel(&self) {
+        self.0.store(true, AtomicOrdering::SeqCst);
+    }
+
+    pub fn check(&self) -> Result<()> {
+        if self.0.load(AtomicOrdering::SeqCst) {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -111,15 +138,15 @@ impl Operator {
     ) -> Result<JournalEntry> {
         let id = now_nanos();
         self.append(JournalEntry::started(id, operation.clone()))?;
-        let plan = match plan_operation(&operation) {
+        let plan = match plan_operation_checked(&operation, &self.context.cancellation) {
             Ok(plan) => plan,
             Err(err) => {
-                let entry = JournalEntry::failed(id, operation, err.to_string());
+                let entry = JournalEntry::from_error(id, operation, &err);
                 let _ = self.append(entry);
                 return Err(err);
             }
         };
-        let mut progress = ProgressTracker::new(plan, &mut on_progress);
+        let mut progress = ProgressTracker::new(plan, &self.context.cancellation, &mut on_progress);
         match self.apply(&operation, &mut progress) {
             Ok(()) => {
                 let entry = JournalEntry::completed(id, operation);
@@ -127,7 +154,7 @@ impl Operator {
                 Ok(entry)
             }
             Err(err) => {
-                let entry = JournalEntry::failed(id, operation, err.to_string());
+                let entry = JournalEntry::from_error(id, operation, &err);
                 let _ = self.append(entry);
                 Err(err)
             }
@@ -179,6 +206,16 @@ impl JournalEntry {
         }
     }
 
+    fn cancelled(id: u128, operation: Operation) -> Self {
+        Self {
+            id,
+            status: OperationStatus::Cancelled,
+            operation,
+            message: None,
+            timestamp_nanos: now_nanos(),
+        }
+    }
+
     fn failed(id: u128, operation: Operation, message: String) -> Self {
         Self {
             id,
@@ -188,18 +225,34 @@ impl JournalEntry {
             timestamp_nanos: now_nanos(),
         }
     }
-}
 
-pub fn plan_operation(operation: &Operation) -> Result<OperationProgress> {
-    match operation {
-        Operation::Copy { from, .. }
-        | Operation::Move { from, .. }
-        | Operation::Rename { from, .. } => plan_path(from),
-        Operation::Delete { path } | Operation::Trash { path } => plan_path(path),
+    fn from_error(id: u128, operation: Operation, err: &GfmError) -> Self {
+        if matches!(err, GfmError::Cancelled) {
+            Self::cancelled(id, operation)
+        } else {
+            Self::failed(id, operation, err.to_string())
+        }
     }
 }
 
-fn plan_path(path: &Path) -> Result<OperationProgress> {
+pub fn plan_operation(operation: &Operation) -> Result<OperationProgress> {
+    plan_operation_checked(operation, &OperationCancellation::default())
+}
+
+fn plan_operation_checked(
+    operation: &Operation,
+    cancellation: &OperationCancellation,
+) -> Result<OperationProgress> {
+    match operation {
+        Operation::Copy { from, .. }
+        | Operation::Move { from, .. }
+        | Operation::Rename { from, .. } => plan_path(from, cancellation),
+        Operation::Delete { path } | Operation::Trash { path } => plan_path(path, cancellation),
+    }
+}
+
+fn plan_path(path: &Path, cancellation: &OperationCancellation) -> Result<OperationProgress> {
+    cancellation.check()?;
     let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
     let mut progress = OperationProgress {
         total_items: 1,
@@ -209,8 +262,9 @@ fn plan_path(path: &Path) -> Result<OperationProgress> {
     };
     if metadata.is_dir() {
         for entry in fs::read_dir(path).map_err(|err| GfmError::io(path, err))? {
+            cancellation.check()?;
             let entry = entry.map_err(|err| GfmError::io(path, err))?;
-            let child = plan_path(&entry.path())?;
+            let child = plan_path(&entry.path(), cancellation)?;
             progress.total_items += child.total_items;
             progress.total_bytes += child.total_bytes;
         }
@@ -220,29 +274,39 @@ fn plan_path(path: &Path) -> Result<OperationProgress> {
 
 struct ProgressTracker<'a, F: FnMut(OperationProgressEvent)> {
     progress: OperationProgress,
+    cancellation: &'a OperationCancellation,
     on_progress: &'a mut F,
 }
 
 impl<'a, F: FnMut(OperationProgressEvent)> ProgressTracker<'a, F> {
-    fn new(plan: OperationProgress, on_progress: &'a mut F) -> Self {
+    fn new(
+        plan: OperationProgress,
+        cancellation: &'a OperationCancellation,
+        on_progress: &'a mut F,
+    ) -> Self {
         let mut tracker = Self {
             progress: plan,
+            cancellation,
             on_progress,
         };
         tracker.emit(OperationProgressPhase::Planned);
         tracker
     }
 
-    fn advance(&mut self, metadata: &fs::Metadata) {
+    fn advance(&mut self, metadata: &fs::Metadata) -> Result<()> {
+        self.cancellation.check()?;
         self.progress.completed_items += 1;
         self.progress.completed_bytes += item_bytes(metadata);
         self.emit(OperationProgressPhase::Advanced);
+        self.cancellation.check()
     }
 
-    fn complete(&mut self) {
+    fn complete(&mut self) -> Result<()> {
+        self.cancellation.check()?;
         self.progress.completed_items = self.progress.total_items;
         self.progress.completed_bytes = self.progress.total_bytes;
         self.emit(OperationProgressPhase::Advanced);
+        self.cancellation.check()
     }
 
     fn emit(&mut self, phase: OperationProgressPhase) {
@@ -250,6 +314,10 @@ impl<'a, F: FnMut(OperationProgressEvent)> ProgressTracker<'a, F> {
             phase,
             progress: self.progress,
         });
+    }
+
+    fn check_cancelled(&self) -> Result<()> {
+        self.cancellation.check()
     }
 }
 
@@ -267,6 +335,7 @@ fn copy_path(
     conflict: ConflictPolicy,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
+    progress.check_cancelled()?;
     ensure_source_exists(from)?;
     prepare_destination(to, conflict)?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
@@ -276,8 +345,7 @@ fn copy_path(
         copy_directory(from, to, progress)
     } else {
         copy_file(from, to)?;
-        progress.advance(&metadata);
-        Ok(())
+        progress.advance(&metadata)
     }
 }
 
@@ -287,16 +355,14 @@ fn move_path(
     conflict: ConflictPolicy,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
+    progress.check_cancelled()?;
     ensure_source_exists(from)?;
     prepare_destination(to, conflict)?;
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
     match fs::rename(from, to) {
-        Ok(()) => {
-            progress.complete();
-            Ok(())
-        }
+        Ok(()) => progress.complete(),
         Err(rename_err) => {
             copy_path(from, to, ConflictPolicy::Replace, progress)?;
             delete_path_untracked(from).map_err(|delete_err| {
@@ -316,15 +382,14 @@ fn delete_path(
     path: &Path,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
+    progress.check_cancelled()?;
     let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
     if metadata.is_dir() {
         fs::remove_dir_all(path).map_err(|err| GfmError::io(path, err))?;
-        progress.complete();
-        Ok(())
+        progress.complete()
     } else {
         fs::remove_file(path).map_err(|err| GfmError::io(path, err))?;
-        progress.advance(&metadata);
-        Ok(())
+        progress.advance(&metadata)
     }
 }
 
@@ -341,10 +406,10 @@ fn trash_path(
     path: &Path,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
+    progress.check_cancelled()?;
     ensure_source_exists(path)?;
     trash::delete(path).map_err(|err| GfmError::io(path, err))?;
-    progress.complete();
-    Ok(())
+    progress.complete()
 }
 
 fn copy_directory(
@@ -352,12 +417,14 @@ fn copy_directory(
     to: &Path,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
+    progress.check_cancelled()?;
     fs::create_dir_all(to).map_err(|err| GfmError::io(to, err))?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     preserve_metadata(from, to, &metadata)?;
-    progress.advance(&metadata);
+    progress.advance(&metadata)?;
 
     for entry in fs::read_dir(from).map_err(|err| GfmError::io(from, err))? {
+        progress.check_cancelled()?;
         let entry = entry.map_err(|err| GfmError::io(from, err))?;
         let source = entry.path();
         let destination = to.join(entry.file_name());
@@ -369,7 +436,7 @@ fn copy_directory(
             copy_directory(&source, &destination, progress)?;
         } else {
             let _ = copy_file(&source, &destination)?;
-            progress.advance(&child_metadata);
+            progress.advance(&child_metadata)?;
         }
     }
     Ok(())
@@ -380,6 +447,7 @@ fn copy_symlink(
     to: &Path,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
+    progress.check_cancelled()?;
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
@@ -387,8 +455,7 @@ fn copy_symlink(
     create_symlink(&target, to)?;
     preserve_xattrs(from, to)?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
-    progress.advance(&metadata);
-    Ok(())
+    progress.advance(&metadata)
 }
 
 fn copy_file(from: &Path, to: &Path) -> Result<CopyMethod> {
@@ -648,6 +715,7 @@ fn encode_status(status: OperationStatus) -> &'static str {
     match status {
         OperationStatus::Started => "started",
         OperationStatus::Completed => "completed",
+        OperationStatus::Cancelled => "cancelled",
         OperationStatus::Failed => "failed",
     }
 }
@@ -656,6 +724,7 @@ fn decode_status(value: &str) -> std::result::Result<OperationStatus, String> {
     match value {
         "started" => Ok(OperationStatus::Started),
         "completed" => Ok(OperationStatus::Completed),
+        "cancelled" => Ok(OperationStatus::Cancelled),
         "failed" => Ok(OperationStatus::Failed),
         other => Err(format!("unknown status `{other}`")),
     }
@@ -824,6 +893,88 @@ mod tests {
         assert_eq!(last.phase, OperationProgressPhase::Advanced);
         assert_eq!(last.progress.completed_items, 3);
         assert_eq!(last.progress.completed_bytes, 7);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_before_preflight_journals_cancelled_without_progress() {
+        let root = unique_temp_dir("gfm-ops-cancel-preflight");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("payload.txt"), "payload").unwrap();
+        let cancellation = OperationCancellation::default();
+        cancellation.cancel();
+        let mut events = Vec::new();
+
+        let err = Operator::new(OperationContext::new(&journal).with_cancellation(cancellation))
+            .execute_with_progress(
+                Operation::Copy {
+                    from: source,
+                    to: destination,
+                },
+                |event| events.push(event),
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert!(events.is_empty());
+        let journal_entries = read_journal(&journal).unwrap();
+        assert_eq!(journal_entries.len(), 2);
+        assert_eq!(journal_entries[0].status, OperationStatus::Started);
+        assert_eq!(journal_entries[1].status, OperationStatus::Cancelled);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recursive_copy_stops_after_cancellation_checkpoint() {
+        let root = unique_temp_dir("gfm-ops-cancel-copy");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("first.txt"), "first").unwrap();
+        fs::write(source.join("nested").join("second.txt"), "second").unwrap();
+        let cancellation = OperationCancellation::default();
+        let cancellation_callback = cancellation.clone();
+        let mut events = Vec::new();
+
+        let err = Operator::new(OperationContext::new(&journal).with_cancellation(cancellation))
+            .execute_with_progress(
+                Operation::Copy {
+                    from: source,
+                    to: destination.clone(),
+                },
+                |event| {
+                    events.push(event);
+                    if event.phase == OperationProgressPhase::Advanced
+                        && event.progress.completed_items == 1
+                    {
+                        cancellation_callback.cancel();
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert!(destination.is_dir());
+        assert!(!destination.join("first.txt").exists());
+        assert!(!destination.join("nested").exists());
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.phase == OperationProgressPhase::Advanced)
+                .count(),
+            1
+        );
+        let journal_entries = read_journal(&journal).unwrap();
+        assert_eq!(
+            journal_entries.last().unwrap().status,
+            OperationStatus::Cancelled
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
