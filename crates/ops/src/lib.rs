@@ -3,7 +3,7 @@ use gfm_types::{FileKind, GfmError, Result};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
@@ -1786,11 +1786,18 @@ fn copy_file_bytes(from: &Path, to: &Path) -> Result<u64> {
         if read == 0 {
             break Ok(written);
         }
-        if let Err(err) = destination.write_all(&buffer[..read]) {
+        if let Err(err) = write_sparse_chunk(&mut destination, &buffer[..read]) {
             break Err(GfmError::io(to, err));
         }
         written += read as u64;
     };
+
+    let result = result.and_then(|written| {
+        destination
+            .set_len(written)
+            .map_err(|err| GfmError::io(to, err))?;
+        Ok(written)
+    });
 
     if result.is_err() {
         let _ = fs::remove_file(to);
@@ -1822,7 +1829,7 @@ fn copy_file_bytes_tracked(
         if read == 0 {
             break Ok(written);
         }
-        if let Err(err) = destination.write_all(&buffer[..read]) {
+        if let Err(err) = write_sparse_chunk(&mut destination, &buffer[..read]) {
             break Err(GfmError::io(to, err));
         }
         written += read as u64;
@@ -1831,10 +1838,36 @@ fn copy_file_bytes_tracked(
         }
     };
 
+    let result = result.and_then(|written| {
+        destination
+            .set_len(written)
+            .map_err(|err| GfmError::io(to, err))?;
+        Ok(written)
+    });
+
     if result.is_err() {
         let _ = fs::remove_file(to);
     }
     result
+}
+
+fn write_sparse_chunk(destination: &mut File, chunk: &[u8]) -> io::Result<()> {
+    let mut cursor = 0;
+    while cursor < chunk.len() {
+        let run_start = cursor;
+        if chunk[cursor] == 0 {
+            while cursor < chunk.len() && chunk[cursor] == 0 {
+                cursor += 1;
+            }
+            destination.seek(SeekFrom::Current((cursor - run_start) as i64))?;
+        } else {
+            while cursor < chunk.len() && chunk[cursor] != 0 {
+                cursor += 1;
+            }
+            destination.write_all(&chunk[run_start..cursor])?;
+        }
+    }
+    Ok(())
 }
 
 fn verify_copy(from: &Path, to: &Path, policy: VerificationPolicy) -> Result<()> {
@@ -2787,6 +2820,67 @@ mod tests {
 
         assert_eq!(copied, bytes.len() as u64);
         assert_eq!(fs::read(&destination).unwrap(), bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn byte_copy_preserves_mixed_zero_and_nonzero_runs() {
+        let root = unique_temp_dir("gfm-ops-byte-copy-zero-runs");
+        let source = root.join("source.bin");
+        let destination = root.join("destination.bin");
+        let mut bytes = vec![0_u8; COPY_BUFFER_BYTES + 41];
+        bytes[0] = 1;
+        bytes[17] = 2;
+        bytes[COPY_BUFFER_BYTES - 1] = 3;
+        bytes[COPY_BUFFER_BYTES] = 4;
+        bytes[COPY_BUFFER_BYTES + 40] = 5;
+        fs::write(&source, &bytes).unwrap();
+
+        let copied = copy_file_bytes(&source, &destination).unwrap();
+
+        assert_eq!(copied, bytes.len() as u64);
+        assert_eq!(fs::read(&destination).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&destination).unwrap().len(),
+            bytes.len() as u64
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn byte_copy_preserves_sparse_holes_when_host_reports_blocks() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = unique_temp_dir("gfm-ops-byte-copy-sparse");
+        let source = root.join("source.bin");
+        let destination = root.join("destination.bin");
+        let logical_len = (COPY_BUFFER_BYTES as u64 * 8) + 13;
+        {
+            let mut file = File::create(&source).unwrap();
+            file.write_all(b"head").unwrap();
+            file.seek(SeekFrom::Start(logical_len - 4)).unwrap();
+            file.write_all(b"tail").unwrap();
+        }
+        let source_metadata = fs::metadata(&source).unwrap();
+        if source_metadata.blocks() == 0 || source_metadata.blocks() * 512 >= source_metadata.len()
+        {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+
+        let copied = copy_file_bytes(&source, &destination).unwrap();
+
+        let destination_metadata = fs::metadata(&destination).unwrap();
+        assert_eq!(copied, logical_len);
+        assert_eq!(destination_metadata.len(), logical_len);
+        assert_eq!(fs::read(&destination).unwrap(), fs::read(&source).unwrap());
+        assert!(
+            destination_metadata.blocks() <= source_metadata.blocks() + 8,
+            "expected sparse destination blocks <= source blocks plus tolerance, source={} destination={}",
+            source_metadata.blocks(),
+            destination_metadata.blocks()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
