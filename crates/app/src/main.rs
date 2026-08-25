@@ -33,7 +33,7 @@ use gfm_preview::{
     PreviewSchedulingPolicy, PreviewSecurityPolicy, PreviewTask, QuickLookSessionContract,
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
-use gfm_store::{ContentArchive, MmapContentArchive};
+use gfm_store::{ContentArchive, MmapContentArchive, MmapRecordArchive};
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
     run_macrobench, run_parity_gate_manifest, run_regression_gate,
@@ -797,6 +797,17 @@ fn run() -> Result<()> {
             })?;
             let snapshot = Indexer::default().load(index_path)?;
             for hit in snapshot.search(&query, 50) {
+                print_hit(&hit);
+            }
+        }
+        Some("search-index-mmap") => {
+            let index_path =
+                required_path(args.next(), "search-index-mmap requires an index path")?;
+            let query = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format("search-index-mmap requires a query string".to_string())
+            })?;
+            let live = LiveIndex::from_records(MmapRecordArchive::open(index_path)?.records()?);
+            for hit in live.search(&query, 50) {
                 print_hit(&hit);
             }
         }
@@ -1923,6 +1934,7 @@ fn print_usage() {
   gfm search-stream <root> <query>
   gfm search-content <root> <query>
   gfm search-index <index.gfmidx> <query>
+  gfm search-index-mmap <index.gfmidx> <query>
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>
   gfm content-ids <content.gfmcontent> <term>
   gfm content-ids-mmap <content.gfmcontent> <term>

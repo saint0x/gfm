@@ -8,7 +8,10 @@ pub use content::{
 pub use durable::{atomic_write, DurableCommit};
 
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
+use memmap2::{Mmap, MmapOptions};
+use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -84,6 +87,119 @@ pub fn read_records(path: impl AsRef<Path>) -> Result<Vec<FileRecord>> {
         })?);
     }
     Ok(records)
+}
+
+#[derive(Debug)]
+pub struct MmapRecordArchive {
+    path: PathBuf,
+    mmap: Mmap,
+    version: StoreVersion,
+    records: Vec<Range<usize>>,
+}
+
+impl MmapRecordArchive {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+        let mmap = {
+            // SAFETY: The map is read-only and all access is bounds-checked through
+            // immutable byte slices. GFM publishes record archives with atomic
+            // rename, and this API never mutates the mapped file.
+            unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
+        };
+        let (header, mut offset) = next_line(&mmap, 0)
+            .ok_or_else(|| GfmError::Format(format!("empty store {}", path.display())))?;
+        let header = std::str::from_utf8(header).map_err(|err| {
+            GfmError::Format(format!("invalid store header in {}: {err}", path.display()))
+        })?;
+        let version = match header {
+            MAGIC_V1 => StoreVersion::V1,
+            MAGIC_V2 => StoreVersion::V2,
+            MAGIC_V3 => StoreVersion::V3,
+            other => {
+                return Err(GfmError::Format(format!(
+                    "unsupported store header `{other}` in {}",
+                    path.display()
+                )));
+            }
+        };
+        let mut records = Vec::new();
+        while offset < mmap.len() {
+            let Some((line, next)) = next_line(&mmap, offset) else {
+                break;
+            };
+            if !line.is_empty() {
+                records.push(offset..offset + line.len());
+            }
+            offset = next;
+        }
+        Ok(Self {
+            path: path.to_path_buf(),
+            mmap,
+            version,
+            records,
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    pub fn mapped_len(&self) -> usize {
+        self.mmap.len()
+    }
+
+    pub fn record(&self, index: usize) -> Result<FileRecord> {
+        let range = self.records.get(index).ok_or_else(|| {
+            GfmError::Format(format!(
+                "{} record index {index} out of bounds",
+                self.path.display()
+            ))
+        })?;
+        let line = std::str::from_utf8(&self.mmap[range.clone()]).map_err(|err| {
+            GfmError::Format(format!(
+                "{} line {} invalid UTF-8: {err}",
+                self.path.display(),
+                index + 2
+            ))
+        })?;
+        parse_record(line, self.version).map_err(|err| {
+            GfmError::Format(format!(
+                "{} line {}: {}",
+                self.path.display(),
+                index + 2,
+                err
+            ))
+        })
+    }
+
+    pub fn records(&self) -> Result<Vec<FileRecord>> {
+        (0..self.len()).map(|index| self.record(index)).collect()
+    }
+}
+
+fn next_line(bytes: &[u8], start: usize) -> Option<(&[u8], usize)> {
+    if start >= bytes.len() {
+        return None;
+    }
+    let relative_end = bytes[start..]
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap_or(bytes.len() - start);
+    let mut end = start + relative_end;
+    if end > start && bytes[end - 1] == b'\r' {
+        end -= 1;
+    }
+    let next = if start + relative_end < bytes.len() {
+        start + relative_end + 1
+    } else {
+        bytes.len()
+    };
+    Some((&bytes[start..end], next))
 }
 
 fn parse_record(line: &str, version: StoreVersion) -> std::result::Result<FileRecord, String> {
@@ -317,6 +433,59 @@ mod tests {
         let read = read_records(&path).unwrap();
 
         assert_eq!(read, records);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_record_archive_hydrates_records_from_immutable_map() {
+        let path = temp_path("gfm-store-mmap", "idx");
+        let records = vec![
+            FileRecord {
+                id: FileId::new(VolumeId(4), 12),
+                parent: Some(FileId::new(VolumeId(4), 1)),
+                path: PathBuf::from("/tmp/a/report.txt"),
+                name: "report.txt".to_string(),
+                kind: FileKind::File,
+                len: 42,
+                mode: 0o100644,
+                owner: 501,
+                group: 20,
+                xattrs_digest: 99,
+                created: Some(UNIX_EPOCH + Duration::from_secs(1)),
+                modified: Some(UNIX_EPOCH + Duration::from_secs(10)),
+                changed: None,
+                hidden: false,
+                tags: vec!["Important".to_string()],
+                finder_comment: Some("notes".to_string()),
+            },
+            FileRecord {
+                id: FileId::new(VolumeId(4), 13),
+                parent: Some(FileId::new(VolumeId(4), 1)),
+                path: PathBuf::from("/tmp/a/archive.md"),
+                name: "archive.md".to_string(),
+                kind: FileKind::File,
+                len: 11,
+                mode: 0o100644,
+                owner: 501,
+                group: 20,
+                xattrs_digest: 0,
+                created: None,
+                modified: None,
+                changed: None,
+                hidden: false,
+                tags: Vec::new(),
+                finder_comment: None,
+            },
+        ];
+
+        write_records(&path, &records).unwrap();
+        let archive = MmapRecordArchive::open(&path).unwrap();
+
+        assert_eq!(archive.len(), 2);
+        assert!(!archive.is_empty());
+        assert!(archive.mapped_len() > 0);
+        assert_eq!(archive.record(1).unwrap(), records[1]);
+        assert_eq!(archive.records().unwrap(), records);
         std::fs::remove_file(path).unwrap();
     }
 

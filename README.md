@@ -294,6 +294,7 @@ cargo run -p gfm -- fsevents-cursor-checkpoint /tmp/gfm.gfmstate /tmp/gfm.gfmcur
 cargo run -p gfm -- fsevents-cursor-resume /tmp/gfm.gfmstate /tmp/gfm.gfmcursor
 cargo run -p gfm -- fsevents-repair-schedule /tmp/gfm.gfmstate /tmp/gfm.gfmcursor 12346,12350 kernel-dropped ~/Documents
 cargo run -p gfm -- search-index /tmp/gfm.gfmidx PLAN
+cargo run -p gfm -- search-index-mmap /tmp/gfm.gfmidx PLAN
 ```
 
 Build and query content indexes:

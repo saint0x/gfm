@@ -35,6 +35,17 @@ fn indexes_and_searches_real_files_from_binary() {
     let stdout = String::from_utf8(search_output.stdout).unwrap();
     assert!(stdout.contains("QuarterlyPlan.md"), "{stdout}");
 
+    let mmap_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-index-mmap", index.to_str().unwrap(), "quarterly"])
+        .output()
+        .unwrap();
+    assert!(
+        mmap_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mmap_output.stderr)
+    );
+    assert_eq!(String::from_utf8(mmap_output.stdout).unwrap(), stdout);
+
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(index).unwrap();
 }
