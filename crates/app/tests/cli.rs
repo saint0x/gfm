@@ -4011,6 +4011,45 @@ fn reports_restorable_job_progress_from_binary() {
     fs::remove_file(progress).unwrap();
 }
 
+#[test]
+fn reports_structured_cancellation_tree_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("jobs-cancel-tree")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("after-child-cancel\troot\tcancelled=false"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("after-child-cancel\tchild\tcancelled=true"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("after-child-cancel\tsibling\tcancelled=false"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("after-child-cancel\tgrandchild\tcancelled=true"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("after-root-cancel\troot\tcancelled=true"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("after-root-cancel\tsibling\tcancelled=true"),
+        "{stdout}"
+    );
+}
+
 fn run_gfm<const N: usize>(journal: &std::path::Path, args: [&str; N]) {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_OPS_JOURNAL", journal)

@@ -196,6 +196,34 @@ fn scheduling_pressure_preserves_visible_work_under_host_pressure() {
 }
 
 #[test]
+fn structured_cancellation_propagates_to_nested_children() {
+    let root = Cancellation::default();
+    let child = root.child();
+    let grandchild = child.child();
+
+    root.cancel();
+
+    assert!(root.is_cancelled());
+    assert!(child.is_cancelled());
+    assert!(grandchild.is_cancelled());
+    assert!(matches!(grandchild.check(), Err(GfmError::Cancelled)));
+}
+
+#[test]
+fn child_cancellation_does_not_cancel_parent_or_siblings() {
+    let root = Cancellation::default();
+    let first = root.child();
+    let second = root.child();
+
+    first.cancel();
+
+    assert!(first.is_cancelled());
+    assert!(!root.is_cancelled());
+    assert!(!second.is_cancelled());
+    assert!(second.check().is_ok());
+}
+
+#[test]
 fn worker_pool_runs_tasks_and_reports_outcomes() {
     let mut scheduler = Scheduler::new();
     let first = scheduler.schedule(Priority::Background, "first");
@@ -210,6 +238,21 @@ fn worker_pool_runs_tasks_and_reports_outcomes() {
     assert_eq!(report.completed(), 1);
     assert_eq!(report.cancelled(), 1);
     assert_eq!(report.failed(), 0);
+}
+
+#[test]
+fn worker_pool_allows_nested_child_cancellation_checks() {
+    let mut scheduler = Scheduler::new();
+    let job = scheduler.schedule(Priority::Visible, "nested preview");
+    let job_cancel = job.cancellation();
+
+    let report = WorkerPool::new(1).run(vec![Task::new(job, move |_| {
+        let child = job_cancel.child();
+        job_cancel.cancel();
+        child.check()
+    })]);
+
+    assert_eq!(report.cancelled(), 1);
 }
 
 #[test]

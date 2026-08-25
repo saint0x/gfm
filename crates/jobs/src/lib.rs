@@ -4,13 +4,15 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+mod cancel;
 mod isolated;
 mod progress;
+pub use cancel::Cancellation;
 use isolated::{IsolatedRetriableTaskQueue, IsolatedTaskQueue};
 pub use progress::{JobProgressSnapshot, JobProgressState, JobProgressStore};
 
@@ -224,23 +226,6 @@ impl Job {
 
     pub fn cancellation(&self) -> Cancellation {
         self.cancel.clone()
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Cancellation(Arc<AtomicBool>);
-
-impl Cancellation {
-    pub fn cancel(&self) {
-        self.0.store(true, AtomicOrdering::SeqCst);
-    }
-
-    pub fn check(&self) -> Result<()> {
-        if self.0.load(AtomicOrdering::SeqCst) {
-            Err(GfmError::Cancelled)
-        } else {
-            Ok(())
-        }
     }
 }
 

@@ -3102,6 +3102,11 @@ fn run() -> Result<()> {
                 println!("{}", snapshot.as_tsv());
             }
         }
+        Some("jobs-cancel-tree") => {
+            for line in sample_cancellation_tree_report() {
+                println!("{line}");
+            }
+        }
         Some("ops-recover") => {
             let (journal, policy) = parse_ops_recover_args(&mut args)?;
             let report =
@@ -4628,6 +4633,37 @@ fn sample_progress_snapshots() -> Vec<JobProgressSnapshot> {
     ]
 }
 
+fn sample_cancellation_tree_report() -> Vec<String> {
+    let root = Cancellation::default();
+    let child = root.child();
+    let sibling = root.child();
+    let grandchild = child.child();
+    child.cancel();
+    let child_cancelled = [
+        ("root", root.is_cancelled()),
+        ("child", child.is_cancelled()),
+        ("sibling", sibling.is_cancelled()),
+        ("grandchild", grandchild.is_cancelled()),
+    ];
+    root.cancel();
+    let root_cancelled = [
+        ("root", root.is_cancelled()),
+        ("child", child.is_cancelled()),
+        ("sibling", sibling.is_cancelled()),
+        ("grandchild", grandchild.is_cancelled()),
+    ];
+
+    child_cancelled
+        .into_iter()
+        .map(|(name, cancelled)| format!("after-child-cancel\t{name}\tcancelled={cancelled}"))
+        .chain(
+            root_cancelled.into_iter().map(|(name, cancelled)| {
+                format!("after-root-cancel\t{name}\tcancelled={cancelled}")
+            }),
+        )
+        .collect()
+}
+
 fn priority_name(priority: Priority) -> &'static str {
     priority.as_str()
 }
@@ -4923,6 +4959,7 @@ fn print_usage() {
   gfm jobs-payload-catalog <catalog.gfmjobs>
   gfm jobs-fairness-plan
   gfm jobs-progress-snapshot <progress.gfmprogress>
+  gfm jobs-cancel-tree
   gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
   gfm watch-once <root>
   gfm copy <source> <destination>

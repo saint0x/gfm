@@ -150,6 +150,8 @@ The scheduler plans foreground, visible, background, maintenance, and repair wor
 
 Job progress is persisted through atomic typed snapshots that record job id, class, priority, label, volume id, state, completed units, total units, detail text, and update timestamp. On restart, planned, running, and paused snapshots are restored for user-visible progress surfaces while completed, cancelled, and failed terminal work stays out of the active restoration set.
 
+Cancellation is structured rather than flat. A parent job token fans out cancellation to children and grandchildren so nested previews, extraction, indexing, and operation subtasks stop quickly, while cancelling one child branch does not poison sibling work or the parent scope.
+
 Job retries classify failures as transient, permission, missing-file, corrupt-file, offline-volume, or permanent before recovery admission. Transient and offline-volume failures receive bounded exponential backoff; permission, missing-file, corrupt-file, and permanent failures are surfaced without retry churn.
 
 Background content indexing also consumes explicit runtime pressure signals: saturated I/O or critical thermal pressure defers the durable job before extraction starts, while elevated pressure, low power, or active user input throttles worker admission.
@@ -466,6 +468,7 @@ cargo run -p gfm -- jobs-recover /tmp/gfm-jobs.journal
 cargo run -p gfm -- jobs-payload-catalog /tmp/gfm-jobs.gfmjobs
 cargo run -p gfm -- jobs-fairness-plan
 cargo run -p gfm -- jobs-progress-snapshot /tmp/gfm-jobs.gfmprogress
+cargo run -p gfm -- jobs-cancel-tree
 ```
 
 Watch and operate on files:
