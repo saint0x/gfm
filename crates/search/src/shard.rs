@@ -327,7 +327,7 @@ impl ShardedSearchIndex {
             });
         }
 
-        let mut merged = Vec::new();
+        let mut merged = BoundedHitMerge::new(limit);
         let mut telemetry = SearchLookupTelemetry::default();
         std::thread::scope(|scope| {
             let handles: Vec<_> = self
@@ -347,17 +347,16 @@ impl ShardedSearchIndex {
                 .collect();
 
             for handle in handles {
-                let mut report = handle
+                let report = handle
                     .join()
                     .map_err(|_| GfmError::Format("search shard worker panicked".to_string()))??;
                 telemetry.merge(&report.lookup);
-                merged.append(&mut report.hits);
+                merged.extend(report.hits);
             }
             Ok::<(), GfmError>(())
         })?;
 
-        sort_hits(&mut merged);
-        merged.truncate(limit);
+        let merged = merged.into_sorted_hits();
         cancellation.check()?;
         Ok(SearchQueryReport {
             hits: merged,
@@ -426,8 +425,7 @@ impl ShardedSearchIndex {
 
         let mut batches = Vec::new();
         let mut seen = BTreeMap::new();
-        sort_hits(&mut hot);
-        hot.truncate(limit);
+        hot = top_hits(hot, limit);
         if !hot.is_empty() {
             for hit in &hot {
                 seen.insert(hit.record.id, hit.score);
@@ -438,12 +436,11 @@ impl ShardedSearchIndex {
             });
         }
 
-        sort_hits(&mut deep);
         deep.retain(|hit| match seen.get(&hit.record.id) {
             Some(score) => hit.score > *score,
             None => true,
         });
-        deep.truncate(limit);
+        deep = top_hits(deep, limit);
         if !deep.is_empty() {
             batches.push(SearchStreamBatch {
                 stage: SearchStreamStage::Deep,
@@ -457,4 +454,45 @@ impl ShardedSearchIndex {
     fn prune_empty_shards(&mut self) {
         self.shards.retain(|_, shard| !shard.is_empty());
     }
+}
+
+#[derive(Debug)]
+struct BoundedHitMerge {
+    limit: usize,
+    hits: Vec<SearchHit>,
+}
+
+impl BoundedHitMerge {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            hits: Vec::with_capacity(limit),
+        }
+    }
+
+    fn extend(&mut self, hits: Vec<SearchHit>) {
+        if self.limit == 0 || hits.is_empty() {
+            return;
+        }
+        self.hits.extend(hits);
+        if self.hits.len() > self.limit.saturating_mul(2) {
+            self.trim();
+        }
+    }
+
+    fn into_sorted_hits(mut self) -> Vec<SearchHit> {
+        self.trim();
+        self.hits
+    }
+
+    fn trim(&mut self) {
+        sort_hits(&mut self.hits);
+        self.hits.truncate(self.limit);
+    }
+}
+
+fn top_hits(hits: Vec<SearchHit>, limit: usize) -> Vec<SearchHit> {
+    let mut merge = BoundedHitMerge::new(limit);
+    merge.extend(hits);
+    merge.into_sorted_hits()
 }

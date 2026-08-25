@@ -1386,6 +1386,31 @@ fn sharded_search_truncates_after_global_merge() {
 }
 
 #[test]
+fn sharded_search_uses_bounded_global_top_hits() {
+    let mut index = ShardedSearchIndex::new();
+    for volume in 1..=4 {
+        for node in 1..=12 {
+            let name = format!("archive-report-{volume}-{node}.md");
+            let path = format!("/Volumes/{volume}/{name}");
+            index.insert(volume_record(volume, node, &path, &name));
+        }
+    }
+    index.insert(volume_record(4, 99, "/Volumes/4/report", "report"));
+    index.insert(volume_record(3, 99, "/Volumes/3/report", "report"));
+
+    let hits = index.query("report", 2);
+    let paths: Vec<_> = hits.into_iter().map(|hit| hit.record.path).collect();
+
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/Volumes/3/report"),
+            PathBuf::from("/Volumes/4/report")
+        ]
+    );
+}
+
+#[test]
 fn sharded_search_removes_records_by_volume_and_path() {
     let mut index = ShardedSearchIndex::new();
     let first = volume_record(1, 1, "/Volumes/A/report.md", "report.md");
