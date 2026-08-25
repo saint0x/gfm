@@ -1028,10 +1028,33 @@ fn index_footprint_reports_sizes_and_schedules_segment_compaction() {
     assert_eq!(report.segment_count, 4);
     assert_eq!(report.compaction.reason, CompactionReason::TierPressure);
     assert!(report.compaction.scheduled);
+    assert_eq!(report.compaction.action, CompactionAction::Run);
     assert_eq!(report.compaction.merge_segments, segments);
     assert_eq!(report.compaction.retained_segments.len(), 0);
     assert!(report.total_bytes >= report.segment_bytes);
     assert!(report.bytes_per_record > 0);
+
+    spec.compaction_pressure = CompactionPressure {
+        io: IoPressure::Elevated,
+        thermal: ThermalState::Nominal,
+        battery: BatteryState::AcPower,
+        user_activity: UserActivity::Idle,
+    };
+    let throttled = inspect_index_footprint(&spec).unwrap();
+    assert_eq!(throttled.compaction.action, CompactionAction::Throttle);
+    assert!(throttled.compaction.scheduled);
+    assert!(throttled.compaction.effective_max_merge_bytes < spec.merge_policy.max_merge_bytes);
+
+    spec.compaction_pressure = CompactionPressure {
+        io: IoPressure::Saturated,
+        thermal: ThermalState::Nominal,
+        battery: BatteryState::AcPower,
+        user_activity: UserActivity::Idle,
+    };
+    let deferred = inspect_index_footprint(&spec).unwrap();
+    assert_eq!(deferred.compaction.action, CompactionAction::Defer);
+    assert!(!deferred.compaction.scheduled);
+    assert_eq!(deferred.compaction.effective_max_merge_bytes, 0);
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(segment_dir).unwrap();

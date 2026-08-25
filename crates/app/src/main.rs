@@ -12,12 +12,13 @@ use gfm_fs::{
 };
 use gfm_index::{
     comment_query_terms, content_query_terms, parse_volume_indexing_policy, tag_query_terms,
-    BackgroundContentIndexer, ContentArchiveManifest, ContentArchiveManifestEntry,
-    ContentIndexJobSpec, ContentIndexReport, ContentMaintenanceOptions, ContentMergePolicy,
-    ContentMergeTier, EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
-    IndexFootprintSpec, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState,
-    Indexer, LiveIndex, SearchArchiveLookup, SearchMetadataField, SearchMetadataPosting,
-    SearchRecordColumns, SearchStreamStage, VolumeIndexPolicy,
+    BackgroundContentIndexer, BatteryState, CompactionPressure, ContentArchiveManifest,
+    ContentArchiveManifestEntry, ContentIndexJobSpec, ContentIndexReport,
+    ContentMaintenanceOptions, ContentMergePolicy, ContentMergeTier, EventBackpressureQueue,
+    EventPriority, FseventsCursor, FseventsCursorHealth, IndexFootprintSpec, IndexMountState,
+    IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState, Indexer, IoPressure, LiveIndex,
+    SearchArchiveLookup, SearchMetadataField, SearchMetadataPosting, SearchRecordColumns,
+    SearchStreamStage, ThermalState, UserActivity, VolumeIndexPolicy,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -1173,6 +1174,67 @@ fn run() -> Result<()> {
                 println!("retain-segment\t{}", path.display());
             }
         }
+        Some("index-compaction-plan") => {
+            let records =
+                required_path(args.next(), "index-compaction-plan requires a records path")?;
+            let content_manifest = optional_path_arg(
+                args.next(),
+                "index-compaction-plan requires a content manifest path or -",
+            )?;
+            let io = parse_io_pressure(required_string(
+                args.next(),
+                "index-compaction-plan requires io pressure",
+            )?)?;
+            let thermal = parse_thermal_state(required_string(
+                args.next(),
+                "index-compaction-plan requires thermal state",
+            )?)?;
+            let battery = parse_battery_state(required_string(
+                args.next(),
+                "index-compaction-plan requires battery state",
+            )?)?;
+            let user_activity = parse_user_activity(required_string(
+                args.next(),
+                "index-compaction-plan requires user activity",
+            )?)?;
+            let mut spec = IndexFootprintSpec::new(records);
+            spec.content_manifest = content_manifest;
+            spec.content_segments = args.map(PathBuf::from).collect();
+            spec.compaction_pressure = CompactionPressure {
+                io,
+                thermal,
+                battery,
+                user_activity,
+            };
+            let report = gfm_index::inspect_index_footprint(&spec)?;
+            eprintln!(
+                "index-compaction-plan\taction={:?}\tscheduled={}\treason={:?}\tpressure={:?}\tmerge-bytes={}\teffective-max-bytes={}",
+                report.compaction.action,
+                report.compaction.scheduled,
+                report.compaction.reason,
+                report.compaction.pressure,
+                report.compaction.merge_bytes,
+                report.compaction.effective_max_merge_bytes
+            );
+            println!(
+                "compaction\taction={:?}\tscheduled={}\ttier={:?}\treason={:?}\tmerge-segments={}\tretained-segments={}\tmerge-bytes={}\teffective-max-bytes={}\tbytes-per-record={}",
+                report.compaction.action,
+                report.compaction.scheduled,
+                report.compaction.tier,
+                report.compaction.reason,
+                report.compaction.merge_segments.len(),
+                report.compaction.retained_segments.len(),
+                report.compaction.merge_bytes,
+                report.compaction.effective_max_merge_bytes,
+                report.bytes_per_record
+            );
+            for path in report.compaction.merge_segments {
+                println!("merge-segment\t{}", path.display());
+            }
+            for path in report.compaction.retained_segments {
+                println!("retain-segment\t{}", path.display());
+            }
+        }
         Some("records-verify") => {
             let records = required_path(args.next(), "records-verify requires a records path")?;
             let archive = MmapRecordArchive::open(records)?;
@@ -2145,6 +2207,50 @@ fn required_string(value: Option<String>, message: &str) -> Result<String> {
     value.ok_or_else(|| GfmError::Format(message.to_string()))
 }
 
+fn parse_io_pressure(value: String) -> Result<IoPressure> {
+    match value.as_str() {
+        "nominal" => Ok(IoPressure::Nominal),
+        "elevated" => Ok(IoPressure::Elevated),
+        "saturated" => Ok(IoPressure::Saturated),
+        _ => Err(GfmError::Format(format!(
+            "invalid io pressure `{value}`; expected nominal, elevated, or saturated"
+        ))),
+    }
+}
+
+fn parse_thermal_state(value: String) -> Result<ThermalState> {
+    match value.as_str() {
+        "nominal" => Ok(ThermalState::Nominal),
+        "fair" => Ok(ThermalState::Fair),
+        "serious" => Ok(ThermalState::Serious),
+        "critical" => Ok(ThermalState::Critical),
+        _ => Err(GfmError::Format(format!(
+            "invalid thermal state `{value}`; expected nominal, fair, serious, or critical"
+        ))),
+    }
+}
+
+fn parse_battery_state(value: String) -> Result<BatteryState> {
+    match value.as_str() {
+        "ac" => Ok(BatteryState::AcPower),
+        "battery" => Ok(BatteryState::Battery),
+        "low" => Ok(BatteryState::LowPower),
+        _ => Err(GfmError::Format(format!(
+            "invalid battery state `{value}`; expected ac, battery, or low"
+        ))),
+    }
+}
+
+fn parse_user_activity(value: String) -> Result<UserActivity> {
+    match value.as_str() {
+        "idle" => Ok(UserActivity::Idle),
+        "active" => Ok(UserActivity::Active),
+        _ => Err(GfmError::Format(format!(
+            "invalid user activity `{value}`; expected idle or active"
+        ))),
+    }
+}
+
 fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeDescriptor {
     IndexVolumeDescriptor::new(
         volume.label.clone(),
@@ -2695,6 +2801,7 @@ fn print_usage() {
   gfm search-index-columns <index.gfmidx> <columns.gfmcols> <query>
   gfm search-index-sidecars <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <fuzzy.gfmfuzzy> <content.gfmcontent> <query>
   gfm index-footprint <index.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <content-manifest.gfmmanifest|-> [segments.gfmseg...]
+  gfm index-compaction-plan <index.gfmidx> <content-manifest.gfmmanifest|-> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> [segments.gfmseg...]
   gfm records-verify <index.gfmidx>
   gfm index-columns <records.gfmidx> <columns.gfmcols>
   gfm columns-verify <columns.gfmcols>

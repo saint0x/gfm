@@ -2114,6 +2114,40 @@ fn compacts_content_segments_from_binary() {
             && footprint_stdout.contains("compaction\tscheduled=true"),
         "{footprint_stdout}"
     );
+    let adaptive_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-compaction-plan",
+            records.to_str().unwrap(),
+            manifest.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        adaptive_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&adaptive_output.stderr)
+    );
+    let adaptive_stderr = String::from_utf8(adaptive_output.stderr).unwrap();
+    assert!(
+        adaptive_stderr.contains("index-compaction-plan")
+            && adaptive_stderr.contains("action=Defer")
+            && adaptive_stderr.contains("scheduled=false"),
+        "{adaptive_stderr}"
+    );
+    let adaptive_stdout = String::from_utf8(adaptive_output.stdout).unwrap();
+    assert!(
+        adaptive_stdout.contains("compaction\taction=Defer")
+            && adaptive_stdout.contains("effective-max-bytes=0"),
+        "{adaptive_stdout}"
+    );
     let maintenance_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "content-maintain-segments",

@@ -437,6 +437,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - record, column, metadata, prefix, fuzzy, content-manifest, and pending content-segment archives are measured from mmap readers and filesystem byte counts;
   - footprint reports include total bytes, bytes per record, sidecar key counts, content archive counts, segment postings, tombstones, and tombstone-bearing segment counts;
   - the same bounded content merge policy used by background maintenance emits a deterministic schedule with merge segments, retained segments, tier, merge bytes, tombstone pressure, and a concrete scheduling reason;
+  - live I/O pressure, thermal state, battery state, user activity, and index-density thresholds adapt the schedule into run, throttle, or defer actions with bounded effective merge bytes;
   - operator and CI surfaces can gate index density drift and compaction pressure without hydrating postings.
 
 ### Query Pipeline

@@ -243,6 +243,8 @@ pub struct IndexFootprintSpec {
     pub content_manifest: Option<PathBuf>,
     pub content_segments: Vec<PathBuf>,
     pub merge_policy: ContentMergePolicy,
+    pub compaction_pressure: CompactionPressure,
+    pub density_policy: IndexDensityPolicy,
 }
 
 impl IndexFootprintSpec {
@@ -256,6 +258,68 @@ impl IndexFootprintSpec {
             content_manifest: None,
             content_segments: Vec::new(),
             merge_policy: ContentMergePolicy::default(),
+            compaction_pressure: CompactionPressure::default(),
+            density_policy: IndexDensityPolicy::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompactionPressure {
+    pub io: IoPressure,
+    pub thermal: ThermalState,
+    pub battery: BatteryState,
+    pub user_activity: UserActivity,
+}
+
+impl Default for CompactionPressure {
+    fn default() -> Self {
+        Self {
+            io: IoPressure::Nominal,
+            thermal: ThermalState::Nominal,
+            battery: BatteryState::AcPower,
+            user_activity: UserActivity::Idle,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoPressure {
+    Nominal,
+    Elevated,
+    Saturated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThermalState {
+    Nominal,
+    Fair,
+    Serious,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatteryState {
+    AcPower,
+    Battery,
+    LowPower,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserActivity {
+    Idle,
+    Active,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexDensityPolicy {
+    pub target_bytes_per_record: u64,
+}
+
+impl Default for IndexDensityPolicy {
+    fn default() -> Self {
+        Self {
+            target_bytes_per_record: 1 << 20,
         }
     }
 }
@@ -293,16 +357,27 @@ pub struct IndexCompactionSchedule {
     pub merge_segments: Vec<PathBuf>,
     pub retained_segments: Vec<PathBuf>,
     pub merge_bytes: u64,
+    pub effective_max_merge_bytes: u64,
     pub tombstone_segments: usize,
     pub reason: CompactionReason,
+    pub action: CompactionAction,
+    pub pressure: CompactionPressure,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompactionReason {
     Tombstones,
+    IndexDensity,
     TierPressure,
     BelowThreshold,
     NoSegments,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionAction {
+    Run,
+    Throttle,
+    Defer,
 }
 
 pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootprintReport> {
@@ -378,25 +453,6 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
         .filter(|summary| summary.tombstones > 0)
         .count();
     let tombstones = summaries.iter().map(|summary| summary.tombstones).sum();
-    let plan = plan_content_segment_merge(&spec.content_segments, &spec.merge_policy)?;
-    let reason = if spec.content_segments.is_empty() {
-        CompactionReason::NoSegments
-    } else if plan.tombstone_segments > 0 {
-        CompactionReason::Tombstones
-    } else if !plan.merge_segments.is_empty() {
-        CompactionReason::TierPressure
-    } else {
-        CompactionReason::BelowThreshold
-    };
-    let compaction = IndexCompactionSchedule {
-        scheduled: !plan.merge_segments.is_empty(),
-        tier: plan.tier,
-        merge_segments: plan.merge_segments,
-        retained_segments: plan.retained_segments,
-        merge_bytes: plan.merge_bytes,
-        tombstone_segments: plan.tombstone_segments,
-        reason,
-    };
     let total_bytes = [
         record_bytes,
         column_bytes,
@@ -412,6 +468,35 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
         0
     } else {
         total_bytes / record_count as u64
+    };
+    let density_pressure = bytes_per_record > spec.density_policy.target_bytes_per_record;
+    let plan = plan_content_segment_merge(&spec.content_segments, &spec.merge_policy)?;
+    let reason = if spec.content_segments.is_empty() {
+        CompactionReason::NoSegments
+    } else if plan.tombstone_segments > 0 {
+        CompactionReason::Tombstones
+    } else if density_pressure && !plan.merge_segments.is_empty() {
+        CompactionReason::IndexDensity
+    } else if !plan.merge_segments.is_empty() {
+        CompactionReason::TierPressure
+    } else {
+        CompactionReason::BelowThreshold
+    };
+    let action = compaction_action(reason, spec.compaction_pressure);
+    let compaction = IndexCompactionSchedule {
+        scheduled: !plan.merge_segments.is_empty() && action != CompactionAction::Defer,
+        tier: plan.tier,
+        merge_segments: plan.merge_segments,
+        retained_segments: plan.retained_segments,
+        merge_bytes: plan.merge_bytes,
+        effective_max_merge_bytes: effective_compaction_bytes(
+            spec.merge_policy.max_merge_bytes,
+            action,
+        ),
+        tombstone_segments: plan.tombstone_segments,
+        reason,
+        action,
+        pressure: spec.compaction_pressure,
     };
 
     Ok(IndexFootprintReport {
@@ -438,6 +523,36 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
         bytes_per_record,
         compaction,
     })
+}
+
+fn compaction_action(reason: CompactionReason, pressure: CompactionPressure) -> CompactionAction {
+    if matches!(
+        reason,
+        CompactionReason::BelowThreshold | CompactionReason::NoSegments
+    ) {
+        return CompactionAction::Defer;
+    }
+    if matches!(pressure.io, IoPressure::Saturated)
+        || matches!(pressure.thermal, ThermalState::Critical)
+    {
+        return CompactionAction::Defer;
+    }
+    if matches!(pressure.io, IoPressure::Elevated)
+        || matches!(pressure.thermal, ThermalState::Serious)
+        || matches!(pressure.battery, BatteryState::LowPower)
+        || matches!(pressure.user_activity, UserActivity::Active)
+    {
+        return CompactionAction::Throttle;
+    }
+    CompactionAction::Run
+}
+
+fn effective_compaction_bytes(max_merge_bytes: u64, action: CompactionAction) -> u64 {
+    match action {
+        CompactionAction::Run => max_merge_bytes,
+        CompactionAction::Throttle => (max_merge_bytes / 2).max(1 << 20),
+        CompactionAction::Defer => 0,
+    }
 }
 
 fn mapped_bytes(path: &Path, mapped_len: usize) -> Result<u64> {

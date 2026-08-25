@@ -92,7 +92,7 @@ The index is compact and incremental:
 - tombstones for deletion and replacement
 - background compaction
 - mmap immutable readers
-- mmap-backed index footprint telemetry with deterministic compaction scheduling recommendations
+- mmap-backed index footprint telemetry with adaptive run/throttle/defer compaction scheduling
 - hot mutable buffers
 - progressive hot/deep result streaming with stable dedupe
 - delete-key fuzzy candidate indexes for typo tolerance without full-record scans
@@ -300,6 +300,7 @@ cargo run -p gfm -- search-index-mmap /tmp/gfm.gfmidx PLAN
 cargo run -p gfm -- search-index-columns /tmp/gfm.gfmidx /tmp/gfm.gfmcols PLAN
 cargo run -p gfm -- search-index-sidecars /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmfuzzy /tmp/gfm.gfmcontent PLAN
 cargo run -p gfm -- index-footprint /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmfuzzy /tmp/gfm.gfmmanifest /tmp/gfm-*.gfmseg
+cargo run -p gfm -- index-compaction-plan /tmp/gfm.gfmidx /tmp/gfm.gfmmanifest elevated serious battery active /tmp/gfm-*.gfmseg
 cargo run -p gfm -- records-verify /tmp/gfm.gfmidx
 cargo run -p gfm -- index-columns /tmp/gfm.gfmidx /tmp/gfm.gfmcols
 cargo run -p gfm -- columns-verify /tmp/gfm.gfmcols
