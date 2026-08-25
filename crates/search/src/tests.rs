@@ -1039,6 +1039,59 @@ fn indexed_filter_expression_candidates_bound_boolean_or_queries() {
 }
 
 #[test]
+fn exact_boolean_and_candidates_intersect_indexed_filters() {
+    let mut index = SearchIndex::new();
+    let mut tagged_report = record(1, "/tmp/report.md", "report.md");
+    tagged_report.tags = vec!["Important".to_string()];
+    let mut tagged_pdf = record(2, "/tmp/report.pdf", "report.pdf");
+    tagged_pdf.tags = vec!["Important".to_string()];
+    index.insert(tagged_report);
+    index.insert(tagged_pdf);
+    index.insert(record(3, "/tmp/notes.md", "notes.md"));
+    let query = SearchQuery::parse("ext:md AND tag:important");
+    let expression = query.expression.as_ref().unwrap();
+
+    let candidates = index
+        .expression_candidate_ids(expression, SearchPass::Full)
+        .unwrap();
+    let hits = index.query_structured(&query, 10);
+    let names: Vec<_> = hits.iter().map(|hit| hit.record.name.as_str()).collect();
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(names, vec!["report.md"]);
+}
+
+#[test]
+fn exact_boolean_and_empty_intersection_skips_candidate_seed() {
+    let mut index = SearchIndex::new();
+    let mut tagged_pdf = record(1, "/tmp/report.pdf", "report.pdf");
+    tagged_pdf.tags = vec!["Important".to_string()];
+    index.insert(tagged_pdf);
+    index.insert(record(2, "/tmp/notes.md", "notes.md"));
+    let query = SearchQuery::parse("ext:md AND tag:important");
+    let expression = query.expression.as_ref().unwrap();
+
+    let candidates = index
+        .expression_candidate_ids(expression, SearchPass::Full)
+        .unwrap();
+    let hits = index.query_structured(&query, 10);
+
+    assert!(candidates.is_empty());
+    assert!(hits.is_empty());
+}
+
+#[test]
+fn exact_boolean_candidates_do_not_treat_term_branches_as_exact() {
+    let index = SearchIndex::new();
+    let query = SearchQuery::parse("(client AND ext:md) OR tag:important");
+    let expression = query.expression.as_ref().unwrap();
+
+    assert!(index
+        .exact_expression_candidate_ids(expression, SearchPass::Full)
+        .is_none());
+}
+
+#[test]
 fn indexed_filter_only_query_with_no_candidates_skips_universe_seed() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/report.md", "report.md"));

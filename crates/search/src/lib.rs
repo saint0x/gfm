@@ -1577,10 +1577,7 @@ impl SearchIndex {
                 .then(|| self.content_proximity_ids(proximity).into_iter().collect()),
             QueryExpr::Filter(filter) => self.filter_candidate_ids(filter),
             QueryExpr::Not(_) => None,
-            QueryExpr::And(expressions) => expressions
-                .iter()
-                .filter_map(|expression| self.expression_candidate_ids(expression, pass))
-                .min_by_key(BTreeSet::len),
+            QueryExpr::And(expressions) => self.and_expression_candidate_ids(expressions, pass),
             QueryExpr::Or(expressions) => {
                 if expressions.is_empty() {
                     return Some(BTreeSet::new());
@@ -1592,6 +1589,88 @@ impl SearchIndex {
                 Some(ids)
             }
         }
+    }
+
+    fn and_expression_candidate_ids(
+        &self,
+        expressions: &[QueryExpr],
+        pass: SearchPass,
+    ) -> Option<BTreeSet<FileId>> {
+        let mut exact = expressions
+            .iter()
+            .filter_map(|expression| self.exact_expression_candidate_ids(expression, pass));
+        if let Some(first) = exact.next() {
+            let mut ids = first;
+            for candidates in exact {
+                ids.retain(|id| candidates.contains(id));
+                if ids.is_empty() {
+                    return Some(ids);
+                }
+            }
+            return Some(ids);
+        }
+
+        expressions
+            .iter()
+            .filter_map(|expression| self.expression_candidate_ids(expression, pass))
+            .min_by_key(BTreeSet::len)
+    }
+
+    fn exact_expression_candidate_ids(
+        &self,
+        expression: &QueryExpr,
+        pass: SearchPass,
+    ) -> Option<BTreeSet<FileId>> {
+        match expression {
+            QueryExpr::Phrase(phrase) => Some(
+                self.record_phrase_ids(phrase)
+                    .into_iter()
+                    .chain(
+                        pass.includes_deep()
+                            .then(|| self.content_phrase_ids(phrase))
+                            .into_iter()
+                            .flatten(),
+                    )
+                    .collect(),
+            ),
+            QueryExpr::Proximity(proximity) => pass
+                .includes_deep()
+                .then(|| self.content_proximity_ids(proximity).into_iter().collect()),
+            QueryExpr::Filter(filter) => self.filter_candidate_ids(filter),
+            QueryExpr::And(expressions) => {
+                self.exact_and_expression_candidate_ids(expressions, pass)
+            }
+            QueryExpr::Or(expressions) => {
+                if expressions.is_empty() {
+                    return Some(BTreeSet::new());
+                }
+                let mut ids = BTreeSet::new();
+                for expression in expressions {
+                    ids.extend(self.exact_expression_candidate_ids(expression, pass)?);
+                }
+                Some(ids)
+            }
+            QueryExpr::Term(_) | QueryExpr::Not(_) => None,
+        }
+    }
+
+    fn exact_and_expression_candidate_ids(
+        &self,
+        expressions: &[QueryExpr],
+        pass: SearchPass,
+    ) -> Option<BTreeSet<FileId>> {
+        let mut exact = expressions
+            .iter()
+            .map(|expression| self.exact_expression_candidate_ids(expression, pass));
+        let mut ids = exact.next().unwrap_or_else(|| Some(BTreeSet::new()))?;
+        for candidates in exact {
+            let candidates = candidates?;
+            ids.retain(|id| candidates.contains(id));
+            if ids.is_empty() {
+                return Some(ids);
+            }
+        }
+        Some(ids)
     }
 
     fn term_candidate_ids(&self, term: &str, pass: SearchPass) -> BTreeSet<FileId> {
