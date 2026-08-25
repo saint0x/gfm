@@ -1746,8 +1746,18 @@ fn fuzzy_retrieval_uses_indexed_name_tokens() {
 #[test]
 fn sidecar_fuzzy_lookup_budget_caps_keys_terms_and_verified_candidates() {
     let mut index = SearchIndex::new();
-    index.insert(record(1, "/tmp/needl.md", "needl.md"));
-    index.insert(record(2, "/tmp/needle.md", "needle.md"));
+    for (id, name) in [(1, "needl.md"), (2, "needle.md")] {
+        let item = record(id, &format!("/tmp/{name}"), name);
+        let columns = SearchRecordColumns {
+            id: item.id,
+            name: item.name.clone(),
+            path: item.path.to_string_lossy().into_owned(),
+            extension: item.extension().map(ToOwned::to_owned),
+            tags: item.tags.clone(),
+            comment: item.finder_comment.clone(),
+        };
+        assert!(index.insert_with_columns_deferred_fuzzy(item, columns));
+    }
     let lookup = StaticLookup {
         prefix_ids: Vec::new(),
         substring_ids: Vec::new(),
@@ -1777,6 +1787,62 @@ fn sidecar_fuzzy_lookup_budget_caps_keys_terms_and_verified_candidates() {
     assert_eq!(report.lookup.fuzzy_keys, 1);
     assert_eq!(report.lookup.fuzzy_key_truncated_terms, 1);
     assert_eq!(report.lookup.fuzzy_term_truncated_keys, 1);
+    assert_eq!(report.lookup.fuzzy_candidate_truncated_terms, 0);
+    assert_eq!(report.lookup.fuzzy_verified_candidates, 1);
+}
+
+#[test]
+fn hot_fuzzy_lookup_budget_caps_local_candidates_before_archive_lookup() {
+    let mut index = SearchIndex::new();
+    for (id, name) in [(1, "needl.md"), (2, "needle.md")] {
+        let item = record(id, &format!("/tmp/{name}"), name);
+        let columns = SearchRecordColumns {
+            id: item.id,
+            name: item.name.clone(),
+            path: item.path.to_string_lossy().into_owned(),
+            extension: item.extension().map(ToOwned::to_owned),
+            tags: item.tags.clone(),
+            comment: item.finder_comment.clone(),
+        };
+        assert!(index.insert_with_columns_deferred_fuzzy(item, columns));
+    }
+    let first_key = SearchQuery::parse("needle")
+        .fuzzy_candidate_keys()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(
+        index.import_fuzzy_postings(&[SearchFuzzyPosting {
+            key: first_key,
+            terms: vec!["needl".to_string(), "needle".to_string()],
+        }]),
+        1
+    );
+    let lookup = StaticLookup {
+        prefix_ids: Vec::new(),
+        substring_ids: Vec::new(),
+        fuzzy_terms: vec!["neatly".to_string()],
+    };
+
+    let report = index
+        .query_structured_with_lookup_budget_cancellable(
+            &SearchQuery::parse("needle"),
+            10,
+            &lookup,
+            SearchLookupBudget {
+                max_fuzzy_keys_per_term: 1,
+                max_fuzzy_terms_per_key: 1,
+                max_fuzzy_candidates_per_term: 1,
+                ..SearchLookupBudget::default()
+            },
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(report.lookup.fuzzy_terms, 1);
+    assert_eq!(report.lookup.fuzzy_keys, 1);
+    assert_eq!(report.lookup.fuzzy_lookup_terms, 0);
+    assert_eq!(report.lookup.fuzzy_candidate_terms, 1);
     assert_eq!(report.lookup.fuzzy_candidate_truncated_terms, 1);
     assert_eq!(report.lookup.fuzzy_verified_candidates, 1);
 }

@@ -7,8 +7,8 @@ use gfm_jobs::Cancellation;
 pub use gfm_search::substring_candidate_grams;
 pub use gfm_search::{
     SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupIds, SearchLookupTelemetry,
-    SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting, SearchQueryReport,
-    SearchRecordColumns, SearchStreamStage, SearchSubstringPosting,
+    SearchLookupTerms, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
+    SearchQueryReport, SearchRecordColumns, SearchStreamStage, SearchSubstringPosting,
 };
 use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
@@ -463,6 +463,34 @@ impl SearchLookup for SearchArchiveLookup {
             .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
             .insert(key.to_string(), terms.clone());
         Ok(terms)
+    }
+
+    fn fuzzy_terms_bounded(&self, key: &str, limit: usize) -> Result<SearchLookupTerms> {
+        self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupTerms::new(Vec::new(), false));
+        }
+        if let Some(mut terms) = self
+            .fuzzy_cache
+            .lock()
+            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
+            .get(key)
+        {
+            self.fuzzy_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = terms.len() > limit;
+            terms.truncate(limit);
+            return Ok(SearchLookupTerms::new(terms, truncated));
+        }
+
+        self.fuzzy_misses.fetch_add(1, Ordering::Relaxed);
+        let (terms, truncated) = self.fuzzy.terms_for_limit(key, limit)?;
+        if !truncated {
+            self.fuzzy_cache
+                .lock()
+                .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
+                .insert(key.to_string(), terms.clone());
+        }
+        Ok(SearchLookupTerms::new(terms, truncated))
     }
 
     fn cache_telemetry(&self) -> SearchLookupTelemetry {

@@ -461,6 +461,7 @@ fn search_archive_bounded_lookup_does_not_cache_partial_results() {
     let substring_ids: Vec<_> = (0..300)
         .map(|node| FileId::new(VolumeId(9), 30_000 + node))
         .collect();
+    let fuzzy_terms: Vec<_> = (0..300).map(|index| format!("term{index}")).collect();
     write_prefix_postings(
         &prefixes,
         &[PrefixPosting {
@@ -477,20 +478,33 @@ fn search_archive_bounded_lookup_does_not_cache_partial_results() {
         }],
     )
     .unwrap();
-    write_fuzzy_postings(&fuzzy, &[]).unwrap();
+    write_fuzzy_postings(
+        &fuzzy,
+        &[FuzzyPosting {
+            key: "term".to_string(),
+            terms: fuzzy_terms.clone(),
+        }],
+    )
+    .unwrap();
 
     let lookup = SearchArchiveLookup::open(&prefixes, &substrings, &fuzzy).unwrap();
     let bounded_prefix = lookup.prefix_ids_bounded("pro", 129).unwrap();
     let bounded_substring = lookup.substring_ids_bounded("por", 129).unwrap();
+    let bounded_fuzzy = lookup.fuzzy_terms_bounded("term", 129).unwrap();
 
     assert!(bounded_prefix.truncated);
     assert_eq!(bounded_prefix.ids.len(), 129);
     assert!(bounded_substring.truncated);
     assert_eq!(bounded_substring.ids.len(), 129);
+    assert!(bounded_fuzzy.truncated);
+    assert_eq!(bounded_fuzzy.terms.len(), 129);
     assert_eq!(lookup.cache_entry_counts().unwrap(), (0, 0, 0));
     assert_eq!(lookup.prefix_ids("pro").unwrap(), prefix_ids);
     assert_eq!(lookup.substring_ids("por").unwrap(), substring_ids);
-    assert_eq!(lookup.cache_entry_counts().unwrap(), (1, 1, 0));
+    let mut sorted_fuzzy_terms = fuzzy_terms;
+    sorted_fuzzy_terms.sort();
+    assert_eq!(lookup.fuzzy_terms("term").unwrap(), sorted_fuzzy_terms);
+    assert_eq!(lookup.cache_entry_counts().unwrap(), (1, 1, 1));
 
     fs::remove_file(prefixes).unwrap();
     fs::remove_file(substrings).unwrap();

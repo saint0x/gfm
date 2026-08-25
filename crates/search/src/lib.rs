@@ -211,6 +211,13 @@ pub trait SearchLookup: Sync {
         Ok(SearchLookupIds::new(ids, truncated))
     }
 
+    fn fuzzy_terms_bounded(&self, key: &str, limit: usize) -> gfm_types::Result<SearchLookupTerms> {
+        let mut terms = self.fuzzy_terms(key)?;
+        let truncated = terms.len() > limit;
+        terms.truncate(limit);
+        Ok(SearchLookupTerms::new(terms, truncated))
+    }
+
     fn cache_telemetry(&self) -> SearchLookupTelemetry {
         SearchLookupTelemetry::default()
     }
@@ -225,6 +232,18 @@ pub struct SearchLookupIds {
 impl SearchLookupIds {
     pub fn new(ids: Vec<FileId>, truncated: bool) -> Self {
         Self { ids, truncated }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchLookupTerms {
+    pub terms: Vec<String>,
+    pub truncated: bool,
+}
+
+impl SearchLookupTerms {
+    pub fn new(terms: Vec<String>, truncated: bool) -> Self {
+        Self { terms, truncated }
     }
 }
 
@@ -1415,26 +1434,37 @@ impl SearchIndex {
         for key in keys.into_iter().take(budget.max_fuzzy_keys_per_term) {
             telemetry.fuzzy_keys += 1;
             let mut candidates = self.fuzzy_terms.get(&key).cloned().unwrap_or_default();
-            let lookup_terms = lookup.fuzzy_terms(&key)?;
-            telemetry.fuzzy_lookup_terms += lookup_terms.len();
-            if lookup_terms.len() > budget.max_fuzzy_terms_per_key {
-                telemetry.fuzzy_key_truncated_terms += 1;
-            }
-            candidates.extend(
-                lookup_terms
-                    .into_iter()
-                    .take(budget.max_fuzzy_terms_per_key)
-                    .map(|term| normalize(&term))
-                    .filter(|term| is_fuzzy_term(term)),
-            );
-            telemetry.fuzzy_candidate_terms += candidates.len();
+            let mut candidate_truncated = false;
             if candidates.len() > budget.max_fuzzy_candidates_per_term {
+                candidate_truncated = true;
+                candidates = candidates
+                    .into_iter()
+                    .take(budget.max_fuzzy_candidates_per_term)
+                    .collect();
+            }
+            let remaining_candidates = budget
+                .max_fuzzy_candidates_per_term
+                .saturating_sub(candidates.len());
+            if remaining_candidates > 0 {
+                let lookup_limit = budget.max_fuzzy_terms_per_key.min(remaining_candidates);
+                let lookup_terms = lookup.fuzzy_terms_bounded(&key, lookup_limit)?;
+                telemetry.fuzzy_lookup_terms += lookup_terms.terms.len();
+                if lookup_terms.truncated {
+                    telemetry.fuzzy_key_truncated_terms += 1;
+                }
+                candidates.extend(
+                    lookup_terms
+                        .terms
+                        .into_iter()
+                        .map(|term| normalize(&term))
+                        .filter(|term| is_fuzzy_term(term)),
+                );
+            }
+            telemetry.fuzzy_candidate_terms += candidates.len();
+            if candidate_truncated {
                 telemetry.fuzzy_candidate_truncated_terms += 1;
             }
-            for candidate in candidates
-                .into_iter()
-                .take(budget.max_fuzzy_candidates_per_term)
-            {
+            for candidate in candidates {
                 telemetry.fuzzy_verified_candidates += 1;
                 if bounded_levenshtein(&candidate, term, 2).is_some() {
                     if let Some(matches) = self.name_terms.get(&candidate) {

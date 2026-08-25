@@ -142,6 +142,38 @@ impl MmapFuzzyArchive {
             .unwrap_or_default())
     }
 
+    pub fn terms_for_limit(&self, key: &str, limit: usize) -> Result<(Vec<String>, bool)> {
+        let key = normalize(key);
+        if key.is_empty() || limit == 0 {
+            return Ok((Vec::new(), false));
+        }
+        let Some(entry) = self
+            .directory
+            .binary_search_by(|entry| entry.key.as_str().cmp(key.as_str()))
+            .ok()
+            .map(|index| &self.directory[index])
+        else {
+            return Ok((Vec::new(), false));
+        };
+        let bytes = self.posting_bytes(entry)?;
+        let mut cursor = Cursor::new(bytes);
+        let posting_key = read_string(&mut cursor, &self.path, "key")?;
+        if posting_key != key {
+            return Err(fuzzy_format_error(
+                &self.path,
+                "fuzzy directory points at the wrong posting",
+            ));
+        }
+        let count = read_varint(&mut cursor).map_err(|err| GfmError::io(&self.path, err))?;
+        let capacity_count = usize::try_from(count).unwrap_or(usize::MAX);
+        let mut terms = Vec::with_capacity(limit.min(capacity_count));
+        let read_count = count.min(limit as u64);
+        for _ in 0..read_count {
+            terms.push(read_string(&mut cursor, &self.path, "term")?);
+        }
+        Ok((terms, count > limit as u64))
+    }
+
     pub fn postings(&self) -> Result<Vec<FuzzyPosting>> {
         self.directory
             .iter()
@@ -483,6 +515,14 @@ mod tests {
         assert_eq!(
             archive.terms_for("PLAN").unwrap(),
             vec!["plane".to_string(), "plans".to_string()]
+        );
+        assert_eq!(
+            archive.terms_for_limit("PLAN", 1).unwrap(),
+            (vec!["plane".to_string()], true)
+        );
+        assert_eq!(
+            archive.terms_for_limit("plan", 4).unwrap(),
+            (vec!["plane".to_string(), "plans".to_string()], false)
         );
         assert_eq!(
             archive.postings_for(["missing", "PLAN", "plan"]).unwrap(),
