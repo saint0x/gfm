@@ -1142,6 +1142,13 @@ fn copy_path_with_session(
             session,
         );
     }
+    if conflict == ConflictPolicy::Replace
+        && metadata.is_file()
+        && !metadata.file_type().is_symlink()
+        && replacement_destination_is_non_directory(to)
+    {
+        return copy_file_replacing_existing(from, to, execution, progress);
+    }
     prepare_destination(to, conflict)?;
     if metadata.file_type().is_symlink() {
         copy_symlink(from, to, progress)
@@ -1158,6 +1165,78 @@ fn copy_path_with_session(
         copy_file_with_session(from, to, &metadata, execution, progress, session)?;
         Ok(())
     }
+}
+
+fn copy_file_replacing_existing(
+    from: &Path,
+    to: &Path,
+    execution: CopyExecution<'_>,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    progress.check_cancelled()?;
+    let source_metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+    let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
+    if metadata_same_file(&source_metadata, &destination_metadata) {
+        return progress.advance(&source_metadata);
+    }
+    let stage = allocate_replace_stage_path(to)?;
+    let result = (|| {
+        copy_file_tracked(
+            from,
+            &stage,
+            execution.verification,
+            execution.volume_copy_policy,
+            progress,
+        )?;
+        rename_replacing_file(&stage, to)
+    })();
+    if result.is_err() && path_exists_or_symlink(&stage) {
+        let _ = delete_path_untracked(&stage);
+    }
+    result
+}
+
+#[cfg(unix)]
+fn metadata_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn metadata_same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+
+fn replacement_destination_is_non_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| !metadata.is_dir())
+        .unwrap_or(false)
+}
+
+fn allocate_replace_stage_path(to: &Path) -> Result<PathBuf> {
+    let parent = to.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    let file_name = to
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("copy");
+    let nonce = now_nanos();
+    for attempt in 0..100_u32 {
+        let candidate = parent.join(format!(".{}.gfm-replace-{}-{}", file_name, nonce, attempt));
+        if !path_exists_or_symlink(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(GfmError::Conflict {
+        path: to.to_path_buf(),
+        message: "could not allocate a safe replace staging path".to_string(),
+    })
+}
+
+fn rename_replacing_file(from: &Path, to: &Path) -> Result<()> {
+    fs::rename(from, to).map_err(|err| GfmError::io(to, err))
 }
 
 fn move_path(
@@ -3573,6 +3652,128 @@ mod tests {
         let journal_entries = operator.journal().unwrap();
         assert_eq!(journal_entries.len(), 2);
         assert_eq!(journal_entries[1].status, OperationStatus::Failed);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_replace_regular_file_uses_staged_destination() {
+        let root = unique_temp_dir("gfm-ops-copy-replace-staged");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "new destination bytes").unwrap();
+        fs::write(&destination, "old destination bytes").unwrap();
+
+        Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::Replace))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&destination).unwrap(),
+            "new destination bytes"
+        );
+        assert_eq!(
+            fs::read_to_string(&source).unwrap(),
+            "new destination bytes"
+        );
+        let leaked_stage = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".gfm-replace-")
+            });
+        assert!(!leaked_stage);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_copy_replace_regular_file_preserves_existing_destination() {
+        let root = unique_temp_dir("gfm-ops-copy-replace-cancel");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "new destination bytes").unwrap();
+        fs::write(&destination, "old destination bytes").unwrap();
+        let cancellation = OperationCancellation::default();
+        let operator = Operator::new(
+            OperationContext::new(&journal)
+                .with_conflict(ConflictPolicy::Replace)
+                .with_cancellation(cancellation.clone()),
+        );
+
+        let err = operator
+            .execute_with_progress(
+                Operation::Copy {
+                    from: source.clone(),
+                    to: destination.clone(),
+                },
+                |event| {
+                    if event.phase == OperationProgressPhase::Planned {
+                        cancellation.cancel();
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert_eq!(
+            fs::read_to_string(&destination).unwrap(),
+            "old destination bytes"
+        );
+        assert_eq!(
+            fs::read_to_string(&source).unwrap(),
+            "new destination bytes"
+        );
+        let leaked_stage = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".gfm-replace-")
+            });
+        assert!(!leaked_stage);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_replace_same_inode_is_noop() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = unique_temp_dir("gfm-ops-copy-replace-same-inode");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "shared inode").unwrap();
+        fs::hard_link(&source, &destination).unwrap();
+        let before_source = fs::metadata(&source).unwrap();
+        let before_destination = fs::metadata(&destination).unwrap();
+
+        Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::Replace))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        let after_source = fs::metadata(&source).unwrap();
+        let after_destination = fs::metadata(&destination).unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "shared inode");
+        assert_eq!(before_source.ino(), before_destination.ino());
+        assert_eq!(after_source.ino(), after_destination.ino());
+        assert_eq!(before_source.ino(), after_source.ino());
+        assert!(after_source.nlink() >= 2);
 
         fs::remove_dir_all(root).unwrap();
     }
