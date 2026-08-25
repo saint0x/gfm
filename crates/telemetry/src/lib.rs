@@ -186,10 +186,11 @@ pub struct HistogramSummary {
     pub overflow: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Telemetry {
     latencies: BTreeMap<LatencyMetric, Histogram>,
     frames: FrameTiming,
+    resources: ResourceTelemetry,
     counters: BTreeMap<&'static str, u64>,
 }
 
@@ -201,6 +202,7 @@ impl Default for Telemetry {
                 .map(|metric| (metric, Histogram::latency()))
                 .collect(),
             frames: FrameTiming::default(),
+            resources: ResourceTelemetry::default(),
             counters: BTreeMap::new(),
         }
     }
@@ -242,6 +244,34 @@ impl Telemetry {
 
     pub fn frame_timing(&self) -> FrameTimingSummary {
         self.frames.summary()
+    }
+
+    pub fn observe_io(&mut self, sample: IoSample) {
+        self.resources.observe_io(sample);
+    }
+
+    pub fn observe_cpu(&mut self, sample: CpuSample) {
+        self.resources.observe_cpu(sample);
+    }
+
+    pub fn observe_memory(&mut self, sample: MemorySample) {
+        self.resources.observe_memory(sample);
+    }
+
+    pub fn observe_allocation(&mut self, sample: AllocationSample) {
+        self.resources.observe_allocation(sample);
+    }
+
+    pub fn observe_queue_depth(&mut self, queue: &'static str, depth: u64) {
+        self.resources.observe_queue_depth(queue, depth);
+    }
+
+    pub fn observe_compaction(&mut self, sample: CompactionSample) {
+        self.resources.observe_compaction(sample);
+    }
+
+    pub fn resources(&self) -> ResourceSummary {
+        self.resources.summary()
     }
 }
 
@@ -309,6 +339,329 @@ pub struct FrameTimingSummary {
     pub worst_stall: Option<Duration>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ResourceTelemetry {
+    io: IoTelemetry,
+    cpu: CpuTelemetry,
+    memory: MemoryTelemetry,
+    allocations: AllocationTelemetry,
+    queues: BTreeMap<&'static str, QueueTelemetry>,
+    compaction: CompactionTelemetry,
+}
+
+impl ResourceTelemetry {
+    pub fn observe_io(&mut self, sample: IoSample) {
+        self.io.observe(sample);
+    }
+
+    pub fn observe_cpu(&mut self, sample: CpuSample) {
+        self.cpu.observe(sample);
+    }
+
+    pub fn observe_memory(&mut self, sample: MemorySample) {
+        self.memory.observe(sample);
+    }
+
+    pub fn observe_allocation(&mut self, sample: AllocationSample) {
+        self.allocations.observe(sample);
+    }
+
+    pub fn observe_queue_depth(&mut self, queue: &'static str, depth: u64) {
+        self.queues.entry(queue).or_default().observe(depth);
+    }
+
+    pub fn observe_compaction(&mut self, sample: CompactionSample) {
+        self.compaction.observe(sample);
+    }
+
+    pub fn summary(&self) -> ResourceSummary {
+        ResourceSummary {
+            io: self.io.summary(),
+            cpu: self.cpu.summary(),
+            memory: self.memory.summary(),
+            allocations: self.allocations.summary(),
+            queues: self
+                .queues
+                .iter()
+                .map(|(name, queue)| (*name, queue.summary()))
+                .collect(),
+            compaction: self.compaction.summary(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IoSample {
+    pub read_bytes: u64,
+    pub written_bytes: u64,
+    pub read_ops: u64,
+    pub write_ops: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IoTelemetry {
+    read_bytes: u64,
+    written_bytes: u64,
+    read_ops: u64,
+    write_ops: u64,
+}
+
+impl IoTelemetry {
+    fn observe(&mut self, sample: IoSample) {
+        self.read_bytes = self.read_bytes.saturating_add(sample.read_bytes);
+        self.written_bytes = self.written_bytes.saturating_add(sample.written_bytes);
+        self.read_ops = self.read_ops.saturating_add(sample.read_ops);
+        self.write_ops = self.write_ops.saturating_add(sample.write_ops);
+    }
+
+    fn summary(&self) -> IoSummary {
+        IoSummary {
+            read_bytes: self.read_bytes,
+            written_bytes: self.written_bytes,
+            read_ops: self.read_ops,
+            write_ops: self.write_ops,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IoSummary {
+    pub read_bytes: u64,
+    pub written_bytes: u64,
+    pub read_ops: u64,
+    pub write_ops: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CpuSample {
+    pub user_percent: f64,
+    pub system_percent: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CpuTelemetry {
+    samples: u64,
+    user_percent_sum: f64,
+    system_percent_sum: f64,
+    peak_total_percent: f64,
+}
+
+impl CpuTelemetry {
+    fn observe(&mut self, sample: CpuSample) {
+        let user = sample.user_percent.max(0.0);
+        let system = sample.system_percent.max(0.0);
+        self.samples += 1;
+        self.user_percent_sum += user;
+        self.system_percent_sum += system;
+        self.peak_total_percent = self.peak_total_percent.max(user + system);
+    }
+
+    fn summary(&self) -> CpuSummary {
+        CpuSummary {
+            samples: self.samples,
+            mean_user_percent: mean_f64(self.user_percent_sum, self.samples),
+            mean_system_percent: mean_f64(self.system_percent_sum, self.samples),
+            peak_total_percent: (self.samples != 0).then_some(self.peak_total_percent),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CpuSummary {
+    pub samples: u64,
+    pub mean_user_percent: Option<f64>,
+    pub mean_system_percent: Option<f64>,
+    pub peak_total_percent: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemorySample {
+    pub resident_bytes: u64,
+    pub virtual_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemoryTelemetry {
+    samples: u64,
+    peak_resident_bytes: u64,
+    peak_virtual_bytes: u64,
+}
+
+impl MemoryTelemetry {
+    fn observe(&mut self, sample: MemorySample) {
+        self.samples += 1;
+        self.peak_resident_bytes = self.peak_resident_bytes.max(sample.resident_bytes);
+        self.peak_virtual_bytes = self.peak_virtual_bytes.max(sample.virtual_bytes);
+    }
+
+    fn summary(&self) -> MemorySummary {
+        MemorySummary {
+            samples: self.samples,
+            peak_resident_bytes: self.peak_resident_bytes,
+            peak_virtual_bytes: self.peak_virtual_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemorySummary {
+    pub samples: u64,
+    pub peak_resident_bytes: u64,
+    pub peak_virtual_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AllocationSample {
+    pub allocated_bytes: u64,
+    pub freed_bytes: u64,
+    pub allocation_count: u64,
+    pub free_count: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AllocationTelemetry {
+    allocated_bytes: u64,
+    freed_bytes: u64,
+    allocation_count: u64,
+    free_count: u64,
+    peak_in_use_bytes: u64,
+}
+
+impl AllocationTelemetry {
+    fn observe(&mut self, sample: AllocationSample) {
+        self.allocated_bytes = self.allocated_bytes.saturating_add(sample.allocated_bytes);
+        self.freed_bytes = self.freed_bytes.saturating_add(sample.freed_bytes);
+        self.allocation_count = self
+            .allocation_count
+            .saturating_add(sample.allocation_count);
+        self.free_count = self.free_count.saturating_add(sample.free_count);
+        self.peak_in_use_bytes = self.peak_in_use_bytes.max(self.in_use_bytes());
+    }
+
+    fn in_use_bytes(&self) -> u64 {
+        self.allocated_bytes.saturating_sub(self.freed_bytes)
+    }
+
+    fn summary(&self) -> AllocationSummary {
+        AllocationSummary {
+            allocated_bytes: self.allocated_bytes,
+            freed_bytes: self.freed_bytes,
+            in_use_bytes: self.in_use_bytes(),
+            allocation_count: self.allocation_count,
+            free_count: self.free_count,
+            peak_in_use_bytes: self.peak_in_use_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AllocationSummary {
+    pub allocated_bytes: u64,
+    pub freed_bytes: u64,
+    pub in_use_bytes: u64,
+    pub allocation_count: u64,
+    pub free_count: u64,
+    pub peak_in_use_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QueueTelemetry {
+    samples: u64,
+    current_depth: u64,
+    peak_depth: u64,
+}
+
+impl QueueTelemetry {
+    fn observe(&mut self, depth: u64) {
+        self.samples += 1;
+        self.current_depth = depth;
+        self.peak_depth = self.peak_depth.max(depth);
+    }
+
+    fn summary(&self) -> QueueSummary {
+        QueueSummary {
+            samples: self.samples,
+            current_depth: self.current_depth,
+            peak_depth: self.peak_depth,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct QueueSummary {
+    pub samples: u64,
+    pub current_depth: u64,
+    pub peak_depth: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CompactionSample {
+    pub input_segments: u64,
+    pub output_segments: u64,
+    pub input_bytes: u64,
+    pub output_bytes: u64,
+    pub tombstones_removed: u64,
+    pub duration: Duration,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompactionTelemetry {
+    runs: u64,
+    input_segments: u64,
+    output_segments: u64,
+    input_bytes: u64,
+    output_bytes: u64,
+    tombstones_removed: u64,
+    durations: Histogram,
+}
+
+impl CompactionTelemetry {
+    fn observe(&mut self, sample: CompactionSample) {
+        self.runs += 1;
+        self.input_segments = self.input_segments.saturating_add(sample.input_segments);
+        self.output_segments = self.output_segments.saturating_add(sample.output_segments);
+        self.input_bytes = self.input_bytes.saturating_add(sample.input_bytes);
+        self.output_bytes = self.output_bytes.saturating_add(sample.output_bytes);
+        self.tombstones_removed = self
+            .tombstones_removed
+            .saturating_add(sample.tombstones_removed);
+        self.durations.observe(sample.duration);
+    }
+
+    fn summary(&self) -> CompactionSummary {
+        CompactionSummary {
+            runs: self.runs,
+            input_segments: self.input_segments,
+            output_segments: self.output_segments,
+            input_bytes: self.input_bytes,
+            output_bytes: self.output_bytes,
+            tombstones_removed: self.tombstones_removed,
+            duration: self.durations.summary(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompactionSummary {
+    pub runs: u64,
+    pub input_segments: u64,
+    pub output_segments: u64,
+    pub input_bytes: u64,
+    pub output_bytes: u64,
+    pub tombstones_removed: u64,
+    pub duration: HistogramSummary,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResourceSummary {
+    pub io: IoSummary,
+    pub cpu: CpuSummary,
+    pub memory: MemorySummary,
+    pub allocations: AllocationSummary,
+    pub queues: BTreeMap<&'static str, QueueSummary>,
+    pub compaction: CompactionSummary,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Timer {
     started_at: Instant,
@@ -343,6 +696,10 @@ fn duration_div(duration: Duration, divisor: u64) -> Duration {
     let nanos = duration.as_nanos() / u128::from(divisor);
     let bounded = nanos.min(u128::from(u64::MAX));
     Duration::from_nanos(bounded as u64)
+}
+
+fn mean_f64(sum: f64, count: u64) -> Option<f64> {
+    (count != 0).then_some(sum / count as f64)
 }
 
 #[cfg(test)]
@@ -407,5 +764,77 @@ mod tests {
         assert_eq!(value, 42);
         assert_eq!(telemetry.counter("searches"), 1);
         assert_eq!(telemetry.latency(LatencyMetric::SearchKeystroke).count, 1);
+    }
+
+    #[test]
+    fn telemetry_tracks_resource_summaries() {
+        let mut telemetry = Telemetry::default();
+        telemetry.observe_io(IoSample {
+            read_bytes: 10,
+            written_bytes: 20,
+            read_ops: 1,
+            write_ops: 2,
+        });
+        telemetry.observe_io(IoSample {
+            read_bytes: 30,
+            written_bytes: 40,
+            read_ops: 3,
+            write_ops: 4,
+        });
+        telemetry.observe_cpu(CpuSample {
+            user_percent: 25.0,
+            system_percent: 10.0,
+        });
+        telemetry.observe_cpu(CpuSample {
+            user_percent: 75.0,
+            system_percent: 5.0,
+        });
+        telemetry.observe_memory(MemorySample {
+            resident_bytes: 100,
+            virtual_bytes: 300,
+        });
+        telemetry.observe_memory(MemorySample {
+            resident_bytes: 200,
+            virtual_bytes: 250,
+        });
+        telemetry.observe_allocation(AllocationSample {
+            allocated_bytes: 1_000,
+            freed_bytes: 250,
+            allocation_count: 10,
+            free_count: 4,
+        });
+        telemetry.observe_allocation(AllocationSample {
+            allocated_bytes: 500,
+            freed_bytes: 1_000,
+            allocation_count: 5,
+            free_count: 6,
+        });
+        telemetry.observe_queue_depth("index", 4);
+        telemetry.observe_queue_depth("index", 9);
+        telemetry.observe_queue_depth("index", 2);
+        telemetry.observe_compaction(CompactionSample {
+            input_segments: 4,
+            output_segments: 1,
+            input_bytes: 1_000,
+            output_bytes: 250,
+            tombstones_removed: 12,
+            duration: Duration::from_millis(12),
+        });
+
+        let summary = telemetry.resources();
+
+        assert_eq!(summary.io.read_bytes, 40);
+        assert_eq!(summary.io.written_bytes, 60);
+        assert_eq!(summary.cpu.samples, 2);
+        assert_eq!(summary.cpu.mean_user_percent, Some(50.0));
+        assert_eq!(summary.cpu.peak_total_percent, Some(80.0));
+        assert_eq!(summary.memory.peak_resident_bytes, 200);
+        assert_eq!(summary.allocations.in_use_bytes, 250);
+        assert_eq!(summary.allocations.peak_in_use_bytes, 750);
+        assert_eq!(summary.queues["index"].current_depth, 2);
+        assert_eq!(summary.queues["index"].peak_depth, 9);
+        assert_eq!(summary.compaction.runs, 1);
+        assert_eq!(summary.compaction.output_bytes, 250);
+        assert_eq!(summary.compaction.duration.count, 1);
     }
 }

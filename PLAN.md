@@ -273,7 +273,7 @@ gfm/
 - Owns local-only metrics.
 - Records bounded p50/p95/p99 latency histograms for navigation, selection, rename, search keystrokes, result streaming, thumbnail display, preview open, copy start, cancel, and window render.
 - Records frame timing histograms and UI-thread stalls against explicit stall thresholds.
-- Records queue depths, cache hit rates, slow paths, index lag, and operation failures.
+- Records IO byte/op counters, CPU sample means and peaks, memory and allocation peaks, queue depth summaries, compaction summaries, cache hit rates, slow paths, index lag, and operation failures.
 
 ## Data Model
 
