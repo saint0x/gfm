@@ -158,6 +158,7 @@ cargo run -p gfm -- list .
 cargo run -p gfm -- app ~/Desktop
 cargo run -p gfm -- ui-contract ~/Desktop
 cargo run -p gfm -- ui-menu-contract
+cargo run -p gfm -- ui-titlebar-contract ~/Desktop
 cargo run -p gfm -- ui-toolbar-contract ~/Desktop
 cargo run -p gfm -- ui-sidebar-contract ~/Desktop
 ```

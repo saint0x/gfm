@@ -1,16 +1,20 @@
 use gfm_types::{GfmError, Result};
 use gpui::{
     div, prelude::*, px, rgb, size, App, AppContext, Application, Bounds, Context, IntoElement,
-    Render, SharedString, Styled, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    Render, Styled, Window, WindowBounds, WindowOptions,
 };
 use std::path::PathBuf;
 
 mod menu;
 mod sidebar;
+mod titlebar;
 mod toolbar;
 
 pub use menu::{MenuCommandSpec, MenuCommandState, MenuContract};
 pub use sidebar::{SidebarContract, SidebarItemKind, SidebarItemSpec, SidebarVolumeSpec};
+pub use titlebar::{
+    FullScreenPolicy, TitlebarContract, TitlebarFocusPolicy, TitlebarMaterialPolicy,
+};
 pub use toolbar::{ToolbarContract, ToolbarControlKind, ToolbarControlSpec};
 
 const DEFAULT_WIDTH: f32 = 1040.0;
@@ -61,6 +65,7 @@ impl AppLaunchSpec {
                 "native app tabbing identifier must not be empty".to_string(),
             ));
         }
+        titlebar::TitlebarContract::from_spec(self)?;
         Ok(())
     }
 }
@@ -176,11 +181,11 @@ fn window_options(cx: &App, spec: &AppLaunchSpec) -> WindowOptions {
     let bounds = Bounds::centered(None, size(px(spec.width), px(spec.height)), cx);
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        titlebar: Some(TitlebarOptions {
-            title: Some(SharedString::from(spec.title.clone())),
-            appears_transparent: spec.transparent_titlebar,
-            traffic_light_position: Some(gpui::point(px(20.0), px(20.0))),
-        }),
+        titlebar: Some(
+            titlebar::TitlebarContract::from_spec(spec)
+                .expect("validated titlebar")
+                .into_options(),
+        ),
         window_min_size: Some(size(px(spec.min_width), px(spec.min_height))),
         tabbing_identifier: Some(spec.tabbing_identifier.clone()),
         ..Default::default()

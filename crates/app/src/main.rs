@@ -28,7 +28,8 @@ use gfm_testkit::{
 };
 use gfm_types::{FileId, FileKind, Result, SearchHit, VolumeId};
 use gfm_ui::{
-    AppLaunchSpec, MenuContract, SidebarContract, ToolbarContract, WindowLifecycleContract,
+    AppLaunchSpec, MenuContract, SidebarContract, TitlebarContract, ToolbarContract,
+    WindowLifecycleContract,
 };
 use std::env;
 use std::path::PathBuf;
@@ -62,6 +63,13 @@ fn run() -> Result<()> {
         }
         Some("ui-menu-contract") => {
             println!("{}", MenuContract::finder_default().as_tsv());
+        }
+        Some("ui-titlebar-contract") => {
+            let spec = match args.next() {
+                Some(path) => AppLaunchSpec::new(path),
+                None => AppLaunchSpec::default(),
+            };
+            println!("{}", TitlebarContract::from_spec(&spec)?.as_tsv());
         }
         Some("ui-toolbar-contract") => {
             let path = match args.next() {
@@ -810,6 +818,7 @@ fn print_usage() {
   gfm app [path]
   gfm ui-contract [path]
   gfm ui-menu-contract
+  gfm ui-titlebar-contract [path]
   gfm ui-toolbar-contract [path]
   gfm ui-sidebar-contract [path]
   gfm list [path]
