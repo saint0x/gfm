@@ -745,6 +745,21 @@ impl<'a, F: FnMut(OperationProgressEvent)> ProgressTracker<'a, F> {
         self.check_control()
     }
 
+    fn advance_bytes(&mut self, bytes: u64) -> Result<()> {
+        self.check_control()?;
+        self.progress.completed_bytes =
+            (self.progress.completed_bytes + bytes).min(self.progress.total_bytes);
+        self.emit(OperationProgressPhase::Advanced);
+        self.check_control()
+    }
+
+    fn finish_current_item(&mut self) -> Result<()> {
+        self.check_control()?;
+        self.progress.completed_items += 1;
+        self.emit(OperationProgressPhase::Advanced);
+        self.check_control()
+    }
+
     fn complete(&mut self) -> Result<()> {
         self.check_control()?;
         self.progress.completed_items = self.progress.total_items;
@@ -814,8 +829,8 @@ fn copy_path(
     } else if metadata.is_dir() {
         copy_directory(from, to, verification, CopyExistingMode::Fresh, progress)
     } else {
-        copy_file(from, to, verification)?;
-        progress.advance(&metadata)
+        copy_file_tracked(from, to, verification, progress)?;
+        Ok(())
     }
 }
 
@@ -1176,8 +1191,7 @@ fn copy_directory(
                 progress,
             )?;
         } else {
-            let _ = copy_file(&source, &destination, verification)?;
-            progress.advance(&child_metadata)?;
+            let _ = copy_file_tracked(&source, &destination, verification, progress)?;
         }
     }
     Ok(())
@@ -1267,6 +1281,7 @@ fn copy_symlink(
     progress.advance(&metadata)
 }
 
+#[cfg(test)]
 fn copy_file(from: &Path, to: &Path, verification: VerificationPolicy) -> Result<CopyMethod> {
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
@@ -1289,6 +1304,37 @@ fn copy_file(from: &Path, to: &Path, verification: VerificationPolicy) -> Result
     }
 }
 
+fn copy_file_tracked(
+    from: &Path,
+    to: &Path,
+    verification: VerificationPolicy,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<CopyMethod> {
+    progress.check_cancelled()?;
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
+    let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+    match clone_file(from, to) {
+        Ok(()) => {
+            preserve_metadata(from, to, &metadata)?;
+            verify_copy(from, to, verification)?;
+            progress.advance(&metadata)?;
+            Ok(CopyMethod::ApfsClone)
+        }
+        Err(err) if clone_fallback_allowed(&err) => {
+            remove_failed_clone_destination(to)?;
+            copy_file_bytes_tracked(from, to, progress)?;
+            preserve_metadata(from, to, &metadata)?;
+            verify_copy(from, to, verification)?;
+            progress.finish_current_item()?;
+            Ok(CopyMethod::ByteCopy)
+        }
+        Err(err) => Err(GfmError::io(from, err)),
+    }
+}
+
+#[cfg(test)]
 fn copy_file_bytes(from: &Path, to: &Path) -> Result<u64> {
     let mut source = File::open(from).map_err(|err| GfmError::io(from, err))?;
     let mut destination = OpenOptions::new()
@@ -1311,6 +1357,44 @@ fn copy_file_bytes(from: &Path, to: &Path) -> Result<u64> {
             break Err(GfmError::io(to, err));
         }
         written += read as u64;
+    };
+
+    if result.is_err() {
+        let _ = fs::remove_file(to);
+    }
+    result
+}
+
+fn copy_file_bytes_tracked(
+    from: &Path,
+    to: &Path,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<u64> {
+    let mut source = File::open(from).map_err(|err| GfmError::io(from, err))?;
+    let mut destination = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(to)
+        .map_err(|err| GfmError::io(to, err))?;
+    let mut buffer = vec![0; COPY_BUFFER_BYTES];
+    let mut written = 0_u64;
+
+    let result = loop {
+        progress.check_cancelled()?;
+        let read = match source.read(&mut buffer) {
+            Ok(read) => read,
+            Err(err) => break Err(GfmError::io(from, err)),
+        };
+        if read == 0 {
+            break Ok(written);
+        }
+        if let Err(err) = destination.write_all(&buffer[..read]) {
+            break Err(GfmError::io(to, err));
+        }
+        written += read as u64;
+        if let Err(err) = progress.advance_bytes(read as u64) {
+            break Err(err);
+        }
     };
 
     if result.is_err() {
@@ -2140,6 +2224,77 @@ mod tests {
 
         assert_eq!(copied, bytes.len() as u64);
         assert_eq!(fs::read(&destination).unwrap(), bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn byte_copy_reports_chunk_progress() {
+        let root = unique_temp_dir("gfm-ops-byte-copy-progress");
+        let source = root.join("source.bin");
+        let destination = root.join("destination.bin");
+        let bytes = vec![7_u8; (COPY_BUFFER_BYTES * 2) + 19];
+        fs::write(&source, &bytes).unwrap();
+        let cancellation = OperationCancellation::default();
+        let pause = OperationPause::default();
+        let plan = OperationProgress {
+            total_items: 1,
+            total_bytes: bytes.len() as u64,
+            completed_items: 0,
+            completed_bytes: 0,
+        };
+        let mut events = Vec::new();
+        let mut callback = |event| events.push(event);
+        let mut tracker = ProgressTracker::new(plan, &cancellation, &pause, &mut callback);
+
+        let copied = copy_file_bytes_tracked(&source, &destination, &mut tracker).unwrap();
+        tracker.finish_current_item().unwrap();
+
+        assert_eq!(copied, bytes.len() as u64);
+        assert!(events
+            .iter()
+            .any(|event| event.phase == OperationProgressPhase::Advanced
+                && event.progress.completed_items == 0
+                && event.progress.completed_bytes == COPY_BUFFER_BYTES as u64));
+        let last = events.last().unwrap();
+        assert_eq!(last.progress.completed_items, 1);
+        assert_eq!(last.progress.completed_bytes, bytes.len() as u64);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn byte_copy_cancellation_removes_partial_destination() {
+        let root = unique_temp_dir("gfm-ops-byte-copy-cancel");
+        let source = root.join("source.bin");
+        let destination = root.join("destination.bin");
+        let bytes = vec![9_u8; (COPY_BUFFER_BYTES * 2) + 5];
+        fs::write(&source, &bytes).unwrap();
+        let cancellation = OperationCancellation::default();
+        let cancellation_callback = cancellation.clone();
+        let pause = OperationPause::default();
+        let plan = OperationProgress {
+            total_items: 1,
+            total_bytes: bytes.len() as u64,
+            completed_items: 0,
+            completed_bytes: 0,
+        };
+        let mut events = Vec::new();
+        let mut callback = |event: OperationProgressEvent| {
+            events.push(event);
+            if event.phase == OperationProgressPhase::Advanced && event.progress.completed_bytes > 0
+            {
+                cancellation_callback.cancel();
+            }
+        };
+        let mut tracker = ProgressTracker::new(plan, &cancellation, &pause, &mut callback);
+
+        let err = copy_file_bytes_tracked(&source, &destination, &mut tracker).unwrap_err();
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert!(!destination.exists());
+        assert!(events
+            .iter()
+            .any(|event| event.phase == OperationProgressPhase::Advanced
+                && event.progress.completed_bytes == COPY_BUFFER_BYTES as u64));
         fs::remove_dir_all(root).unwrap();
     }
 

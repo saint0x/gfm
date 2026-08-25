@@ -62,11 +62,11 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 ## File Operations
 
 38. Finish Finder-compatible copy preservation for ACLs, birthtime, package behavior, and verified edge cases beyond the implemented symlink preservation, ownership preservation where the host permits it, permissions, access/modified timestamps, and copyable xattrs.
-39. Implement operation pause and resume UI/progress controls beyond the implemented operation-engine pause state, paused journal recovery, idempotent paused copy/move/rename destination verification, journaled cancellation checkpoints, interrupted-operation recovery replay, and explicit capped retry for classified transient failed operations.
+39. Implement operation pause and resume UI/progress controls beyond the implemented operation-engine pause state, paused journal recovery, idempotent paused copy/move/rename destination verification, journaled cancellation checkpoints, byte-copy fallback chunk progress with pause/cancel checkpoints and partial-destination cleanup, interrupted-operation recovery replay, and explicit capped retry for classified transient failed operations.
 40. Implement conflict UI/state machine for skip, apply to all, and per-item decisions beyond the implemented operation-engine replace, keep-both, and merge-folder policies with journaled actual destinations.
 41. Finish Finder-native Trash restore integration beyond the implemented GFM metadata-backed restore operation, including direct platform Trash item identity, Put Back parity, collision sheets, permanent delete plumbing, and captured Finder baselines.
 42. Finish privileged-operation flow for protected paths beyond the implemented operation access gate and macOS security-scope preflight for foreground mutations, including native GPUI permission sheets, security-scoped bookmark acquisition/resolution, privileged helper or authorization strategy where required, Finder-parity Full Disk Access guidance, and captured protected-path baselines.
-43. Finish volume-specific network-volume fallback and slow-volume throttling policy beyond the implemented bounded streaming byte-copy fallback for unsupported or cross-device regular-file copies.
+43. Finish volume-specific network-volume fallback and slow-volume throttling policy beyond the implemented bounded streaming byte-copy fallback with chunk progress and pause/cancel checkpoints for unsupported or cross-device regular-file copies.
 
 ## Jobs And Runtime
 
