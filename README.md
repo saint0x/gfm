@@ -83,6 +83,7 @@ GFM indexes:
 The index is compact and incremental:
 
 - appendable per-volume segments
+- per-volume query shards with parallel fanout and deterministic global merge ordering
 - dictionary-compressed terms
 - delta-coded postings
 - tombstones for deletion and replacement

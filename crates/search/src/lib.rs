@@ -1,6 +1,7 @@
 mod fuzzy;
 mod query;
 mod session;
+mod shard;
 
 use fuzzy::bounded_levenshtein;
 use query::{normalize, tokenize};
@@ -9,6 +10,7 @@ pub use query::{
     SizeComparison,
 };
 pub use session::SearchSupersession;
+pub use shard::ShardedSearchIndex;
 
 use gfm_jobs::Cancellation;
 use gfm_types::{ContentPositions, ContentPosting, FileId, FileRecord, MatchReason, SearchHit};
@@ -300,14 +302,7 @@ impl SearchIndex {
             })
             .collect();
 
-        hits.sort_by(|a, b| {
-            b.score.cmp(&a.score).then_with(|| {
-                a.record
-                    .name
-                    .to_lowercase()
-                    .cmp(&b.record.name.to_lowercase())
-            })
-        });
+        sort_hits(&mut hits);
         hits.truncate(limit);
         cancellation.check()?;
         Ok(hits)
@@ -526,6 +521,26 @@ fn recency_score(record: &FileRecord) -> i64 {
             100i64.saturating_sub(days.min(100) as i64)
         })
         .unwrap_or(0)
+}
+
+pub(crate) fn sort_hits(hits: &mut [SearchHit]) {
+    hits.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| {
+                a.record
+                    .name
+                    .to_lowercase()
+                    .cmp(&b.record.name.to_lowercase())
+            })
+            .then_with(|| {
+                a.record
+                    .path
+                    .to_string_lossy()
+                    .cmp(&b.record.path.to_string_lossy())
+            })
+            .then_with(|| a.record.id.cmp(&b.record.id))
+    });
 }
 
 #[cfg(test)]
@@ -845,9 +860,75 @@ mod tests {
         assert!(hits[0].record.path.ends_with("Downloads/report.md"));
     }
 
+    #[test]
+    fn sharded_search_merges_volume_results_deterministically() {
+        let mut index = ShardedSearchIndex::new();
+        index.insert(volume_record(2, 2, "/Volumes/B/report.md", "report.md"));
+        index.insert(volume_record(1, 1, "/Volumes/A/report.md", "report.md"));
+
+        let hits = index.query("report", 10);
+        let paths: Vec<_> = hits
+            .iter()
+            .map(|hit| hit.record.path.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(index.shard_count(), 2);
+        assert_eq!(paths, vec!["/Volumes/A/report.md", "/Volumes/B/report.md"]);
+    }
+
+    #[test]
+    fn sharded_search_truncates_after_global_merge() {
+        let mut index = ShardedSearchIndex::new();
+        let mut exact = volume_record(2, 2, "/Volumes/B/report.md", "report.md");
+        exact.modified = Some(std::time::SystemTime::now());
+        index.insert(volume_record(
+            1,
+            1,
+            "/Volumes/A/archive-report.md",
+            "archive-report.md",
+        ));
+        index.insert(exact);
+
+        let hits = index.query("report", 1);
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.path, PathBuf::from("/Volumes/B/report.md"));
+    }
+
+    #[test]
+    fn sharded_search_removes_records_by_volume_and_path() {
+        let mut index = ShardedSearchIndex::new();
+        let first = volume_record(1, 1, "/Volumes/A/report.md", "report.md");
+        let second = volume_record(2, 1, "/Volumes/B/report.md", "report.md");
+        index.insert(first.clone());
+        index.insert(second.clone());
+
+        assert_eq!(index.remove(first.id).unwrap().path, first.path);
+        assert_eq!(index.remove_path(&second.path).unwrap().path, second.path);
+
+        assert!(index.query("report", 10).is_empty());
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn sharded_search_honors_cancellation() {
+        let mut index = ShardedSearchIndex::new();
+        index.insert(record(1, "/tmp/report.md", "report.md"));
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = index.query_cancellable("report", 10, &cancellation);
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
     fn record(node: u64, path: &str, name: &str) -> FileRecord {
+        volume_record(1, node, path, name)
+    }
+
+    fn volume_record(volume: u64, node: u64, path: &str, name: &str) -> FileRecord {
         FileRecord {
-            id: FileId::new(VolumeId(1), node),
+            id: FileId::new(VolumeId(volume), node),
             parent: None,
             path: PathBuf::from(path),
             name: name.to_string(),

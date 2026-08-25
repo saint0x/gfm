@@ -1,7 +1,7 @@
 use gfm_content::Extractor;
 use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
-use gfm_search::{SearchIndex, SearchQuery};
+use gfm_search::{SearchQuery, ShardedSearchIndex};
 use gfm_store::{
     compact_content_segments, read_content_postings, read_records, write_content_postings,
     write_content_segment, write_records,
@@ -31,7 +31,7 @@ impl IndexSnapshot {
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
-        let mut index = SearchIndex::new();
+        let mut index = ShardedSearchIndex::new();
         for record in self.records.iter().cloned() {
             index.insert(record);
         }
@@ -44,7 +44,7 @@ impl IndexSnapshot {
         limit: usize,
         cancellation: &Cancellation,
     ) -> Result<Vec<SearchHit>> {
-        let mut index = SearchIndex::new();
+        let mut index = ShardedSearchIndex::new();
         for record in self.records.iter().cloned() {
             cancellation.check()?;
             index.insert(record);
@@ -110,7 +110,7 @@ impl IndexSnapshot {
 
 #[derive(Debug, Clone, Default)]
 pub struct LiveIndex {
-    index: SearchIndex,
+    index: ShardedSearchIndex,
 }
 
 impl LiveIndex {

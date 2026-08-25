@@ -322,6 +322,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
    - Component-level postings.
    - Path depth and directory affinity ranking.
    - Supports queries like `src index rust`, `~/Downloads pdf`, and `Desktop screenshot`.
+   - Executed per volume with deterministic global merge ordering so local, external, network, and iCloud volumes can fan out independently without unstable result ordering.
 
 3. Metadata index
    - Kind, extension, UTI, size buckets, timestamps, tags, comments, author, app-origin metadata where available.
