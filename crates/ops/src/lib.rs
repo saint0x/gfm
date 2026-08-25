@@ -1,4 +1,5 @@
-use gfm_types::{GfmError, Result};
+use gfm_fs::PackagePolicy;
+use gfm_types::{FileKind, GfmError, Result};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -1315,6 +1316,14 @@ fn copy_path_existing(
         verify_existing_symlink_copy(from, to, mode)?;
         progress.advance(metadata)
     } else if metadata.is_dir() {
+        if mode == CopyExistingMode::Merge
+            && (is_finder_package_dir(from, metadata) || is_existing_finder_package_dir(to))
+        {
+            return Err(GfmError::Conflict {
+                path: to.to_path_buf(),
+                message: "merge destination package already exists".to_string(),
+            });
+        }
         copy_directory(from, to, verification, mode, progress)
     } else if mode == CopyExistingMode::Merge {
         Err(GfmError::Conflict {
@@ -1326,6 +1335,19 @@ fn copy_path_existing(
         preserve_metadata(from, to, metadata)?;
         progress.advance(metadata)
     }
+}
+
+fn is_existing_finder_package_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| is_finder_package_dir(path, &metadata))
+        .unwrap_or(false)
+}
+
+fn is_finder_package_dir(path: &Path, metadata: &fs::Metadata) -> bool {
+    metadata.is_dir()
+        && PackagePolicy::default()
+            .classify(path, FileKind::Directory)
+            .is_some()
 }
 
 fn verify_existing_symlink_copy(from: &Path, to: &Path, mode: CopyExistingMode) -> Result<()> {
@@ -2833,6 +2855,43 @@ mod tests {
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[1].status, OperationStatus::Completed);
         assert_eq!(entries[3].status, OperationStatus::Skipped);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn merge_conflict_treats_finder_packages_as_atomic_items() {
+        let root = unique_temp_dir("gfm-ops-package-merge");
+        let journal = root.join("journal.log");
+        let source = root.join("Demo.app");
+        let destination = root.join("Demo Copy.app");
+        fs::create_dir_all(source.join("Contents")).unwrap();
+        fs::create_dir_all(destination.join("Contents")).unwrap();
+        fs::write(source.join("Contents").join("new.txt"), "source").unwrap();
+        fs::write(
+            destination.join("Contents").join("existing.txt"),
+            "destination",
+        )
+        .unwrap();
+
+        let err =
+            Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::Merge))
+                .execute(Operation::Copy {
+                    from: source.clone(),
+                    to: destination.clone(),
+                })
+                .unwrap_err();
+
+        assert!(matches!(err, GfmError::Conflict { .. }));
+        assert!(!destination.join("Contents").join("new.txt").exists());
+        assert_eq!(
+            fs::read_to_string(destination.join("Contents").join("existing.txt")).unwrap(),
+            "destination"
+        );
+        let entries = read_journal(&journal).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].status, OperationStatus::Started);
+        assert_eq!(entries[1].status, OperationStatus::Failed);
 
         fs::remove_dir_all(root).unwrap();
     }
