@@ -5,8 +5,8 @@ use gfm_diagnostics::{
     StorageInspection,
 };
 use gfm_fs::{
-    read_directory, record_for_path, scan_tree, PackageTraversalMode, PackageTraversalReport,
-    ScanOptions,
+    read_directory, record_for_path, scan_tree, FinderMetadataReport, PackageTraversalMode,
+    PackageTraversalReport, ScanOptions,
 };
 use gfm_index::{
     BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, Indexer, SearchStreamStage,
@@ -353,6 +353,10 @@ fn run() -> Result<()> {
             let page = scan_tree(&root, options.clone())?;
             let report = PackageTraversalReport::from_page(&page, &options.package_policy);
             println!("{}", report.as_tsv());
+        }
+        Some("finder-metadata") => {
+            let path = required_path(args.next(), "finder-metadata requires a path")?;
+            println!("{}", FinderMetadataReport::read_path(path)?.as_tsv());
         }
         Some("ui-virtualization-contract") => {
             let surface = parse_virtual_surface(args.next().as_deref())?;
@@ -1522,6 +1526,7 @@ fn print_usage() {
   gfm ui-icon-view-contract <path> [columns] [viewport-rows] [scroll-row]
   gfm ui-virtualization-contract <icon-grid|list-rows|column-rows|gallery-filmstrip|search-results|trash-rows> <total> <viewport> <scroll> [columns]
   gfm package-traversal <root> [opaque|traverse]
+  gfm finder-metadata <path>
   gfm list [path]
   gfm index <root> <output.gfmidx>
   gfm index-content <root> <records.gfmidx> <content.gfmcontent>

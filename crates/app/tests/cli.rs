@@ -246,6 +246,54 @@ fn reports_package_traversal_policy_from_binary() {
 }
 
 #[test]
+fn reports_finder_metadata_from_binary() {
+    let root = unique_temp_dir("gfm-cli-finder-metadata");
+    let app = root.join("GFMFixture.app");
+    fs::create_dir_all(&app).unwrap();
+
+    let app_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("finder-metadata")
+        .arg(&app)
+        .output()
+        .unwrap();
+    assert!(
+        app_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&app_output.stderr)
+    );
+    let app_stdout = String::from_utf8(app_output.stdout).unwrap();
+    assert!(app_stdout.starts_with("finder-metadata\t"), "{app_stdout}");
+    assert!(
+        app_stdout.contains("\tdisplay=GFMFixture\t"),
+        "{app_stdout}"
+    );
+    assert!(app_stdout.contains("\tkind=Application\t"), "{app_stdout}");
+    assert!(app_stdout.contains("\ttype=application\t"), "{app_stdout}");
+    assert!(app_stdout.contains("\text-hidden=true\t"), "{app_stdout}");
+
+    let target = root.join("target.txt");
+    let link = root.join("target link");
+    fs::write(&target, "target").unwrap();
+    make_symlink(&target, &link);
+    let link_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("finder-metadata")
+        .arg(&link)
+        .output()
+        .unwrap();
+    assert!(
+        link_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&link_output.stderr)
+    );
+    let link_stdout = String::from_utf8(link_output.stdout).unwrap();
+    assert!(link_stdout.contains("\tkind=Alias\t"), "{link_stdout}");
+    assert!(link_stdout.contains("\ttype=symlink\t"), "{link_stdout}");
+    assert!(link_stdout.contains("\tlink=symlink\t"), "{link_stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_persisted_tags_from_binary() {
     let index = unique_temp_path("gfm-cli-tags", "gfmidx");
     fs::write(
@@ -926,6 +974,16 @@ fn unique_temp_path(prefix: &str, extension: &str) -> std::path::PathBuf {
         name.push_str(extension);
     }
     std::env::temp_dir().join(name)
+}
+
+#[cfg(unix)]
+fn make_symlink(target: &std::path::Path, link: &std::path::Path) {
+    std::os::unix::fs::symlink(target, link).unwrap();
+}
+
+#[cfg(not(unix))]
+fn make_symlink(_target: &std::path::Path, link: &std::path::Path) {
+    fs::write(link, "link").unwrap();
 }
 
 fn minimal_pdf(text: &str) -> Vec<u8> {

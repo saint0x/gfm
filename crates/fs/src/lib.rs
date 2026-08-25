@@ -9,6 +9,12 @@ use std::path::Path;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
+mod metadata;
+
+pub use metadata::{
+    FinderLabelColor, FinderLinkRole, FinderMetadataReport, FinderTagEntry, FinderTypeRole,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanOptions {
     pub max_depth: usize,

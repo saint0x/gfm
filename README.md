@@ -156,6 +156,7 @@ List a directory:
 ```sh
 cargo run -p gfm -- list .
 cargo run -p gfm -- package-traversal ~/Desktop opaque
+cargo run -p gfm -- finder-metadata ~/Desktop/Report.md
 cargo run -p gfm -- app ~/Desktop
 cargo run -p gfm -- ui-contract ~/Desktop
 cargo run -p gfm -- ui-menu-contract
