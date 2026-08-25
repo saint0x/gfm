@@ -23,6 +23,7 @@ mod rename;
 mod repair;
 mod scan;
 mod state;
+mod volume;
 
 pub use backpressure::{
     EventBackpressureQueue, EventBackpressureReport, EventBackpressureSnapshot, EventPriority,
@@ -37,6 +38,11 @@ pub use rename::{correlate_rename, RenameCorrelationReport};
 pub use repair::{RepairPriority, RepairReason, RepairSchedule, SubtreeRepairJob};
 pub use scan::{FairScanReport, FairScanScheduler, FairScanSummary, ScanLane};
 pub use state::{IndexVolumeState, INDEX_STATE_SCHEMA_VERSION};
+pub use volume::{
+    parse_volume_indexing_policy, volume_indexing_policy_name, IndexMountState, IndexVolumeClass,
+    IndexVolumeDescriptor, VolumeIndexAction, VolumeIndexDecision, VolumeIndexPlan,
+    VolumeIndexPolicy, VolumeIndexThrottle, VolumeThrottleClass,
+};
 
 #[derive(Debug, Clone)]
 pub struct IndexSnapshot {

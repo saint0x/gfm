@@ -9,9 +9,10 @@ use gfm_fs::{
     PackageTraversalReport, ScanOptions,
 };
 use gfm_index::{
-    BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, EventBackpressureQueue,
-    EventPriority, FseventsCursor, FseventsCursorHealth, IndexVolumeState, Indexer, LiveIndex,
-    SearchStreamStage,
+    parse_volume_indexing_policy, BackgroundContentIndexer, ContentIndexJobSpec,
+    ContentIndexReport, EventBackpressureQueue, EventPriority, FseventsCursor,
+    FseventsCursorHealth, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor,
+    IndexVolumeState, Indexer, LiveIndex, SearchStreamStage, VolumeIndexPolicy,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -19,9 +20,9 @@ use gfm_jobs::{
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, parse_spotlight_fixture, AccessIntent,
-    FileEventStream, FileProviderStateReport, MacBridgeContract, NativeIconDescriptor,
+    FileEventStream, FileProviderStateReport, MacBridgeContract, MountState, NativeIconDescriptor,
     SecurityScopedAccessReport, SpotlightMetadataReader, SpotlightReconciliationReport,
-    SupportMatrix, VolumeDiscoveryReport, WatchRoot,
+    SupportMatrix, VolumeDescriptor, VolumeDiscoveryReport, VolumeKind, WatchRoot,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_preview::{
@@ -946,6 +947,37 @@ fn run() -> Result<()> {
             };
             println!("{}", report.as_tsv());
         }
+        Some("volume-index-policy") => {
+            let external = parse_volume_indexing_policy(&required_string(
+                args.next(),
+                "volume-index-policy requires an external policy",
+            )?)?;
+            let network = parse_volume_indexing_policy(&required_string(
+                args.next(),
+                "volume-index-policy requires a network policy",
+            )?)?;
+            let mut opted_in = Vec::new();
+            let mut paths = Vec::new();
+            for arg in args {
+                if let Some(path) = arg.strip_prefix("opt-in:") {
+                    opted_in.push(PathBuf::from(path));
+                } else {
+                    paths.push(PathBuf::from(arg));
+                }
+            }
+            let discovery = if paths.is_empty() {
+                VolumeDiscoveryReport::discover()
+            } else {
+                VolumeDiscoveryReport::from_paths(paths)
+            };
+            let volumes = discovery
+                .volumes
+                .iter()
+                .map(index_volume_descriptor)
+                .collect::<Vec<_>>();
+            let policy = VolumeIndexPolicy::new(external, network).with_opted_in_roots(opted_in);
+            println!("{}", policy.plan(volumes).as_tsv());
+        }
         Some("spotlight-reconcile") => {
             let path = required_path(args.next(), "spotlight-reconcile requires a path")?;
             let fixture_path = args.next().map(PathBuf::from);
@@ -1326,6 +1358,39 @@ fn required_path(value: Option<String>, message: &str) -> Result<PathBuf> {
     value
         .map(PathBuf::from)
         .ok_or_else(|| GfmError::Format(message.to_string()))
+}
+
+fn required_string(value: Option<String>, message: &str) -> Result<String> {
+    value.ok_or_else(|| GfmError::Format(message.to_string()))
+}
+
+fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeDescriptor {
+    IndexVolumeDescriptor::new(
+        volume.label.clone(),
+        volume.path.clone(),
+        index_volume_class(volume.kind),
+        index_mount_state(volume.mount_state),
+    )
+}
+
+fn index_volume_class(kind: VolumeKind) -> IndexVolumeClass {
+    match kind {
+        VolumeKind::System => IndexVolumeClass::System,
+        VolumeKind::Internal => IndexVolumeClass::Internal,
+        VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage => {
+            IndexVolumeClass::External
+        }
+        VolumeKind::Network => IndexVolumeClass::Network,
+        VolumeKind::Unknown => IndexVolumeClass::Unknown,
+    }
+}
+
+fn index_mount_state(state: MountState) -> IndexMountState {
+    match state {
+        MountState::Mounted => IndexMountState::Mounted,
+        MountState::Unmounted => IndexMountState::Unmounted,
+        MountState::Stale => IndexMountState::Stale,
+    }
 }
 
 fn parse_u16(value: &str, name: &str) -> Result<u16> {
@@ -1808,6 +1873,7 @@ fn print_usage() {
   gfm native-icon <path>
   gfm fileprovider-state <path>
   gfm volume-discovery [paths...]
+  gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]
   gfm spotlight-reconcile <path> [spotlight-fixture.tsv]
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm quicklook-session <path>

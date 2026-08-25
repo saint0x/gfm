@@ -213,6 +213,108 @@ fn fair_scan_avoids_duplicate_visible_paths() {
 }
 
 #[test]
+fn volume_index_policy_includes_local_and_defers_remote_by_default() {
+    let policy = VolumeIndexPolicy::default();
+    let local = IndexVolumeDescriptor::new(
+        "Macintosh HD",
+        "/",
+        IndexVolumeClass::System,
+        IndexMountState::Mounted,
+    );
+    let external = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    );
+    let network = IndexVolumeDescriptor::new(
+        "Team Share",
+        "/Volumes/Team",
+        IndexVolumeClass::Network,
+        IndexMountState::Mounted,
+    );
+
+    let plan = policy.plan(vec![network, external, local]);
+
+    assert_eq!(plan.decisions[0].action, VolumeIndexAction::Include);
+    assert_eq!(plan.decisions[1].action, VolumeIndexAction::DeferredOptIn);
+    assert_eq!(plan.decisions[2].action, VolumeIndexAction::DeferredOptIn);
+    assert_eq!(plan.included_roots(), vec![PathBuf::from("/")]);
+    assert!(plan
+        .as_tsv()
+        .starts_with("volume-index-plan\tcount=3\tincluded=1"));
+}
+
+#[test]
+fn volume_index_policy_applies_opt_in_and_remote_throttles() {
+    let policy = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::OptIn,
+        gfm_config::VolumeIndexingPolicy::OptIn,
+    )
+    .with_opted_in_roots(vec![PathBuf::from("/Volumes/Work")]);
+    let external = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    );
+    let network = IndexVolumeDescriptor::new(
+        "Team Share",
+        "/Volumes/Team",
+        IndexVolumeClass::Network,
+        IndexMountState::Mounted,
+    );
+
+    let plan = policy.plan(vec![network, external]);
+    let external = plan
+        .decisions
+        .iter()
+        .find(|decision| decision.label == "Work Drive")
+        .unwrap();
+    let network = plan
+        .decisions
+        .iter()
+        .find(|decision| decision.label == "Team Share")
+        .unwrap();
+
+    assert_eq!(external.action, VolumeIndexAction::Include);
+    assert_eq!(external.throttle.class, VolumeThrottleClass::External);
+    assert_eq!(external.throttle.max_concurrent_jobs, 2);
+    assert_eq!(network.action, VolumeIndexAction::DeferredOptIn);
+    assert_eq!(plan.included_roots(), vec![PathBuf::from("/Volumes/Work")]);
+}
+
+#[test]
+fn volume_index_policy_suspends_disabled_and_disconnected_volumes() {
+    let policy = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Enabled,
+        gfm_config::VolumeIndexingPolicy::Disabled,
+    );
+    let disconnected_external = IndexVolumeDescriptor::new(
+        "Backup",
+        "/Volumes/Backup",
+        IndexVolumeClass::External,
+        IndexMountState::Stale,
+    );
+    let disabled_network = IndexVolumeDescriptor::new(
+        "Team Share",
+        "/Volumes/Team",
+        IndexVolumeClass::Network,
+        IndexMountState::Mounted,
+    );
+
+    let plan = policy.plan(vec![disabled_network, disconnected_external]);
+
+    assert_eq!(plan.decisions[0].action, VolumeIndexAction::Disconnected);
+    assert_eq!(
+        plan.decisions[0].throttle.class,
+        VolumeThrottleClass::Suspended
+    );
+    assert_eq!(plan.decisions[1].action, VolumeIndexAction::Disabled);
+    assert!(plan.included_roots().is_empty());
+}
+
+#[test]
 fn live_index_correlates_file_renames_without_identity_churn() {
     let root = unique_temp_dir("gfm-rename-file-root");
     let from = root.join("NeedleOld.txt");

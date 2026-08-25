@@ -312,6 +312,46 @@ fn reports_volume_discovery_from_binary() {
 }
 
 #[test]
+fn reports_volume_index_policy_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-volume-policy-{}", std::process::id()));
+    let external = root.join("Work Drive");
+    let network = root.join("Team Share");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::create_dir_all(&network).unwrap();
+    std::fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+    std::fs::write(network.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-index-policy")
+        .arg("opt-in")
+        .arg("opt-in")
+        .arg(format!("opt-in:{}", external.display()))
+        .arg(&external)
+        .arg(&network)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("volume-index-plan\tcount=2\tincluded=1\n"));
+    assert!(stdout.contains("\tWork Drive\t"));
+    assert!(stdout.contains("\tclass=external\tmount=mounted\taction=include\t"));
+    assert!(stdout.contains("\tthrottle=external\tmax-jobs=2\t"));
+    assert!(stdout.contains("\treason=opted-in"));
+    assert!(stdout.contains("\tTeam Share\t"));
+    assert!(stdout.contains("\tclass=network\tmount=mounted\taction=deferred-opt-in\t"));
+    assert!(stdout.contains("\tthrottle=suspended\tmax-jobs=0\t"));
+    assert!(stdout.contains("\treason=requires-opt-in"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_ui_lifecycle_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-contract", "/tmp/gfm"])

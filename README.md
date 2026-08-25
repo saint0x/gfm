@@ -212,6 +212,7 @@ cargo run -p gfm -- mac-bridges
 cargo run -p gfm -- native-icon ~/Desktop/GFM.app
 cargo run -p gfm -- fileprovider-state ~/Library/Mobile\ Documents/com~apple~CloudDocs/Report.md
 cargo run -p gfm -- volume-discovery
+cargo run -p gfm -- volume-index-policy opt-in opt-in opt-in:/Volumes/Work /Volumes/Work /Volumes/TeamShare
 cargo run -p gfm -- spotlight-reconcile ~/Desktop/Report.md
 ```
 

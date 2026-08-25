@@ -1699,6 +1699,7 @@ dependencies = [
 name = "gfm-index"
 version = "0.1.0"
 dependencies = [
+ "gfm-config",
  "gfm-content",
  "gfm-fs",
  "gfm-jobs",
