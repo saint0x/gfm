@@ -4,7 +4,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -14,6 +14,7 @@ pub struct GfmConfig {
     pub settings: UserSettings,
     pub features: FeatureFlags,
     pub diagnostics: DiagnosticsConfig,
+    pub performance: PerformanceControls,
 }
 
 impl Default for GfmConfig {
@@ -24,6 +25,7 @@ impl Default for GfmConfig {
             settings: UserSettings::default(),
             features: FeatureFlags::default(),
             diagnostics: DiagnosticsConfig::default(),
+            performance: PerformanceControls::default(),
         }
     }
 }
@@ -37,7 +39,7 @@ impl GfmConfig {
             .and_then(toml::Value::as_integer)
             .unwrap_or(1);
         match version {
-            1 => migrate_v1_to_current(&mut value)?,
+            1 | 2 => migrate_legacy_to_current(&mut value)?,
             version if version == i64::from(CURRENT_SCHEMA_VERSION) => {}
             other => {
                 return Err(GfmError::Format(format!(
@@ -69,7 +71,16 @@ impl GfmConfig {
         self.parity.validate()?;
         self.settings.validate()?;
         self.diagnostics.validate()?;
+        self.performance.validate()?;
         Ok(())
+    }
+
+    pub fn effective_performance_policy(&self) -> RuntimePerformancePolicy {
+        if self.features.internal_power_mode && self.performance.enabled {
+            self.performance.policy()
+        } else {
+            RuntimePerformancePolicy::finder_parity()
+        }
     }
 }
 
@@ -310,6 +321,144 @@ impl DiagnosticsConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PerformanceControls {
+    pub enabled: bool,
+    pub profile: PerformanceProfile,
+    pub max_background_index_threads: u16,
+    pub max_extractor_threads: u16,
+    pub max_thumbnail_threads: u16,
+    pub max_io_mib_per_second: u16,
+    pub search_keystroke_budget_ms: u16,
+    pub visible_directory_budget_ms: u16,
+    pub enable_aggressive_prefetch: bool,
+    pub enable_mmap_read_ahead: bool,
+}
+
+impl Default for PerformanceControls {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            profile: PerformanceProfile::Balanced,
+            max_background_index_threads: 2,
+            max_extractor_threads: 2,
+            max_thumbnail_threads: 2,
+            max_io_mib_per_second: 256,
+            search_keystroke_budget_ms: 30,
+            visible_directory_budget_ms: 50,
+            enable_aggressive_prefetch: false,
+            enable_mmap_read_ahead: true,
+        }
+    }
+}
+
+impl PerformanceControls {
+    fn validate(&self) -> Result<()> {
+        validate_range(
+            "performance max_background_index_threads",
+            self.max_background_index_threads,
+            1,
+            64,
+        )?;
+        validate_range(
+            "performance max_extractor_threads",
+            self.max_extractor_threads,
+            1,
+            64,
+        )?;
+        validate_range(
+            "performance max_thumbnail_threads",
+            self.max_thumbnail_threads,
+            1,
+            64,
+        )?;
+        validate_range(
+            "performance max_io_mib_per_second",
+            self.max_io_mib_per_second,
+            1,
+            16_384,
+        )?;
+        validate_range(
+            "performance search_keystroke_budget_ms",
+            self.search_keystroke_budget_ms,
+            1,
+            1_000,
+        )?;
+        validate_range(
+            "performance visible_directory_budget_ms",
+            self.visible_directory_budget_ms,
+            1,
+            5_000,
+        )?;
+        Ok(())
+    }
+
+    fn policy(&self) -> RuntimePerformancePolicy {
+        let mut policy = RuntimePerformancePolicy {
+            profile: self.profile,
+            max_background_index_threads: self.max_background_index_threads,
+            max_extractor_threads: self.max_extractor_threads,
+            max_thumbnail_threads: self.max_thumbnail_threads,
+            max_io_bytes_per_second: u64::from(self.max_io_mib_per_second) * 1024 * 1024,
+            search_keystroke_budget: std::time::Duration::from_millis(u64::from(
+                self.search_keystroke_budget_ms,
+            )),
+            visible_directory_budget: std::time::Duration::from_millis(u64::from(
+                self.visible_directory_budget_ms,
+            )),
+            aggressive_prefetch: self.enable_aggressive_prefetch,
+            mmap_read_ahead: self.enable_mmap_read_ahead,
+        };
+        match self.profile {
+            PerformanceProfile::Conservative => {
+                policy.max_background_index_threads = policy.max_background_index_threads.min(1);
+                policy.max_extractor_threads = policy.max_extractor_threads.min(1);
+                policy.max_thumbnail_threads = policy.max_thumbnail_threads.min(1);
+                policy.aggressive_prefetch = false;
+            }
+            PerformanceProfile::Balanced => {}
+            PerformanceProfile::Aggressive => {
+                policy.aggressive_prefetch = true;
+            }
+            PerformanceProfile::Benchmark => {
+                policy.aggressive_prefetch = true;
+                policy.mmap_read_ahead = true;
+            }
+        }
+        policy
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PerformanceProfile {
+    Conservative,
+    Balanced,
+    Aggressive,
+    Benchmark,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimePerformancePolicy {
+    pub profile: PerformanceProfile,
+    pub max_background_index_threads: u16,
+    pub max_extractor_threads: u16,
+    pub max_thumbnail_threads: u16,
+    pub max_io_bytes_per_second: u64,
+    pub search_keystroke_budget: std::time::Duration,
+    pub visible_directory_budget: std::time::Duration,
+    pub aggressive_prefetch: bool,
+    pub mmap_read_ahead: bool,
+}
+
+impl RuntimePerformancePolicy {
+    pub fn finder_parity() -> Self {
+        let controls = PerformanceControls::default();
+        controls.policy()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigStore {
     path: PathBuf,
@@ -399,7 +548,7 @@ fn sync_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn migrate_v1_to_current(value: &mut toml::Value) -> Result<()> {
+fn migrate_legacy_to_current(value: &mut toml::Value) -> Result<()> {
     let table = value
         .as_table_mut()
         .ok_or_else(|| GfmError::Format("GFM config root must be a TOML table".to_string()))?;
@@ -412,6 +561,7 @@ fn migrate_v1_to_current(value: &mut toml::Value) -> Result<()> {
     ensure_table(table, "settings")?;
     ensure_table(table, "features")?;
     ensure_table(table, "diagnostics")?;
+    ensure_table(table, "performance")?;
     Ok(())
 }
 
@@ -428,6 +578,16 @@ fn ensure_table(table: &mut toml::map::Map<String, toml::Value>, key: &str) -> R
     }
 }
 
+fn validate_range(label: &str, value: u16, min: u16, max: u16) -> Result<()> {
+    if value < min || value > max {
+        Err(GfmError::Format(format!(
+            "{label} must be between {min} and {max}, got {value}"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,12 +599,14 @@ mod tests {
         let parsed = GfmConfig::parse(&encoded).unwrap();
 
         assert_eq!(parsed, GfmConfig::default());
-        assert!(encoded.contains("schema_version = 2"));
+        assert!(encoded.contains("schema_version = 3"));
         assert!(encoded.contains("strict_finder_parity = true"));
+        assert!(encoded.contains("[performance]"));
+        assert!(encoded.contains("enabled = false"));
     }
 
     #[test]
-    fn migrates_v1_config_with_partial_sections() {
+    fn migrates_legacy_config_with_partial_sections() {
         let parsed = GfmConfig::parse(
             r#"
 schema_version = 1
@@ -460,6 +622,24 @@ default_view = "list"
         assert!(parsed.settings.show_hidden_files);
         assert_eq!(parsed.settings.default_view, ViewMode::List);
         assert!(parsed.features.strict_finder_parity);
+        assert_eq!(parsed.performance, PerformanceControls::default());
+    }
+
+    #[test]
+    fn migrates_v2_config_to_performance_controls() {
+        let parsed = GfmConfig::parse(
+            r#"
+schema_version = 2
+
+[features]
+internal_power_mode = true
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.schema_version, CURRENT_SCHEMA_VERSION);
+        assert!(parsed.features.internal_power_mode);
+        assert!(!parsed.performance.enabled);
     }
 
     #[test]
@@ -510,13 +690,46 @@ unexpected = true
         let mut config = GfmConfig::default();
         config.parity.profile.macos_build = "25A354".to_string();
         config.features.internal_power_mode = true;
+        config.performance.enabled = true;
+        config.performance.profile = PerformanceProfile::Aggressive;
 
         store.save(&config).unwrap();
         let loaded = store.load().unwrap();
 
         assert_eq!(loaded.parity.profile.macos_build, "25A354");
         assert!(loaded.features.internal_power_mode);
+        assert!(loaded.performance.enabled);
+        assert_eq!(loaded.performance.profile, PerformanceProfile::Aggressive);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn internal_performance_controls_are_hidden_until_power_mode_is_enabled() {
+        let mut config = GfmConfig::default();
+        config.performance.enabled = true;
+        config.performance.profile = PerformanceProfile::Benchmark;
+        config.performance.max_background_index_threads = 16;
+        let hidden = config.effective_performance_policy();
+
+        assert_eq!(hidden.profile, PerformanceProfile::Balanced);
+        assert_eq!(hidden.max_background_index_threads, 2);
+
+        config.features.internal_power_mode = true;
+        let active = config.effective_performance_policy();
+
+        assert_eq!(active.profile, PerformanceProfile::Benchmark);
+        assert_eq!(active.max_background_index_threads, 16);
+        assert!(active.aggressive_prefetch);
+    }
+
+    #[test]
+    fn rejects_invalid_internal_performance_controls() {
+        let mut config = GfmConfig::default();
+        config.performance.max_extractor_threads = 0;
+
+        let err = config.to_toml().unwrap_err();
+
+        assert!(err.to_string().contains("max_extractor_threads"));
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

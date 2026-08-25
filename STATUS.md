@@ -114,19 +114,15 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 79. Implement preview security policy for untrusted files.
 80. Implement thumbnail invalidation on content, metadata, tag, and iCloud state changes.
 
-## Configuration
-
-81. Implement hidden/internal performance controls without exposing non-Finder UI by default.
-
 ## Packaging
 
-82. Implement first-run permission onboarding that remains Finder-parity by default.
-83. Implement update, rollback, crash-report, and diagnostics policy.
-84. Implement release artifact validation on clean macOS machines.
+81. Implement first-run permission onboarding that remains Finder-parity by default.
+82. Implement update, rollback, crash-report, and diagnostics policy.
+83. Implement release artifact validation on clean macOS machines.
 
 ## Documentation
 
-85. Expand `PLAN.md` when architectural decisions change materially.
-86. Keep `README.md` written as the completed product contract.
-87. Keep this file limited to unfinished work only.
-88. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+84. Expand `PLAN.md` when architectural decisions change materially.
+85. Keep `README.md` written as the completed product contract.
+86. Keep this file limited to unfinished work only.
+87. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

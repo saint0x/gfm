@@ -18,7 +18,7 @@ fn creates_checks_and_dumps_config_from_binary() {
         String::from_utf8_lossy(&init_output.stderr)
     );
     let init_stdout = String::from_utf8(init_output.stdout).unwrap();
-    assert!(init_stdout.contains("2\t"), "{init_stdout}");
+    assert!(init_stdout.contains("3\t"), "{init_stdout}");
     assert!(config.exists());
 
     let check_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -41,7 +41,7 @@ fn creates_checks_and_dumps_config_from_binary() {
         String::from_utf8_lossy(&dump_output.stderr)
     );
     let dump_stdout = String::from_utf8(dump_output.stdout).unwrap();
-    assert!(dump_stdout.contains("schema_version = 2"), "{dump_stdout}");
+    assert!(dump_stdout.contains("schema_version = 3"), "{dump_stdout}");
     assert!(
         dump_stdout.contains("strict_finder_parity = true"),
         "{dump_stdout}"

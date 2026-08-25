@@ -59,7 +59,7 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 - `crates/store`: mmap segment store, dictionaries, compressed postings, appendable content segments, tombstones, merge policy, and compaction.
 - `crates/preview`: icons, thumbnails, Quick Look previews, preview cache, and extraction budgets.
 - `crates/jobs`: scheduling, cancellation, prioritization, fairness, progress, and backpressure.
-- `crates/config`: versioned TOML config, Finder parity profiles, user settings, feature flags, diagnostics toggles, validation, and atomic persistence.
+- `crates/config`: versioned TOML config, Finder parity profiles, user settings, feature flags, hidden performance controls, diagnostics toggles, validation, and atomic persistence.
 - `crates/telemetry`: bounded latency histograms, hard performance budgets, frame timing, UI-thread stall detection, IO/CPU/memory/allocation/queue/compaction summaries, counters, traces, and local-only diagnostics export with privacy review.
 - `crates/diagnostics`: operator commands for index rebuilds, privacy-reviewed trace export, parity baseline selection, and persisted storage inspection.
 - `crates/testkit`: filesystem fixtures, synthetic trees, repeatable macrobenchmarks, macOS capture harnesses, pixel diffing, and benchmark utilities.
@@ -179,6 +179,8 @@ cargo run -p gfm -- config-init ~/Library/Application\ Support/GFM/config.toml
 cargo run -p gfm -- config-check ~/Library/Application\ Support/GFM/config.toml
 cargo run -p gfm -- config-dump ~/Library/Application\ Support/GFM/config.toml
 ```
+
+Internal performance controls live in the config file but are inert unless both `features.internal_power_mode` and `performance.enabled` are explicitly set. The default Finder-parity surface does not expose them.
 
 Run operator diagnostics:
 

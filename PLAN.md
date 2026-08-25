@@ -269,6 +269,8 @@ gfm/
 - Owns the versioned TOML configuration contract for Finder parity profiles, user settings, feature flags, diagnostics toggles, and operator-facing config commands.
 - Persists settings atomically through a schema-versioned store and migrates older config documents before validation.
 - Keeps power and diagnostic controls explicit so the default Finder-parity UI remains uncontaminated.
+- Owns hidden internal performance controls for background index threads, extractor threads, thumbnail workers, I/O budget, search-keystroke budget, visible-directory budget, prefetch policy, and mmap read-ahead.
+- Derives an effective runtime performance policy that ignores internal controls unless `features.internal_power_mode` and `performance.enabled` are both explicitly set.
 
 `telemetry`
 
