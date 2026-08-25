@@ -211,6 +211,7 @@ cargo run -p gfm -- diagnostics-parity-baseline ~/Library/Application\ Support/G
 cargo run -p gfm -- mac-bridges
 cargo run -p gfm -- native-icon ~/Desktop/GFM.app
 cargo run -p gfm -- fileprovider-state ~/Library/Mobile\ Documents/com~apple~CloudDocs/Report.md
+cargo run -p gfm -- volume-discovery
 cargo run -p gfm -- spotlight-reconcile ~/Desktop/Report.md
 ```
 

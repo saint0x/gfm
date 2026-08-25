@@ -191,6 +191,17 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-dist/.gfm-volume-kind",
+      "data": "external-removable\n"
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["volume-discovery", "tmp/gfm-fozzy-dist"],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

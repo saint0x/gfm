@@ -1,0 +1,396 @@
+use gfm_types::{GfmError, Result, VolumeId};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+
+const VOLUME_MARKER: &str = ".gfm-volume-kind";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolumeKind {
+    System,
+    Internal,
+    External,
+    Removable,
+    Network,
+    DiskImage,
+    Unknown,
+}
+
+impl VolumeKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Internal => "internal",
+            Self::External => "external",
+            Self::Removable => "removable",
+            Self::Network => "network",
+            Self::DiskImage => "disk-image",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MountState {
+    Mounted,
+    Unmounted,
+    Stale,
+}
+
+impl MountState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Mounted => "mounted",
+            Self::Unmounted => "unmounted",
+            Self::Stale => "stale",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolumeCommandState {
+    Enabled,
+    Disabled,
+    Hidden,
+}
+
+impl VolumeCommandState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+            Self::Hidden => "hidden",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeCommandPolicy {
+    pub eject: VolumeCommandState,
+    pub mount: VolumeCommandState,
+    pub unmount: VolumeCommandState,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeCapacity {
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+}
+
+impl VolumeCapacity {
+    fn read(path: &Path) -> Self {
+        let total_bytes = fs2::total_space(path).unwrap_or(0);
+        let available_bytes = fs2::available_space(path).unwrap_or(0);
+        Self {
+            total_bytes,
+            available_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeDescriptor {
+    pub id: VolumeId,
+    pub label: String,
+    pub path: PathBuf,
+    pub kind: VolumeKind,
+    pub mount_state: MountState,
+    pub removable: bool,
+    pub network: bool,
+    pub ejectable: bool,
+    pub capacity: VolumeCapacity,
+    pub commands: VolumeCommandPolicy,
+    pub source: String,
+}
+
+impl VolumeDescriptor {
+    pub fn for_path(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let metadata = fs::metadata(&path).map_err(|err| GfmError::io(&path, err))?;
+        let id = volume_id(&metadata);
+        let label = volume_label(&path);
+        let marker = marker_kind(&path);
+        let kind = classify_volume(&path, marker.as_deref());
+        let mount_state = if path.exists() {
+            MountState::Mounted
+        } else {
+            MountState::Stale
+        };
+        let removable = matches!(
+            kind,
+            VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage
+        );
+        let network = kind == VolumeKind::Network;
+        let ejectable = removable || network;
+        let capacity = VolumeCapacity::read(&path);
+        let commands = command_policy(kind, mount_state, ejectable);
+        let source = marker
+            .map(|marker| format!("fixture-marker:{marker}"))
+            .unwrap_or_else(|| "filesystem".to_string());
+
+        Ok(Self {
+            id,
+            label,
+            path,
+            kind,
+            mount_state,
+            removable,
+            network,
+            ejectable,
+            capacity,
+            commands,
+            source,
+        })
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}",
+            self.id.0,
+            escape_field(&self.label),
+            self.path.display(),
+            self.kind.as_str(),
+            self.mount_state.as_str(),
+            self.removable,
+            self.network,
+            self.ejectable,
+            self.capacity.total_bytes,
+            self.capacity.available_bytes,
+            self.commands.eject.as_str(),
+            self.commands.mount.as_str(),
+            self.commands.unmount.as_str(),
+            escape_field(&self.source),
+            self.commands
+                .reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string())
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeDiscoveryReport {
+    pub volumes: Vec<VolumeDescriptor>,
+}
+
+impl VolumeDiscoveryReport {
+    pub fn discover() -> Self {
+        let mut paths = vec![PathBuf::from("/")];
+        if let Ok(entries) = fs::read_dir("/Volumes") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    paths.push(path);
+                }
+            }
+        }
+        Self::from_paths(paths)
+    }
+
+    pub fn from_paths(paths: Vec<PathBuf>) -> Self {
+        let mut volumes: Vec<_> = paths
+            .into_iter()
+            .filter_map(|path| VolumeDescriptor::for_path(path).ok())
+            .collect();
+        volumes.sort_by(|left, right| {
+            left.path
+                .cmp(&right.path)
+                .then(left.label.cmp(&right.label))
+                .then(left.id.cmp(&right.id))
+        });
+        volumes.dedup_by(|left, right| left.id == right.id && left.path == right.path);
+        Self { volumes }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let mut lines = vec![format!("volumes\tcount={}", self.volumes.len())];
+        lines.extend(self.volumes.iter().map(VolumeDescriptor::as_tsv));
+        lines.join("\n")
+    }
+}
+
+fn classify_volume(path: &Path, marker: Option<&str>) -> VolumeKind {
+    match marker {
+        Some("network") | Some("network-smb") | Some("network-afp") | Some("network-nfs") => {
+            return VolumeKind::Network;
+        }
+        Some("external") | Some("external-removable") => return VolumeKind::External,
+        Some("removable") => return VolumeKind::Removable,
+        Some("disk-image") => return VolumeKind::DiskImage,
+        Some("system") => return VolumeKind::System,
+        Some("internal") => return VolumeKind::Internal,
+        _ => {}
+    }
+
+    let label = volume_label(path).to_ascii_lowercase();
+    if path == Path::new("/") || label == "macintosh hd" {
+        VolumeKind::System
+    } else if path.starts_with("/Network")
+        || label.contains("smb")
+        || label.contains("nfs")
+        || label.contains("network")
+    {
+        VolumeKind::Network
+    } else if path.starts_with("/Volumes") {
+        VolumeKind::External
+    } else {
+        VolumeKind::Internal
+    }
+}
+
+fn command_policy(
+    kind: VolumeKind,
+    mount_state: MountState,
+    ejectable: bool,
+) -> VolumeCommandPolicy {
+    if mount_state != MountState::Mounted {
+        return VolumeCommandPolicy {
+            eject: VolumeCommandState::Disabled,
+            mount: VolumeCommandState::Enabled,
+            unmount: VolumeCommandState::Hidden,
+            reason: Some("volume-not-mounted".to_string()),
+        };
+    }
+    if ejectable {
+        VolumeCommandPolicy {
+            eject: VolumeCommandState::Enabled,
+            mount: VolumeCommandState::Hidden,
+            unmount: VolumeCommandState::Enabled,
+            reason: None,
+        }
+    } else {
+        VolumeCommandPolicy {
+            eject: VolumeCommandState::Hidden,
+            mount: VolumeCommandState::Hidden,
+            unmount: VolumeCommandState::Disabled,
+            reason: Some(format!("{}-volume-not-ejectable", kind.as_str())),
+        }
+    }
+}
+
+fn marker_kind(path: &Path) -> Option<String> {
+    let value = fs::read_to_string(path.join(VOLUME_MARKER)).ok()?;
+    let value = value.lines().next()?.trim().to_ascii_lowercase();
+    (!value.is_empty()).then_some(value)
+}
+
+fn volume_label(path: &Path) -> String {
+    if path == Path::new("/") {
+        "Macintosh HD".to_string()
+    } else {
+        path.file_name()
+            .and_then(|label| label.to_str())
+            .filter(|label| !label.is_empty())
+            .unwrap_or("Volume")
+            .to_string()
+    }
+}
+
+#[cfg(unix)]
+fn volume_id(metadata: &fs::Metadata) -> VolumeId {
+    VolumeId(metadata.dev())
+}
+
+#[cfg(not(unix))]
+fn volume_id(metadata: &fs::Metadata) -> VolumeId {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    metadata.len().hash(&mut hasher);
+    metadata.modified().ok().hash(&mut hasher);
+    VolumeId(hasher.finish())
+}
+
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn classifies_system_root_as_not_ejectable() {
+        let descriptor = VolumeDescriptor::for_path("/").unwrap();
+
+        assert_eq!(descriptor.kind, VolumeKind::System);
+        assert!(!descriptor.ejectable);
+        assert_eq!(descriptor.commands.eject, VolumeCommandState::Hidden);
+        assert!(descriptor.capacity.total_bytes > 0);
+    }
+
+    #[test]
+    fn classifies_external_marker_as_ejectable() {
+        let root = unique_temp_dir("gfm-volume-external");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+
+        let descriptor = VolumeDescriptor::for_path(&root).unwrap();
+
+        assert_eq!(descriptor.kind, VolumeKind::External);
+        assert!(descriptor.removable);
+        assert!(descriptor.ejectable);
+        assert_eq!(descriptor.commands.eject, VolumeCommandState::Enabled);
+        assert!(descriptor
+            .as_tsv()
+            .contains("source=fixture-marker:external-removable"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn classifies_network_marker_as_network_ejectable() {
+        let root = unique_temp_dir("gfm-volume-network");
+        fs::write(root.join(VOLUME_MARKER), "network-smb\n").unwrap();
+
+        let descriptor = VolumeDescriptor::for_path(&root).unwrap();
+
+        assert_eq!(descriptor.kind, VolumeKind::Network);
+        assert!(descriptor.network);
+        assert!(descriptor.ejectable);
+        assert_eq!(descriptor.commands.unmount, VolumeCommandState::Enabled);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn discovery_report_orders_volumes_stably() {
+        let first = unique_temp_dir("gfm-volume-a");
+        let second = unique_temp_dir("gfm-volume-b");
+        fs::write(first.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        fs::write(second.join(VOLUME_MARKER), "external-removable\n").unwrap();
+
+        let report = VolumeDiscoveryReport::from_paths(vec![second.clone(), first.clone()]);
+        let tsv = report.as_tsv();
+
+        assert!(tsv.starts_with("volumes\tcount=2"));
+        assert!(
+            tsv.find(first.to_str().unwrap()).unwrap()
+                < tsv.find(second.to_str().unwrap()).unwrap()
+        );
+
+        fs::remove_dir_all(first).unwrap();
+        fs::remove_dir_all(second).unwrap();
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "{}-{}-{}",
+            prefix,
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+}

@@ -18,7 +18,7 @@ use gfm_jobs::{
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, parse_spotlight_fixture, FileEventStream,
     FileProviderStateReport, MacBridgeContract, NativeIconDescriptor, SpotlightMetadataReader,
-    SpotlightReconciliationReport, SupportMatrix, WatchRoot,
+    SpotlightReconciliationReport, SupportMatrix, VolumeDiscoveryReport, WatchRoot,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_preview::{
@@ -733,6 +733,15 @@ fn run() -> Result<()> {
         Some("fileprovider-state") => {
             let path = required_path(args.next(), "fileprovider-state requires a path")?;
             println!("{}", FileProviderStateReport::read_path(path)?.as_tsv());
+        }
+        Some("volume-discovery") => {
+            let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            let report = if paths.is_empty() {
+                VolumeDiscoveryReport::discover()
+            } else {
+                VolumeDiscoveryReport::from_paths(paths)
+            };
+            println!("{}", report.as_tsv());
         }
         Some("spotlight-reconcile") => {
             let path = required_path(args.next(), "spotlight-reconcile requires a path")?;
@@ -1557,6 +1566,7 @@ fn print_usage() {
   gfm mac-bridges
   gfm native-icon <path>
   gfm fileprovider-state <path>
+  gfm volume-discovery [paths...]
   gfm spotlight-reconcile <path> [spotlight-fixture.tsv]
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm quicklook-session <path>

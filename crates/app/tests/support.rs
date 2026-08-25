@@ -226,6 +226,45 @@ fn reports_fileprovider_state_from_binary() {
 }
 
 #[test]
+fn reports_volume_discovery_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-volumes-{}", std::process::id()));
+    let external = root.join("Work Drive");
+    let network = root.join("Team Share");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::create_dir_all(&network).unwrap();
+    std::fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+    std::fs::write(network.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-discovery")
+        .arg(&external)
+        .arg(&network)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volumes\tcount=2\n"));
+    assert!(stdout.contains("\tWork Drive\t"));
+    assert!(stdout.contains(
+        "\tkind=external\tmount=mounted\tremovable=true\tnetwork=false\tejectable=true\t"
+    ));
+    assert!(stdout.contains("\teject=enabled\tmount=hidden\tunmount=enabled\t"));
+    assert!(stdout.contains("\tTeam Share\t"));
+    assert!(stdout.contains(
+        "\tkind=network\tmount=mounted\tremovable=false\tnetwork=true\tejectable=true\t"
+    ));
+    assert!(stdout.contains("source=fixture-marker:network-smb"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_ui_lifecycle_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-contract", "/tmp/gfm"])

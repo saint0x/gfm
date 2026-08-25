@@ -10,6 +10,7 @@ mod fileprovider;
 mod icon;
 mod permissions;
 mod spotlight;
+mod volume;
 
 pub use bridge::{
     MacBridgeContract, MacBridgeSpec, MacBridgeStatus, MacBridgeThreadPolicy, MacFramework,
@@ -26,6 +27,10 @@ pub use permissions::{
 pub use spotlight::{
     parse_spotlight_fixture, SpotlightField, SpotlightFieldDecision, SpotlightFieldReconciliation,
     SpotlightMetadataReader, SpotlightReconciliationReport, SpotlightSnapshot, SpotlightStatus,
+};
+pub use volume::{
+    MountState, VolumeCapacity, VolumeCommandPolicy, VolumeCommandState, VolumeDescriptor,
+    VolumeDiscoveryReport, VolumeKind,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
