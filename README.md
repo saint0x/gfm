@@ -97,6 +97,7 @@ The index is compact and incremental:
 - bounded snippets with highlighted content matches
 - binary-signature and control-byte classification before content extraction
 - bounded PDF text-stream extraction with PDF-specific byte, page, and object budgets
+- bounded OOXML extraction for DOCX, XLSX, and PPTX with ZIP entry, XML part, and text-output budgets
 - explicit ranking accumulator for exact, prefix, substring, fuzzy, path, metadata, kind, tag, content, recency, term-frequency, and user-pinned signals
 - user-intent boosts for Applications, Recents, Downloads, Desktop, screenshots, and project folders
 

@@ -1,6 +1,8 @@
+mod ooxml;
 mod pdf;
 
 use gfm_types::{FileKind, FileRecord, GfmError, Result, SearchSnippet, SnippetHighlight};
+use ooxml::{extract_ooxml, OoxmlExtractStatus, OoxmlKind};
 use pdf::{extract_pdf, PdfExtractStatus};
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -13,6 +15,10 @@ pub struct ExtractionPolicy {
     pub max_pdf_bytes: u64,
     pub max_pdf_pages: usize,
     pub max_pdf_objects: usize,
+    pub max_office_bytes: u64,
+    pub max_office_entries: usize,
+    pub max_office_entry_bytes: u64,
+    pub max_office_text_bytes: usize,
     pub extensions: BTreeSet<String>,
 }
 
@@ -23,6 +29,10 @@ impl Default for ExtractionPolicy {
             max_pdf_bytes: 16 * 1024 * 1024,
             max_pdf_pages: 256,
             max_pdf_objects: 20_000,
+            max_office_bytes: 32 * 1024 * 1024,
+            max_office_entries: 10_000,
+            max_office_entry_bytes: 8 * 1024 * 1024,
+            max_office_text_bytes: 4 * 1024 * 1024,
             extensions: text_extensions(),
         }
     }
@@ -50,6 +60,8 @@ impl Extractor {
         }
         let max_bytes = if path_is_pdf(&record.path) {
             self.policy.max_pdf_bytes
+        } else if office_kind(&record.path).is_some() {
+            self.policy.max_office_bytes
         } else {
             self.policy.max_bytes
         };
@@ -86,9 +98,12 @@ impl Extractor {
             return Ok(None);
         }
         let metadata = std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?;
+        let office = office_kind(path);
         let is_pdf = path_is_pdf(path);
         let max_bytes = if is_pdf {
             self.policy.max_pdf_bytes
+        } else if office.is_some() {
+            self.policy.max_office_bytes
         } else {
             self.policy.max_bytes
         };
@@ -113,6 +128,18 @@ impl Extractor {
             };
         }
 
+        if let Some(kind) = office {
+            let (status, document) = extract_ooxml(&bytes, kind, &self.policy);
+            return match status {
+                OoxmlExtractStatus::Extracted
+                | OoxmlExtractStatus::Unsupported
+                | OoxmlExtractStatus::TooLarge
+                | OoxmlExtractStatus::TooManyEntries
+                | OoxmlExtractStatus::EntryTooLarge
+                | OoxmlExtractStatus::Corrupt => Ok(document),
+            };
+        }
+
         if is_binary(&bytes) {
             return Ok(None);
         }
@@ -130,11 +157,21 @@ impl Extractor {
 
     fn accepts_path(&self, path: &Path) -> bool {
         path_is_pdf(path)
+            || office_kind(path).is_some()
             || path
                 .extension()
                 .and_then(|extension| extension.to_str())
                 .map(|extension| self.policy.extensions.contains(&extension.to_lowercase()))
                 .unwrap_or(false)
+    }
+}
+
+fn office_kind(path: &Path) -> Option<OoxmlKind> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "docx" => Some(OoxmlKind::Docx),
+        "xlsx" => Some(OoxmlKind::Xlsx),
+        "pptx" => Some(OoxmlKind::Pptx),
+        _ => None,
     }
 }
 
@@ -279,8 +316,10 @@ mod tests {
     use super::*;
     use gfm_types::{FileId, VolumeId};
     use std::fs;
+    use std::io::{Cursor, Write};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use zip::write::SimpleFileOptions;
 
     #[test]
     fn extracts_utf8_text_with_byte_budget() {
@@ -455,6 +494,83 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn extracts_docx_text() {
+        let root = unique_temp_dir("gfm-content-docx");
+        let path = root.join("brief.docx");
+        fs::write(
+            &path,
+            ooxml_package(&[(
+                "word/document.xml",
+                "<w:document><w:body><w:p><w:r><w:t>docxneedle proposal</w:t></w:r></w:p></w:body></w:document>",
+            )]),
+        )
+        .unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
+
+        assert_eq!(doc.text, "docxneedle proposal");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_xlsx_text() {
+        let root = unique_temp_dir("gfm-content-xlsx");
+        let path = root.join("numbers.xlsx");
+        fs::write(
+            &path,
+            ooxml_package(&[(
+                "xl/sharedStrings.xml",
+                "<sst><si><t>sheetneedle</t></si><si><t>Revenue &amp; Margin</t></si></sst>",
+            )]),
+        )
+        .unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
+
+        assert_eq!(doc.text, "sheetneedle Revenue & Margin");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_pptx_text() {
+        let root = unique_temp_dir("gfm-content-pptx");
+        let path = root.join("deck.pptx");
+        fs::write(
+            &path,
+            ooxml_package(&[(
+                "ppt/slides/slide1.xml",
+                "<p:sld><p:cSld><a:t>slideneedle launch plan</a:t></p:cSld></p:sld>",
+            )]),
+        )
+        .unwrap();
+
+        let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
+
+        assert_eq!(doc.text, "slideneedle launch plan");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn applies_office_entry_budget() {
+        let root = unique_temp_dir("gfm-content-office-budget");
+        let path = root.join("brief.docx");
+        fs::write(
+            &path,
+            ooxml_package(&[("word/document.xml", "<w:t>large office text</w:t>")]),
+        )
+        .unwrap();
+        let extractor = Extractor::new(ExtractionPolicy {
+            max_office_entry_bytes: 4,
+            ..ExtractionPolicy::default()
+        });
+
+        let doc = extractor.extract_path(&path).unwrap();
+
+        assert!(doc.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "{}-{}",
@@ -494,5 +610,16 @@ endobj
         }
         pdf.extend(b"%%EOF");
         pdf
+    }
+
+    fn ooxml_package(parts: &[(&str, &str)]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, text) in parts {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(text.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
     }
 }

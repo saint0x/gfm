@@ -14,5 +14,8 @@ gfm-ops = { path = "../ops" }
 gfm-store = { path = "../store" }
 gfm-types = { path = "../types" }
 
+[dev-dependencies]
+zip = { version = "4.3.0", default-features = false, features = ["deflate"] }
+
 [lints]
 workspace = true

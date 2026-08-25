@@ -335,6 +335,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
    - Large binary files excluded by default.
    - Chunked content with per-file byte budgets.
    - PDF extraction is policy-bounded separately from plain text, with byte, page, and object caps plus corrupt-file isolation before wider sandboxed extractor coverage lands.
+   - DOCX/XLSX/PPTX extraction reads bounded OOXML ZIP packages, selected XML content parts, and capped decoded text output without blocking unrelated content indexing.
    - Positional postings support exact quoted phrases and explicit `near:N:alpha,beta` proximity windows after durable reload.
 
 5. Recency and usage index

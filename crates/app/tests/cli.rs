@@ -1,6 +1,8 @@
 use std::fs;
+use std::io::{Cursor, Write};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+use zip::write::SimpleFileOptions;
 
 #[test]
 fn indexes_and_searches_real_files_from_binary() {
@@ -304,6 +306,34 @@ fn searches_pdf_content_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("brief.pdf"), "{stdout}");
     assert!(stdout.contains("[[pdfneedle]]"), "{stdout}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn searches_docx_content_from_binary() {
+    let root = unique_temp_dir("gfm-cli-docx-content-root");
+    fs::write(
+        root.join("brief.docx"),
+        ooxml_package(&[(
+            "word/document.xml",
+            "<w:document><w:body><w:p><w:r><w:t>docxneedle lives here</w:t></w:r></w:p></w:body></w:document>",
+        )]),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-content", root.to_str().unwrap(), "docxneedle"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("brief.docx"), "{stdout}");
+    assert!(stdout.contains("[[docxneedle]]"), "{stdout}");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -802,4 +832,14 @@ endobj
         text
     )
     .into_bytes()
+}
+
+fn ooxml_package(parts: &[(&str, &str)]) -> Vec<u8> {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for (name, text) in parts {
+        writer.start_file(*name, options).unwrap();
+        writer.write_all(text.as_bytes()).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
 }
