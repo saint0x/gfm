@@ -328,6 +328,20 @@
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "pixel-threshold-check",
+        "toolbar",
+        "tmp/gfm-pixel-expected.rgba",
+        "tmp/gfm-pixel-actual.rgba",
+        "3",
+        "1",
+        "tmp/gfm-pixel-mask.tsv"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["release-policy"],
       "expect_exit": 0
     },

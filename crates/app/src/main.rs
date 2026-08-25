@@ -23,9 +23,10 @@ use gfm_preview::{
 };
 use gfm_store::ContentArchive;
 use gfm_testkit::{
-    diff_rgba_files, materialize_parity_fixture, read_mask_file, run_macrobench,
-    run_regression_gate, MacrobenchOptions, MacrobenchScale, MacrobenchStage, ParityFixtureOptions,
-    ParityFixtureScale, PixelDiffOptions, PixelSize, RegressionGateOptions,
+    diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
+    run_macrobench, run_regression_gate, MacrobenchOptions, MacrobenchScale, MacrobenchStage,
+    ParityFixtureOptions, ParityFixtureScale, ParitySurface, PixelDiffOptions, PixelDriftThreshold,
+    PixelSize, RegressionGateOptions,
 };
 use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
 use gfm_ui::{
@@ -608,6 +609,53 @@ fn run() -> Result<()> {
                 )));
             }
         }
+        Some("pixel-threshold-check") => {
+            let surface = args
+                .next()
+                .ok_or_else(|| {
+                    GfmError::Format("pixel-threshold-check requires a surface".to_string())
+                })?
+                .parse::<ParitySurface>()
+                .map_err(GfmError::Format)?;
+            let expected = required_path(
+                args.next(),
+                "pixel-threshold-check requires an expected RGBA path",
+            )?;
+            let actual = required_path(
+                args.next(),
+                "pixel-threshold-check requires an actual RGBA path",
+            )?;
+            let width = parse_u32_arg(args.next(), "pixel-threshold-check requires a width")?;
+            let height = parse_u32_arg(args.next(), "pixel-threshold-check requires a height")?;
+            let size = PixelSize::new(width, height);
+            let masks = args
+                .next()
+                .map(|path| read_mask_file(path, size))
+                .transpose()?
+                .unwrap_or_default();
+            let options = PixelDiffOptions::strict(size).with_masks(masks);
+            let report = diff_rgba_files(expected, actual, &options)?;
+            let threshold = PixelDriftThreshold::finder_strict(surface);
+            let evaluation = evaluate_pixel_threshold(&report, threshold);
+            println!(
+                "{}\tpassed={}\tmismatched={}\tunmasked={}\tmasked={}",
+                threshold.as_tsv(),
+                evaluation.passed,
+                report.mismatched_pixels,
+                report.unmasked_mismatches,
+                report.masked_mismatches
+            );
+            for violation in &evaluation.violations {
+                println!("{}", violation.as_tsv());
+            }
+            if !evaluation.passed {
+                return Err(GfmError::Format(format!(
+                    "pixel threshold failed for {} with {} violation(s)",
+                    surface.as_str(),
+                    evaluation.violations.len()
+                )));
+            }
+        }
         Some("regression-gate") => {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
             let run = run_regression_gate(&options, RegressionGateOptions::default())?;
@@ -1021,6 +1069,7 @@ fn print_usage() {
   gfm macrobench <workspace> [smoke|standard]
   gfm parity-fixture <workspace> [smoke|standard]
   gfm pixel-diff <expected.rgba> <actual.rgba> <width> <height> [mask.tsv]
+  gfm pixel-threshold-check <layout|text|icon|selection|focus|hover|toolbar|thumbnail|preview> <expected.rgba> <actual.rgba> <width> <height> [mask.tsv]
   gfm regression-gate <workspace> [smoke|standard]
   gfm release-policy
   gfm release-validate <GFM.app> [--allow-unsigned] [--skip-notarization] [--skip-gatekeeper]

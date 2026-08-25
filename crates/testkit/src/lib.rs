@@ -16,6 +16,7 @@ pub use parity::{
     ParityFixtureScenario, ParityFixtureScenarioReport,
 };
 pub use pixel::{
-    diff_rgba, diff_rgba_files, parse_masks, read_mask_file, PixelDiffOptions, PixelDiffReport,
-    PixelMaskRect, PixelMismatch, PixelSize,
+    diff_rgba, diff_rgba_files, evaluate_pixel_threshold, parse_masks, read_mask_file,
+    ParitySurface, PixelDiffOptions, PixelDiffReport, PixelDriftThreshold, PixelMaskRect,
+    PixelMismatch, PixelSize, PixelThresholdEvaluation, PixelThresholdViolation, ThresholdTsv,
 };

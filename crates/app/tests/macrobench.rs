@@ -91,6 +91,47 @@ fn compares_pixel_diff_from_binary() {
 }
 
 #[test]
+fn checks_pixel_threshold_from_binary() {
+    let root = unique_temp_dir("gfm-cli-pixel-threshold");
+    let expected = root.join("expected.rgba");
+    let actual = root.join("actual.rgba");
+    let mask = root.join("mask.tsv");
+    fs::write(&expected, [0, 0, 0, 255, 10, 10, 10, 255, 20, 20, 20, 255]).unwrap();
+    fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255, 20, 20, 20, 255]).unwrap();
+    fs::write(&mask, "1\t0\t1\t1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "pixel-threshold-check",
+            "toolbar",
+            expected.to_str().unwrap(),
+            actual.to_str().unwrap(),
+            "3",
+            "1",
+            mask.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("threshold\ttoolbar\tunmasked<=0"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("passed=true\tmismatched=1\tunmasked=0\tmasked=1"),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn runs_regression_gate_from_binary() {
     let root = unique_temp_dir("gfm-cli-regression-gate");
 

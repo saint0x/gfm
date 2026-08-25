@@ -1,6 +1,7 @@
 use gfm_types::{GfmError, Result};
 use std::fs;
 use std::path::Path;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PixelSize {
@@ -106,6 +107,172 @@ pub struct PixelMismatch {
     pub y: u32,
     pub expected: [u8; 4],
     pub actual: [u8; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ParitySurface {
+    Layout,
+    Text,
+    Icon,
+    Selection,
+    Focus,
+    Hover,
+    Toolbar,
+    Thumbnail,
+    Preview,
+}
+
+impl ParitySurface {
+    pub const ALL: [Self; 9] = [
+        Self::Layout,
+        Self::Text,
+        Self::Icon,
+        Self::Selection,
+        Self::Focus,
+        Self::Hover,
+        Self::Toolbar,
+        Self::Thumbnail,
+        Self::Preview,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Layout => "layout",
+            Self::Text => "text",
+            Self::Icon => "icon",
+            Self::Selection => "selection",
+            Self::Focus => "focus",
+            Self::Hover => "hover",
+            Self::Toolbar => "toolbar",
+            Self::Thumbnail => "thumbnail",
+            Self::Preview => "preview",
+        }
+    }
+}
+
+impl FromStr for ParitySurface {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "layout" => Ok(Self::Layout),
+            "text" => Ok(Self::Text),
+            "icon" => Ok(Self::Icon),
+            "selection" => Ok(Self::Selection),
+            "focus" => Ok(Self::Focus),
+            "hover" => Ok(Self::Hover),
+            "toolbar" => Ok(Self::Toolbar),
+            "thumbnail" => Ok(Self::Thumbnail),
+            "preview" => Ok(Self::Preview),
+            _ => Err(format!("unknown parity surface: {value}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PixelDriftThreshold {
+    pub surface: ParitySurface,
+    pub max_unmasked_mismatches: usize,
+    pub max_masked_mismatches: Option<usize>,
+    pub require_explicit_masks: bool,
+}
+
+impl PixelDriftThreshold {
+    pub const fn finder_strict(surface: ParitySurface) -> Self {
+        Self {
+            surface,
+            max_unmasked_mismatches: 0,
+            max_masked_mismatches: None,
+            require_explicit_masks: true,
+        }
+    }
+
+    pub const fn as_tsv(self) -> ThresholdTsv {
+        ThresholdTsv(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThresholdTsv(PixelDriftThreshold);
+
+impl std::fmt::Display for ThresholdTsv {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let threshold = self.0;
+        let max_masked = threshold
+            .max_masked_mismatches
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unbounded-explicit".to_string());
+        write!(
+            formatter,
+            "threshold\t{}\tunmasked<={}\tmasked<={}\texplicit-masks={}",
+            threshold.surface.as_str(),
+            threshold.max_unmasked_mismatches,
+            max_masked,
+            threshold.require_explicit_masks
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PixelThresholdEvaluation {
+    pub threshold: PixelDriftThreshold,
+    pub passed: bool,
+    pub violations: Vec<PixelThresholdViolation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PixelThresholdViolation {
+    UnmaskedMismatchBudgetExceeded { actual: usize, max: usize },
+    MaskedMismatchBudgetExceeded { actual: usize, max: usize },
+    MaskedMismatchWithoutExplicitMask { actual: usize },
+}
+
+impl PixelThresholdViolation {
+    pub fn as_tsv(&self) -> String {
+        match self {
+            Self::UnmaskedMismatchBudgetExceeded { actual, max } => {
+                format!("violation\tunmasked-mismatch-budget\tactual={actual}\tmax={max}")
+            }
+            Self::MaskedMismatchBudgetExceeded { actual, max } => {
+                format!("violation\tmasked-mismatch-budget\tactual={actual}\tmax={max}")
+            }
+            Self::MaskedMismatchWithoutExplicitMask { actual } => {
+                format!("violation\tmasked-without-explicit-mask\tactual={actual}")
+            }
+        }
+    }
+}
+
+pub fn evaluate_pixel_threshold(
+    report: &PixelDiffReport,
+    threshold: PixelDriftThreshold,
+) -> PixelThresholdEvaluation {
+    let mut violations = Vec::new();
+    if report.unmasked_mismatches > threshold.max_unmasked_mismatches {
+        violations.push(PixelThresholdViolation::UnmaskedMismatchBudgetExceeded {
+            actual: report.unmasked_mismatches,
+            max: threshold.max_unmasked_mismatches,
+        });
+    }
+    if let Some(max) = threshold.max_masked_mismatches {
+        if report.masked_mismatches > max {
+            violations.push(PixelThresholdViolation::MaskedMismatchBudgetExceeded {
+                actual: report.masked_mismatches,
+                max,
+            });
+        }
+    }
+    if threshold.require_explicit_masks && report.masked_mismatches > 0 && report.masks.is_empty() {
+        violations.push(PixelThresholdViolation::MaskedMismatchWithoutExplicitMask {
+            actual: report.masked_mismatches,
+        });
+    }
+
+    PixelThresholdEvaluation {
+        threshold,
+        passed: violations.is_empty(),
+        violations,
+    }
 }
 
 pub fn diff_rgba(
@@ -304,5 +471,53 @@ mod tests {
         let masks = parse_masks("1\t2\t3\t4\n# comment\n", PixelSize::new(10, 10)).unwrap();
 
         assert_eq!(masks, vec![PixelMaskRect::new(1, 2, 3, 4)]);
+    }
+
+    #[test]
+    fn strict_threshold_rejects_unmasked_text_drift() {
+        let expected = vec![0, 0, 0, 255, 10, 10, 10, 255];
+        let actual = vec![0, 0, 0, 255, 9, 10, 10, 255];
+        let report = diff_rgba(
+            &expected,
+            &actual,
+            &PixelDiffOptions::strict(PixelSize::new(2, 1)),
+        )
+        .unwrap();
+        let evaluation = evaluate_pixel_threshold(
+            &report,
+            PixelDriftThreshold::finder_strict(ParitySurface::Text),
+        );
+
+        assert!(!evaluation.passed);
+        assert_eq!(
+            evaluation.violations,
+            vec![PixelThresholdViolation::UnmaskedMismatchBudgetExceeded { actual: 1, max: 0 }]
+        );
+    }
+
+    #[test]
+    fn strict_threshold_allows_explicit_masked_drift() {
+        let expected = vec![0, 0, 0, 255, 10, 10, 10, 255];
+        let actual = vec![0, 0, 0, 255, 9, 10, 10, 255];
+        let options = PixelDiffOptions::strict(PixelSize::new(2, 1))
+            .with_masks(vec![PixelMaskRect::new(1, 0, 1, 1)]);
+        let report = diff_rgba(&expected, &actual, &options).unwrap();
+        let evaluation = evaluate_pixel_threshold(
+            &report,
+            PixelDriftThreshold::finder_strict(ParitySurface::Focus),
+        );
+
+        assert!(evaluation.passed);
+        assert!(evaluation.violations.is_empty());
+    }
+
+    #[test]
+    fn threshold_tsv_is_stable_for_cli_and_fozzy() {
+        let threshold = PixelDriftThreshold::finder_strict(ParitySurface::Toolbar);
+
+        assert_eq!(
+            threshold.as_tsv().to_string(),
+            "threshold\ttoolbar\tunmasked<=0\tmasked<=unbounded-explicit\texplicit-masks=true"
+        );
     }
 }
