@@ -7,11 +7,16 @@ use std::time::SystemTime;
 
 mod quicklook;
 mod schedule;
+mod thumbnail;
 
 pub use quicklook::{QuickLookControllerMode, QuickLookSessionContract, QuickLookSessionInput};
 pub use schedule::{
     PreviewPriority, PreviewScheduler, PreviewSchedulingPolicy, PreviewTask, PreviewTaskDecision,
     Rect, Viewport,
+};
+pub use thumbnail::{
+    ThumbnailCacheDisposition, ThumbnailGenerationContract, ThumbnailGenerationInput,
+    ThumbnailGeneratorMode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

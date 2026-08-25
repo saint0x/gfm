@@ -24,7 +24,7 @@ use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path,
     PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
     PreviewSchedulingPolicy, PreviewSecurityPolicy, PreviewTask, QuickLookSessionContract,
-    QuickLookSessionInput, Rect, Viewport,
+    QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
 use gfm_store::ContentArchive;
 use gfm_testkit::{
@@ -761,6 +761,25 @@ fn run() -> Result<()> {
             });
             let contract =
                 QuickLookSessionContract::from_input(&PreviewSecurityPolicy::default(), input)?;
+            println!("{}", contract.as_tsv());
+        }
+        Some("thumbnail-generation") => {
+            let path = required_path(args.next(), "thumbnail-generation requires a path")?;
+            let record = record_for_path(&path, None, false)?;
+            let rect = Rect::new(0, 0, 160, 160);
+            let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
+            let input = ThumbnailGenerationInput::new(
+                PreviewRequestKey::new(record.id, path, PreviewKind::Thumbnail),
+                rect,
+                viewport,
+            )
+            .with_size(512, 2_000)
+            .with_invalidation(PreviewInvalidationEvent {
+                metadata_changed: true,
+                ..PreviewInvalidationEvent::default()
+            });
+            let contract =
+                ThumbnailGenerationContract::from_input(&PreviewSecurityPolicy::default(), input)?;
             println!("{}", contract.as_tsv());
         }
         Some("preview-schedule") => {
@@ -1512,6 +1531,7 @@ fn print_usage() {
   gfm native-icon <path>
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm quicklook-session <path>
+  gfm thumbnail-generation <path>
   gfm preview-schedule
   gfm macrobench <workspace> [smoke|standard]
   gfm parity-fixture <workspace> [smoke|standard]
