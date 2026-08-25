@@ -1895,7 +1895,10 @@ fn performs_journaled_copy_move_and_delete_from_binary() {
     let source = root.join("source.txt");
     let copy = root.join("copy.txt");
     let moved = root.join("moved.txt");
+    let link = root.join("source-link");
+    let link_copy = root.join("copy-link");
     fs::write(&source, "hello ops").unwrap();
+    make_symlink(&source, &link);
     let modified = filetime::FileTime::from_unix_time(1_700_000_001, 456_000_000);
     filetime::set_file_mtime(&source, modified).unwrap();
     let xattr_supported = match xattr::set(&source, "user.gfm.cli-test", b"preserved") {
@@ -1926,6 +1929,21 @@ fn performs_journaled_copy_move_and_delete_from_binary() {
             Some(b"preserved".as_slice())
         );
     }
+
+    run_gfm(
+        &journal,
+        ["copy", link.to_str().unwrap(), link_copy.to_str().unwrap()],
+    );
+    #[cfg(unix)]
+    {
+        assert!(fs::symlink_metadata(&link_copy)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read_link(&link_copy).unwrap(), source);
+    }
+    #[cfg(not(unix))]
+    assert_eq!(fs::read_to_string(&link_copy).unwrap(), "link");
 
     run_gfm(
         &journal,

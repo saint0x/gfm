@@ -153,7 +153,9 @@ fn copy_path(from: &Path, to: &Path, conflict: ConflictPolicy) -> Result<()> {
     ensure_source_exists(from)?;
     prepare_destination(to, conflict)?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
-    if metadata.is_dir() {
+    if metadata.file_type().is_symlink() {
+        copy_symlink(from, to)
+    } else if metadata.is_dir() {
         copy_directory(from, to)
     } else {
         copy_file(from, to).map(|_| ())
@@ -208,13 +210,24 @@ fn copy_directory(from: &Path, to: &Path) -> Result<()> {
         let destination = to.join(entry.file_name());
         let child_metadata =
             fs::symlink_metadata(&source).map_err(|err| GfmError::io(&source, err))?;
-        if child_metadata.is_dir() {
+        if child_metadata.file_type().is_symlink() {
+            copy_symlink(&source, &destination)?;
+        } else if child_metadata.is_dir() {
             copy_directory(&source, &destination)?;
         } else {
             let _ = copy_file(&source, &destination)?;
         }
     }
     Ok(())
+}
+
+fn copy_symlink(from: &Path, to: &Path) -> Result<()> {
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
+    let target = fs::read_link(from).map_err(|err| GfmError::io(from, err))?;
+    create_symlink(&target, to)?;
+    preserve_xattrs(from, to)
 }
 
 fn copy_file(from: &Path, to: &Path) -> Result<CopyMethod> {
@@ -234,6 +247,20 @@ fn copy_file(from: &Path, to: &Path) -> Result<CopyMethod> {
             Ok(CopyMethod::ByteCopy)
         }
         Err(err) => Err(GfmError::io(from, err)),
+    }
+}
+
+#[cfg(unix)]
+fn create_symlink(target: &Path, link: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(target, link).map_err(|err| GfmError::io(link, err))
+}
+
+#[cfg(windows)]
+fn create_symlink(target: &Path, link: &Path) -> Result<()> {
+    if target.is_dir() {
+        std::os::windows::fs::symlink_dir(target, link).map_err(|err| GfmError::io(link, err))
+    } else {
+        std::os::windows::fs::symlink_file(target, link).map_err(|err| GfmError::io(link, err))
     }
 }
 
@@ -654,6 +681,60 @@ mod tests {
             filetime::FileTime::from_last_modification_time(&copied),
             expected
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_preserves_symlink_instead_of_copying_target() {
+        let root = unique_temp_dir("gfm-ops-symlink");
+        let journal = root.join("journal.log");
+        let target = root.join("target.txt");
+        let source = root.join("source-link");
+        let destination = root.join("destination-link");
+        fs::write(&target, "target bytes").unwrap();
+        std::os::unix::fs::symlink(&target, &source).unwrap();
+
+        Operator::new(OperationContext::new(&journal))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        let destination_metadata = fs::symlink_metadata(&destination).unwrap();
+        assert!(destination_metadata.file_type().is_symlink());
+        assert_eq!(fs::read_link(&destination).unwrap(), target);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_directory_preserves_nested_symlink() {
+        let root = unique_temp_dir("gfm-ops-directory-symlink");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        let target = root.join("outside-target.txt");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(&target, "outside").unwrap();
+        std::os::unix::fs::symlink(&target, source.join("link")).unwrap();
+
+        Operator::new(OperationContext::new(&journal))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        let copied_link = destination.join("link");
+        assert!(fs::symlink_metadata(&copied_link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read_link(copied_link).unwrap(), target);
 
         fs::remove_dir_all(root).unwrap();
     }
