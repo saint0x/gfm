@@ -2061,7 +2061,11 @@ impl Indexer {
         query: &str,
     ) -> Result<(LiveIndex, usize)> {
         let mut live = self.load(records_path)?.into_live();
-        let terms = live.load_content_set_postings(content_paths, query)?;
+        let terms = live.load_content_set_postings_with_budget(
+            content_paths,
+            query,
+            SearchLookupBudget::default(),
+        )?;
         Ok((live, terms))
     }
 
@@ -2072,7 +2076,11 @@ impl Indexer {
         query: &str,
     ) -> Result<(LiveIndex, usize)> {
         let mut live = self.load(records_path)?.into_live();
-        let terms = live.load_content_manifest_postings(manifest_path, query)?;
+        let terms = live.load_content_manifest_postings_with_budget(
+            manifest_path,
+            query,
+            SearchLookupBudget::default(),
+        )?;
         Ok((live, terms))
     }
 
