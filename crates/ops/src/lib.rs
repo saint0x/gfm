@@ -1400,7 +1400,6 @@ fn copy_directory(
             create_new_directory(to)?;
             created_destination = true;
         }
-        preserve_metadata(from, to, &metadata)?;
         progress.advance(&metadata)?;
 
         for entry in fs::read_dir(from).map_err(|err| GfmError::io(from, err))? {
@@ -1473,6 +1472,7 @@ fn copy_directory(
                 )?;
             }
         }
+        preserve_metadata(from, to, &metadata)?;
         Ok(())
     })();
     if rollback_incomplete_fresh_destination
@@ -3071,6 +3071,40 @@ mod tests {
             .is_symlink());
         assert_eq!(fs::read_link(copied_link).unwrap(), target);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_directory_applies_readonly_permissions_after_children() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("gfm-ops-readonly-directory");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("nested").join("file.txt"), "nested").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o555)).unwrap();
+
+        Operator::new(OperationContext::new(&journal))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(destination.join("nested").join("file.txt")).unwrap(),
+            "nested"
+        );
+        assert_eq!(
+            fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+            0o555
+        );
+
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o755)).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 
