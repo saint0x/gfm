@@ -274,6 +274,7 @@ gfm/
 - Publishes durable payload/progress records from the retriable background content indexing worker as it plans, runs retry attempts, and records terminal status.
 - Provides structured cancellation tokens where parent cancellation propagates to child and grandchild work, child cancellation stays local to that branch, and nested worker checks observe cancellation through the shared jobs-layer contract.
 - Classifies retriable job failures as transient, permission, missing-file, corrupt-file, offline-volume, or permanent before recovery admission, applies bounded exponential backoff only to retryable classes, and exposes the decision through an operator CLI report.
+- Retries adaptive scheduled repair, maintenance, and rebuild producers through the isolated jobs worker with capped retry policy, persistent attempt journal entries, runtime metadata updates, and a deterministic operator probe for validating transient retry behavior.
 - Admits foreground copy, move, rename, delete, and trash operation CLI jobs through the volume-isolated worker path before they enter the operation engine.
 - Admits interactive live content extraction/search jobs through the same volume-isolated worker path before they crawl, extract, and snippet candidate files.
 - Admits Quick Look preview and thumbnail generation jobs through the same volume-isolated worker path before producing preview contracts.

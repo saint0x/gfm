@@ -1854,9 +1854,11 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
 
     let catalog = unique_temp_path("gfm-cli-sidecar-recovery-runtime", "gfmjobs");
     let progress = unique_temp_path("gfm-cli-sidecar-recovery-runtime", "gfmprogress");
+    let journal = unique_temp_path("gfm-cli-sidecar-recovery-runtime", "journal");
     let recover_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
         .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_JOB_JOURNAL", &journal)
         .args([
             "sidecar-recover-adaptive",
             records.to_str().unwrap(),
@@ -1905,6 +1907,15 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
         progress_text.contains("\tcompleted\t1\t1\tcompleted\t"),
         "{progress_text}"
     );
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tsidecar repair"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t1\tcompleted\tsidecar repair"),
+        "{journal_text}"
+    );
 
     let prefix_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["prefix-verify", prefixes.to_str().unwrap()])
@@ -1923,6 +1934,7 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
     fs::remove_file(dictionary).unwrap();
     fs::remove_file(catalog).unwrap();
     fs::remove_file(progress).unwrap();
+    fs::remove_file(journal).unwrap();
     fs::remove_dir_all(quarantine).unwrap();
 }
 
@@ -3994,6 +4006,71 @@ fn reports_retry_backoff_plan_from_binary() {
             .contains("retry-plan\tclass=permission\tretryable=false\tnext-delay-ms=0"),
         "{permission_stdout}"
     );
+}
+
+#[test]
+fn scheduled_runtime_retry_probe_retries_transient_failure_from_binary() {
+    let state = unique_temp_path("gfm-cli-runtime-retry-probe", "state");
+    let journal = unique_temp_path("gfm-cli-runtime-retry-probe", "journal");
+    let catalog = unique_temp_path("gfm-cli-runtime-retry-probe", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-runtime-retry-probe", "gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["jobs-runtime-retry-probe", state.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("runtime-retry-probe\tcompleted\t2\tRun"),
+        "{stdout}"
+    );
+    assert_eq!(fs::read_to_string(&state).unwrap(), "2");
+
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\truntime retry probe"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t1\tfailed:temporary runtime probe busy\truntime retry probe"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\truntime retry probe"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\truntime retry probe"),
+        "{journal_text}"
+    );
+
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains("runtime retry probe"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tbackground\tbackground\truntime retry probe"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tcompleted\t1\t1\tcompleted\t"),
+        "{progress_text}"
+    );
+
+    fs::remove_file(state).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
 }
 
 #[test]

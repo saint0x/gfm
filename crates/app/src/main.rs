@@ -3125,6 +3125,32 @@ fn run() -> Result<()> {
                 println!("{line}");
             }
         }
+        Some("jobs-runtime-retry-probe") => {
+            let state = required_path(
+                args.next(),
+                "jobs-runtime-retry-probe requires an attempt state path",
+            )?;
+            let pressure = parse_optional_scheduling_pressure(&mut args)?;
+            let outcome = run_scheduled_volume_task(
+                parent_volume(&state),
+                Priority::Background,
+                "runtime retry probe",
+                pressure,
+                move || runtime_retry_probe(&state),
+            )?;
+            if outcome.deferred {
+                println!(
+                    "runtime-retry-probe\tdeferred\t{:?}",
+                    outcome.scheduling_action
+                );
+            } else {
+                println!(
+                    "runtime-retry-probe\tcompleted\t{}\t{:?}",
+                    outcome.result.unwrap_or_default(),
+                    outcome.scheduling_action
+                );
+            }
+        }
         Some("ops-recover") => {
             let (journal, policy) = parse_ops_recover_args(&mut args)?;
             let report =
@@ -3946,7 +3972,7 @@ fn run_scheduled_volume_task<T>(
     priority: Priority,
     label: &'static str,
     pressure: SchedulingPressure,
-    work: impl FnOnce() -> Result<T> + Send + 'static,
+    work: impl Fn() -> Result<T> + Send + Sync + 'static,
 ) -> Result<ScheduledTaskOutcome<T>>
 where
     T: Send + 'static,
@@ -3976,7 +4002,7 @@ where
         format!("{}:{label}:adaptive", priority.as_str()),
     )?;
     let runtime_task = runtime.clone();
-    let task = Task::new(job.clone(), move |_| {
+    let task = RetriableTask::new(job.clone(), move |_| {
         runtime_task.running()?;
         let result = work()?;
         *result_slot_task
@@ -3984,8 +4010,13 @@ where
             .expect("scheduled task result lock poisoned") = Some(result);
         Ok(())
     });
-    let report = WorkerPool::new(scheduling.worker_threads)
-        .run_isolated(vec![task], scheduling.volume_policy);
+    let journal = JobJournal::new(default_job_journal_path());
+    let report = WorkerPool::new(scheduling.worker_threads).run_retriable_isolated(
+        vec![task],
+        &journal,
+        RetryPolicy { max_attempts: 2 },
+        scheduling.volume_policy,
+    );
     let outcome = report
         .outcomes
         .iter()
@@ -4859,6 +4890,20 @@ fn priority_name(priority: Priority) -> &'static str {
     priority.as_str()
 }
 
+fn runtime_retry_probe(state: &Path) -> Result<usize> {
+    let attempt = std::fs::read_to_string(state)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(0)
+        + 1;
+    std::fs::write(state, attempt.to_string()).map_err(|err| GfmError::io(state, err))?;
+    if attempt == 1 {
+        Err(GfmError::Format("temporary runtime probe busy".to_string()))
+    } else {
+        Ok(attempt)
+    }
+}
+
 fn stream_stage(stage: SearchStreamStage) -> &'static str {
     match stage {
         SearchStreamStage::Hot => "hot",
@@ -5151,6 +5196,7 @@ fn print_usage() {
   gfm jobs-fairness-plan
   gfm jobs-progress-snapshot <progress.gfmprogress>
   gfm jobs-cancel-tree
+  gfm jobs-runtime-retry-probe <attempt-state> [<nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>]
   gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
   gfm watch-once <root>
   gfm copy <source> <destination>
