@@ -1115,6 +1115,85 @@ fn persistent_index_state_tracks_volume_mount_and_epoch() {
 }
 
 #[test]
+fn persistent_index_recovery_rebuilds_missing_or_stale_state() {
+    let root = unique_temp_dir("gfm-index-recovery-state-root");
+    let records = unique_temp_path("gfm-index-recovery-state-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-index-recovery-state", "gfmstate");
+    let quarantine = unique_temp_dir("gfm-index-recovery-state-quarantine");
+    fs::write(root.join("Recover.md"), "state").unwrap();
+
+    let indexer = Indexer::default();
+    indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    fs::remove_file(&state_path).unwrap();
+
+    let plan = indexer.plan_persistent_recovery(&root, &records, &state_path);
+    assert_eq!(plan.action, PersistentIndexAction::RebuildState);
+    assert_eq!(plan.reason, PersistentIndexReason::MissingState);
+    assert_eq!(plan.record_count, Some(2));
+
+    let recovery = indexer
+        .recover_persistent(&root, &records, &state_path, &quarantine)
+        .unwrap();
+
+    assert_eq!(recovery.before.action, PersistentIndexAction::RebuildState);
+    assert!(recovery.rebuilt_state);
+    assert!(!recovery.rebuilt_records);
+    assert!(recovery.after.ready());
+    assert_eq!(IndexVolumeState::read(&state_path).unwrap().record_count, 2);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+    fs::remove_dir_all(quarantine).unwrap();
+}
+
+#[test]
+fn persistent_index_recovery_quarantines_corrupt_records_before_rebuild() {
+    let root = unique_temp_dir("gfm-index-recovery-records-root");
+    let records = unique_temp_path("gfm-index-recovery-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-index-recovery-records-state", "gfmstate");
+    let quarantine = unique_temp_dir("gfm-index-recovery-records-quarantine");
+    fs::write(root.join("Recover.md"), "state").unwrap();
+
+    let indexer = Indexer::default();
+    indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    fs::write(&records, "gfm-records-v1\ncorrupt").unwrap();
+
+    let plan = indexer.plan_persistent_recovery(&root, &records, &state_path);
+    assert_eq!(
+        plan.action,
+        PersistentIndexAction::QuarantineRecordsAndRebuild
+    );
+    assert_eq!(plan.reason, PersistentIndexReason::UnreadableRecords);
+
+    let recovery = indexer
+        .recover_persistent(&root, &records, &state_path, &quarantine)
+        .unwrap();
+
+    assert!(recovery.rebuilt_records);
+    assert!(recovery.rebuilt_state);
+    assert!(recovery
+        .quarantined_records_path
+        .as_ref()
+        .is_some_and(|path| path.exists()));
+    assert!(recovery.after.ready());
+    assert!(!indexer
+        .load(&records)
+        .unwrap()
+        .search("recover", 5)
+        .is_empty());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+    fs::remove_dir_all(quarantine).unwrap();
+}
+
+#[test]
 fn scan_progress_checkpoint_tracks_completed_scan_publication() {
     let root = unique_temp_dir("gfm-scan-progress-root");
     let records = unique_temp_path("gfm-scan-progress-records", "gfmidx");

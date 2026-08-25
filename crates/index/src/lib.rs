@@ -31,6 +31,7 @@ mod backpressure;
 mod cursor;
 mod metadata;
 mod progress;
+mod recovery;
 mod rename;
 mod repair;
 mod scan;
@@ -46,6 +47,10 @@ pub use cursor::{
 };
 pub use metadata::{diff_metadata, MetadataUpdateReport};
 pub use progress::{ScanProgressCheckpoint, SCAN_PROGRESS_SCHEMA_VERSION};
+pub use recovery::{
+    persistent_index_action_name, persistent_index_reason_name, plan_persistent_index_recovery,
+    PersistentIndexAction, PersistentIndexPlan, PersistentIndexReason, PersistentIndexRecovery,
+};
 pub use rename::{correlate_rename, RenameCorrelationReport};
 pub use repair::{RepairPriority, RepairReason, RepairSchedule, SubtreeRepairJob};
 pub use scan::{FairScanReport, FairScanScheduler, FairScanSummary, ScanLane};
@@ -1210,6 +1215,34 @@ impl Indexer {
         let state = snapshot.volume_state(records_path.to_path_buf(), previous.as_ref())?;
         state.write(state_path)?;
         Ok(state)
+    }
+
+    pub fn plan_persistent_recovery(
+        &self,
+        root: impl AsRef<Path>,
+        records_path: impl AsRef<Path>,
+        state_path: impl AsRef<Path>,
+    ) -> PersistentIndexPlan {
+        plan_persistent_index_recovery(root, records_path, state_path)
+    }
+
+    pub fn recover_persistent(
+        &self,
+        root: impl AsRef<Path>,
+        records_path: impl AsRef<Path>,
+        state_path: impl AsRef<Path>,
+        quarantine_dir: impl AsRef<Path>,
+    ) -> Result<PersistentIndexRecovery> {
+        let root = root.as_ref().to_path_buf();
+        let records_path = records_path.as_ref().to_path_buf();
+        let state_path = state_path.as_ref().to_path_buf();
+        recovery::recover_persistent_index(
+            &root,
+            &records_path,
+            &state_path,
+            quarantine_dir,
+            || self.build_persistent(&root, &records_path, &state_path),
+        )
     }
 
     pub fn build_with_progress(

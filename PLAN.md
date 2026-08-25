@@ -443,6 +443,12 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - the same bounded content merge policy used by background maintenance emits a deterministic schedule with merge segments, retained segments, tier, merge bytes, tombstone pressure, and a concrete scheduling reason;
   - live I/O pressure, thermal state, battery state, user activity, and index-density thresholds adapt the schedule into run, throttle, or defer actions with bounded effective merge bytes;
   - operator and CI surfaces can gate index density drift and compaction pressure without hydrating postings.
+- Persistent index recovery:
+  - record archives and volume-state files are classified before startup use as ready, missing, unreadable, schema-mismatched, root-mismatched, path-mismatched, or count-mismatched;
+  - valid records with missing, stale, unreadable, or migratable state rebuild the state file without rescanning the volume;
+  - missing records trigger a full records-plus-state rebuild plan;
+  - unreadable record archives are quarantined before rebuilding so corrupted bytes are preserved for diagnostics while startup can recover to a valid index;
+  - diagnostics commands expose both dry-run recovery plans and executing recovery transcripts with before/after state.
 
 ### Query Pipeline
 

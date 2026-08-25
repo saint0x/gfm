@@ -1,6 +1,6 @@
 use gfm_config::ConfigStore;
 use gfm_content::Extractor;
-use gfm_index::Indexer;
+use gfm_index::{Indexer, PersistentIndexPlan, PersistentIndexRecovery};
 use gfm_store::{read_records, ContentArchive};
 use gfm_telemetry::{export_diagnostics, DiagnosticPrivacy, IoSample, LatencyMetric, Telemetry};
 use gfm_types::{FileKind, GfmError, Result};
@@ -65,6 +65,43 @@ pub fn rebuild_index(spec: &RebuildSpec) -> Result<RebuildReport> {
         inaccessible,
         content_indexed,
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistentIndexRecoverySpec {
+    pub root: PathBuf,
+    pub records_path: PathBuf,
+    pub state_path: PathBuf,
+    pub quarantine_dir: PathBuf,
+}
+
+impl PersistentIndexRecoverySpec {
+    pub fn new(
+        root: impl Into<PathBuf>,
+        records_path: impl Into<PathBuf>,
+        state_path: impl Into<PathBuf>,
+        quarantine_dir: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            root: root.into(),
+            records_path: records_path.into(),
+            state_path: state_path.into(),
+            quarantine_dir: quarantine_dir.into(),
+        }
+    }
+}
+
+pub fn plan_index_recovery(spec: &PersistentIndexRecoverySpec) -> PersistentIndexPlan {
+    Indexer::default().plan_persistent_recovery(&spec.root, &spec.records_path, &spec.state_path)
+}
+
+pub fn recover_index(spec: &PersistentIndexRecoverySpec) -> Result<PersistentIndexRecovery> {
+    Indexer::default().recover_persistent(
+        &spec.root,
+        &spec.records_path,
+        &spec.state_path,
+        &spec.quarantine_dir,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

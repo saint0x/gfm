@@ -258,9 +258,12 @@ cargo run -p gfm -- parity-gate parity-gate.tsv
 cargo run -p gfm -- parity-review parity-gate.tsv /tmp/gfm-parity-review
 cargo run -p gfm -- parity-profile 25A354 dark 2x display-p3
 cargo run -p gfm -- regression-gate /tmp/gfm-bench smoke
+cargo run -p gfm -- diagnostics-index-recovery-plan /tmp/root records.gfmidx state.gfmstate quarantine
+cargo run -p gfm -- diagnostics-index-recover /tmp/root records.gfmidx state.gfmstate quarantine
 ```
 
 `regression-gate` materializes the benchmark indexes and fails on latency, index-density, prefix lookup, fuzzy lookup, and sidecar-truncation drift.
+`diagnostics-index-recovery-plan` and `diagnostics-index-recover` classify persistent record/state health, rebuild missing or stale state, and quarantine corrupt record archives before rebuilding.
 
 Build, sign, and register the native app bundle:
 

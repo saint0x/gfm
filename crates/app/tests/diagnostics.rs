@@ -54,6 +54,81 @@ fn diagnostics_rebuilds_and_inspects_indexes_from_binary() {
 }
 
 #[test]
+fn diagnostics_plans_and_recovers_persistent_index_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-recovery");
+    let records = root.join("records.gfmidx");
+    let state = root.join("state.gfmstate");
+    let quarantine = root.join("quarantine");
+    fs::write(root.join("needle.md"), "diagnostic needle").unwrap();
+
+    let rebuild = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        rebuild.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuild.stderr)
+    );
+    fs::remove_file(&state).unwrap();
+
+    let plan = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-index-recovery-plan",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(plan.status.success());
+    let plan_stdout = String::from_utf8(plan.stdout).unwrap();
+    assert!(
+        plan_stdout.contains("action=rebuild-state"),
+        "{plan_stdout}"
+    );
+    assert!(
+        plan_stdout.contains("reason=missing-state"),
+        "{plan_stdout}"
+    );
+
+    let recover = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-index-recover",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        recover.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recover.stderr)
+    );
+    let recover_stdout = String::from_utf8(recover.stdout).unwrap();
+    assert!(
+        recover_stdout.contains("rebuilt-records=false"),
+        "{recover_stdout}"
+    );
+    assert!(
+        recover_stdout.contains("rebuilt-state=true"),
+        "{recover_stdout}"
+    );
+    assert!(recover_stdout.contains("action=ready"), "{recover_stdout}");
+    assert!(state.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn diagnostics_exports_trace_and_selects_parity_baseline_from_binary() {
     let root = unique_temp_dir("gfm-cli-diagnostics-config");
     let trace = root.join("trace.json");

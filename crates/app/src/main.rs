@@ -3,8 +3,8 @@ use gfm_content::{
     CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor, QuarantineFailureKind,
 };
 use gfm_diagnostics::{
-    export_operator_trace, inspect_storage, rebuild_index, select_parity_baseline, RebuildSpec,
-    StorageInspection,
+    export_operator_trace, inspect_storage, plan_index_recovery, rebuild_index, recover_index,
+    select_parity_baseline, PersistentIndexRecoverySpec, RebuildSpec, StorageInspection,
 };
 use gfm_fs::{
     read_directory, record_for_path, scan_tree, FinderMetadataReport, PackageTraversalMode,
@@ -1843,6 +1843,58 @@ fn run() -> Result<()> {
                 eprintln!("inaccessible\t{}", report.inaccessible);
             }
         }
+        Some("diagnostics-index-recovery-plan") => {
+            let root = required_path(
+                args.next(),
+                "diagnostics-index-recovery-plan requires a root path",
+            )?;
+            let records = required_path(
+                args.next(),
+                "diagnostics-index-recovery-plan requires a records path",
+            )?;
+            let state = required_path(
+                args.next(),
+                "diagnostics-index-recovery-plan requires a state path",
+            )?;
+            let quarantine = args
+                .next()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| records.with_extension("quarantine"));
+            let spec = PersistentIndexRecoverySpec::new(root, records, state, quarantine);
+            println!("{}", plan_index_recovery(&spec).as_tsv());
+        }
+        Some("diagnostics-index-recover") => {
+            let root = required_path(
+                args.next(),
+                "diagnostics-index-recover requires a root path",
+            )?;
+            let records = required_path(
+                args.next(),
+                "diagnostics-index-recover requires a records path",
+            )?;
+            let state = required_path(
+                args.next(),
+                "diagnostics-index-recover requires a state path",
+            )?;
+            let quarantine = args
+                .next()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| records.with_extension("quarantine"));
+            let spec = PersistentIndexRecoverySpec::new(root, records, state, quarantine);
+            let report = recover_index(&spec)?;
+            println!("{}", report.before.as_tsv());
+            println!(
+                "persistent-index-recovery\trebuilt-records={}\trebuilt-state={}\tquarantined-records={}",
+                report.rebuilt_records,
+                report.rebuilt_state,
+                report
+                    .quarantined_records_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            );
+            println!("{}", report.after.as_tsv());
+        }
         Some("diagnostics-trace-export") => {
             let output = required_path(
                 args.next(),
@@ -3022,6 +3074,8 @@ fn print_usage() {
   gfm config-check [config.toml]
   gfm config-dump [config.toml]
   gfm diagnostics-index-rebuild <root> <records.gfmidx> [content.gfmcontent]
+  gfm diagnostics-index-recovery-plan <root> <records.gfmidx> <state.gfmstate> [quarantine-dir]
+  gfm diagnostics-index-recover <root> <records.gfmidx> <state.gfmstate> [quarantine-dir]
   gfm diagnostics-trace-export <trace.json>
   gfm diagnostics-parity-baseline <config.toml> <baseline-root> <macos-build>
   gfm diagnostics-storage-inspect <records.gfmidx|content.gfmcontent>
