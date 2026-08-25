@@ -366,11 +366,16 @@ This avoids treating every rename as delete-plus-create when the platform expose
 5. Re-rank using:
    - exact filename match.
    - prefix match.
+   - substring and token-frequency signals.
    - path proximity.
+   - extension, tag, metadata filter, and content matches.
+   - fuzzy candidate verification quality.
    - recency.
    - file kind.
+   - user-pinned boosts.
    - current folder affinity.
    - user usage signals.
+   - explicit Finder-style intent boosts for applications, recent items, common folders, screenshots, and project folders.
 6. Cancel stale queries on every keystroke.
 7. Preserve result stability enough that the UI does not jump violently while typing.
 

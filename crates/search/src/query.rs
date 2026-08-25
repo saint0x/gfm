@@ -167,7 +167,7 @@ impl QueryFilter {
                 .is_some_and(|extension| extension == *value),
             Self::Tag(value, _) => record.tags.iter().any(|tag| normalize(tag) == *value),
             Self::Scope(scope, _) => scope.matches(record),
-            Self::Kind(kind, _) => kind.matches(record.kind),
+            Self::Kind(kind, _) => kind.matches_kind(record.kind),
             Self::Size(size, _) => size.matches(record.len),
             Self::Date(field, date, _) => field.time(record).is_some_and(|time| date.matches(time)),
         };
@@ -211,7 +211,7 @@ impl QueryKind {
         }
     }
 
-    fn matches(self, kind: FileKind) -> bool {
+    pub(crate) fn matches_kind(self, kind: FileKind) -> bool {
         matches!(
             (self, kind),
             (Self::Directory, FileKind::Directory)

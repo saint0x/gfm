@@ -1,6 +1,7 @@
 mod fuzzy;
 mod intent;
 mod query;
+mod ranking;
 mod session;
 mod shard;
 
@@ -10,6 +11,12 @@ use query::{normalize, tokenize};
 pub use query::{
     DateComparison, DateField, QueryExpr, QueryFilter, QueryKind, QueryProximity, QueryScope,
     SearchQuery, SizeComparison,
+};
+use ranking::{
+    capped_frequency, count_term, filter_kind_matches, kind_score, recency_score, RankAccumulator,
+    CONTENT, CONTENT_FREQUENCY, EXACT_NAME, EXTENSION, FUZZY_NAME, KIND_MATCH, NAME_FREQUENCY,
+    NAME_TOKEN, PATH_COMPONENT, PATH_FREQUENCY, PHRASE, PREFIX_NAME, PROXIMITY, SUBSTRING_NAME,
+    TAG, USER_PINNED,
 };
 pub use session::SearchSupersession;
 pub use shard::ShardedSearchIndex;
@@ -44,6 +51,7 @@ pub struct SearchIndex {
     extension: BTreeMap<String, BTreeSet<FileId>>,
     tags: BTreeMap<String, BTreeSet<FileId>>,
     content_terms: BTreeMap<String, BTreeMap<FileId, Vec<u32>>>,
+    pinned: BTreeSet<FileId>,
 }
 
 impl SearchIndex {
@@ -73,6 +81,7 @@ impl SearchIndex {
     pub fn remove(&mut self, id: FileId) -> Option<FileRecord> {
         let record = self.records.remove(&id)?;
         self.remove_terms(&record);
+        self.pinned.remove(&id);
         self.paths.remove(&path_key(&record.path));
         Some(record)
     }
@@ -107,6 +116,22 @@ impl SearchIndex {
 
     pub fn records(&self) -> impl Iterator<Item = &FileRecord> {
         self.records.values()
+    }
+
+    pub fn pin(&mut self, id: FileId) -> bool {
+        if self.records.contains_key(&id) {
+            self.pinned.insert(id)
+        } else {
+            false
+        }
+    }
+
+    pub fn unpin(&mut self, id: FileId) -> bool {
+        self.pinned.remove(&id)
+    }
+
+    pub fn is_pinned(&self, id: FileId) -> bool {
+        self.pinned.contains(&id)
     }
 
     pub fn insert_content(&mut self, id: FileId, text: &str) {
@@ -286,12 +311,12 @@ impl SearchIndex {
             return Ok(Vec::new());
         }
 
-        let mut scores: HashMap<FileId, (i64, MatchReason)> = HashMap::new();
+        let mut scores: HashMap<FileId, RankAccumulator> = HashMap::new();
         let text = query.terms.join(" ");
 
         if !text.is_empty() {
             if let Some(ids) = self.name_exact.get(&text) {
-                add_scores(&mut scores, ids, 1_000, MatchReason::ExactName);
+                add_scores(&mut scores, ids, EXACT_NAME, MatchReason::ExactName);
             }
         }
 
@@ -301,27 +326,27 @@ impl SearchIndex {
                 if !term.starts_with(&text) {
                     break;
                 }
-                add_scores(&mut scores, ids, 700, MatchReason::PrefixName);
+                add_scores(&mut scores, ids, PREFIX_NAME, MatchReason::PrefixName);
             }
         }
 
         for term in &query.terms {
             cancellation.check()?;
             if let Some(ids) = self.name_terms.get(term) {
-                add_scores(&mut scores, ids, 500, MatchReason::SubstringName);
+                add_scores(&mut scores, ids, NAME_TOKEN, MatchReason::SubstringName);
             }
             if let Some(ids) = self.path_terms.get(term) {
-                add_scores(&mut scores, ids, 250, MatchReason::PathComponent);
+                add_scores(&mut scores, ids, PATH_COMPONENT, MatchReason::PathComponent);
             }
             if let Some(ids) = self.extension.get(term) {
-                add_scores(&mut scores, ids, 350, MatchReason::Extension);
+                add_scores(&mut scores, ids, EXTENSION, MatchReason::Extension);
             }
             if let Some(ids) = self.tags.get(term) {
-                add_scores(&mut scores, ids, 325, MatchReason::Tag);
+                add_scores(&mut scores, ids, TAG, MatchReason::Tag);
             }
             if pass.includes_deep() {
                 if let Some(ids) = self.content_ids(term) {
-                    add_scores(&mut scores, &ids, 150, MatchReason::Content);
+                    add_scores(&mut scores, &ids, CONTENT, MatchReason::Content);
                 }
             }
         }
@@ -339,8 +364,10 @@ impl SearchIndex {
                     {
                         scores
                             .entry(id)
-                            .and_modify(|(score, _)| *score += 100)
-                            .or_insert((100, MatchReason::FuzzyName));
+                            .and_modify(|score| score.add(FUZZY_NAME, MatchReason::FuzzyName))
+                            .or_insert_with(|| {
+                                RankAccumulator::new(FUZZY_NAME, MatchReason::FuzzyName)
+                            });
                     }
                 }
             }
@@ -355,12 +382,12 @@ impl SearchIndex {
                 cancellation.check()?;
                 scores
                     .entry(record.id)
-                    .and_modify(|(score, _)| *score += 450)
+                    .and_modify(|score| score.add(PHRASE, MatchReason::PathComponent))
                     .or_insert_with(|| {
                         if pass.includes_deep() && self.content_matches_phrase(record.id, phrase) {
-                            (450, MatchReason::Content)
+                            RankAccumulator::new(PHRASE, MatchReason::Content)
                         } else {
-                            (450, MatchReason::PathComponent)
+                            RankAccumulator::new(PHRASE, MatchReason::PathComponent)
                         }
                     });
             }
@@ -372,8 +399,8 @@ impl SearchIndex {
                 for id in self.content_proximity_ids(proximity) {
                     scores
                         .entry(id)
-                        .and_modify(|(score, _)| *score += 375)
-                        .or_insert((375, MatchReason::Content));
+                        .and_modify(|score| score.add(PROXIMITY, MatchReason::Content))
+                        .or_insert_with(|| RankAccumulator::new(PROXIMITY, MatchReason::Content));
                 }
             }
         }
@@ -385,8 +412,10 @@ impl SearchIndex {
                 if !text.is_empty() && name.contains(&text) {
                     scores
                         .entry(record.id)
-                        .and_modify(|(score, _)| *score += 300)
-                        .or_insert((300, MatchReason::SubstringName));
+                        .and_modify(|score| score.add(SUBSTRING_NAME, MatchReason::SubstringName))
+                        .or_insert_with(|| {
+                            RankAccumulator::new(SUBSTRING_NAME, MatchReason::SubstringName)
+                        });
                 }
             }
         }
@@ -397,8 +426,8 @@ impl SearchIndex {
             if score > 0 {
                 scores
                     .entry(record.id)
-                    .and_modify(|(current, _)| *current += score)
-                    .or_insert((score, MatchReason::PathComponent));
+                    .and_modify(|current| current.boost(score))
+                    .or_insert_with(|| RankAccumulator::new(score, MatchReason::PathComponent));
             }
         }
 
@@ -412,24 +441,34 @@ impl SearchIndex {
                 cancellation.check()?;
                 scores
                     .entry(record.id)
-                    .or_insert((0, MatchReason::PathComponent));
+                    .or_insert_with(|| RankAccumulator::new(0, MatchReason::PathComponent));
             }
+        }
+
+        for (id, score) in &mut scores {
+            let Some(record) = self.records.get(id) else {
+                continue;
+            };
+            score.boost(self.composite_boosts(record, query, pass));
         }
 
         let mut hits: Vec<_> = scores
             .into_iter()
-            .filter_map(|(id, (score, reason))| {
+            .filter_map(|(id, score)| {
                 if cancellation.check().is_err() {
                     return None;
                 }
                 self.records
                     .get(&id)
                     .filter(|record| self.record_matches_query(record, query, pass))
-                    .map(|record| SearchHit {
-                        record: record.clone(),
-                        score: score + recency_score(record),
-                        reason,
-                        snippet: None,
+                    .map(|record| {
+                        let (score, reason) = score.finish();
+                        SearchHit {
+                            record: record.clone(),
+                            score,
+                            reason,
+                            snippet: None,
+                        }
                     })
             })
             .collect();
@@ -506,6 +545,32 @@ impl SearchIndex {
         }
     }
 
+    fn composite_boosts(&self, record: &FileRecord, query: &SearchQuery, pass: SearchPass) -> i64 {
+        let mut score = recency_score(record);
+        if self.pinned.contains(&record.id) {
+            score += USER_PINNED;
+        }
+        for filter in &query.filters {
+            if filter_kind_matches(filter, record.kind) {
+                score += kind_score(record.kind);
+            } else if filter.matches(record) {
+                score += KIND_MATCH / 3;
+            }
+        }
+        for term in &query.terms {
+            score += capped_frequency(count_term(&normalize(&record.name), term), NAME_FREQUENCY);
+            score += capped_frequency(
+                count_term(&normalize_path(&record.path), term),
+                PATH_FREQUENCY,
+            );
+            if pass.includes_deep() {
+                score +=
+                    capped_frequency(self.content_frequency(record.id, term), CONTENT_FREQUENCY);
+            }
+        }
+        score
+    }
+
     fn content_has(&self, id: FileId, term: &str) -> bool {
         self.content_terms
             .get(term)
@@ -516,6 +581,14 @@ impl SearchIndex {
         self.content_terms
             .get(term)
             .map(|positions| positions.keys().copied().collect())
+    }
+
+    fn content_frequency(&self, id: FileId, term: &str) -> usize {
+        self.content_terms
+            .get(term)
+            .and_then(|positions| positions.get(&id))
+            .map(|positions| positions.len().max(1))
+            .unwrap_or(0)
     }
 
     fn fuzzy_ids(&self, term: &str) -> BTreeSet<FileId> {
@@ -777,7 +850,7 @@ fn expression_needs_universe(expression: &QueryExpr) -> bool {
 }
 
 fn add_scores(
-    scores: &mut HashMap<FileId, (i64, MatchReason)>,
+    scores: &mut HashMap<FileId, RankAccumulator>,
     ids: &BTreeSet<FileId>,
     points: i64,
     reason: MatchReason,
@@ -785,8 +858,8 @@ fn add_scores(
     for id in ids {
         scores
             .entry(*id)
-            .and_modify(|(score, _)| *score += points)
-            .or_insert((points, reason.clone()));
+            .and_modify(|score| score.add(points, reason.clone()))
+            .or_insert_with(|| RankAccumulator::new(points, reason.clone()));
     }
 }
 
@@ -797,17 +870,6 @@ fn remove_id(map: &mut BTreeMap<String, BTreeSet<FileId>>, key: &str, id: FileId
             map.remove(key);
         }
     }
-}
-
-fn recency_score(record: &FileRecord) -> i64 {
-    record
-        .modified
-        .and_then(|time| time.elapsed().ok())
-        .map(|age| {
-            let days = age.as_secs() / 86_400;
-            100i64.saturating_sub(days.min(100) as i64)
-        })
-        .unwrap_or(0)
 }
 
 pub(crate) fn sort_hits(hits: &mut [SearchHit]) {

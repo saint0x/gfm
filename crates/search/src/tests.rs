@@ -440,6 +440,65 @@ fn intent_ranking_surfaces_recently_touched_files() {
 }
 
 #[test]
+fn ranking_boosts_user_pinned_relevant_results() {
+    let mut index = SearchIndex::new();
+    let first = record(1, "/tmp/a/report.md", "report.md");
+    let second = record(2, "/tmp/b/report.md", "report.md");
+    let second_id = second.id;
+    index.insert(first);
+    index.insert(second);
+
+    assert!(index.pin(second_id));
+    let hits = index.query("report", 10);
+
+    assert_eq!(hits[0].record.id, second_id);
+    assert!(index.is_pinned(second_id));
+    assert!(index.unpin(second_id));
+}
+
+#[test]
+fn ranking_composes_capped_term_frequency() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/alpha.md", "alpha.md"));
+    index.insert(record(
+        2,
+        "/tmp/alpha-alpha-alpha.md",
+        "alpha-alpha-alpha.md",
+    ));
+
+    let hits = index.query("alpha", 10);
+
+    assert_eq!(hits[0].record.name, "alpha-alpha-alpha.md");
+    assert!(hits[0].score > hits[1].score);
+}
+
+#[test]
+fn ranking_scores_kind_filter_matches() {
+    let mut index = SearchIndex::new();
+    let mut folder = record(1, "/tmp/report", "report");
+    folder.kind = FileKind::Directory;
+    index.insert(folder);
+
+    let hits = index.query("report kind:directory", 10);
+
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].score >= 90);
+}
+
+#[test]
+fn ranking_keeps_strongest_primary_reason() {
+    let mut index = SearchIndex::new();
+    let mut item = record(1, "/tmp/client", "client");
+    item.tags = vec!["client".to_string()];
+    index.insert(item);
+
+    let hits = index.query("client", 10);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].reason, MatchReason::ExactName);
+}
+
+#[test]
 fn stream_returns_hot_results_before_deep_content_results() {
     let mut index = SearchIndex::new();
     let hot = record(1, "/tmp/needle.md", "needle.md");
