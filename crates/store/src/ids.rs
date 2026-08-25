@@ -3,18 +3,63 @@ use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
 const DEFAULT_ID_BLOCK_SIZE: usize = 128;
+const BLOCKED_IDS_V2_MARKER: u64 = 0;
+const BLOCKED_IDS_V2_VERSION: u64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IdBlock {
     first: FileId,
     entries: u64,
+    codec: IdBlockCodec,
     len: u64,
 }
 
-pub(crate) fn write_blocked_file_ids(
-    mut writer: impl Write,
-    ids: &[FileId],
-) -> std::io::Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdBlockCodec {
+    Delta,
+    Run,
+}
+
+pub(crate) fn write_blocked_file_ids(writer: impl Write, ids: &[FileId]) -> std::io::Result<()> {
+    write_blocked_file_ids_v2(writer, ids)
+}
+
+fn write_blocked_file_ids_v2(mut writer: impl Write, ids: &[FileId]) -> std::io::Result<()> {
+    let mut ids = ids.to_vec();
+    ids.sort();
+    ids.dedup();
+    write_varint(&mut writer, ids.len() as u64)?;
+    write_varint(&mut writer, BLOCKED_IDS_V2_MARKER)?;
+    write_varint(&mut writer, BLOCKED_IDS_V2_VERSION)?;
+    write_varint(&mut writer, DEFAULT_ID_BLOCK_SIZE as u64)?;
+
+    let mut encoded = Vec::new();
+    let mut blocks = Vec::new();
+    for block_ids in ids.chunks(DEFAULT_ID_BLOCK_SIZE) {
+        let first = block_ids[0];
+        let (codec, block) = encode_best_block(block_ids)?;
+        blocks.push(IdBlock {
+            first,
+            entries: block_ids.len() as u64,
+            codec,
+            len: block.len() as u64,
+        });
+        encoded.extend(block);
+    }
+
+    write_varint(&mut writer, blocks.len() as u64)?;
+    for block in &blocks {
+        write_varint(&mut writer, block.first.volume.0)?;
+        write_varint(&mut writer, block.first.node)?;
+        write_varint(&mut writer, block.entries)?;
+        write_varint(&mut writer, block.codec.as_code())?;
+        write_varint(&mut writer, block.len)?;
+    }
+    writer.write_all(&encoded)
+}
+
+#[cfg(test)]
+fn write_blocked_file_ids_v1(mut writer: impl Write, ids: &[FileId]) -> std::io::Result<()> {
     let mut ids = ids.to_vec();
     ids.sort();
     ids.dedup();
@@ -30,6 +75,7 @@ pub(crate) fn write_blocked_file_ids(
         blocks.push(IdBlock {
             first,
             entries: block_ids.len() as u64,
+            codec: IdBlockCodec::Delta,
             len: block.len() as u64,
         });
         encoded.extend(block);
@@ -47,11 +93,7 @@ pub(crate) fn write_blocked_file_ids(
 
 pub(crate) fn read_blocked_file_ids(mut reader: impl Read, path: &Path) -> Result<Vec<FileId>> {
     let count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
-    let block_size = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
-    if block_size == 0 {
-        return Err(id_format_error(path, "zero id block size"));
-    }
-    let blocks = read_id_blocks(&mut reader, path)?;
+    let (_block_size, blocks) = read_blocked_header(&mut reader, path)?;
     let mut payload = vec![0; block_payload_len(&blocks, path)?];
     reader
         .read_exact(&mut payload)
@@ -68,11 +110,7 @@ pub(crate) fn read_blocked_file_ids(mut reader: impl Read, path: &Path) -> Resul
         let bytes = payload
             .get(offset..end)
             .ok_or_else(|| id_format_error(path, "id block out of bounds"))?;
-        ids.extend(read_delta_file_ids(
-            Cursor::new(bytes),
-            block.entries,
-            path,
-        )?);
+        ids.extend(read_encoded_file_ids(Cursor::new(bytes), &block, path)?);
         offset = end;
     }
     if ids.len() != count as usize {
@@ -88,11 +126,7 @@ pub(crate) fn read_blocked_file_id_block_from_slice(
 ) -> Result<Vec<FileId>> {
     let mut reader = Cursor::new(bytes);
     let _count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
-    let block_size = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
-    if block_size == 0 {
-        return Err(id_format_error(path, "zero id block size"));
-    }
-    let blocks = read_id_blocks(&mut reader, path)?;
+    let (_block_size, blocks) = read_blocked_header(&mut reader, path)?;
     let target = blocks
         .get(block_index)
         .ok_or_else(|| id_format_error(path, "id block index out of bounds"))?;
@@ -110,7 +144,24 @@ pub(crate) fn read_blocked_file_id_block_from_slice(
     let bytes = bytes
         .get(start..end)
         .ok_or_else(|| id_format_error(path, "id block out of bounds"))?;
-    read_delta_file_ids(Cursor::new(bytes), target.entries, path)
+    read_encoded_file_ids(Cursor::new(bytes), target, path)
+}
+
+fn read_blocked_header(mut reader: impl Read, path: &Path) -> Result<(u64, Vec<IdBlock>)> {
+    let block_size = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+    if block_size == BLOCKED_IDS_V2_MARKER {
+        let version = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        if version != BLOCKED_IDS_V2_VERSION {
+            return Err(id_format_error(path, "unsupported blocked id version"));
+        }
+        let block_size = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        if block_size == 0 {
+            return Err(id_format_error(path, "zero id block size"));
+        }
+        Ok((block_size, read_id_blocks_v2(reader, path)?))
+    } else {
+        Ok((block_size, read_id_blocks_v1(reader, path)?))
+    }
 }
 
 fn block_payload_len(blocks: &[IdBlock], path: &Path) -> Result<usize> {
@@ -122,7 +173,7 @@ fn block_payload_len(blocks: &[IdBlock], path: &Path) -> Result<usize> {
     })
 }
 
-fn read_id_blocks(mut reader: impl Read, path: &Path) -> Result<Vec<IdBlock>> {
+fn read_id_blocks_v1(mut reader: impl Read, path: &Path) -> Result<Vec<IdBlock>> {
     let block_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
     let mut blocks = Vec::with_capacity(block_count.min(1_000_000) as usize);
     for _ in 0..block_count {
@@ -133,10 +184,69 @@ fn read_id_blocks(mut reader: impl Read, path: &Path) -> Result<Vec<IdBlock>> {
         blocks.push(IdBlock {
             first: FileId::new(VolumeId(volume), node),
             entries,
+            codec: IdBlockCodec::Delta,
             len,
         });
     }
     Ok(blocks)
+}
+
+fn read_id_blocks_v2(mut reader: impl Read, path: &Path) -> Result<Vec<IdBlock>> {
+    let block_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+    let mut blocks = Vec::with_capacity(block_count.min(1_000_000) as usize);
+    for _ in 0..block_count {
+        let volume = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        let node = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        let entries = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        let codec = IdBlockCodec::from_code(
+            read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?,
+            path,
+        )?;
+        let len = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        blocks.push(IdBlock {
+            first: FileId::new(VolumeId(volume), node),
+            entries,
+            codec,
+            len,
+        });
+    }
+    Ok(blocks)
+}
+
+impl IdBlockCodec {
+    const fn as_code(self) -> u64 {
+        match self {
+            Self::Delta => 0,
+            Self::Run => 1,
+        }
+    }
+
+    fn from_code(value: u64, path: &Path) -> Result<Self> {
+        match value {
+            0 => Ok(Self::Delta),
+            1 => Ok(Self::Run),
+            _ => Err(id_format_error(path, "unsupported id block codec")),
+        }
+    }
+}
+
+fn encode_best_block(ids: &[FileId]) -> std::io::Result<(IdBlockCodec, Vec<u8>)> {
+    let mut delta = Vec::new();
+    write_delta_file_ids(&mut delta, ids)?;
+    let mut run = Vec::new();
+    write_run_file_ids(&mut run, ids)?;
+    if run.len() < delta.len() {
+        Ok((IdBlockCodec::Run, run))
+    } else {
+        Ok((IdBlockCodec::Delta, delta))
+    }
+}
+
+fn read_encoded_file_ids(reader: impl Read, block: &IdBlock, path: &Path) -> Result<Vec<FileId>> {
+    match block.codec {
+        IdBlockCodec::Delta => read_delta_file_ids(reader, block.entries, path),
+        IdBlockCodec::Run => read_run_file_ids(reader, block.entries, path),
+    }
 }
 
 fn write_delta_file_ids(mut writer: impl Write, ids: &[FileId]) -> std::io::Result<()> {
@@ -150,6 +260,30 @@ fn write_delta_file_ids(mut writer: impl Write, ids: &[FileId]) -> std::io::Resu
         };
         write_varint(&mut writer, node_delta)?;
         previous = *id;
+    }
+    Ok(())
+}
+
+fn write_run_file_ids(mut writer: impl Write, ids: &[FileId]) -> std::io::Result<()> {
+    let runs = id_runs(ids);
+    write_varint(&mut writer, runs.len() as u64)?;
+    let mut previous = FileId::new(VolumeId(0), 0);
+    for run in runs {
+        write_varint(
+            &mut writer,
+            run.start.volume.0.saturating_sub(previous.volume.0),
+        )?;
+        let node_delta = if run.start.volume == previous.volume {
+            run.start.node.saturating_sub(previous.node)
+        } else {
+            run.start.node
+        };
+        write_varint(&mut writer, node_delta)?;
+        write_varint(&mut writer, run.entries)?;
+        previous = FileId::new(
+            run.start.volume,
+            run.start.node.saturating_add(run.entries.saturating_sub(1)),
+        );
     }
     Ok(())
 }
@@ -178,6 +312,77 @@ fn read_delta_file_ids(mut reader: impl Read, count: u64, path: &Path) -> Result
         previous = id;
     }
     Ok(ids)
+}
+
+fn read_run_file_ids(mut reader: impl Read, count: u64, path: &Path) -> Result<Vec<FileId>> {
+    let run_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+    let mut ids = Vec::with_capacity(count.min(1_000_000) as usize);
+    let mut previous = FileId::new(VolumeId(0), 0);
+    for _ in 0..run_count {
+        let volume_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        let volume = previous
+            .volume
+            .0
+            .checked_add(volume_delta)
+            .ok_or_else(|| id_format_error(path, "volume id overflow"))?;
+        let node_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        let start_node = if volume == previous.volume.0 {
+            previous
+                .node
+                .checked_add(node_delta)
+                .ok_or_else(|| id_format_error(path, "file node id overflow"))?
+        } else {
+            node_delta
+        };
+        let entries = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+        if entries == 0 {
+            return Err(id_format_error(path, "empty id run"));
+        }
+        for offset in 0..entries {
+            let node = start_node
+                .checked_add(offset)
+                .ok_or_else(|| id_format_error(path, "file node id overflow"))?;
+            ids.push(FileId::new(VolumeId(volume), node));
+        }
+        previous = FileId::new(
+            VolumeId(volume),
+            start_node
+                .checked_add(entries - 1)
+                .ok_or_else(|| id_format_error(path, "file node id overflow"))?,
+        );
+    }
+    if ids.len() != count as usize {
+        return Err(id_format_error(path, "id run count mismatch"));
+    }
+    Ok(ids)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct IdRun {
+    start: FileId,
+    entries: u64,
+}
+
+fn id_runs(ids: &[FileId]) -> Vec<IdRun> {
+    let Some((&first, rest)) = ids.split_first() else {
+        return Vec::new();
+    };
+    let mut runs = Vec::new();
+    let mut start = first;
+    let mut previous = first;
+    let mut entries = 1u64;
+    for id in rest {
+        if id.volume == previous.volume && id.node == previous.node.saturating_add(1) {
+            entries += 1;
+        } else {
+            runs.push(IdRun { start, entries });
+            start = *id;
+            entries = 1;
+        }
+        previous = *id;
+    }
+    runs.push(IdRun { start, entries });
+    runs
 }
 
 fn write_varint(mut writer: impl Write, mut value: u64) -> std::io::Result<()> {
@@ -227,14 +432,44 @@ mod tests {
             .chain([FileId::new(VolumeId(9), 1), FileId::new(VolumeId(9), 2)])
             .collect::<Vec<_>>();
         let mut encoded = Vec::new();
+        let mut legacy = Vec::new();
 
         write_blocked_file_ids(&mut encoded, &ids).unwrap();
+        write_blocked_file_ids_v1(&mut legacy, &ids).unwrap();
 
         let decoded = read_blocked_file_ids(Cursor::new(&encoded), path).unwrap();
+        let legacy_decoded = read_blocked_file_ids(Cursor::new(&legacy), path).unwrap();
         let block = read_blocked_file_id_block_from_slice(&encoded, 1, path).unwrap();
+        let legacy_block = read_blocked_file_id_block_from_slice(&legacy, 1, path).unwrap();
 
         assert_eq!(decoded, ids);
+        assert_eq!(legacy_decoded, ids);
+        assert!(encoded.len() < legacy.len());
         assert_eq!(block.len(), DEFAULT_ID_BLOCK_SIZE);
         assert_eq!(block[0], FileId::new(VolumeId(7), 10_128));
+        assert_eq!(legacy_block, block);
+    }
+
+    #[test]
+    fn blocked_file_ids_keep_sparse_blocks_delta_encoded() {
+        let path = Path::new("/tmp/gfm-id-block-sparse-test");
+        let ids = (0..200)
+            .map(|index| FileId::new(VolumeId(11), 10_000 + index * 257))
+            .collect::<Vec<_>>();
+        let mut encoded = Vec::new();
+        let mut legacy = Vec::new();
+
+        write_blocked_file_ids(&mut encoded, &ids).unwrap();
+        write_blocked_file_ids_v1(&mut legacy, &ids).unwrap();
+
+        assert_eq!(
+            read_blocked_file_ids(Cursor::new(&encoded), path).unwrap(),
+            ids
+        );
+        assert_eq!(
+            read_blocked_file_id_block_from_slice(&encoded, 1, path).unwrap()[0],
+            FileId::new(VolumeId(11), 10_000 + 128 * 257)
+        );
+        assert!(encoded.len() <= legacy.len() + 8);
     }
 }
