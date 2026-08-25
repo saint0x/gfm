@@ -776,6 +776,7 @@ fn searches_persisted_tags_from_binary() {
     let dictionary = unique_temp_path("gfm-cli-tags", "gfmdict");
     let columns = unique_temp_path("gfm-cli-tags", "gfmcols");
     let prefixes = unique_temp_path("gfm-cli-tags", "gfmprefix");
+    let fuzzy = unique_temp_path("gfm-cli-tags", "gfmfuzzy");
     fs::write(
         &index,
         "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\tImportant,Client\t/tmp/tagged.md\n2\t2\t0\tf\t5\t0\t0\t0\t0\tLater\t/tmp/other.md\n",
@@ -962,6 +963,46 @@ fn searches_persisted_tags_from_binary() {
         "{prefix_verify_stdout}"
     );
 
+    let fuzzy_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-fuzzy",
+            index.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        fuzzy_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fuzzy_output.stderr)
+    );
+
+    let fuzzy_terms = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["fuzzy-terms-mmap", fuzzy.to_str().unwrap(), "tagge"])
+        .output()
+        .unwrap();
+    assert!(
+        fuzzy_terms.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fuzzy_terms.stderr)
+    );
+    assert_eq!(String::from_utf8(fuzzy_terms.stdout).unwrap(), "tagged\n");
+
+    let fuzzy_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["fuzzy-verify", fuzzy.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        fuzzy_verify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fuzzy_verify.stderr)
+    );
+    let fuzzy_verify_stdout = String::from_utf8(fuzzy_verify.stdout).unwrap();
+    assert!(
+        fuzzy_verify_stdout.contains("\tchecksum=true"),
+        "{fuzzy_verify_stdout}"
+    );
+
     let columns_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "index-columns",
@@ -1039,6 +1080,7 @@ fn searches_persisted_tags_from_binary() {
     fs::remove_file(dictionary).unwrap();
     fs::remove_file(columns).unwrap();
     fs::remove_file(prefixes).unwrap();
+    fs::remove_file(fuzzy).unwrap();
 }
 
 #[test]

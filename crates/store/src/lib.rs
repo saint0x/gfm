@@ -2,6 +2,7 @@ mod columns;
 mod content;
 mod dictionary;
 mod durable;
+mod fuzzy;
 mod ids;
 mod integrity;
 mod metadata;
@@ -16,6 +17,10 @@ pub use dictionary::{
     dictionary_terms_from_records, read_dictionary, write_dictionary, MmapDictionary,
 };
 pub use durable::{atomic_write, DurableCommit};
+pub use fuzzy::{
+    fuzzy_postings_from_records, read_fuzzy_postings, write_fuzzy_postings, FuzzyPosting,
+    MmapFuzzyArchive,
+};
 pub use metadata::{
     metadata_postings_from_records, read_metadata_postings, write_metadata_postings, MetadataField,
     MetadataPosting, MmapMetadataArchive,

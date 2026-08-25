@@ -311,6 +311,9 @@ cargo run -p gfm -- index-prefixes /tmp/gfm.gfmidx /tmp/gfm.gfmprefix
 cargo run -p gfm -- prefix-ids-mmap /tmp/gfm.gfmprefix Pro
 cargo run -p gfm -- prefix-id-block-mmap /tmp/gfm.gfmprefix Pro 0
 cargo run -p gfm -- prefix-verify /tmp/gfm.gfmprefix
+cargo run -p gfm -- index-fuzzy /tmp/gfm.gfmidx /tmp/gfm.gfmfuzzy
+cargo run -p gfm -- fuzzy-terms-mmap /tmp/gfm.gfmfuzzy Pln
+cargo run -p gfm -- fuzzy-verify /tmp/gfm.gfmfuzzy
 ```
 
 Build and query content indexes:

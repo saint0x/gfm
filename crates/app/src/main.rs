@@ -40,7 +40,10 @@ use gfm_store::{
     MmapContentArchive, MmapDictionary, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
     MmapRecordColumns,
 };
-use gfm_store::{prefix_postings_from_records, write_prefix_postings};
+use gfm_store::{
+    fuzzy_postings_from_records, prefix_postings_from_records, write_fuzzy_postings,
+    write_prefix_postings, MmapFuzzyArchive,
+};
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
     run_macrobench, run_parity_gate_manifest, run_regression_gate,
@@ -936,6 +939,34 @@ fn run() -> Result<()> {
             let postings = prefix_postings_from_records(&archive.records()?);
             write_prefix_postings(output, &postings)?;
             eprintln!("prefixes-indexed {} prefixes", postings.len());
+        }
+        Some("index-fuzzy") => {
+            let records = required_path(args.next(), "index-fuzzy requires a records path")?;
+            let output = required_path(args.next(), "index-fuzzy requires an output fuzzy path")?;
+            let archive = MmapRecordArchive::open(records)?;
+            let postings = fuzzy_postings_from_records(&archive.records()?);
+            write_fuzzy_postings(output, &postings)?;
+            eprintln!("fuzzy-indexed {} keys", postings.len());
+        }
+        Some("fuzzy-terms-mmap") => {
+            let fuzzy = required_path(args.next(), "fuzzy-terms-mmap requires a fuzzy path")?;
+            let key = args
+                .next()
+                .ok_or_else(|| GfmError::Format("fuzzy-terms-mmap requires a key".to_string()))?;
+            let archive = MmapFuzzyArchive::open(fuzzy)?;
+            for term in archive.terms_for(&key)? {
+                println!("{term}");
+            }
+        }
+        Some("fuzzy-verify") => {
+            let fuzzy = required_path(args.next(), "fuzzy-verify requires a fuzzy path")?;
+            let archive = MmapFuzzyArchive::open(fuzzy)?;
+            println!(
+                "fuzzy-verify\tkeys={}\tbytes={}\tchecksum={}",
+                archive.indexed_keys(),
+                archive.mapped_len(),
+                archive.is_checksummed()
+            );
         }
         Some("prefix-ids-mmap") => {
             let prefixes = required_path(args.next(), "prefix-ids-mmap requires a prefix path")?;
@@ -2227,6 +2258,9 @@ fn print_usage() {
   gfm index-metadata <records.gfmidx> <metadata.gfmmeta>
   gfm index-dictionary <records.gfmidx> <dictionary.gfmdict>
   gfm index-prefixes <records.gfmidx> <prefixes.gfmprefix>
+  gfm index-fuzzy <records.gfmidx> <fuzzy.gfmfuzzy>
+  gfm fuzzy-terms-mmap <fuzzy.gfmfuzzy> <key>
+  gfm fuzzy-verify <fuzzy.gfmfuzzy>
   gfm prefix-ids-mmap <prefixes.gfmprefix> <prefix>
   gfm prefix-id-block-mmap <prefixes.gfmprefix> <prefix> <block-index>
   gfm prefix-verify <prefixes.gfmprefix>
