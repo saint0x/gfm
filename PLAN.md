@@ -204,13 +204,14 @@ gfm/
 
 `app`
 
-- Owns GPUI startup, app state composition, command registration, menus, windows, and platform lifecycle.
+- Owns the native binary entrypoint, command routing, and operator-facing inspection commands.
 - Does not perform direct filesystem work.
 - Does not know index storage internals.
 
 `ui`
 
-- Owns Finder parity.
+- Owns GPUI startup, app state composition, command registration, menus, windows, platform lifecycle, and Finder parity.
+- Installs the native macOS menu bar through GPUI with Finder-family menus, Services handoff, key bindings, global lifecycle handlers, and view/selection command IDs for later enabled-state ownership.
 - Components: sidebar, toolbar, path/title area, icon grid, list table, column browser, gallery, inspector, popovers, sheets, context menus, operation progress windows.
 - Receives view models only.
 - Must be screenshot-tested aggressively.

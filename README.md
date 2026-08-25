@@ -157,6 +157,7 @@ List a directory:
 cargo run -p gfm -- list .
 cargo run -p gfm -- app ~/Desktop
 cargo run -p gfm -- ui-contract ~/Desktop
+cargo run -p gfm -- ui-menu-contract
 ```
 
 Search directly:

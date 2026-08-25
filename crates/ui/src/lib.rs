@@ -5,6 +5,10 @@ use gpui::{
 };
 use std::path::PathBuf;
 
+mod menu;
+
+pub use menu::{MenuCommandSpec, MenuCommandState, MenuContract};
+
 const DEFAULT_WIDTH: f32 = 1040.0;
 const DEFAULT_HEIGHT: f32 = 720.0;
 const MIN_WIDTH: f32 = 640.0;
@@ -121,6 +125,7 @@ impl WindowLifecycleContract {
 pub fn run_native(spec: AppLaunchSpec) -> Result<()> {
     spec.validate()?;
     Application::new().run(move |cx: &mut App| {
+        install_native_menu(cx, spec.clone());
         if let Err(err) = open_main_window(cx, spec) {
             eprintln!("gfm-ui: {err}");
             cx.quit();
@@ -141,6 +146,25 @@ fn open_main_window(cx: &mut App, spec: AppLaunchSpec) -> anyhow::Result<()> {
         cx.activate(true);
     }
     Ok(())
+}
+
+fn install_native_menu(cx: &mut App, spec: AppLaunchSpec) {
+    cx.bind_keys(menu::key_bindings());
+    cx.on_action({
+        let spec = spec.clone();
+        move |_: &menu::NewWindow, cx| {
+            if let Err(err) = open_main_window(cx, spec.clone()) {
+                eprintln!("gfm-ui: {err}");
+            }
+        }
+    });
+    cx.on_action(|_: &menu::CloseWindow, cx| {
+        if let Some(active_window) = cx.active_window() {
+            let _ = active_window.update(cx, |_, window, _| window.remove_window());
+        }
+    });
+    cx.on_action(|_: &menu::Quit, cx| cx.quit());
+    cx.set_menus(menu::native_menus());
 }
 
 fn window_options(cx: &App, spec: &AppLaunchSpec) -> WindowOptions {

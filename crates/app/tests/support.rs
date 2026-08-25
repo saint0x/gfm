@@ -77,6 +77,29 @@ fn reports_ui_lifecycle_contract_from_binary() {
 }
 
 #[test]
+fn reports_ui_menu_contract_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-menu-contract")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let mut lines = stdout.lines();
+
+    assert_eq!(
+        lines.next(),
+        Some("menus\tGFM,File,Edit,View,Go,Window,Help\tservices=true")
+    );
+    assert!(lines.any(|line| line == "command\tFile\tNew Window\tgfm::NewWindow\tcmd-n\tglobal"));
+    assert!(stdout.contains("command\tGFM\tServices\tsystem::Services\t-\tsystem"));
+    assert!(stdout.contains("command\tEdit\tCopy\tsystem::Copy\tcmd-c\tsystem"));
+}
+
+#[test]
 fn reports_preview_security_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["preview-check", "/tmp/example.app", "quick-look"])

@@ -229,6 +229,12 @@
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["ui-menu-contract"],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["preview-check", "/tmp/example.app", "quick-look"],
       "expect_exit": 0
     },
