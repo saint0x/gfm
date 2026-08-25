@@ -1,8 +1,9 @@
 use crate::{
     dictionary_terms_from_records, fuzzy_postings_from_records, metadata_postings_from_records,
-    prefix_postings_from_records, read_records, write_dictionary, write_fuzzy_postings,
-    write_metadata_postings, write_prefix_postings, write_record_columns, MmapDictionary,
-    MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordColumns,
+    prefix_postings_from_records, read_records, substring_postings_from_records, write_dictionary,
+    write_fuzzy_postings, write_metadata_postings, write_prefix_postings, write_record_columns,
+    write_substring_postings, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive,
+    MmapPrefixArchive, MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_types::{FileRecord, GfmError, Result};
 use std::fs;
@@ -14,6 +15,7 @@ pub enum SidecarKind {
     Columns,
     Metadata,
     Prefixes,
+    Substrings,
     Fuzzy,
     Dictionary,
 }
@@ -38,6 +40,7 @@ pub struct SidecarPaths {
     pub columns: Option<PathBuf>,
     pub metadata: Option<PathBuf>,
     pub prefixes: Option<PathBuf>,
+    pub substrings: Option<PathBuf>,
     pub fuzzy: Option<PathBuf>,
     pub dictionary: Option<PathBuf>,
 }
@@ -48,6 +51,7 @@ impl SidecarPaths {
             (SidecarKind::Columns, self.columns.as_ref()),
             (SidecarKind::Metadata, self.metadata.as_ref()),
             (SidecarKind::Prefixes, self.prefixes.as_ref()),
+            (SidecarKind::Substrings, self.substrings.as_ref()),
             (SidecarKind::Fuzzy, self.fuzzy.as_ref()),
             (SidecarKind::Dictionary, self.dictionary.as_ref()),
         ]
@@ -113,6 +117,7 @@ pub fn sidecar_kind_name(kind: SidecarKind) -> &'static str {
         SidecarKind::Columns => "columns",
         SidecarKind::Metadata => "metadata",
         SidecarKind::Prefixes => "prefixes",
+        SidecarKind::Substrings => "substrings",
         SidecarKind::Fuzzy => "fuzzy",
         SidecarKind::Dictionary => "dictionary",
     }
@@ -246,6 +251,7 @@ fn open_sidecar(kind: SidecarKind, path: &Path) -> Result<()> {
         SidecarKind::Columns => MmapRecordColumns::open(path).map(|_| ()),
         SidecarKind::Metadata => MmapMetadataArchive::open(path).map(|_| ()),
         SidecarKind::Prefixes => MmapPrefixArchive::open(path).map(|_| ()),
+        SidecarKind::Substrings => MmapSubstringArchive::open(path).map(|_| ()),
         SidecarKind::Fuzzy => MmapFuzzyArchive::open(path).map(|_| ()),
         SidecarKind::Dictionary => MmapDictionary::open(path).map(|_| ()),
     }
@@ -259,6 +265,9 @@ fn rebuild_sidecar(kind: SidecarKind, path: &Path, records: &[FileRecord]) -> Re
         }
         SidecarKind::Prefixes => {
             write_prefix_postings(path, &prefix_postings_from_records(records))
+        }
+        SidecarKind::Substrings => {
+            write_substring_postings(path, &substring_postings_from_records(records))
         }
         SidecarKind::Fuzzy => write_fuzzy_postings(path, &fuzzy_postings_from_records(records)),
         SidecarKind::Dictionary => write_dictionary(path, &dictionary_terms_from_records(records)),
@@ -295,7 +304,7 @@ fn quarantine_sidecar(path: &Path, quarantine_dir: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{read_dictionary, write_records};
+    use crate::{read_dictionary, write_records, MmapSubstringArchive};
     use gfm_types::{FileId, FileKind, VolumeId};
 
     #[test]
@@ -304,25 +313,30 @@ mod tests {
         let records = dir.join("records.gfmidx");
         let columns = dir.join("records.gfmcols");
         let prefixes = dir.join("records.gfmprefix");
+        let substrings = dir.join("records.gfmsubstr");
         fs::create_dir_all(&dir).unwrap();
         write_records(&records, &[record("ProjectPlan.md")]).unwrap();
         let paths = SidecarPaths {
             columns: Some(columns.clone()),
             prefixes: Some(prefixes.clone()),
+            substrings: Some(substrings.clone()),
             ..SidecarPaths::default()
         };
 
         let plan = plan_sidecar_recovery(&records, &paths);
         assert_eq!(plan.action, SidecarRecoveryAction::Rebuild);
         assert_eq!(plan.reason, SidecarRecoveryReason::MissingSidecar);
-        assert_eq!(plan.invalid_sidecars.len(), 2);
+        assert_eq!(plan.invalid_sidecars.len(), 3);
 
         let recovery = recover_sidecars(&records, &paths, dir.join("quarantine")).unwrap();
 
-        assert_eq!(recovery.rebuilt_sidecars.len(), 2);
+        assert_eq!(recovery.rebuilt_sidecars.len(), 3);
         assert!(recovery.after.ready());
         assert!(MmapRecordColumns::open(columns).unwrap().is_checksummed());
         assert!(MmapPrefixArchive::open(prefixes).unwrap().is_checksummed());
+        assert!(MmapSubstringArchive::open(substrings)
+            .unwrap()
+            .is_checksummed());
         fs::remove_dir_all(dir).unwrap();
     }
 

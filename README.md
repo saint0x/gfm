@@ -96,7 +96,7 @@ The index is compact and incremental:
 - hot mutable buffers
 - progressive hot/deep result streaming with stable dedupe
 - name substring n-gram candidates and delete-key fuzzy candidate indexes for infix and typo-tolerant matches without full-record scans
-- archive-backed prefix and fuzzy lookup with explicit candidate budgets, adaptive prefix cutoffs, lookup cache telemetry, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
+- archive-backed prefix, substring, and fuzzy lookup with explicit candidate budgets, adaptive prefix cutoffs, lookup cache telemetry, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
 - exact phrase and `near:N:alpha,beta` positional content retrieval
 - bounded snippets with highlighted content matches
 - binary-signature and control-byte classification before content extraction
@@ -320,12 +320,12 @@ cargo run -p gfm -- content-manifest-recovery-plan content.gfmmanifest hot:conte
 cargo run -p gfm -- content-manifest-recover content.gfmmanifest quarantine hot:content.gfmcontent
 cargo run -p gfm -- content-manifest-promotion-recovery-plan content.gfmmanifest
 cargo run -p gfm -- content-manifest-promotion-recover content.gfmmanifest
-cargo run -p gfm -- sidecar-recovery-plan records.gfmidx columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
-cargo run -p gfm -- sidecar-recover records.gfmidx quarantine columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
-cargo run -p gfm -- sidecar-recover-adaptive records.gfmidx quarantine saturated nominal ac idle columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
+cargo run -p gfm -- sidecar-recovery-plan records.gfmidx columns.gfmcols metadata.gfmmeta prefixes.gfmprefix substrings.gfmsubstr fuzzy.gfmfuzzy dictionary.gfmdict
+cargo run -p gfm -- sidecar-recover records.gfmidx quarantine columns.gfmcols metadata.gfmmeta prefixes.gfmprefix substrings.gfmsubstr fuzzy.gfmfuzzy dictionary.gfmdict
+cargo run -p gfm -- sidecar-recover-adaptive records.gfmidx quarantine saturated nominal ac idle columns.gfmcols metadata.gfmmeta prefixes.gfmprefix substrings.gfmsubstr fuzzy.gfmfuzzy dictionary.gfmdict
 cargo run -p gfm -- archive-schema records records.gfmidx
 cargo run -p gfm -- archive-schema prefixes prefixes.gfmprefix
-cargo run -p gfm -- archive-rebuild-plan records.gfmidx columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict content.gfmcontent content.gfmmanifest hot:content.gfmcontent
+cargo run -p gfm -- archive-rebuild-plan records.gfmidx columns.gfmcols metadata.gfmmeta prefixes.gfmprefix substrings.gfmsubstr fuzzy.gfmfuzzy dictionary.gfmdict content.gfmcontent content.gfmmanifest hot:content.gfmcontent
 cargo run -p gfm -- records-migration-plan records.gfmidx
 cargo run -p gfm -- records-migrate records.gfmidx quarantine
 cargo run -p gfm -- content-migration-plan content.gfmcontent
@@ -339,20 +339,20 @@ cargo run -p gfm -- derived-sidecar-rebuild records.gfmidx prefixes prefixes.gfm
 ```
 
 `macrobench-fixture` materializes real filesystem benchmark trees for developer projects, documents, media, iCloud-shaped files, external-volume-shaped files, network-volume-shaped files, huge directories, and nested trees, then writes a manifest with exact file and directory counts; the `million` scale materializes a one-million-file fixture without running the full benchmark loop.
-`regression-gate` materializes benchmark indexes and real prefix/fuzzy sidecar archives, then fails on latency, index-density, prefix lookup, fuzzy lookup, cache-path, and sidecar-truncation drift.
-`large-sidecar-gate` synthesizes realistic record distributions, writes real prefix/fuzzy sidecars, verifies bounded repeated lookup behavior at million-entry scale, skips digit-run-heavy tokens in fuzzy sidecars, probes full sidecars with a bounded live record set, and retains `thresholds.tsv` plus `gfm-large-sidecar-history.tsv` artifacts using the `production-macos-million-v1` calibration profile.
+`regression-gate` materializes benchmark indexes and real prefix/substring/fuzzy sidecar archives, then fails on latency, index-density, prefix lookup, substring lookup, fuzzy lookup, cache-path, and sidecar-truncation drift.
+`large-sidecar-gate` synthesizes realistic record distributions, writes real prefix/substring/fuzzy sidecars, verifies bounded repeated lookup behavior at million-entry scale, skips digit-run-heavy tokens in fuzzy sidecars, probes full sidecars with a bounded live record set, and retains `thresholds.tsv` plus `gfm-large-sidecar-history.tsv` artifacts using the `production-macos-million-v1` calibration profile.
 `diagnostics-index-rebuild-adaptive` defers filesystem scans, content extraction, record publication, and content archive publication under saturated host pressure.
 `diagnostics-index-recovery-plan`, `diagnostics-index-recover`, and `diagnostics-index-recover-adaptive` classify persistent record/state health, rebuild missing or stale state, and quarantine corrupt record archives before rebuilding; the adaptive path defers before mutating recovery state under saturated host pressure.
 `content-manifest-recovery-plan` and `content-manifest-recover` classify content manifest health, prune invalid archives, and quarantine corrupt manifests before rebuilding from mmap-validated archives.
 `content-manifest-promotion-recovery-plan` and `content-manifest-promotion-recover` complete or clean up interrupted content manifest promotions from the durable promotion journal so compaction cannot strand a valid new content archive behind a stale manifest.
 `sidecar-recovery-plan` and `sidecar-recover` validate, quarantine, and rebuild search sidecars from the durable record archive.
-`archive-schema` classifies record, column, metadata, prefix, fuzzy, dictionary, content, and content-manifest archives as current, legacy, unsupported, missing, or unreadable while validating known schemas through the production readers used by search and diagnostics.
-`archive-rebuild-plan` emits one deterministic preflight over records, columns, metadata, prefixes, fuzzy, dictionary, content, and content-manifest state, selecting the concrete ready/migrate/rebuild/recover/blocked route for each surface before any bytes are mutated.
+`archive-schema` classifies record, column, metadata, prefix, substring, fuzzy, dictionary, content, and content-manifest archives as current, legacy, unsupported, missing, or unreadable while validating known schemas through the production readers used by search and diagnostics.
+`archive-rebuild-plan` emits one deterministic preflight over records, columns, metadata, prefixes, substrings, fuzzy, dictionary, content, and content-manifest state, selecting the concrete ready/migrate/rebuild/recover/blocked route for each surface before any bytes are mutated.
 `records-migration-plan` and `records-migrate` rewrite legacy record archives into the current checksummed schema after preserving a byte backup for operator rollback and forensic inspection.
 `content-migration-plan` and `content-migrate` rewrite legacy sequential content archives into the current indexed and checksummed content schema after preserving a byte backup.
 `metadata-migration-plan` and `metadata-migrate` rewrite legacy metadata archives into the current checksummed metadata schema after preserving a byte backup.
 `columns-rebuild-plan` and `columns-rebuild` preserve legacy, unsupported, or unreadable column bytes and regenerate the current checksummed column mmap archive from the durable record archive.
-`derived-sidecar-rebuild-plan` and `derived-sidecar-rebuild` apply the same durable-record rebuild contract to metadata, prefix, fuzzy, dictionary, and column sidecars.
+`derived-sidecar-rebuild-plan` and `derived-sidecar-rebuild` apply the same durable-record rebuild contract to metadata, prefix, substring, fuzzy, dictionary, and column sidecars.
 
 Build, sign, and register the native app bundle:
 
@@ -395,15 +395,15 @@ cargo run -p gfm -- fsevents-repair-schedule /tmp/gfm.gfmstate /tmp/gfm.gfmcurso
 cargo run -p gfm -- search-index /tmp/gfm.gfmidx PLAN
 cargo run -p gfm -- search-index-mmap /tmp/gfm.gfmidx PLAN
 cargo run -p gfm -- search-index-columns /tmp/gfm.gfmidx /tmp/gfm.gfmcols PLAN
-cargo run -p gfm -- search-index-sidecars /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmfuzzy /tmp/gfm.gfmcontent PLAN
-cargo run -p gfm -- search-index-sidecars-budget /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmfuzzy /tmp/gfm.gfmcontent 4096 96 512 4096 PLAN
-cargo run -p gfm -- index-footprint /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmfuzzy /tmp/gfm.gfmmanifest /tmp/gfm-*.gfmseg
+cargo run -p gfm -- search-index-sidecars /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmsubstr /tmp/gfm.gfmfuzzy /tmp/gfm.gfmcontent PLAN
+cargo run -p gfm -- search-index-sidecars-budget /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmsubstr /tmp/gfm.gfmfuzzy /tmp/gfm.gfmcontent 4096 16 4096 96 512 4096 PLAN
+cargo run -p gfm -- index-footprint /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmsubstr /tmp/gfm.gfmfuzzy /tmp/gfm.gfmmanifest /tmp/gfm-*.gfmseg
 cargo run -p gfm -- index-compaction-plan /tmp/gfm.gfmidx /tmp/gfm.gfmmanifest elevated serious battery active /tmp/gfm-*.gfmseg
 cargo run -p gfm -- archive-schema records /tmp/gfm.gfmidx
 cargo run -p gfm -- archive-schema content-manifest /tmp/gfm.gfmmanifest
 cargo run -p gfm -- records-migration-plan /tmp/gfm.gfmidx
 cargo run -p gfm -- records-migrate /tmp/gfm.gfmidx /tmp/gfm-migration-backups
-cargo run -p gfm -- archive-rebuild-plan /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmfuzzy /tmp/gfm.gfmdict /tmp/gfm.gfmcontent /tmp/gfm.gfmmanifest hot:/tmp/gfm.gfmcontent
+cargo run -p gfm -- archive-rebuild-plan /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmsubstr /tmp/gfm.gfmfuzzy /tmp/gfm.gfmdict /tmp/gfm.gfmcontent /tmp/gfm.gfmmanifest hot:/tmp/gfm.gfmcontent
 cargo run -p gfm -- content-migration-plan /tmp/gfm.gfmcontent
 cargo run -p gfm -- content-migrate /tmp/gfm.gfmcontent /tmp/gfm-migration-backups
 cargo run -p gfm -- metadata-migration-plan /tmp/gfm.gfmmeta
@@ -427,6 +427,10 @@ cargo run -p gfm -- index-prefixes /tmp/gfm.gfmidx /tmp/gfm.gfmprefix
 cargo run -p gfm -- prefix-ids-mmap /tmp/gfm.gfmprefix Pro
 cargo run -p gfm -- prefix-id-block-mmap /tmp/gfm.gfmprefix Pro 0
 cargo run -p gfm -- prefix-verify /tmp/gfm.gfmprefix
+cargo run -p gfm -- index-substrings /tmp/gfm.gfmidx /tmp/gfm.gfmsubstr
+cargo run -p gfm -- substring-ids-mmap /tmp/gfm.gfmsubstr roj
+cargo run -p gfm -- substring-id-block-mmap /tmp/gfm.gfmsubstr roj 0
+cargo run -p gfm -- substring-verify /tmp/gfm.gfmsubstr
 cargo run -p gfm -- index-fuzzy /tmp/gfm.gfmidx /tmp/gfm.gfmfuzzy
 cargo run -p gfm -- fuzzy-terms-mmap /tmp/gfm.gfmfuzzy Pln
 cargo run -p gfm -- fuzzy-verify /tmp/gfm.gfmfuzzy

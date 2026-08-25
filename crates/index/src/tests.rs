@@ -1,8 +1,9 @@
 use super::*;
 use gfm_store::{
     fuzzy_postings_from_records, metadata_postings_from_records, prefix_postings_from_records,
-    write_fuzzy_postings, write_metadata_postings, write_prefix_postings, write_record_columns,
-    FuzzyPosting, PrefixPosting,
+    substring_postings_from_records, write_fuzzy_postings, write_metadata_postings,
+    write_prefix_postings, write_record_columns, write_substring_postings, FuzzyPosting,
+    PrefixPosting, SubstringPosting,
 };
 use gfm_types::{FileKind, MatchReason, VolumeId};
 use std::collections::HashSet;
@@ -21,6 +22,10 @@ fn extracts_content_terms_for_query_sidecar_loading() {
         vec!["important"]
     );
     assert_eq!(prefix_query_terms("project-plan"), vec!["plan", "project"]);
+    assert_eq!(
+        substring_candidate_grams("report"),
+        vec!["epo", "ort", "por", "rep"]
+    );
     assert!(fuzzy_query_keys("project").contains(&"project".to_string()));
     assert!(content_query_terms("tag:Important kind:file").is_empty());
 }
@@ -110,7 +115,7 @@ fn live_index_builds_records_with_deferred_sidecar_terms() {
     let live = LiveIndex::from_records_deferred_sidecars(vec![record]);
 
     assert_eq!(live.indexed_records(), 1);
-    assert_eq!(live.search("deferred", 5).len(), 1);
+    assert_eq!(live.search("deferredsidecar", 5).len(), 1);
     assert!(live.search("defered", 5).is_empty());
 }
 
@@ -177,7 +182,7 @@ fn live_index_imports_metadata_prefix_and_fuzzy_sidecars_after_column_build() {
         xattrs_digest: 0,
     };
 
-    let (live, applied, metadata_keys, prefix_keys, fuzzy_keys, content_keys) =
+    let (live, applied, metadata_keys, prefix_keys, substring_keys, fuzzy_keys, content_keys) =
         LiveIndex::from_records_with_sidecars(
             vec![record.clone()],
             vec![SearchRecordColumns {
@@ -204,6 +209,10 @@ fn live_index_imports_metadata_prefix_and_fuzzy_sidecars_after_column_build() {
                 prefix: "proj".to_string(),
                 ids: vec![record.id],
             }],
+            vec![SearchSubstringPosting {
+                gram: "eed".to_string(),
+                ids: vec![record.id],
+            }],
             vec![SearchFuzzyPosting {
                 key: "needl".to_string(),
                 terms: vec!["needl".to_string()],
@@ -218,11 +227,13 @@ fn live_index_imports_metadata_prefix_and_fuzzy_sidecars_after_column_build() {
     assert_eq!(applied, 1);
     assert_eq!(metadata_keys, 2);
     assert_eq!(prefix_keys, 1);
+    assert_eq!(substring_keys, 1);
     assert_eq!(fuzzy_keys, 1);
     assert_eq!(content_keys, 1);
     assert_eq!(live.search("tag:Important", 5).len(), 1);
     assert_eq!(live.search("launch", 5).len(), 1);
     assert_eq!(live.search("proj", 5).len(), 1);
+    assert_eq!(live.search("eed", 5).len(), 1);
     assert_eq!(live.search("needle", 5).len(), 1);
     assert_eq!(live.search("bodymarker", 5).len(), 1);
 }
@@ -248,12 +259,21 @@ fn live_index_queries_prefix_and_fuzzy_archive_lookup_without_importing_sidecars
         xattrs_digest: 0,
     };
     let prefixes = unique_temp_path("gfm-prefix-archive-lookup", "gfmprefix");
+    let substrings = unique_temp_path("gfm-substring-archive-lookup", "gfmsubstr");
     let fuzzy = unique_temp_path("gfm-fuzzy-archive-lookup", "gfmfuzzy");
 
     write_prefix_postings(
         &prefixes,
         &[PrefixPosting {
             prefix: "proj".to_string(),
+            ids: vec![record.id],
+        }],
+    )
+    .unwrap();
+    write_substring_postings(
+        &substrings,
+        &[SubstringPosting {
+            gram: "eed".to_string(),
             ids: vec![record.id],
         }],
     )
@@ -267,7 +287,7 @@ fn live_index_queries_prefix_and_fuzzy_archive_lookup_without_importing_sidecars
     )
     .unwrap();
 
-    let (live, applied, metadata_keys, prefix_keys, fuzzy_keys, content_keys) =
+    let (live, applied, metadata_keys, prefix_keys, substring_keys, fuzzy_keys, content_keys) =
         LiveIndex::from_records_with_sidecars(
             vec![record.clone()],
             vec![SearchRecordColumns {
@@ -282,30 +302,34 @@ fn live_index_queries_prefix_and_fuzzy_archive_lookup_without_importing_sidecars
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
-    let lookup = SearchArchiveLookup::open(&prefixes, &fuzzy).unwrap();
+    let lookup = SearchArchiveLookup::open(&prefixes, &substrings, &fuzzy).unwrap();
 
     assert_eq!(applied, 1);
     assert_eq!(metadata_keys, 0);
     assert_eq!(prefix_keys, 0);
+    assert_eq!(substring_keys, 0);
     assert_eq!(fuzzy_keys, 0);
     assert_eq!(content_keys, 0);
     assert_eq!(lookup.indexed_prefixes(), 1);
+    assert_eq!(lookup.indexed_substring_grams(), 1);
     assert_eq!(lookup.indexed_fuzzy_keys(), 1);
-    let prefix_without_lookup = live.search("proj", 5);
-    assert_eq!(prefix_without_lookup.len(), 1);
-    assert_eq!(prefix_without_lookup[0].reason, MatchReason::SubstringName);
+    assert_eq!(live.search("proj", 5).len(), 0);
     assert_eq!(live.search("needle", 5).len(), 0);
     let prefix_hits = live.search_with_lookup("proj", 5, &lookup).unwrap();
+    let substring_hits = live.search_with_lookup("eed", 5, &lookup).unwrap();
     let fuzzy_hits = live.search_with_lookup("needle", 5, &lookup).unwrap();
     assert_eq!(prefix_hits.len(), 1);
     assert_eq!(prefix_hits[0].reason, MatchReason::PrefixName);
+    assert_eq!(substring_hits.len(), 1);
+    assert_eq!(substring_hits[0].reason, MatchReason::SubstringName);
     assert_eq!(fuzzy_hits.len(), 1);
     assert_eq!(fuzzy_hits[0].reason, MatchReason::FuzzyName);
-    let budget_lookup = SearchArchiveLookup::open(&prefixes, &fuzzy).unwrap();
+    let budget_lookup = SearchArchiveLookup::open(&prefixes, &substrings, &fuzzy).unwrap();
     let first_report = live
         .search_with_lookup_budget(
-            "proj needle",
+            "proj eed needle",
             5,
             &budget_lookup,
             SearchLookupBudget::default(),
@@ -313,18 +337,21 @@ fn live_index_queries_prefix_and_fuzzy_archive_lookup_without_importing_sidecars
         .unwrap();
     let second_report = live
         .search_with_lookup_budget(
-            "proj needle",
+            "proj eed needle",
             5,
             &budget_lookup,
             SearchLookupBudget::default(),
         )
         .unwrap();
     assert!(first_report.lookup.prefix_cache_misses > 0);
+    assert!(first_report.lookup.substring_cache_misses > 0);
     assert!(first_report.lookup.fuzzy_cache_misses > 0);
     assert!(second_report.lookup.prefix_cache_hits > 0);
+    assert!(second_report.lookup.substring_cache_hits > 0);
     assert!(second_report.lookup.fuzzy_cache_hits > 0);
 
     fs::remove_file(prefixes).unwrap();
+    fs::remove_file(substrings).unwrap();
     fs::remove_file(fuzzy).unwrap();
 }
 
@@ -1016,6 +1043,7 @@ fn index_footprint_reports_sizes_and_schedules_segment_compaction() {
     let columns = unique_temp_path("gfm-index-footprint-columns", "gfmcols");
     let metadata = unique_temp_path("gfm-index-footprint-metadata", "gfmmeta");
     let prefixes = unique_temp_path("gfm-index-footprint-prefixes", "gfmprefix");
+    let substrings = unique_temp_path("gfm-index-footprint-substrings", "gfmsubstr");
     let fuzzy = unique_temp_path("gfm-index-footprint-fuzzy", "gfmfuzzy");
     let content = unique_temp_path("gfm-index-footprint-content", "gfmcontent");
     let manifest = unique_temp_path("gfm-index-footprint-content", "gfmmanifest");
@@ -1038,6 +1066,11 @@ fn index_footprint_reports_sizes_and_schedules_segment_compaction() {
     )
     .unwrap();
     write_prefix_postings(&prefixes, &prefix_postings_from_records(&snapshot.records)).unwrap();
+    write_substring_postings(
+        &substrings,
+        &substring_postings_from_records(&snapshot.records),
+    )
+    .unwrap();
     write_fuzzy_postings(&fuzzy, &fuzzy_postings_from_records(&snapshot.records)).unwrap();
     ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
         tier: ContentMergeTier::Hot,
@@ -1060,6 +1093,7 @@ fn index_footprint_reports_sizes_and_schedules_segment_compaction() {
     spec.columns = Some(columns.clone());
     spec.metadata = Some(metadata.clone());
     spec.prefixes = Some(prefixes.clone());
+    spec.substrings = Some(substrings.clone());
     spec.fuzzy = Some(fuzzy.clone());
     spec.content_manifest = Some(manifest.clone());
     spec.content_segments = segments.clone();
@@ -1071,6 +1105,7 @@ fn index_footprint_reports_sizes_and_schedules_segment_compaction() {
     assert!(report.column_bytes > 0);
     assert!(report.metadata_bytes > 0);
     assert!(report.prefix_keys > 0);
+    assert!(report.substring_keys > 0);
     assert!(report.fuzzy_keys > 0);
     assert_eq!(report.content_archives, 1);
     assert!(report.content_terms > 0);
@@ -1108,7 +1143,7 @@ fn index_footprint_reports_sizes_and_schedules_segment_compaction() {
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(segment_dir).unwrap();
     for path in [
-        records, columns, metadata, prefixes, fuzzy, content, manifest,
+        records, columns, metadata, prefixes, substrings, fuzzy, content, manifest,
     ] {
         fs::remove_file(path).unwrap();
     }

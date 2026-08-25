@@ -38,6 +38,8 @@ const SUBSTRING_GRAM_CHARS: usize = 3;
 pub struct SearchLookupBudget {
     pub max_prefix_ids_per_term: usize,
     pub min_archive_prefix_chars: usize,
+    pub max_substring_grams_per_term: usize,
+    pub max_substring_ids_per_gram: usize,
     pub max_fuzzy_keys_per_term: usize,
     pub max_fuzzy_terms_per_key: usize,
     pub max_fuzzy_candidates_per_term: usize,
@@ -48,6 +50,8 @@ impl Default for SearchLookupBudget {
         Self {
             max_prefix_ids_per_term: 4096,
             min_archive_prefix_chars: 2,
+            max_substring_grams_per_term: 16,
+            max_substring_ids_per_gram: 4096,
             max_fuzzy_keys_per_term: 96,
             max_fuzzy_terms_per_key: 512,
             max_fuzzy_candidates_per_term: 4096,
@@ -65,6 +69,15 @@ pub struct SearchLookupTelemetry {
     pub prefix_cache_misses: usize,
     pub prefix_cutoff_terms: usize,
     pub prefix_truncated_terms: usize,
+    pub substring_terms: usize,
+    pub substring_grams: usize,
+    pub substring_lookup_requests: usize,
+    pub substring_lookup_ids: usize,
+    pub substring_candidate_ids: usize,
+    pub substring_cache_hits: usize,
+    pub substring_cache_misses: usize,
+    pub substring_term_truncated_grams: usize,
+    pub substring_truncated_grams: usize,
     pub fuzzy_terms: usize,
     pub fuzzy_keys: usize,
     pub fuzzy_lookup_requests: usize,
@@ -88,6 +101,15 @@ impl SearchLookupTelemetry {
         self.prefix_cache_misses += other.prefix_cache_misses;
         self.prefix_cutoff_terms += other.prefix_cutoff_terms;
         self.prefix_truncated_terms += other.prefix_truncated_terms;
+        self.substring_terms += other.substring_terms;
+        self.substring_grams += other.substring_grams;
+        self.substring_lookup_requests += other.substring_lookup_requests;
+        self.substring_lookup_ids += other.substring_lookup_ids;
+        self.substring_candidate_ids += other.substring_candidate_ids;
+        self.substring_cache_hits += other.substring_cache_hits;
+        self.substring_cache_misses += other.substring_cache_misses;
+        self.substring_term_truncated_grams += other.substring_term_truncated_grams;
+        self.substring_truncated_grams += other.substring_truncated_grams;
         self.fuzzy_terms += other.fuzzy_terms;
         self.fuzzy_keys += other.fuzzy_keys;
         self.fuzzy_lookup_requests += other.fuzzy_lookup_requests;
@@ -111,6 +133,15 @@ impl SearchLookupTelemetry {
         self.prefix_cache_misses += after
             .prefix_cache_misses
             .saturating_sub(before.prefix_cache_misses);
+        self.substring_lookup_requests += after
+            .substring_lookup_requests
+            .saturating_sub(before.substring_lookup_requests);
+        self.substring_cache_hits += after
+            .substring_cache_hits
+            .saturating_sub(before.substring_cache_hits);
+        self.substring_cache_misses += after
+            .substring_cache_misses
+            .saturating_sub(before.substring_cache_misses);
         self.fuzzy_lookup_requests += after
             .fuzzy_lookup_requests
             .saturating_sub(before.fuzzy_lookup_requests);
@@ -141,6 +172,11 @@ pub struct SearchStreamBatch {
     pub hits: Vec<SearchHit>,
 }
 
+pub fn substring_candidate_grams(query: &str) -> Vec<String> {
+    let parsed = SearchQuery::parse(query);
+    substring_grams(&parsed.terms.join(" "))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchFuzzyPosting {
     pub key: String,
@@ -149,6 +185,7 @@ pub struct SearchFuzzyPosting {
 
 pub trait SearchLookup: Sync {
     fn prefix_ids(&self, prefix: &str) -> gfm_types::Result<Vec<FileId>>;
+    fn substring_ids(&self, gram: &str) -> gfm_types::Result<Vec<FileId>>;
     fn fuzzy_terms(&self, key: &str) -> gfm_types::Result<Vec<String>>;
 
     fn cache_telemetry(&self) -> SearchLookupTelemetry {
@@ -164,6 +201,10 @@ impl SearchLookup for EmptySearchLookup {
         Ok(Vec::new())
     }
 
+    fn substring_ids(&self, _gram: &str) -> gfm_types::Result<Vec<FileId>> {
+        Ok(Vec::new())
+    }
+
     fn fuzzy_terms(&self, _key: &str) -> gfm_types::Result<Vec<String>> {
         Ok(Vec::new())
     }
@@ -172,6 +213,12 @@ impl SearchLookup for EmptySearchLookup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchPrefixPosting {
     pub prefix: String,
+    pub ids: Vec<FileId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchSubstringPosting {
+    pub gram: String,
     pub ids: Vec<FileId>,
 }
 
@@ -242,7 +289,7 @@ impl SearchIndex {
         record: FileRecord,
         columns: SearchRecordColumns,
     ) -> bool {
-        self.insert_with_columns_inner(record, columns, true, true, true)
+        self.insert_with_columns_inner(record, columns, true, true, true, true)
     }
 
     pub fn insert_with_columns_deferred_fuzzy(
@@ -250,7 +297,7 @@ impl SearchIndex {
         record: FileRecord,
         columns: SearchRecordColumns,
     ) -> bool {
-        self.insert_with_columns_inner(record, columns, true, false, true)
+        self.insert_with_columns_inner(record, columns, true, true, false, true)
     }
 
     pub fn insert_with_columns_deferred_sidecars(
@@ -258,7 +305,7 @@ impl SearchIndex {
         record: FileRecord,
         columns: SearchRecordColumns,
     ) -> bool {
-        self.insert_with_columns_inner(record, columns, false, false, false)
+        self.insert_with_columns_inner(record, columns, false, false, false, false)
     }
 
     fn insert_with_columns_inner(
@@ -266,6 +313,7 @@ impl SearchIndex {
         record: FileRecord,
         columns: SearchRecordColumns,
         build_prefixes: bool,
+        build_substrings: bool,
         build_fuzzy: bool,
         build_metadata: bool,
     ) -> bool {
@@ -284,6 +332,7 @@ impl SearchIndex {
             &record,
             &normalized,
             build_prefixes,
+            build_substrings,
             build_fuzzy,
             build_metadata,
         );
@@ -310,6 +359,25 @@ impl SearchIndex {
             }
         }
         self.name_prefixes.len()
+    }
+
+    pub fn import_substring_postings(&mut self, postings: &[SearchSubstringPosting]) -> usize {
+        for posting in postings {
+            let gram = normalize(&posting.gram);
+            if !is_substring_gram(&gram) {
+                continue;
+            }
+            let ids = posting
+                .ids
+                .iter()
+                .copied()
+                .filter(|id| self.records.contains_key(id))
+                .collect::<BTreeSet<_>>();
+            if !ids.is_empty() {
+                self.name_substrings.entry(gram).or_default().extend(ids);
+            }
+        }
+        self.name_substrings.len()
     }
 
     pub fn import_fuzzy_postings(&mut self, postings: &[SearchFuzzyPosting]) -> usize {
@@ -762,9 +830,12 @@ impl SearchIndex {
         }
 
         if scores.len() < limit {
-            let candidates = self.name_substring_candidates(&text);
-            for record in candidates {
+            let candidates = self.name_substring_ids(&text, lookup, budget, &mut telemetry)?;
+            for id in candidates {
                 cancellation.check()?;
+                let Some(record) = self.records.get(&id) else {
+                    continue;
+                };
                 if !text.is_empty()
                     && self
                         .columns
@@ -1048,6 +1119,59 @@ impl SearchIndex {
         Ok(ids)
     }
 
+    fn name_substring_ids(
+        &self,
+        term: &str,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        telemetry: &mut SearchLookupTelemetry,
+    ) -> gfm_types::Result<BTreeSet<FileId>> {
+        if term.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let grams = substring_grams(term);
+        if grams.is_empty() {
+            return Ok(self.records.keys().copied().collect());
+        }
+        telemetry.substring_terms += 1;
+        if grams.len() > budget.max_substring_grams_per_term {
+            telemetry.substring_term_truncated_grams += 1;
+        }
+
+        let mut gram_sets = Vec::new();
+        for gram in grams.into_iter().take(budget.max_substring_grams_per_term) {
+            telemetry.substring_grams += 1;
+            let mut ids = self.name_substrings.get(&gram).cloned().unwrap_or_default();
+            let lookup_ids = lookup.substring_ids(&gram)?;
+            telemetry.substring_lookup_ids += lookup_ids.len();
+            if lookup_ids.len() > budget.max_substring_ids_per_gram {
+                telemetry.substring_truncated_grams += 1;
+            }
+            ids.extend(
+                lookup_ids
+                    .into_iter()
+                    .filter(|id| self.records.contains_key(id))
+                    .take(budget.max_substring_ids_per_gram),
+            );
+            if ids.is_empty() {
+                return Ok(BTreeSet::new());
+            }
+            gram_sets.push(ids);
+        }
+
+        gram_sets.sort_by_key(|ids| ids.len());
+        let mut gram_sets = gram_sets.into_iter();
+        let mut candidates = gram_sets.next().unwrap_or_default();
+        for ids in gram_sets {
+            candidates.retain(|id| ids.contains(id));
+            if candidates.is_empty() {
+                break;
+            }
+        }
+        telemetry.substring_candidate_ids += candidates.len();
+        Ok(candidates)
+    }
+
     fn content_matches_phrase(&self, id: FileId, phrase: &str) -> bool {
         let terms = tokenize(&normalize(phrase));
         if terms.is_empty() {
@@ -1136,7 +1260,7 @@ impl SearchIndex {
     }
 
     fn add_terms(&mut self, record: &FileRecord, columns: &RecordColumns) {
-        self.add_terms_with_sidecar_policy(record, columns, true, true, true);
+        self.add_terms_with_sidecar_policy(record, columns, true, true, true, true);
     }
 
     fn add_terms_with_sidecar_policy(
@@ -1144,6 +1268,7 @@ impl SearchIndex {
         record: &FileRecord,
         columns: &RecordColumns,
         build_prefixes: bool,
+        build_substrings: bool,
         build_fuzzy: bool,
         build_metadata: bool,
     ) {
@@ -1169,11 +1294,13 @@ impl SearchIndex {
                 self.add_fuzzy_term(token);
             }
         }
-        for gram in substring_grams(&columns.name) {
-            self.name_substrings
-                .entry(gram)
-                .or_default()
-                .insert(record.id);
+        if build_substrings {
+            for gram in substring_grams(&columns.name) {
+                self.name_substrings
+                    .entry(gram)
+                    .or_default()
+                    .insert(record.id);
+            }
         }
         for token in &columns.path_tokens {
             self.path_terms
@@ -1290,35 +1417,6 @@ impl SearchIndex {
                 .any(|candidate| bounded_levenshtein(candidate, term, 2).is_some())
         })
     }
-
-    fn name_substring_candidates(&self, text: &str) -> Vec<&FileRecord> {
-        if text.is_empty() {
-            return Vec::new();
-        }
-        let grams = substring_grams(text);
-        if grams.is_empty() {
-            return self.records.values().collect();
-        }
-        let mut gram_sets = grams
-            .iter()
-            .filter_map(|gram| self.name_substrings.get(gram))
-            .collect::<Vec<_>>();
-        if gram_sets.len() != grams.len() {
-            return Vec::new();
-        }
-        gram_sets.sort_by_key(|ids| ids.len());
-        let mut candidates = gram_sets[0].clone();
-        for ids in gram_sets.iter().skip(1) {
-            candidates.retain(|id| ids.contains(id));
-            if candidates.is_empty() {
-                break;
-            }
-        }
-        candidates
-            .into_iter()
-            .filter_map(|id| self.records.get(&id))
-            .collect()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1387,6 +1485,10 @@ fn substring_grams(value: &str) -> Vec<String> {
     grams.sort();
     grams.dedup();
     grams
+}
+
+fn is_substring_gram(value: &str) -> bool {
+    value.chars().count() == SUBSTRING_GRAM_CHARS
 }
 
 fn expression_needs_universe(expression: &QueryExpr) -> bool {

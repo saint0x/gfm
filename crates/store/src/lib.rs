@@ -12,6 +12,7 @@ mod prefix;
 mod rebuild;
 mod schema;
 mod sidecar;
+mod substring;
 
 pub use columns::{write_record_columns, MmapRecordColumns, RecordColumn};
 pub use content::{
@@ -73,6 +74,10 @@ pub use sidecar::{
     plan_sidecar_recovery, recover_sidecars, sidecar_kind_name, sidecar_recovery_action_name,
     sidecar_recovery_reason_name, SidecarHealth, SidecarKind, SidecarPaths, SidecarRecovery,
     SidecarRecoveryAction, SidecarRecoveryPlan, SidecarRecoveryReason,
+};
+pub use substring::{
+    read_substring_postings, substring_postings_from_records, write_substring_postings,
+    MmapSubstringArchive, SubstringPosting,
 };
 
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};

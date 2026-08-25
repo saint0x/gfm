@@ -389,7 +389,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
 1. Hot name index
    - In-memory or memory-mapped finite-state transducer for filenames and path components.
    - Lowercased, Unicode-normalized, tokenized, and extension-aware.
-   - Prefix, hot name substring via in-memory n-gram candidate index, substring sidecar strategy for persisted archives, and fuzzy via delete-key candidate indexes plus bounded edit-distance verification.
+   - Prefix, hot name substring via in-memory and mmap-backed n-gram candidate indexes, and fuzzy via delete-key candidate indexes plus bounded edit-distance verification.
 
 2. Path component index
    - Component-level postings.
@@ -457,27 +457,27 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - each query term performs binary directory lookup inside each archive instead of hydrating all postings;
   - duplicate file ids and positional offsets are merged deterministically through ordered sets;
   - this lets background compaction publish new tier files while retained archives remain searchable.
-- Query-time prefix and fuzzy archive lookup:
-  - prefix and delete-key fuzzy sidecars expose a store-agnostic lookup contract to the search engine;
-  - live hot records keep in-memory prefix/fuzzy maps while immutable sidecars answer query candidates directly from mmap archives;
+- Query-time prefix, substring, and fuzzy archive lookup:
+  - prefix, name-substring trigram, and delete-key fuzzy sidecars expose a store-agnostic lookup contract to the search engine;
+  - live hot records keep in-memory prefix/substring/fuzzy maps while immutable sidecars answer query candidates directly from mmap archives;
   - sharded search fans out the same archive lookup across volume shards and filters candidate ids per shard;
-  - archive-backed lookup avoids importing large prefix/fuzzy candidate maps into heap memory for each machine-wide query session;
-  - the archive lookup caches repeated prefix and fuzzy key probes inside the mmap-backed lookup object and reports request, hit, and miss counters with each budgeted query;
-  - prefix ids, archive prefix length, fuzzy delete keys, fuzzy terms per key, and verified fuzzy candidates are capped by an explicit search lookup budget;
+  - archive-backed lookup avoids importing large prefix/substring/fuzzy candidate maps into heap memory for each machine-wide query session;
+  - the archive lookup caches repeated prefix, substring gram, and fuzzy key probes inside the mmap-backed lookup object and reports request, hit, and miss counters with each budgeted query;
+  - prefix ids, archive prefix length, substring grams, substring ids per gram, fuzzy delete keys, fuzzy terms per key, and verified fuzzy candidates are capped by an explicit search lookup budget;
   - adaptive prefix cutoffs skip archive expansion for too-short prefixes and already-saturated local candidate sets before they can touch mmap sidecars;
   - fuzzy sidecar generation excludes all-numeric and long digit-run name tokens so high-cardinality generated identifiers do not dominate deletion-key expansion or heap residency;
-  - search reports expose prefix/fuzzy lookup telemetry, cache-hit telemetry, cutoff telemetry, truncation counters, candidate counts, and verified-candidate counts;
-  - regression gates materialize real prefix/fuzzy sidecar archives from macrobench records, execute repeated sidecar-backed search probes, and fail on candidate-count overflow or lookup truncation before prefix/fuzzy expansion can become a machine-wide latency cliff;
-  - large sidecar gates synthesize realistic developer, document, media, iCloud, external-volume, network-volume, application, and archive record distributions, publish real mmap prefix/fuzzy sidecars from those records, and verify bounded repeated lookup behavior at user-selected record counts including million-entry CI runs;
-  - the `production-macos-million-v1` threshold profile caps prefix/fuzzy bytes per record, lookup candidate counts, and truncation to calibrated hard limits, writes a per-run `thresholds.tsv`, appends retained `gfm-large-sidecar-history.tsv` telemetry for CI trend review, and probes full sidecars through a bounded live record set rather than duplicating million-entry sidecars in heap.
+  - search reports expose prefix/substring/fuzzy lookup telemetry, cache-hit telemetry, cutoff telemetry, truncation counters, candidate counts, and verified-candidate counts;
+  - regression gates materialize real prefix/substring/fuzzy sidecar archives from macrobench records, execute repeated sidecar-backed search probes, and fail on candidate-count overflow or lookup truncation before prefix/substring/fuzzy expansion can become a machine-wide latency cliff;
+  - large sidecar gates synthesize realistic developer, document, media, iCloud, external-volume, network-volume, application, and archive record distributions, publish real mmap prefix/substring/fuzzy sidecars from those records, and verify bounded repeated lookup behavior at user-selected record counts including million-entry CI runs;
+  - the `production-macos-million-v1` threshold profile caps prefix/substring/fuzzy bytes per record, lookup candidate counts, and truncation to calibrated hard limits, writes a per-run `thresholds.tsv`, appends retained `gfm-large-sidecar-history.tsv` telemetry for CI trend review, and probes full sidecars through a bounded live record set rather than duplicating million-entry sidecars in heap.
 - Index footprint telemetry and maintenance scheduling:
-  - record, column, metadata, prefix, fuzzy, content-manifest, and pending content-segment archives are measured from mmap readers and filesystem byte counts;
+  - record, column, metadata, prefix, substring, fuzzy, content-manifest, and pending content-segment archives are measured from mmap readers and filesystem byte counts;
   - footprint reports include total bytes, bytes per record, sidecar key counts, content archive counts, segment postings, tombstones, and tombstone-bearing segment counts;
   - the same bounded content merge policy used by background maintenance emits a deterministic schedule with merge segments, retained segments, tier, merge bytes, tombstone pressure, and a concrete scheduling reason;
   - live I/O pressure, thermal state, battery state, user activity, and index-density thresholds adapt the schedule into run, throttle, or defer actions with bounded effective merge bytes;
   - operator and CI surfaces can gate index density drift and compaction pressure without hydrating postings.
 - Archive schema inspection:
-  - records, columns, metadata, prefix, fuzzy, dictionary, content, and content-manifest archives are classified before migration or recovery work as current, legacy, unsupported, missing, or unreadable;
+  - records, columns, metadata, prefix, substring, fuzzy, dictionary, content, and content-manifest archives are classified before migration or recovery work as current, legacy, unsupported, missing, or unreadable;
   - current known schemas are validated through production mmap readers where the format is mmap-indexed, while valid legacy content uses the production sequential content reader before migration;
   - the operator-facing `archive-schema` command emits deterministic TSV for CI gates, recovery audits, and future archive migration execution.
 - Record archive migration:
@@ -498,12 +498,12 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - rebuilt columns are reclassified after publication and must reopen as current checksummed `gfm-record-columns-v2` archives before the rebuild is reported successful;
   - unreadable, missing, or unsupported record archives block column rebuilds because records are the authoritative source for all column fields.
 - Derived search sidecar rebuild:
-  - metadata, prefix, fuzzy, dictionary, and column sidecars share one production rebuild engine, so missing, legacy, unsupported, and unreadable derived archives are regenerated from durable mmap records through the same encoders used by indexing;
+  - metadata, prefix, substring, fuzzy, dictionary, and column sidecars share one production rebuild engine, so missing, legacy, unsupported, and unreadable derived archives are regenerated from durable mmap records through the same encoders used by indexing;
   - existing unreadable, unsupported, or legacy sidecar bytes are backed up before replacement, while missing sidecars rebuild without synthetic backup artifacts;
   - rebuilt sidecars are reclassified and must reopen as the current schema for their archive kind before success is reported;
   - the operator-facing `derived-sidecar-rebuild-plan` and `derived-sidecar-rebuild` commands expose the generic path, with `columns-rebuild-plan` and `columns-rebuild` retained as column-specific aliases.
 - Aggregate archive rebuild planning:
-  - records, columns, metadata, prefixes, fuzzy, dictionary, content, and content manifests are planned through one deterministic preflight that delegates to the production migration, derived-rebuild, and manifest-recovery planners;
+  - records, columns, metadata, prefixes, substrings, fuzzy, dictionary, content, and content manifests are planned through one deterministic preflight that delegates to the production migration, derived-rebuild, and manifest-recovery planners;
   - each archive surface resolves to exactly one route before mutation: ready, migrate, rebuild, recover, or cannot-recover;
   - record rebuild routes point at filesystem rescan, derived sidecar rebuild routes point at durable mmap records, content rebuild routes point at extraction segments, and content-manifest recovery routes point at validated content archives;
   - the operator-facing `archive-rebuild-plan` command emits stable summary and per-archive TSV lines for CI gates, startup diagnostics, and repair runbooks.
@@ -526,7 +526,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - stale journals left after a successful manifest write are deleted durably after the manifest already matches the promoted archive set;
   - the operator-facing recovery commands emit deterministic TSV plans and before/after transcripts for CI replay, crash audits, and startup repair gates.
 - Search sidecar recovery:
-  - record columns, metadata postings, prefix postings, fuzzy postings, and dictionary archives are validated through their mmap checksum readers before startup use;
+  - record columns, metadata postings, prefix postings, substring postings, fuzzy postings, and dictionary archives are validated through their mmap checksum readers before startup use;
   - missing or unreadable sidecars are rebuilt from the durable record archive using the same production encoders as indexing;
   - corrupt existing sidecar files are quarantined before rebuild so diagnostics can retain the failing bytes;
   - recovery reports classify healthy, missing, unreadable, and records-unreadable states and expose rebuilt/quarantined counts for CI and operator gates.

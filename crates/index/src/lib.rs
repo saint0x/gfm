@@ -1,17 +1,18 @@
 use gfm_content::Extractor;
 use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
+pub use gfm_search::substring_candidate_grams;
 pub use gfm_search::{
     SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupTelemetry,
     SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting, SearchQueryReport,
-    SearchRecordColumns, SearchStreamStage,
+    SearchRecordColumns, SearchStreamStage, SearchSubstringPosting,
 };
 use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
     compact_content_segments, compact_content_segments_with_policy, plan_content_segment_merge,
     read_content_postings, read_records, summarize_content_segment, write_content_postings,
     write_content_segment, write_records, MmapContentSet, MmapFuzzyArchive, MmapMetadataArchive,
-    MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
+    MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
 pub use gfm_store::{
     ContentArchiveCleanupAction, ContentArchiveCleanupPlan, ContentArchiveCleanupPolicy,
@@ -211,12 +212,17 @@ pub struct LiveIndex {
 #[derive(Debug)]
 pub struct SearchArchiveLookup {
     prefixes: MmapPrefixArchive,
+    substrings: MmapSubstringArchive,
     fuzzy: MmapFuzzyArchive,
     prefix_cache: Mutex<HashMap<String, Vec<FileId>>>,
+    substring_cache: Mutex<HashMap<String, Vec<FileId>>>,
     fuzzy_cache: Mutex<HashMap<String, Vec<String>>>,
     prefix_requests: AtomicUsize,
     prefix_hits: AtomicUsize,
     prefix_misses: AtomicUsize,
+    substring_requests: AtomicUsize,
+    substring_hits: AtomicUsize,
+    substring_misses: AtomicUsize,
     fuzzy_requests: AtomicUsize,
     fuzzy_hits: AtomicUsize,
     fuzzy_misses: AtomicUsize,
@@ -225,16 +231,22 @@ pub struct SearchArchiveLookup {
 impl SearchArchiveLookup {
     pub fn open(
         prefixes: impl AsRef<Path>,
+        substrings: impl AsRef<Path>,
         fuzzy: impl AsRef<Path>,
     ) -> Result<SearchArchiveLookup> {
         Ok(Self {
             prefixes: MmapPrefixArchive::open(prefixes)?,
+            substrings: MmapSubstringArchive::open(substrings)?,
             fuzzy: MmapFuzzyArchive::open(fuzzy)?,
             prefix_cache: Mutex::new(HashMap::new()),
+            substring_cache: Mutex::new(HashMap::new()),
             fuzzy_cache: Mutex::new(HashMap::new()),
             prefix_requests: AtomicUsize::new(0),
             prefix_hits: AtomicUsize::new(0),
             prefix_misses: AtomicUsize::new(0),
+            substring_requests: AtomicUsize::new(0),
+            substring_hits: AtomicUsize::new(0),
+            substring_misses: AtomicUsize::new(0),
             fuzzy_requests: AtomicUsize::new(0),
             fuzzy_hits: AtomicUsize::new(0),
             fuzzy_misses: AtomicUsize::new(0),
@@ -243,6 +255,10 @@ impl SearchArchiveLookup {
 
     pub fn indexed_prefixes(&self) -> usize {
         self.prefixes.indexed_prefixes()
+    }
+
+    pub fn indexed_substring_grams(&self) -> usize {
+        self.substrings.indexed_grams()
     }
 
     pub fn indexed_fuzzy_keys(&self) -> usize {
@@ -273,6 +289,28 @@ impl SearchLookup for SearchArchiveLookup {
         Ok(ids)
     }
 
+    fn substring_ids(&self, gram: &str) -> Result<Vec<FileId>> {
+        self.substring_requests.fetch_add(1, Ordering::Relaxed);
+        if let Some(ids) = self
+            .substring_cache
+            .lock()
+            .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
+            .get(gram)
+            .cloned()
+        {
+            self.substring_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(ids);
+        }
+
+        self.substring_misses.fetch_add(1, Ordering::Relaxed);
+        let ids = self.substrings.ids_for(gram)?;
+        self.substring_cache
+            .lock()
+            .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
+            .insert(gram.to_string(), ids.clone());
+        Ok(ids)
+    }
+
     fn fuzzy_terms(&self, key: &str) -> Result<Vec<String>> {
         self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
         if let Some(terms) = self
@@ -300,6 +338,9 @@ impl SearchLookup for SearchArchiveLookup {
             prefix_lookup_requests: self.prefix_requests.load(Ordering::Relaxed),
             prefix_cache_hits: self.prefix_hits.load(Ordering::Relaxed),
             prefix_cache_misses: self.prefix_misses.load(Ordering::Relaxed),
+            substring_lookup_requests: self.substring_requests.load(Ordering::Relaxed),
+            substring_cache_hits: self.substring_hits.load(Ordering::Relaxed),
+            substring_cache_misses: self.substring_misses.load(Ordering::Relaxed),
             fuzzy_lookup_requests: self.fuzzy_requests.load(Ordering::Relaxed),
             fuzzy_cache_hits: self.fuzzy_hits.load(Ordering::Relaxed),
             fuzzy_cache_misses: self.fuzzy_misses.load(Ordering::Relaxed),
@@ -314,6 +355,7 @@ pub struct IndexFootprintSpec {
     pub columns: Option<PathBuf>,
     pub metadata: Option<PathBuf>,
     pub prefixes: Option<PathBuf>,
+    pub substrings: Option<PathBuf>,
     pub fuzzy: Option<PathBuf>,
     pub content_manifest: Option<PathBuf>,
     pub content_segments: Vec<PathBuf>,
@@ -329,6 +371,7 @@ impl IndexFootprintSpec {
             columns: None,
             metadata: None,
             prefixes: None,
+            substrings: None,
             fuzzy: None,
             content_manifest: None,
             content_segments: Vec::new(),
@@ -410,6 +453,8 @@ pub struct IndexFootprintReport {
     pub metadata_bytes: u64,
     pub prefix_keys: usize,
     pub prefix_bytes: u64,
+    pub substring_keys: usize,
+    pub substring_bytes: u64,
     pub fuzzy_keys: usize,
     pub fuzzy_bytes: u64,
     pub content_archives: usize,
@@ -501,6 +546,16 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
         (0, 0)
     };
 
+    let (substring_keys, substring_bytes) = if let Some(path) = &spec.substrings {
+        let archive = MmapSubstringArchive::open(path)?;
+        (
+            archive.indexed_grams(),
+            mapped_bytes(path, archive.mapped_len())?,
+        )
+    } else {
+        (0, 0)
+    };
+
     let (content_archives, content_terms, content_bytes) =
         if let Some(path) = &spec.content_manifest {
             let content = MmapContentSet::open_manifest(path)?;
@@ -533,6 +588,7 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
         column_bytes,
         metadata_bytes,
         prefix_bytes,
+        substring_bytes,
         fuzzy_bytes,
         content_bytes,
         segment_bytes,
@@ -584,6 +640,8 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
         metadata_bytes,
         prefix_keys,
         prefix_bytes,
+        substring_keys,
+        substring_bytes,
         fuzzy_keys,
         fuzzy_bytes,
         content_archives,
@@ -724,9 +782,10 @@ impl LiveIndex {
         columns: Vec<SearchRecordColumns>,
         metadata: Vec<SearchMetadataPosting>,
         prefixes: Vec<SearchPrefixPosting>,
+        substrings: Vec<SearchSubstringPosting>,
         fuzzy: Vec<SearchFuzzyPosting>,
         content: Vec<ContentPosting>,
-    ) -> (Self, usize, usize, usize, usize, usize) {
+    ) -> (Self, usize, usize, usize, usize, usize, usize) {
         let mut live = Self::new();
         let mut columns_by_id = columns
             .into_iter()
@@ -747,6 +806,7 @@ impl LiveIndex {
         }
         let metadata_keys = live.index.import_metadata_postings(&metadata);
         let prefix_keys = live.index.import_prefix_postings(&prefixes);
+        let substring_keys = live.index.import_substring_postings(&substrings);
         let fuzzy_keys = live.index.import_fuzzy_postings(&fuzzy);
         let content_keys = content.len();
         live.index.import_content_postings(&content);
@@ -755,6 +815,7 @@ impl LiveIndex {
             applied,
             metadata_keys,
             prefix_keys,
+            substring_keys,
             fuzzy_keys,
             content_keys,
         )

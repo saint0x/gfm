@@ -5,8 +5,8 @@ use gfm_index::{
     Indexer, LiveIndex, SearchArchiveLookup, SearchLookupBudget, SearchLookupTelemetry,
 };
 use gfm_store::{
-    fuzzy_postings_from_records, prefix_postings_from_records, write_fuzzy_postings,
-    write_prefix_postings,
+    fuzzy_postings_from_records, prefix_postings_from_records, substring_postings_from_records,
+    write_fuzzy_postings, write_prefix_postings, write_substring_postings,
 };
 use gfm_telemetry::{BudgetViolation, FrameTimingSummary, ResourceSummary};
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
@@ -88,6 +88,7 @@ pub enum RegressionGateViolation {
     },
     SidecarLookupTruncated {
         prefix_terms: usize,
+        substring_terms: usize,
         fuzzy_terms_with_truncated_keys: usize,
         fuzzy_keys_with_truncated_terms: usize,
         fuzzy_candidate_terms: usize,
@@ -136,8 +137,10 @@ pub struct LargeSidecarThresholds {
     pub profile: &'static str,
     pub min_required_ci_records: usize,
     pub max_prefix_bytes_per_record: u64,
+    pub max_substring_bytes_per_record: u64,
     pub max_fuzzy_bytes_per_record: u64,
     pub max_prefix_candidate_ids_per_run: usize,
+    pub max_substring_candidate_ids_per_run: usize,
     pub max_fuzzy_verified_candidates_per_run: usize,
     pub require_zero_truncation: bool,
 }
@@ -148,8 +151,10 @@ impl LargeSidecarThresholds {
             profile: "production-macos-million-v1",
             min_required_ci_records: 1_000_000,
             max_prefix_bytes_per_record: 256,
+            max_substring_bytes_per_record: 512,
             max_fuzzy_bytes_per_record: 4096,
             max_prefix_candidate_ids_per_run: 4096,
+            max_substring_candidate_ids_per_run: 4096,
             max_fuzzy_verified_candidates_per_run: 4096,
             require_zero_truncation: true,
         }
@@ -157,12 +162,14 @@ impl LargeSidecarThresholds {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "large-sidecar-thresholds\tprofile={}\tmin-ci-records={}\tmax-prefix-bytes-per-record={}\tmax-fuzzy-bytes-per-record={}\tmax-prefix-candidates-per-run={}\tmax-fuzzy-verified-per-run={}\trequire-zero-truncation={}",
+            "large-sidecar-thresholds\tprofile={}\tmin-ci-records={}\tmax-prefix-bytes-per-record={}\tmax-substring-bytes-per-record={}\tmax-fuzzy-bytes-per-record={}\tmax-prefix-candidates-per-run={}\tmax-substring-candidates-per-run={}\tmax-fuzzy-verified-per-run={}\trequire-zero-truncation={}",
             self.profile,
             self.min_required_ci_records,
             self.max_prefix_bytes_per_record,
+            self.max_substring_bytes_per_record,
             self.max_fuzzy_bytes_per_record,
             self.max_prefix_candidate_ids_per_run,
+            self.max_substring_candidate_ids_per_run,
             self.max_fuzzy_verified_candidates_per_run,
             self.require_zero_truncation
         )
@@ -178,8 +185,10 @@ pub struct LargeSidecarGateReport {
     pub records: usize,
     pub probe_records: usize,
     pub prefix_keys: usize,
+    pub substring_keys: usize,
     pub fuzzy_keys: usize,
     pub prefix_bytes: u64,
+    pub substring_bytes: u64,
     pub fuzzy_bytes: u64,
     pub lookup: SearchLookupTelemetry,
     pub violations: Vec<LargeSidecarGateViolation>,
@@ -192,11 +201,19 @@ pub enum LargeSidecarGateViolation {
         observed: u64,
         budget: u64,
     },
+    SubstringBytesPerRecordExceeded {
+        observed: u64,
+        budget: u64,
+    },
     FuzzyBytesPerRecordExceeded {
         observed: u64,
         budget: u64,
     },
     PrefixCandidatesExceeded {
+        observed: usize,
+        budget: usize,
+    },
+    SubstringCandidatesExceeded {
         observed: usize,
         budget: usize,
     },
@@ -206,6 +223,7 @@ pub enum LargeSidecarGateViolation {
     },
     LookupTruncated {
         prefix_terms: usize,
+        substring_terms: usize,
         fuzzy_terms_with_truncated_keys: usize,
         fuzzy_keys_with_truncated_terms: usize,
         fuzzy_candidate_terms: usize,
@@ -217,8 +235,10 @@ struct LargeSidecarRunMetrics {
     records: usize,
     probe_records: usize,
     prefix_keys: usize,
+    substring_keys: usize,
     fuzzy_keys: usize,
     prefix_bytes: u64,
+    substring_bytes: u64,
     fuzzy_bytes: u64,
     violations: usize,
     passed: bool,
@@ -236,9 +256,11 @@ pub fn run_large_sidecar_gate(options: &LargeSidecarGateOptions) -> Result<Large
     let thresholds_path = fixture_root.join("thresholds.tsv");
     let history_path = options.workspace.join("gfm-large-sidecar-history.tsv");
     let prefix_path = fixture_root.join("records.gfmprefix");
+    let substring_path = fixture_root.join("records.gfmsubstr");
     let fuzzy_path = fixture_root.join("records.gfmfuzzy");
     write_large_sidecar_thresholds(&thresholds_path, &options.thresholds)?;
     write_prefix_postings(&prefix_path, &prefix_postings_from_records(&records))?;
+    write_substring_postings(&substring_path, &substring_postings_from_records(&records))?;
     write_fuzzy_postings(&fuzzy_path, &fuzzy_postings_from_records(&records))?;
     let probe_records = records
         .iter()
@@ -246,7 +268,7 @@ pub fn run_large_sidecar_gate(options: &LargeSidecarGateOptions) -> Result<Large
         .cloned()
         .collect::<Vec<_>>();
     drop(records);
-    let lookup = SearchArchiveLookup::open(&prefix_path, &fuzzy_path)?;
+    let lookup = SearchArchiveLookup::open(&prefix_path, &substring_path, &fuzzy_path)?;
     let live = LiveIndex::from_records_deferred_sidecars(probe_records);
     let mut telemetry = SearchLookupTelemetry::default();
     for _ in 0..2 {
@@ -258,12 +280,16 @@ pub fn run_large_sidecar_gate(options: &LargeSidecarGateOptions) -> Result<Large
     let prefix_bytes = fs::metadata(&prefix_path)
         .map_err(|err| GfmError::io(&prefix_path, err))?
         .len();
+    let substring_bytes = fs::metadata(&substring_path)
+        .map_err(|err| GfmError::io(&substring_path, err))?
+        .len();
     let fuzzy_bytes = fs::metadata(&fuzzy_path)
         .map_err(|err| GfmError::io(&fuzzy_path, err))?
         .len();
     let violations = evaluate_large_sidecar_gate(
         options.records,
         prefix_bytes,
+        substring_bytes,
         fuzzy_bytes,
         &telemetry,
         &options.thresholds,
@@ -273,8 +299,10 @@ pub fn run_large_sidecar_gate(options: &LargeSidecarGateOptions) -> Result<Large
         records: options.records,
         probe_records: live.indexed_records(),
         prefix_keys: lookup.indexed_prefixes(),
+        substring_keys: lookup.indexed_substring_grams(),
         fuzzy_keys: lookup.indexed_fuzzy_keys(),
         prefix_bytes,
+        substring_bytes,
         fuzzy_bytes,
         violations: violations.len(),
         passed,
@@ -289,8 +317,10 @@ pub fn run_large_sidecar_gate(options: &LargeSidecarGateOptions) -> Result<Large
         records: options.records,
         probe_records: live.indexed_records(),
         prefix_keys: lookup.indexed_prefixes(),
+        substring_keys: lookup.indexed_substring_grams(),
         fuzzy_keys: lookup.indexed_fuzzy_keys(),
         prefix_bytes,
+        substring_bytes,
         fuzzy_bytes,
         lookup: telemetry,
         violations,
@@ -395,14 +425,24 @@ pub fn evaluate_regression_gate(
                 budget: options.max_sidecar_fuzzy_verified_candidates,
             });
         }
+        if sidecar.substring_candidate_ids > options.max_sidecar_prefix_candidate_ids {
+            violations.push(RegressionGateViolation::SidecarPrefixCandidatesExceeded {
+                observed: sidecar.substring_candidate_ids,
+                budget: options.max_sidecar_prefix_candidate_ids,
+            });
+        }
         if options.fail_on_sidecar_truncation
             && (sidecar.prefix_truncated_terms > 0
+                || sidecar.substring_term_truncated_grams > 0
+                || sidecar.substring_truncated_grams > 0
                 || sidecar.fuzzy_term_truncated_keys > 0
                 || sidecar.fuzzy_key_truncated_terms > 0
                 || sidecar.fuzzy_candidate_truncated_terms > 0)
         {
             violations.push(RegressionGateViolation::SidecarLookupTruncated {
                 prefix_terms: sidecar.prefix_truncated_terms,
+                substring_terms: sidecar.substring_term_truncated_grams
+                    + sidecar.substring_truncated_grams,
                 fuzzy_terms_with_truncated_keys: sidecar.fuzzy_term_truncated_keys,
                 fuzzy_keys_with_truncated_terms: sidecar.fuzzy_key_truncated_terms,
                 fuzzy_candidate_terms: sidecar.fuzzy_candidate_truncated_terms,
@@ -420,6 +460,7 @@ fn duration_ns(value: std::time::Duration) -> u64 {
 fn evaluate_large_sidecar_gate(
     records: usize,
     prefix_bytes: u64,
+    substring_bytes: u64,
     fuzzy_bytes: u64,
     telemetry: &SearchLookupTelemetry,
     thresholds: &LargeSidecarThresholds,
@@ -427,11 +468,18 @@ fn evaluate_large_sidecar_gate(
     let mut violations = Vec::new();
     let records = records.max(1) as u64;
     let prefix_bytes_per_record = prefix_bytes.div_ceil(records);
+    let substring_bytes_per_record = substring_bytes.div_ceil(records);
     let fuzzy_bytes_per_record = fuzzy_bytes.div_ceil(records);
     if prefix_bytes_per_record > thresholds.max_prefix_bytes_per_record {
         violations.push(LargeSidecarGateViolation::PrefixBytesPerRecordExceeded {
             observed: prefix_bytes_per_record,
             budget: thresholds.max_prefix_bytes_per_record,
+        });
+    }
+    if substring_bytes_per_record > thresholds.max_substring_bytes_per_record {
+        violations.push(LargeSidecarGateViolation::SubstringBytesPerRecordExceeded {
+            observed: substring_bytes_per_record,
+            budget: thresholds.max_substring_bytes_per_record,
         });
     }
     if fuzzy_bytes_per_record > thresholds.max_fuzzy_bytes_per_record {
@@ -446,6 +494,12 @@ fn evaluate_large_sidecar_gate(
             budget: thresholds.max_prefix_candidate_ids_per_run * 2,
         });
     }
+    if telemetry.substring_candidate_ids > thresholds.max_substring_candidate_ids_per_run * 2 {
+        violations.push(LargeSidecarGateViolation::SubstringCandidatesExceeded {
+            observed: telemetry.substring_candidate_ids,
+            budget: thresholds.max_substring_candidate_ids_per_run * 2,
+        });
+    }
     if telemetry.fuzzy_verified_candidates > thresholds.max_fuzzy_verified_candidates_per_run * 2 {
         violations.push(LargeSidecarGateViolation::FuzzyVerifiedExceeded {
             observed: telemetry.fuzzy_verified_candidates,
@@ -454,12 +508,16 @@ fn evaluate_large_sidecar_gate(
     }
     if thresholds.require_zero_truncation
         && (telemetry.prefix_truncated_terms > 0
+            || telemetry.substring_term_truncated_grams > 0
+            || telemetry.substring_truncated_grams > 0
             || telemetry.fuzzy_term_truncated_keys > 0
             || telemetry.fuzzy_key_truncated_terms > 0
             || telemetry.fuzzy_candidate_truncated_terms > 0)
     {
         violations.push(LargeSidecarGateViolation::LookupTruncated {
             prefix_terms: telemetry.prefix_truncated_terms,
+            substring_terms: telemetry.substring_term_truncated_grams
+                + telemetry.substring_truncated_grams,
             fuzzy_terms_with_truncated_keys: telemetry.fuzzy_term_truncated_keys,
             fuzzy_keys_with_truncated_terms: telemetry.fuzzy_key_truncated_terms,
             fuzzy_candidate_terms: telemetry.fuzzy_candidate_truncated_terms,
@@ -503,22 +561,28 @@ fn append_large_sidecar_history(
     let safe_records = metrics.records.max(1) as u64;
     writeln!(
         file,
-        "large-sidecar-history\trun={run}\tprofile={}\trecords={}\tprobe-records={}\tprefix-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tfuzzy-bytes={}\tprefix-bytes-per-record={}\tfuzzy-bytes-per-record={}\tprefix-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
+        "large-sidecar-history\trun={run}\tprofile={}\trecords={}\tprobe-records={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tsubstring-bytes={}\tfuzzy-bytes={}\tprefix-bytes-per-record={}\tsubstring-bytes-per-record={}\tfuzzy-bytes-per-record={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tsubstring-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
         thresholds.profile,
         metrics.records,
         metrics.probe_records,
         metrics.prefix_keys,
+        metrics.substring_keys,
         metrics.fuzzy_keys,
         metrics.prefix_bytes,
+        metrics.substring_bytes,
         metrics.fuzzy_bytes,
         metrics.prefix_bytes.div_ceil(safe_records),
+        metrics.substring_bytes.div_ceil(safe_records),
         metrics.fuzzy_bytes.div_ceil(safe_records),
         telemetry.prefix_candidate_ids,
+        telemetry.substring_candidate_ids,
         telemetry.fuzzy_verified_candidates,
         telemetry.prefix_cache_hits,
+        telemetry.substring_cache_hits,
         telemetry.fuzzy_cache_hits,
         telemetry.prefix_cutoff_terms,
         telemetry.prefix_truncated_terms,
+        telemetry.substring_term_truncated_grams + telemetry.substring_truncated_grams,
         telemetry.fuzzy_term_truncated_keys
             + telemetry.fuzzy_key_truncated_terms
             + telemetry.fuzzy_candidate_truncated_terms,
@@ -560,13 +624,18 @@ fn measure_sidecar_lookup(report: &MacrobenchReport) -> Result<SearchLookupTelem
         let root = report.fixture_root.join(scenario.directory());
         let snapshot = Indexer::default().build(&root)?;
         let prefix_path = sidecar_root.join(format!("{}.gfmprefix", scenario.directory()));
+        let substring_path = sidecar_root.join(format!("{}.gfmsubstr", scenario.directory()));
         let fuzzy_path = sidecar_root.join(format!("{}.gfmfuzzy", scenario.directory()));
         write_prefix_postings(
             &prefix_path,
             &prefix_postings_from_records(&snapshot.records),
         )?;
+        write_substring_postings(
+            &substring_path,
+            &substring_postings_from_records(&snapshot.records),
+        )?;
         write_fuzzy_postings(&fuzzy_path, &fuzzy_postings_from_records(&snapshot.records))?;
-        let lookup = SearchArchiveLookup::open(&prefix_path, &fuzzy_path)?;
+        let lookup = SearchArchiveLookup::open(&prefix_path, &substring_path, &fuzzy_path)?;
         let live = snapshot.into_live();
         for _ in 0..2 {
             let report = live.search_with_lookup_budget(
@@ -867,6 +936,7 @@ mod tests {
             gate.violations,
             vec![RegressionGateViolation::SidecarLookupTruncated {
                 prefix_terms: 1,
+                substring_terms: 0,
                 fuzzy_terms_with_truncated_keys: 0,
                 fuzzy_keys_with_truncated_terms: 0,
                 fuzzy_candidate_terms: 0,
@@ -916,12 +986,17 @@ mod tests {
         assert_eq!(report.records, 4_096);
         assert_eq!(report.probe_records, 4_096);
         assert!(report.prefix_keys > 0);
+        assert!(report.substring_keys > 0);
         assert!(report.fuzzy_keys > 0);
         assert!(report.prefix_bytes > 0);
+        assert!(report.substring_bytes > 0);
         assert!(report.fuzzy_bytes > 0);
         assert!(report.lookup.prefix_terms > 0);
+        assert!(report.lookup.substring_terms > 0);
         assert!(report.lookup.prefix_cache_misses > 0);
         assert!(report.lookup.prefix_cache_hits > 0);
+        assert!(report.lookup.substring_cache_misses > 0);
+        assert!(report.lookup.substring_cache_hits > 0);
         assert!(report.passed);
         assert!(report.violations.is_empty());
         assert_eq!(
@@ -937,6 +1012,7 @@ mod tests {
             .unwrap()
             .contains("large-sidecar-history\trun=1"));
         assert!(report.fixture_root.join("records.gfmprefix").exists());
+        assert!(report.fixture_root.join("records.gfmsubstr").exists());
         assert!(report.fixture_root.join("records.gfmfuzzy").exists());
 
         fs::remove_dir_all(root).unwrap();

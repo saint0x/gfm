@@ -2,6 +2,7 @@ use crate::{
     sort_hits, SearchFuzzyPosting, SearchIndex, SearchLookup, SearchLookupBudget,
     SearchLookupTelemetry, SearchMetadataPosting, SearchPrefixPosting, SearchQuery,
     SearchQueryReport, SearchRecordColumns, SearchStreamBatch, SearchStreamStage,
+    SearchSubstringPosting,
 };
 use gfm_jobs::Cancellation;
 use gfm_types::{FileId, FileRecord, GfmError, Result, SearchHit, VolumeId};
@@ -116,6 +117,34 @@ impl ShardedSearchIndex {
         self.shards
             .values()
             .map(SearchIndex::indexed_name_prefixes)
+            .sum()
+    }
+
+    pub fn import_substring_postings(&mut self, postings: &[SearchSubstringPosting]) -> usize {
+        self.shards
+            .iter_mut()
+            .map(|(volume, shard)| {
+                let volume_postings = postings
+                    .iter()
+                    .filter_map(|posting| {
+                        let ids = posting
+                            .ids
+                            .iter()
+                            .copied()
+                            .filter(|id| id.volume == *volume)
+                            .collect::<Vec<_>>();
+                        (!ids.is_empty()).then(|| SearchSubstringPosting {
+                            gram: posting.gram.clone(),
+                            ids,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                if volume_postings.is_empty() {
+                    0
+                } else {
+                    shard.import_substring_postings(&volume_postings)
+                }
+            })
             .sum()
     }
 

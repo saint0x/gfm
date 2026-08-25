@@ -2,11 +2,11 @@ use crate::{
     content_manifest_recovery_action_name, dictionary_terms_from_records,
     fuzzy_postings_from_records, inspect_archive_schema, metadata_postings_from_records,
     plan_content_archive_migration, plan_content_manifest_recovery, plan_record_archive_migration,
-    prefix_postings_from_records, schema, sidecar_kind_name, write_dictionary,
-    write_fuzzy_postings, write_metadata_postings, write_prefix_postings, write_record_columns,
-    ArchiveSchemaKind, ArchiveSchemaReport, ArchiveSchemaStatus, ContentArchiveManifestEntry,
-    ContentArchiveMigrationAction, ContentManifestRecoveryAction, MmapRecordArchive,
-    RecordArchiveMigrationAction, SidecarKind,
+    prefix_postings_from_records, schema, sidecar_kind_name, substring_postings_from_records,
+    write_dictionary, write_fuzzy_postings, write_metadata_postings, write_prefix_postings,
+    write_record_columns, write_substring_postings, ArchiveSchemaKind, ArchiveSchemaReport,
+    ArchiveSchemaStatus, ContentArchiveManifestEntry, ContentArchiveMigrationAction,
+    ContentManifestRecoveryAction, MmapRecordArchive, RecordArchiveMigrationAction, SidecarKind,
 };
 use gfm_types::{FileRecord, GfmError, Result};
 use std::path::{Path, PathBuf};
@@ -124,6 +124,7 @@ pub struct ArchiveRebuildInputs {
     pub columns_path: PathBuf,
     pub metadata_path: PathBuf,
     pub prefixes_path: PathBuf,
+    pub substrings_path: PathBuf,
     pub fuzzy_path: PathBuf,
     pub dictionary_path: PathBuf,
     pub content_path: PathBuf,
@@ -418,7 +419,7 @@ pub fn plan_archive_rebuilds(inputs: &ArchiveRebuildInputs) -> ArchiveRebuildPla
     let content_plan = plan_content_archive_migration(content_path);
     let manifest_plan =
         plan_content_manifest_recovery(manifest_path, &inputs.discovered_content_archives);
-    let mut entries = Vec::with_capacity(8);
+    let mut entries = Vec::with_capacity(9);
     entries.push(record_rebuild_entry(record_plan));
     entries.extend([
         derived_rebuild_entry(plan_derived_sidecar_rebuild(
@@ -435,6 +436,11 @@ pub fn plan_archive_rebuilds(inputs: &ArchiveRebuildInputs) -> ArchiveRebuildPla
             records_path,
             SidecarKind::Prefixes,
             &inputs.prefixes_path,
+        )),
+        derived_rebuild_entry(plan_derived_sidecar_rebuild(
+            records_path,
+            SidecarKind::Substrings,
+            &inputs.substrings_path,
         )),
         derived_rebuild_entry(plan_derived_sidecar_rebuild(
             records_path,
@@ -602,6 +608,7 @@ fn archive_kind_for_sidecar(kind: SidecarKind) -> ArchiveSchemaKind {
         SidecarKind::Columns => ArchiveSchemaKind::Columns,
         SidecarKind::Metadata => ArchiveSchemaKind::Metadata,
         SidecarKind::Prefixes => ArchiveSchemaKind::Prefixes,
+        SidecarKind::Substrings => ArchiveSchemaKind::Substrings,
         SidecarKind::Fuzzy => ArchiveSchemaKind::Fuzzy,
         SidecarKind::Dictionary => ArchiveSchemaKind::Dictionary,
     }
@@ -616,6 +623,9 @@ fn write_derived_sidecar(kind: SidecarKind, path: &Path, records: &[FileRecord])
         SidecarKind::Prefixes => {
             write_prefix_postings(path, &prefix_postings_from_records(records))
         }
+        SidecarKind::Substrings => {
+            write_substring_postings(path, &substring_postings_from_records(records))
+        }
         SidecarKind::Fuzzy => write_fuzzy_postings(path, &fuzzy_postings_from_records(records)),
         SidecarKind::Dictionary => write_dictionary(path, &dictionary_terms_from_records(records)),
     }
@@ -627,6 +637,7 @@ mod tests {
     use crate::{
         read_dictionary, read_metadata_postings, write_content_postings, write_records,
         ContentMergeTier, MmapFuzzyArchive, MmapPrefixArchive, MmapRecordColumns,
+        MmapSubstringArchive,
     };
     use gfm_types::{FileId, FileKind, FileRecord, VolumeId};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -736,6 +747,7 @@ mod tests {
         for (kind, name) in [
             (SidecarKind::Metadata, "records.gfmmeta"),
             (SidecarKind::Prefixes, "records.gfmprefix"),
+            (SidecarKind::Substrings, "records.gfmsubstr"),
             (SidecarKind::Fuzzy, "records.gfmfuzzy"),
             (SidecarKind::Dictionary, "records.gfmdict"),
         ] {
@@ -759,6 +771,11 @@ mod tests {
         assert!(!MmapPrefixArchive::open(dir.join("records.gfmprefix"))
             .unwrap()
             .ids_for("instant")
+            .unwrap()
+            .is_empty());
+        assert!(!MmapSubstringArchive::open(dir.join("records.gfmsubstr"))
+            .unwrap()
+            .ids_for("sta")
             .unwrap()
             .is_empty());
         assert!(!MmapFuzzyArchive::open(dir.join("records.gfmfuzzy"))
@@ -808,6 +825,7 @@ mod tests {
         let columns = dir.join("records.gfmcols");
         let metadata = dir.join("records.gfmmeta");
         let prefixes = dir.join("records.gfmprefix");
+        let substrings = dir.join("records.gfmsubstr");
         let fuzzy = dir.join("records.gfmfuzzy");
         let dictionary = dir.join("records.gfmdict");
         let content = dir.join("content.gfmcontent");
@@ -820,6 +838,7 @@ mod tests {
             columns_path: columns,
             metadata_path: metadata,
             prefixes_path: prefixes,
+            substrings_path: substrings,
             fuzzy_path: fuzzy,
             dictionary_path: dictionary,
             content_path: content.clone(),
@@ -830,9 +849,9 @@ mod tests {
             }],
         });
 
-        assert_eq!(plan.entries.len(), 8);
+        assert_eq!(plan.entries.len(), 9);
         assert_eq!(plan.ready_count(), 2);
-        assert_eq!(plan.rebuild_count(), 5);
+        assert_eq!(plan.rebuild_count(), 6);
         assert_eq!(plan.recovery_count(), 1);
         assert_eq!(plan.blocked_count(), 0);
         assert!(plan
@@ -840,6 +859,9 @@ mod tests {
             .iter()
             .any(|entry| entry.kind == "records" && entry.route == ArchiveRebuildRoute::Ready));
         assert!(plan.entries.iter().any(|entry| entry.kind == "columns"
+            && entry.route == ArchiveRebuildRoute::Rebuild
+            && entry.source == "durable-records"));
+        assert!(plan.entries.iter().any(|entry| entry.kind == "substrings"
             && entry.route == ArchiveRebuildRoute::Rebuild
             && entry.source == "durable-records"));
         assert!(plan
@@ -852,7 +874,7 @@ mod tests {
             .as_tsv_lines()
             .first()
             .unwrap()
-            .contains("entries=8\tready=2\tmigrate=0\trebuild=5\trecover=1\tblocked=0"));
+            .contains("entries=9\tready=2\tmigrate=0\trebuild=6\trecover=1\tblocked=0"));
 
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -869,6 +891,7 @@ mod tests {
             columns_path: dir.join("records.gfmcols"),
             metadata_path: dir.join("records.gfmmeta"),
             prefixes_path: dir.join("records.gfmprefix"),
+            substrings_path: dir.join("records.gfmsubstr"),
             fuzzy_path: dir.join("records.gfmfuzzy"),
             dictionary_path: dir.join("records.gfmdict"),
             content_path: content,
@@ -876,9 +899,9 @@ mod tests {
             discovered_content_archives: Vec::new(),
         });
 
-        assert_eq!(plan.entries.len(), 8);
+        assert_eq!(plan.entries.len(), 9);
         assert_eq!(plan.rebuild_count(), 2);
-        assert_eq!(plan.blocked_count(), 6);
+        assert_eq!(plan.blocked_count(), 7);
         assert!(plan.entries.iter().any(|entry| entry.kind == "records"
             && entry.route == ArchiveRebuildRoute::Rebuild
             && entry.source == "filesystem-scan"));
@@ -886,6 +909,11 @@ mod tests {
             .entries
             .iter()
             .any(|entry| entry.kind == "prefixes"
+                && entry.route == ArchiveRebuildRoute::CannotRecover));
+        assert!(plan
+            .entries
+            .iter()
+            .any(|entry| entry.kind == "substrings"
                 && entry.route == ArchiveRebuildRoute::CannotRecover));
         assert!(plan
             .entries

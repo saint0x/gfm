@@ -13,15 +13,16 @@ use gfm_fs::{
     PackageTraversalReport, ScanOptions,
 };
 use gfm_index::{
-    comment_query_terms, content_query_terms, parse_volume_indexing_policy, tag_query_terms,
-    BackgroundContentIndexer, BatteryState, CompactionPressure, ContentArchiveCleanupPolicy,
-    ContentArchiveManifest, ContentArchiveManifestEntry, ContentIndexJobSpec, ContentIndexReport,
+    comment_query_terms, content_query_terms, parse_volume_indexing_policy,
+    substring_candidate_grams, tag_query_terms, BackgroundContentIndexer, BatteryState,
+    CompactionPressure, ContentArchiveCleanupPolicy, ContentArchiveManifest,
+    ContentArchiveManifestEntry, ContentIndexJobSpec, ContentIndexReport,
     ContentMaintenanceOptions, ContentMaintenanceReport, ContentMergePolicy, ContentMergeTier,
     EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
     IndexFootprintSpec, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState,
     Indexer, IoPressure, LiveIndex, PersistentIndexRecovery, SearchArchiveLookup,
     SearchLookupBudget, SearchMetadataField, SearchMetadataPosting, SearchRecordColumns,
-    SearchStreamStage, ThermalState, UserActivity, VolumeIndexPolicy,
+    SearchStreamStage, SearchSubstringPosting, ThermalState, UserActivity, VolumeIndexPolicy,
 };
 use gfm_jobs::{
     Cancellation, Job, JobBatteryState, JobClass, JobFairnessPlanner, JobFairnessPolicy,
@@ -59,12 +60,13 @@ use gfm_store::{
     write_metadata_postings, write_record_columns, ArchiveRebuildInputs, ArchiveSchemaKind,
     ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive, MmapContentSet,
     MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
-    MmapRecordColumns,
+    MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_store::{
     fuzzy_postings_from_records, plan_sidecar_recovery, prefix_postings_from_records,
-    recover_sidecars, sidecar_kind_name, write_fuzzy_postings, write_prefix_postings,
-    SidecarHealth, SidecarKind, SidecarPaths, SidecarRecovery,
+    recover_sidecars, sidecar_kind_name, substring_postings_from_records, write_fuzzy_postings,
+    write_prefix_postings, write_substring_postings, SidecarHealth, SidecarKind, SidecarPaths,
+    SidecarRecovery,
 };
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_macrobench_fixture_report,
@@ -1386,6 +1388,10 @@ fn run() -> Result<()> {
                 args.next(),
                 "search-index-sidecars requires a prefixes path",
             )?;
+            let substrings = required_path(
+                args.next(),
+                "search-index-sidecars requires a substrings path",
+            )?;
             let fuzzy = required_path(args.next(), "search-index-sidecars requires a fuzzy path")?;
             let content =
                 required_path(args.next(), "search-index-sidecars requires a content path")?;
@@ -1397,7 +1403,8 @@ fn run() -> Result<()> {
             let records = MmapRecordArchive::open(records)?;
             let columns = MmapRecordColumns::open(columns)?;
             let metadata = MmapMetadataArchive::open(metadata)?;
-            let lookup = SearchArchiveLookup::open(prefixes, fuzzy)?;
+            let substrings_archive = MmapSubstringArchive::open(&substrings)?;
+            let lookup = SearchArchiveLookup::open(prefixes, substrings, fuzzy)?;
             let content = MmapContentArchive::open(content)?;
             let mut search_columns = Vec::with_capacity(columns.len());
             for index in 0..columns.len() {
@@ -1426,19 +1433,36 @@ fn run() -> Result<()> {
                     ids: posting.ids,
                 })
                 .collect();
+            let search_substrings = substrings_archive
+                .postings_for(substring_candidate_grams(&query))?
+                .into_iter()
+                .map(|posting| SearchSubstringPosting {
+                    gram: posting.gram,
+                    ids: posting.ids,
+                })
+                .collect();
             let search_content = content.postings_for_terms(content_query_terms(&query))?;
-            let (live, applied, metadata_keys, prefix_keys, fuzzy_keys, content_keys) =
-                LiveIndex::from_records_with_sidecars(
-                    records.records()?,
-                    search_columns,
-                    search_metadata,
-                    Vec::new(),
-                    Vec::new(),
-                    search_content,
-                );
+            let (
+                live,
+                applied,
+                metadata_keys,
+                prefix_keys,
+                substring_keys,
+                fuzzy_keys,
+                content_keys,
+            ) = LiveIndex::from_records_with_sidecars(
+                records.records()?,
+                search_columns,
+                search_metadata,
+                Vec::new(),
+                search_substrings,
+                Vec::new(),
+                search_content,
+            );
             eprintln!(
-                "columns-indexed {applied} metadata-keys {metadata_keys} prefix-keys {prefix_keys} fuzzy-keys {fuzzy_keys} prefix-archive-keys {} fuzzy-archive-keys {} content-keys {content_keys}",
+                "columns-indexed {applied} metadata-keys {metadata_keys} prefix-keys {prefix_keys} substring-keys {substring_keys} fuzzy-keys {fuzzy_keys} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {content_keys}",
                 lookup.indexed_prefixes(),
+                lookup.indexed_substring_grams(),
                 lookup.indexed_fuzzy_keys()
             );
             for hit in live.search_with_lookup(&query, 50, &lookup)? {
@@ -1462,6 +1486,10 @@ fn run() -> Result<()> {
                 args.next(),
                 "search-index-sidecars-budget requires a prefixes path",
             )?;
+            let substrings = required_path(
+                args.next(),
+                "search-index-sidecars-budget requires a substrings path",
+            )?;
             let fuzzy = required_path(
                 args.next(),
                 "search-index-sidecars-budget requires a fuzzy path",
@@ -1473,6 +1501,14 @@ fn run() -> Result<()> {
             let max_prefix_ids = parse_usize_arg(
                 args.next(),
                 "search-index-sidecars-budget requires max-prefix-ids",
+            )?;
+            let max_substring_grams = parse_usize_arg(
+                args.next(),
+                "search-index-sidecars-budget requires max-substring-grams",
+            )?;
+            let max_substring_ids = parse_usize_arg(
+                args.next(),
+                "search-index-sidecars-budget requires max-substring-ids",
             )?;
             let max_fuzzy_keys = parse_usize_arg(
                 args.next(),
@@ -1494,7 +1530,8 @@ fn run() -> Result<()> {
             let records = MmapRecordArchive::open(records)?;
             let columns = MmapRecordColumns::open(columns)?;
             let metadata = MmapMetadataArchive::open(metadata)?;
-            let lookup = SearchArchiveLookup::open(prefixes, fuzzy)?;
+            let substrings_archive = MmapSubstringArchive::open(&substrings)?;
+            let lookup = SearchArchiveLookup::open(prefixes, substrings, fuzzy)?;
             let content = MmapContentArchive::open(content)?;
             let mut search_columns = Vec::with_capacity(columns.len());
             for index in 0..columns.len() {
@@ -1523,16 +1560,32 @@ fn run() -> Result<()> {
                     ids: posting.ids,
                 })
                 .collect();
+            let search_substrings = substrings_archive
+                .postings_for(substring_candidate_grams(&query))?
+                .into_iter()
+                .map(|posting| SearchSubstringPosting {
+                    gram: posting.gram,
+                    ids: posting.ids,
+                })
+                .collect();
             let search_content = content.postings_for_terms(content_query_terms(&query))?;
-            let (live, applied, metadata_keys, prefix_keys, fuzzy_keys, content_keys) =
-                LiveIndex::from_records_with_sidecars(
-                    records.records()?,
-                    search_columns,
-                    search_metadata,
-                    Vec::new(),
-                    Vec::new(),
-                    search_content,
-                );
+            let (
+                live,
+                applied,
+                metadata_keys,
+                prefix_keys,
+                substring_keys,
+                fuzzy_keys,
+                content_keys,
+            ) = LiveIndex::from_records_with_sidecars(
+                records.records()?,
+                search_columns,
+                search_metadata,
+                Vec::new(),
+                search_substrings,
+                Vec::new(),
+                search_content,
+            );
             let report = live.search_with_lookup_budget(
                 &query,
                 50,
@@ -1541,14 +1594,17 @@ fn run() -> Result<()> {
                     max_prefix_ids_per_term: max_prefix_ids,
                     min_archive_prefix_chars: SearchLookupBudget::default()
                         .min_archive_prefix_chars,
+                    max_substring_grams_per_term: max_substring_grams,
+                    max_substring_ids_per_gram: max_substring_ids,
                     max_fuzzy_keys_per_term: max_fuzzy_keys,
                     max_fuzzy_terms_per_key: max_fuzzy_terms,
                     max_fuzzy_candidates_per_term: max_fuzzy_candidates,
                 },
             )?;
             eprintln!(
-                "sidecar-budget\tcolumns-indexed={applied}\tmetadata-keys={metadata_keys}\tprefix-keys={prefix_keys}\tfuzzy-keys={fuzzy_keys}\tprefix-archive-keys={}\tfuzzy-archive-keys={}\tcontent-keys={content_keys}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
+                "sidecar-budget\tcolumns-indexed={applied}\tmetadata-keys={metadata_keys}\tprefix-keys={prefix_keys}\tsubstring-keys={substring_keys}\tfuzzy-keys={fuzzy_keys}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tcontent-keys={content_keys}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
                 lookup.indexed_prefixes(),
+                lookup.indexed_substring_grams(),
                 lookup.indexed_fuzzy_keys(),
                 report.lookup.prefix_terms,
                 report.lookup.prefix_lookup_requests,
@@ -1558,6 +1614,15 @@ fn run() -> Result<()> {
                 report.lookup.prefix_cache_misses,
                 report.lookup.prefix_cutoff_terms,
                 report.lookup.prefix_truncated_terms,
+                report.lookup.substring_terms,
+                report.lookup.substring_grams,
+                report.lookup.substring_lookup_requests,
+                report.lookup.substring_lookup_ids,
+                report.lookup.substring_candidate_ids,
+                report.lookup.substring_cache_hits,
+                report.lookup.substring_cache_misses,
+                report.lookup.substring_term_truncated_grams,
+                report.lookup.substring_truncated_grams,
                 report.lookup.fuzzy_terms,
                 report.lookup.fuzzy_keys,
                 report.lookup.fuzzy_lookup_requests,
@@ -1582,6 +1647,10 @@ fn run() -> Result<()> {
                 optional_path_arg(args.next(), "index-footprint requires a metadata path or -")?;
             let prefixes =
                 optional_path_arg(args.next(), "index-footprint requires a prefixes path or -")?;
+            let substrings = optional_path_arg(
+                args.next(),
+                "index-footprint requires a substrings path or -",
+            )?;
             let fuzzy =
                 optional_path_arg(args.next(), "index-footprint requires a fuzzy path or -")?;
             let content_manifest = optional_path_arg(
@@ -1592,6 +1661,7 @@ fn run() -> Result<()> {
             spec.columns = columns;
             spec.metadata = metadata;
             spec.prefixes = prefixes;
+            spec.substrings = substrings;
             spec.fuzzy = fuzzy;
             spec.content_manifest = content_manifest;
             spec.content_segments = args.map(PathBuf::from).collect();
@@ -1621,6 +1691,10 @@ fn run() -> Result<()> {
             println!(
                 "prefixes\tkeys={}\tbytes={}",
                 report.prefix_keys, report.prefix_bytes
+            );
+            println!(
+                "substrings\tkeys={}\tbytes={}",
+                report.substring_keys, report.substring_bytes
             );
             println!(
                 "fuzzy\tkeys={}\tbytes={}",
@@ -1736,7 +1810,7 @@ fn run() -> Result<()> {
                 .and_then(|kind| ArchiveSchemaKind::parse(&kind))
                 .ok_or_else(|| {
                     GfmError::Format(
-                        "archive-schema requires records, columns, metadata, prefixes, fuzzy, dictionary, content, or content-manifest".to_string(),
+                        "archive-schema requires records, columns, metadata, prefixes, substrings, fuzzy, dictionary, content, or content-manifest".to_string(),
                     )
                 })?;
             let path = required_path(args.next(), "archive-schema requires an archive path")?;
@@ -1751,6 +1825,10 @@ fn run() -> Result<()> {
                 required_path(args.next(), "archive-rebuild-plan requires a metadata path")?;
             let prefixes =
                 required_path(args.next(), "archive-rebuild-plan requires a prefixes path")?;
+            let substrings = required_path(
+                args.next(),
+                "archive-rebuild-plan requires a substrings path",
+            )?;
             let fuzzy = required_path(args.next(), "archive-rebuild-plan requires a fuzzy path")?;
             let dictionary = required_path(
                 args.next(),
@@ -1770,6 +1848,7 @@ fn run() -> Result<()> {
                 columns_path: columns,
                 metadata_path: metadata,
                 prefixes_path: prefixes,
+                substrings_path: substrings,
                 fuzzy_path: fuzzy,
                 dictionary_path: dictionary,
                 content_path: content,
@@ -1955,6 +2034,17 @@ fn run() -> Result<()> {
             write_prefix_postings(output, &postings)?;
             eprintln!("prefixes-indexed {} prefixes", postings.len());
         }
+        Some("index-substrings") => {
+            let records = required_path(args.next(), "index-substrings requires a records path")?;
+            let output = required_path(
+                args.next(),
+                "index-substrings requires an output substring path",
+            )?;
+            let archive = MmapRecordArchive::open(records)?;
+            let postings = substring_postings_from_records(&archive.records()?);
+            write_substring_postings(output, &postings)?;
+            eprintln!("substrings-indexed {} grams", postings.len());
+        }
         Some("index-fuzzy") => {
             let records = required_path(args.next(), "index-fuzzy requires a records path")?;
             let output = required_path(args.next(), "index-fuzzy requires an output fuzzy path")?;
@@ -2074,6 +2164,48 @@ fn run() -> Result<()> {
             println!(
                 "prefix-verify\tprefixes={}\tbytes={}\tchecksum={}",
                 archive.indexed_prefixes(),
+                archive.mapped_len(),
+                archive.is_checksummed()
+            );
+        }
+        Some("substring-ids-mmap") => {
+            let substrings =
+                required_path(args.next(), "substring-ids-mmap requires a substring path")?;
+            let gram = args.next().ok_or_else(|| {
+                GfmError::Format("substring-ids-mmap requires a trigram".to_string())
+            })?;
+            let archive = MmapSubstringArchive::open(substrings)?;
+            for id in archive.ids_for(&gram)? {
+                println!("{}\t{}", id.volume.0, id.node);
+            }
+        }
+        Some("substring-id-block-mmap") => {
+            let substrings = required_path(
+                args.next(),
+                "substring-id-block-mmap requires a substring path",
+            )?;
+            let gram = args.next().ok_or_else(|| {
+                GfmError::Format("substring-id-block-mmap requires a trigram".to_string())
+            })?;
+            let block_index = args
+                .next()
+                .ok_or_else(|| {
+                    GfmError::Format("substring-id-block-mmap requires a block index".to_string())
+                })?
+                .parse::<usize>()
+                .map_err(|err| GfmError::Format(format!("invalid substring block index: {err}")))?;
+            let archive = MmapSubstringArchive::open(substrings)?;
+            for id in archive.id_block_for(&gram, block_index)? {
+                println!("{}\t{}", id.volume.0, id.node);
+            }
+        }
+        Some("substring-verify") => {
+            let substrings =
+                required_path(args.next(), "substring-verify requires a substring path")?;
+            let archive = MmapSubstringArchive::open(substrings)?;
+            println!(
+                "substring-verify\tgrams={}\tbytes={}\tchecksum={}",
+                archive.indexed_grams(),
                 archive.mapped_len(),
                 archive.is_checksummed()
             );
@@ -2985,16 +3117,20 @@ fn run() -> Result<()> {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
             let run = run_regression_gate(&options, RegressionGateOptions::default())?;
             println!(
-                "fixture\t{}\tfiles\t{}\tindex-bytes\t{}\tsidecar-prefix-candidates\t{}\tsidecar-fuzzy-verified\t{}\tsidecar-prefix-cache-hits\t{}\tsidecar-fuzzy-cache-hits\t{}\tsidecar-prefix-cutoffs\t{}\tsidecar-prefix-truncated\t{}\tsidecar-fuzzy-truncated\t{}\tpassed\t{}",
+                "fixture\t{}\tfiles\t{}\tindex-bytes\t{}\tsidecar-prefix-candidates\t{}\tsidecar-substring-candidates\t{}\tsidecar-fuzzy-verified\t{}\tsidecar-prefix-cache-hits\t{}\tsidecar-substring-cache-hits\t{}\tsidecar-fuzzy-cache-hits\t{}\tsidecar-prefix-cutoffs\t{}\tsidecar-prefix-truncated\t{}\tsidecar-substring-truncated\t{}\tsidecar-fuzzy-truncated\t{}\tpassed\t{}",
                 run.macrobench.fixture_root.display(),
                 run.macrobench.files_materialized,
                 run.index_size_bytes,
                 run.sidecar_lookup.prefix_candidate_ids,
+                run.sidecar_lookup.substring_candidate_ids,
                 run.sidecar_lookup.fuzzy_verified_candidates,
                 run.sidecar_lookup.prefix_cache_hits,
+                run.sidecar_lookup.substring_cache_hits,
                 run.sidecar_lookup.fuzzy_cache_hits,
                 run.sidecar_lookup.prefix_cutoff_terms,
                 run.sidecar_lookup.prefix_truncated_terms,
+                run.sidecar_lookup.substring_term_truncated_grams
+                    + run.sidecar_lookup.substring_truncated_grams,
                 run.sidecar_lookup.fuzzy_term_truncated_keys
                     + run.sidecar_lookup.fuzzy_key_truncated_terms
                     + run.sidecar_lookup.fuzzy_candidate_truncated_terms,
@@ -3019,7 +3155,7 @@ fn run() -> Result<()> {
             )?;
             let report = run_large_sidecar_gate(&LargeSidecarGateOptions::new(workspace, records))?;
             println!(
-                "large-sidecar-gate\tfixture={}\tthresholds={}\thistory={}\tprofile={}\tmin-ci-records={}\trecords={}\tprobe-records={}\tprefix-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tfuzzy-bytes={}\tprefix-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
+                "large-sidecar-gate\tfixture={}\tthresholds={}\thistory={}\tprofile={}\tmin-ci-records={}\trecords={}\tprobe-records={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tsubstring-bytes={}\tfuzzy-bytes={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tsubstring-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
                 report.fixture_root.display(),
                 report.thresholds_path.display(),
                 report.history_path.display(),
@@ -3028,15 +3164,20 @@ fn run() -> Result<()> {
                 report.records,
                 report.probe_records,
                 report.prefix_keys,
+                report.substring_keys,
                 report.fuzzy_keys,
                 report.prefix_bytes,
+                report.substring_bytes,
                 report.fuzzy_bytes,
                 report.lookup.prefix_candidate_ids,
+                report.lookup.substring_candidate_ids,
                 report.lookup.fuzzy_verified_candidates,
                 report.lookup.prefix_cache_hits,
+                report.lookup.substring_cache_hits,
                 report.lookup.fuzzy_cache_hits,
                 report.lookup.prefix_cutoff_terms,
                 report.lookup.prefix_truncated_terms,
+                report.lookup.substring_term_truncated_grams + report.lookup.substring_truncated_grams,
                 report.lookup.fuzzy_term_truncated_keys
                     + report.lookup.fuzzy_key_truncated_terms
                     + report.lookup.fuzzy_candidate_truncated_terms,
@@ -3357,6 +3498,10 @@ fn parse_sidecar_paths(
             args.next(),
             &format!("{command} requires a prefixes path or -"),
         )?,
+        substrings: optional_path_arg(
+            args.next(),
+            &format!("{command} requires a substrings path or -"),
+        )?,
         fuzzy: optional_path_arg(
             args.next(),
             &format!("{command} requires a fuzzy path or -"),
@@ -3371,17 +3516,18 @@ fn parse_sidecar_paths(
 fn parse_sidecar_kind(value: Option<String>, command: &str) -> Result<SidecarKind> {
     let value = value.ok_or_else(|| {
         GfmError::Format(format!(
-            "{command} requires columns, metadata, prefixes, fuzzy, or dictionary"
+            "{command} requires columns, metadata, prefixes, substrings, fuzzy, or dictionary"
         ))
     })?;
     match value.as_str() {
         "columns" => Ok(SidecarKind::Columns),
         "metadata" => Ok(SidecarKind::Metadata),
         "prefixes" | "prefix" => Ok(SidecarKind::Prefixes),
+        "substrings" | "substring" => Ok(SidecarKind::Substrings),
         "fuzzy" => Ok(SidecarKind::Fuzzy),
         "dictionary" => Ok(SidecarKind::Dictionary),
         _ => Err(GfmError::Format(format!(
-            "{command} requires columns, metadata, prefixes, fuzzy, or dictionary"
+            "{command} requires columns, metadata, prefixes, substrings, fuzzy, or dictionary"
         ))),
     }
 }
@@ -5317,12 +5463,12 @@ fn print_usage() {
   gfm search-index <index.gfmidx> <query>
   gfm search-index-mmap <index.gfmidx> <query>
   gfm search-index-columns <index.gfmidx> <columns.gfmcols> <query>
-  gfm search-index-sidecars <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <fuzzy.gfmfuzzy> <content.gfmcontent> <query>
-  gfm search-index-sidecars-budget <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <fuzzy.gfmfuzzy> <content.gfmcontent> <max-prefix-ids> <max-fuzzy-keys> <max-fuzzy-terms> <max-fuzzy-candidates> <query>
-  gfm index-footprint <index.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <content-manifest.gfmmanifest|-> [segments.gfmseg...]
+  gfm search-index-sidecars <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <substrings.gfmsubstr> <fuzzy.gfmfuzzy> <content.gfmcontent> <query>
+  gfm search-index-sidecars-budget <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <substrings.gfmsubstr> <fuzzy.gfmfuzzy> <content.gfmcontent> <max-prefix-ids> <max-substring-grams> <max-substring-ids> <max-fuzzy-keys> <max-fuzzy-terms> <max-fuzzy-candidates> <query>
+  gfm index-footprint <index.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <substrings.gfmsubstr|-> <fuzzy.gfmfuzzy|-> <content-manifest.gfmmanifest|-> [segments.gfmseg...]
   gfm index-compaction-plan <index.gfmidx> <content-manifest.gfmmanifest|-> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> [segments.gfmseg...]
-  gfm archive-schema <records|columns|metadata|prefixes|fuzzy|dictionary|content|content-manifest> <archive-path>
-  gfm archive-rebuild-plan <records.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <fuzzy.gfmfuzzy> <dictionary.gfmdict> <content.gfmcontent> <content-manifest.gfmmanifest> [hot|warm|cold:content.gfmcontent...]
+  gfm archive-schema <records|columns|metadata|prefixes|substrings|fuzzy|dictionary|content|content-manifest> <archive-path>
+  gfm archive-rebuild-plan <records.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <substrings.gfmsubstr> <fuzzy.gfmfuzzy> <dictionary.gfmdict> <content.gfmcontent> <content-manifest.gfmmanifest> [hot|warm|cold:content.gfmcontent...]
   gfm records-migration-plan <records.gfmidx>
   gfm records-migrate <records.gfmidx> <backup-dir>
   gfm content-migration-plan <content.gfmcontent>
@@ -5331,8 +5477,8 @@ fn print_usage() {
   gfm metadata-migrate <metadata.gfmmeta> <backup-dir>
   gfm columns-rebuild-plan <records.gfmidx> <columns.gfmcols>
   gfm columns-rebuild <records.gfmidx> <columns.gfmcols> <backup-dir>
-  gfm derived-sidecar-rebuild-plan <records.gfmidx> <columns|metadata|prefixes|fuzzy|dictionary> <sidecar-path>
-  gfm derived-sidecar-rebuild <records.gfmidx> <columns|metadata|prefixes|fuzzy|dictionary> <sidecar-path> <backup-dir>
+  gfm derived-sidecar-rebuild-plan <records.gfmidx> <columns|metadata|prefixes|substrings|fuzzy|dictionary> <sidecar-path>
+  gfm derived-sidecar-rebuild <records.gfmidx> <columns|metadata|prefixes|substrings|fuzzy|dictionary> <sidecar-path> <backup-dir>
   gfm records-verify <index.gfmidx>
   gfm index-columns <records.gfmidx> <columns.gfmcols>
   gfm columns-verify <columns.gfmcols>
@@ -5340,15 +5486,19 @@ fn print_usage() {
   gfm index-metadata <records.gfmidx> <metadata.gfmmeta>
   gfm index-dictionary <records.gfmidx> <dictionary.gfmdict>
   gfm index-prefixes <records.gfmidx> <prefixes.gfmprefix>
+  gfm index-substrings <records.gfmidx> <substrings.gfmsubstr>
   gfm index-fuzzy <records.gfmidx> <fuzzy.gfmfuzzy>
-  gfm sidecar-recovery-plan <records.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <dictionary.gfmdict|->
-  gfm sidecar-recover <records.gfmidx> <quarantine-dir> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <dictionary.gfmdict|->
-  gfm sidecar-recover-adaptive <records.gfmidx> <quarantine-dir> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <dictionary.gfmdict|->
+  gfm sidecar-recovery-plan <records.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <substrings.gfmsubstr|-> <fuzzy.gfmfuzzy|-> <dictionary.gfmdict|->
+  gfm sidecar-recover <records.gfmidx> <quarantine-dir> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <substrings.gfmsubstr|-> <fuzzy.gfmfuzzy|-> <dictionary.gfmdict|->
+  gfm sidecar-recover-adaptive <records.gfmidx> <quarantine-dir> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <substrings.gfmsubstr|-> <fuzzy.gfmfuzzy|-> <dictionary.gfmdict|->
   gfm fuzzy-terms-mmap <fuzzy.gfmfuzzy> <key>
   gfm fuzzy-verify <fuzzy.gfmfuzzy>
   gfm prefix-ids-mmap <prefixes.gfmprefix> <prefix>
   gfm prefix-id-block-mmap <prefixes.gfmprefix> <prefix> <block-index>
   gfm prefix-verify <prefixes.gfmprefix>
+  gfm substring-ids-mmap <substrings.gfmsubstr> <trigram>
+  gfm substring-id-block-mmap <substrings.gfmsubstr> <trigram> <block-index>
+  gfm substring-verify <substrings.gfmsubstr>
   gfm dictionary-lookup <dictionary.gfmdict> <term>
   gfm dictionary-verify <dictionary.gfmdict>
   gfm metadata-ids-mmap <metadata.gfmmeta> <tag|comment> <term>

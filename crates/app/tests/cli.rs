@@ -443,6 +443,7 @@ fn rebuilds_derived_sidecars_from_binary() {
     let columns = unique_temp_path("gfm-cli-derived-rebuild-columns", "gfmcols");
     let metadata = unique_temp_path("gfm-cli-derived-rebuild-metadata", "gfmmeta");
     let prefixes = unique_temp_path("gfm-cli-derived-rebuild-prefixes", "gfmprefix");
+    let substrings = unique_temp_path("gfm-cli-derived-rebuild-substrings", "gfmsubstr");
     let fuzzy = unique_temp_path("gfm-cli-derived-rebuild-fuzzy", "gfmfuzzy");
     let dictionary = unique_temp_path("gfm-cli-derived-rebuild-dictionary", "gfmdict");
     let content = unique_temp_path("gfm-cli-derived-rebuild-content", "gfmcontent");
@@ -468,6 +469,7 @@ fn rebuilds_derived_sidecars_from_binary() {
             columns.to_str().unwrap(),
             metadata.to_str().unwrap(),
             prefixes.to_str().unwrap(),
+            substrings.to_str().unwrap(),
             fuzzy.to_str().unwrap(),
             dictionary.to_str().unwrap(),
             content.to_str().unwrap(),
@@ -484,11 +486,13 @@ fn rebuilds_derived_sidecars_from_binary() {
     let archive_plan_stdout = String::from_utf8(archive_plan.stdout).unwrap();
     assert!(
         archive_plan_stdout.contains(
-            "archive-rebuild-plan\tentries=8\tready=2\tmigrate=0\trebuild=5\trecover=1\tblocked=0"
+            "archive-rebuild-plan\tentries=9\tready=2\tmigrate=0\trebuild=6\trecover=1\tblocked=0"
         ) && archive_plan_stdout.contains(
             "archive-rebuild-entry\tkind=content-manifest\troute=recover\tstatus=write-discovered-manifest"
         ) && archive_plan_stdout.contains(
             "archive-rebuild-entry\tkind=prefixes\troute=rebuild\tstatus=missing\tsource=durable-records"
+        ) && archive_plan_stdout.contains(
+            "archive-rebuild-entry\tkind=substrings\troute=rebuild\tstatus=missing\tsource=durable-records"
         ),
         "{archive_plan_stdout}"
     );
@@ -580,6 +584,9 @@ fn rebuilds_derived_sidecars_from_binary() {
         fs::remove_file(manifest).unwrap();
     }
     fs::remove_file(prefixes).unwrap();
+    if substrings.exists() {
+        fs::remove_file(substrings).unwrap();
+    }
     fs::remove_file(dictionary).unwrap();
     fs::remove_dir_all(backup).unwrap();
 }
@@ -1295,6 +1302,7 @@ fn searches_persisted_tags_from_binary() {
     let dictionary = unique_temp_path("gfm-cli-tags", "gfmdict");
     let columns = unique_temp_path("gfm-cli-tags", "gfmcols");
     let prefixes = unique_temp_path("gfm-cli-tags", "gfmprefix");
+    let substrings = unique_temp_path("gfm-cli-tags", "gfmsubstr");
     let fuzzy = unique_temp_path("gfm-cli-tags", "gfmfuzzy");
     let content = unique_temp_path("gfm-cli-tags", "gfmcontent");
     fs::write(
@@ -1509,6 +1517,62 @@ fn searches_persisted_tags_from_binary() {
         "{prefix_verify_stdout}"
     );
 
+    let substrings_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-substrings",
+            index.to_str().unwrap(),
+            substrings.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        substrings_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&substrings_output.stderr)
+    );
+
+    let substring_ids = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["substring-ids-mmap", substrings.to_str().unwrap(), "agg"])
+        .output()
+        .unwrap();
+    assert!(
+        substring_ids.status.success(),
+        "{}",
+        String::from_utf8_lossy(&substring_ids.stderr)
+    );
+    assert_eq!(String::from_utf8(substring_ids.stdout).unwrap(), "1\t1\n");
+
+    let substring_block = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "substring-id-block-mmap",
+            substrings.to_str().unwrap(),
+            "agg",
+            "0",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        substring_block.status.success(),
+        "{}",
+        String::from_utf8_lossy(&substring_block.stderr)
+    );
+    assert_eq!(String::from_utf8(substring_block.stdout).unwrap(), "1\t1\n");
+
+    let substring_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["substring-verify", substrings.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        substring_verify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&substring_verify.stderr)
+    );
+    let substring_verify_stdout = String::from_utf8(substring_verify.stdout).unwrap();
+    assert!(
+        substring_verify_stdout.contains("\tchecksum=true"),
+        "{substring_verify_stdout}"
+    );
+
     let fuzzy_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "index-fuzzy",
@@ -1644,6 +1708,7 @@ fn searches_persisted_tags_from_binary() {
             columns.to_str().unwrap(),
             metadata.to_str().unwrap(),
             prefixes.to_str().unwrap(),
+            substrings.to_str().unwrap(),
             fuzzy.to_str().unwrap(),
             content.to_str().unwrap(),
             "tag:Important",
@@ -1664,8 +1729,10 @@ fn searches_persisted_tags_from_binary() {
     assert!(
         sidecar_search_stderr.contains("metadata-keys 1")
             && sidecar_search_stderr.contains("prefix-keys 0")
+            && sidecar_search_stderr.contains("substring-keys 0")
             && sidecar_search_stderr.contains("fuzzy-keys 0")
             && sidecar_search_stderr.contains("prefix-archive-keys")
+            && sidecar_search_stderr.contains("substring-archive-keys")
             && sidecar_search_stderr.contains("fuzzy-archive-keys")
             && sidecar_search_stderr.contains("content-keys 0"),
         "{sidecar_search_stderr}"
@@ -1678,6 +1745,7 @@ fn searches_persisted_tags_from_binary() {
             columns.to_str().unwrap(),
             metadata.to_str().unwrap(),
             prefixes.to_str().unwrap(),
+            substrings.to_str().unwrap(),
             fuzzy.to_str().unwrap(),
             content.to_str().unwrap(),
             "tag",
@@ -1697,7 +1765,8 @@ fn searches_persisted_tags_from_binary() {
     let sidecar_prefix_stderr = String::from_utf8(sidecar_prefix_search.stderr).unwrap();
     assert!(
         sidecar_prefix_stderr.contains("prefix-keys 0")
-            && sidecar_prefix_stderr.contains("prefix-archive-keys"),
+            && sidecar_prefix_stderr.contains("prefix-archive-keys")
+            && sidecar_prefix_stderr.contains("substring-archive-keys"),
         "{sidecar_prefix_stderr}"
     );
     let sidecar_budget_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -1707,8 +1776,11 @@ fn searches_persisted_tags_from_binary() {
             columns.to_str().unwrap(),
             metadata.to_str().unwrap(),
             prefixes.to_str().unwrap(),
+            substrings.to_str().unwrap(),
             fuzzy.to_str().unwrap(),
             content.to_str().unwrap(),
+            "1",
+            "1",
             "1",
             "1",
             "1",
@@ -1731,6 +1803,9 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_budget_stderr.contains("\tprefix-candidate-ids=")
             && sidecar_budget_stderr.contains("\tprefix-cache-misses=")
             && sidecar_budget_stderr.contains("\tprefix-cutoff-terms=")
+            && sidecar_budget_stderr.contains("\tsubstring-terms=")
+            && sidecar_budget_stderr.contains("\tsubstring-lookup-requests=")
+            && sidecar_budget_stderr.contains("\tsubstring-cache-misses=")
             && sidecar_budget_stderr.contains("\tfuzzy-terms=2")
             && sidecar_budget_stderr.contains("\tfuzzy-lookup-requests=")
             && sidecar_budget_stderr.contains("\tfuzzy-cache-misses=")
@@ -1744,6 +1819,7 @@ fn searches_persisted_tags_from_binary() {
             columns.to_str().unwrap(),
             metadata.to_str().unwrap(),
             prefixes.to_str().unwrap(),
+            substrings.to_str().unwrap(),
             fuzzy.to_str().unwrap(),
             content.to_str().unwrap(),
             "bodymarker",
@@ -1771,6 +1847,7 @@ fn searches_persisted_tags_from_binary() {
     fs::remove_file(dictionary).unwrap();
     fs::remove_file(columns).unwrap();
     fs::remove_file(prefixes).unwrap();
+    fs::remove_file(substrings).unwrap();
     fs::remove_file(fuzzy).unwrap();
     fs::remove_file(content).unwrap();
 }
@@ -1803,6 +1880,7 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
             "-",
             prefixes.to_str().unwrap(),
             "-",
+            "-",
             dictionary.to_str().unwrap(),
         ])
         .output()
@@ -1832,6 +1910,7 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
             "-",
             "-",
             prefixes.to_str().unwrap(),
+            "-",
             "-",
             dictionary.to_str().unwrap(),
         ])
@@ -1870,6 +1949,7 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
             "-",
             "-",
             prefixes.to_str().unwrap(),
+            "-",
             "-",
             dictionary.to_str().unwrap(),
         ])
@@ -3802,6 +3882,7 @@ fn compacts_content_segments_from_binary() {
         .args([
             "index-footprint",
             records.to_str().unwrap(),
+            "-",
             "-",
             "-",
             "-",

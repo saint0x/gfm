@@ -2,7 +2,7 @@ use crate::{
     read_content_postings, read_metadata_postings, read_records, write_content_postings,
     write_metadata_postings, write_records, ContentArchive, ContentArchiveManifest,
     MmapContentArchive, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
-    MmapRecordArchive, MmapRecordColumns,
+    MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_types::{GfmError, Result};
 use std::fmt;
@@ -18,6 +18,7 @@ const COLUMNS_LEGACY: &[&[u8]] = &[b"gfm-record-columns-v1\n"];
 const METADATA_CURRENT: &[u8] = b"gfm-metadata-v3\n";
 const METADATA_LEGACY: &[&[u8]] = &[b"gfm-metadata-v1\n", b"gfm-metadata-v2\n"];
 const PREFIX_CURRENT: &[u8] = b"gfm-prefix-v1\n";
+const SUBSTRING_CURRENT: &[u8] = b"gfm-substring-v1\n";
 const FUZZY_CURRENT: &[u8] = b"gfm-fuzzy-v1\n";
 const DICTIONARY_CURRENT: &[u8] = b"gfm-dictionary-v1\n";
 const CONTENT_CURRENT: &[u8] = b"gfm-content-v5\n";
@@ -35,6 +36,7 @@ pub enum ArchiveSchemaKind {
     Columns,
     Metadata,
     Prefixes,
+    Substrings,
     Fuzzy,
     Dictionary,
     Content,
@@ -48,6 +50,7 @@ impl ArchiveSchemaKind {
             "columns" => Some(Self::Columns),
             "metadata" => Some(Self::Metadata),
             "prefixes" | "prefix" => Some(Self::Prefixes),
+            "substrings" | "substring" => Some(Self::Substrings),
             "fuzzy" => Some(Self::Fuzzy),
             "dictionary" => Some(Self::Dictionary),
             "content" => Some(Self::Content),
@@ -62,6 +65,7 @@ impl ArchiveSchemaKind {
             Self::Columns => "columns",
             Self::Metadata => "metadata",
             Self::Prefixes => "prefixes",
+            Self::Substrings => "substrings",
             Self::Fuzzy => "fuzzy",
             Self::Dictionary => "dictionary",
             Self::Content => "content",
@@ -75,6 +79,7 @@ impl ArchiveSchemaKind {
             Self::Columns => "gfm-record-columns-v2",
             Self::Metadata => "gfm-metadata-v3",
             Self::Prefixes => "gfm-prefix-v1",
+            Self::Substrings => "gfm-substring-v1",
             Self::Fuzzy => "gfm-fuzzy-v1",
             Self::Dictionary => "gfm-dictionary-v1",
             Self::Content => "gfm-content-v5",
@@ -600,6 +605,11 @@ fn inspect_archive_schema_result(
                 MmapPrefixArchive::open(path).map(|_| ())
             })
         }
+        ArchiveSchemaKind::Substrings => {
+            inspect_magic_schema(kind, path, &[SUBSTRING_CURRENT], &[], || {
+                MmapSubstringArchive::open(path).map(|_| ())
+            })
+        }
         ArchiveSchemaKind::Fuzzy => inspect_magic_schema(kind, path, &[FUZZY_CURRENT], &[], || {
             MmapFuzzyArchive::open(path).map(|_| ())
         }),
@@ -820,8 +830,8 @@ mod tests {
     use crate::{
         metadata_postings_from_records, prefix_postings_from_records, write_content_postings,
         write_dictionary, write_fuzzy_postings, write_metadata_postings, write_prefix_postings,
-        write_record_columns, write_records, ContentArchiveManifestEntry, ContentMergeTier,
-        MetadataField, MetadataPosting,
+        write_record_columns, write_records, write_substring_postings, ContentArchiveManifestEntry,
+        ContentMergeTier, MetadataField, MetadataPosting,
     };
     use gfm_types::{ContentPosting, FileId, FileKind, FileRecord, VolumeId};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -832,6 +842,7 @@ mod tests {
         let columns = temp_path("gfm-schema-columns", "gfmcols");
         let metadata = temp_path("gfm-schema-metadata", "gfmmeta");
         let prefixes = temp_path("gfm-schema-prefixes", "gfmprefix");
+        let substrings = temp_path("gfm-schema-substrings", "gfmsubstr");
         let fuzzy = temp_path("gfm-schema-fuzzy", "gfmfuzzy");
         let dictionary = temp_path("gfm-schema-dictionary", "gfmdict");
         let content = temp_path("gfm-schema-content", "gfmcontent");
@@ -842,6 +853,8 @@ mod tests {
         write_record_columns(&columns, &rows).unwrap();
         write_metadata_postings(&metadata, &metadata_postings_from_records(&rows)).unwrap();
         write_prefix_postings(&prefixes, &prefix_postings_from_records(&rows)).unwrap();
+        write_substring_postings(&substrings, &crate::substring_postings_from_records(&rows))
+            .unwrap();
         write_fuzzy_postings(&fuzzy, &crate::fuzzy_postings_from_records(&rows)).unwrap();
         write_dictionary(&dictionary, &crate::dictionary_terms_from_records(&rows)).unwrap();
         write_content_postings(
@@ -866,6 +879,7 @@ mod tests {
             (ArchiveSchemaKind::Columns, columns.as_path()),
             (ArchiveSchemaKind::Metadata, metadata.as_path()),
             (ArchiveSchemaKind::Prefixes, prefixes.as_path()),
+            (ArchiveSchemaKind::Substrings, substrings.as_path()),
             (ArchiveSchemaKind::Fuzzy, fuzzy.as_path()),
             (ArchiveSchemaKind::Dictionary, dictionary.as_path()),
             (ArchiveSchemaKind::Content, content.as_path()),
@@ -877,7 +891,7 @@ mod tests {
         }
 
         for path in [
-            records, columns, metadata, prefixes, fuzzy, dictionary, content, manifest,
+            records, columns, metadata, prefixes, substrings, fuzzy, dictionary, content, manifest,
         ] {
             std::fs::remove_file(path).unwrap();
         }

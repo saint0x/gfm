@@ -59,6 +59,80 @@ fn reindexed_records_remove_stale_name_substring_postings() {
 }
 
 #[test]
+fn imported_substring_postings_drive_deferred_sidecar_search() {
+    let mut index = SearchIndex::new();
+    let item = record(1, "/tmp/report.pdf", "report.pdf");
+    let columns = SearchRecordColumns {
+        id: item.id,
+        name: item.name.clone(),
+        path: item.path.to_string_lossy().into_owned(),
+        extension: item.extension().map(ToOwned::to_owned),
+        tags: item.tags.clone(),
+        comment: item.finder_comment.clone(),
+    };
+    assert!(index.insert_with_columns_deferred_sidecars(item, columns));
+    assert!(index.query("port", 10).is_empty());
+
+    assert_eq!(
+        index.import_substring_postings(&[
+            SearchSubstringPosting {
+                gram: "por".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 1)],
+            },
+            SearchSubstringPosting {
+                gram: "ort".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 1)],
+            },
+        ]),
+        2
+    );
+    let hits = index.query("port", 10);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.name, "report.pdf");
+    assert_eq!(hits[0].reason, MatchReason::SubstringName);
+}
+
+#[test]
+fn sidecar_substring_lookup_budget_caps_grams_and_reports_truncation() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/report-alpha.md", "report-alpha.md"));
+    index.insert(record(2, "/tmp/report-beta.md", "report-beta.md"));
+    index.insert(record(3, "/tmp/report-gamma.md", "report-gamma.md"));
+    let lookup = StaticLookup {
+        prefix_ids: Vec::new(),
+        substring_ids: vec![
+            FileId::new(VolumeId(1), 1),
+            FileId::new(VolumeId(1), 2),
+            FileId::new(VolumeId(1), 3),
+        ],
+        fuzzy_terms: Vec::new(),
+    };
+
+    let report = index
+        .query_structured_with_lookup_budget_cancellable(
+            &SearchQuery::parse("port"),
+            10,
+            &lookup,
+            SearchLookupBudget {
+                max_substring_grams_per_term: 1,
+                max_substring_ids_per_gram: 2,
+                ..SearchLookupBudget::default()
+            },
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(report.lookup.substring_terms, 1);
+    assert_eq!(report.lookup.substring_grams, 1);
+    assert_eq!(report.lookup.substring_lookup_ids, 3);
+    assert_eq!(report.lookup.substring_candidate_ids, 3);
+    assert_eq!(report.lookup.substring_term_truncated_grams, 1);
+    assert_eq!(report.lookup.substring_truncated_grams, 1);
+    assert!(!report.hits.is_empty());
+}
+
+#[test]
 fn reindexed_records_refresh_cached_columns() {
     let mut index = SearchIndex::new();
     let mut item = record(1, "/tmp/alpha.md", "alpha.md");
@@ -252,9 +326,7 @@ fn imported_prefix_postings_drive_deferred_prefix_search() {
             comment: None,
         },
     ));
-    let fallback_hits = index.query("proj", 10);
-    assert_eq!(fallback_hits.len(), 1);
-    assert_eq!(fallback_hits[0].reason, MatchReason::SubstringName);
+    assert!(index.query("proj", 10).is_empty());
 
     assert_eq!(
         index.import_prefix_postings(&[SearchPrefixPosting {
@@ -282,6 +354,7 @@ fn sidecar_prefix_lookup_budget_caps_candidates_and_reports_truncation() {
             FileId::new(VolumeId(1), 2),
             FileId::new(VolumeId(1), 3),
         ],
+        substring_ids: Vec::new(),
         fuzzy_terms: Vec::new(),
     };
 
@@ -312,6 +385,7 @@ fn sidecar_prefix_lookup_budget_cuts_off_short_archive_prefixes() {
     index.insert(record(1, "/tmp/omega.md", "omega.md"));
     let lookup = StaticLookup {
         prefix_ids: vec![FileId::new(VolumeId(1), 1)],
+        substring_ids: Vec::new(),
         fuzzy_terms: Vec::new(),
     };
 
@@ -352,9 +426,7 @@ fn imported_prefix_postings_preserve_fallback_prefix_terms() {
     ));
 
     assert_eq!(index.query("prof", 10).len(), 1);
-    let fallback_hits = index.query("proj", 10);
-    assert_eq!(fallback_hits.len(), 1);
-    assert_eq!(fallback_hits[0].reason, MatchReason::SubstringName);
+    assert!(index.query("proj", 10).is_empty());
     assert!(
         index.import_prefix_postings(&[SearchPrefixPosting {
             prefix: "proj".to_string(),
@@ -1048,6 +1120,7 @@ fn sidecar_fuzzy_lookup_budget_caps_keys_terms_and_verified_candidates() {
     index.insert(record(2, "/tmp/needle.md", "needle.md"));
     let lookup = StaticLookup {
         prefix_ids: Vec::new(),
+        substring_ids: Vec::new(),
         fuzzy_terms: vec![
             "needl".to_string(),
             "needle".to_string(),
@@ -1088,6 +1161,7 @@ fn fuzzy_lookup_skips_numeric_only_and_digit_run_terms() {
     ));
     let lookup = StaticLookup {
         prefix_ids: Vec::new(),
+        substring_ids: Vec::new(),
         fuzzy_terms: vec!["packageproject00012345".to_string()],
     };
 
@@ -1389,12 +1463,17 @@ fn volume_record(volume: u64, node: u64, path: &str, name: &str) -> FileRecord {
 
 struct StaticLookup {
     prefix_ids: Vec<FileId>,
+    substring_ids: Vec<FileId>,
     fuzzy_terms: Vec<String>,
 }
 
 impl SearchLookup for StaticLookup {
     fn prefix_ids(&self, _prefix: &str) -> gfm_types::Result<Vec<FileId>> {
         Ok(self.prefix_ids.clone())
+    }
+
+    fn substring_ids(&self, _gram: &str) -> gfm_types::Result<Vec<FileId>> {
+        Ok(self.substring_ids.clone())
     }
 
     fn fuzzy_terms(&self, _key: &str) -> gfm_types::Result<Vec<String>> {

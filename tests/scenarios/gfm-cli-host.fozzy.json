@@ -307,6 +307,46 @@
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "index-substrings",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "substring-ids-mmap",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "agg"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "substring-id-block-mmap",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "agg",
+        "0"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "substring-verify",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "derived-sidecar-rebuild-plan",
         "tmp/gfm-fozzy-metadata-records.gfmidx",
         "prefixes",
@@ -499,6 +539,7 @@
         "/tmp/gfm-fozzy-archive-plan.gfmcols",
         "/tmp/gfm-fozzy-archive-plan.gfmmeta",
         "/tmp/gfm-fozzy-archive-plan.gfmprefix",
+        "/tmp/gfm-fozzy-archive-plan.gfmsubstr",
         "/tmp/gfm-fozzy-archive-plan.gfmfuzzy",
         "/tmp/gfm-fozzy-archive-plan.gfmdict",
         "/tmp/gfm-fozzy-host.gfmcontent",
@@ -578,6 +619,7 @@
         "/tmp/gfm-fozzy-columns.gfmcols",
         "/tmp/gfm-fozzy-metadata.gfmmeta",
         "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
         "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
         "/tmp/gfm-fozzy-host.gfmcontent",
         "tag:Important"
@@ -593,8 +635,11 @@
         "/tmp/gfm-fozzy-columns.gfmcols",
         "/tmp/gfm-fozzy-metadata.gfmmeta",
         "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
         "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
         "/tmp/gfm-fozzy-host.gfmcontent",
+        "1",
+        "1",
         "1",
         "1",
         "1",
