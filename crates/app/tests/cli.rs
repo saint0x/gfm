@@ -2079,6 +2079,41 @@ fn compacts_content_segments_from_binary() {
         "{}",
         String::from_utf8_lossy(&manifest_output.stderr)
     );
+    let footprint_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-footprint",
+            records.to_str().unwrap(),
+            "-",
+            "-",
+            "-",
+            "-",
+            manifest.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        footprint_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&footprint_output.stderr)
+    );
+    let footprint_stderr = String::from_utf8(footprint_output.stderr).unwrap();
+    assert!(
+        footprint_stderr.contains("index-footprint")
+            && footprint_stderr.contains("compaction-scheduled=true")
+            && footprint_stderr.contains("reason=TierPressure"),
+        "{footprint_stderr}"
+    );
+    let footprint_stdout = String::from_utf8(footprint_output.stdout).unwrap();
+    assert!(
+        footprint_stdout.contains("records\tcount=")
+            && footprint_stdout.contains("content\tarchives=1")
+            && footprint_stdout.contains("compaction\tscheduled=true"),
+        "{footprint_stdout}"
+    );
     let maintenance_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "content-maintain-segments",

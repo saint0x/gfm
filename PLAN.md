@@ -433,6 +433,11 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - live hot records keep in-memory prefix/fuzzy maps while immutable sidecars answer query candidates directly from mmap archives;
   - sharded search fans out the same archive lookup across volume shards and filters candidate ids per shard;
   - archive-backed lookup avoids importing large prefix/fuzzy candidate maps into heap memory for each machine-wide query session.
+- Index footprint telemetry and maintenance scheduling:
+  - record, column, metadata, prefix, fuzzy, content-manifest, and pending content-segment archives are measured from mmap readers and filesystem byte counts;
+  - footprint reports include total bytes, bytes per record, sidecar key counts, content archive counts, segment postings, tombstones, and tombstone-bearing segment counts;
+  - the same bounded content merge policy used by background maintenance emits a deterministic schedule with merge segments, retained segments, tier, merge bytes, tombstone pressure, and a concrete scheduling reason;
+  - operator and CI surfaces can gate index density drift and compaction pressure without hydrating postings.
 
 ### Query Pipeline
 

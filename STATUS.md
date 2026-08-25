@@ -61,7 +61,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 38. Finish tombstone cleanup cadence across active content manifests.
 39. Finish benchmark-proven prefix/fuzzy lookup budgets for multi-million-entry indexes, including adaptive prefix cutoffs, fuzzy candidate caps, cache hit telemetry, and worst-case latency gates.
 40. Implement checksums, schema migration, crash recovery, corruption detection, and rebuild plans.
-41. Implement index size telemetry and compaction scheduling heuristics.
+41. Finish adaptive compaction scheduling from live I/O, thermal, battery, user-activity, and index-density pressure signals.
 42. Implement benchmark fixtures for millions of files and realistic developer, media, documents, and iCloud trees.
 
 ## File Operations

@@ -15,9 +15,9 @@ use gfm_index::{
     BackgroundContentIndexer, ContentArchiveManifest, ContentArchiveManifestEntry,
     ContentIndexJobSpec, ContentIndexReport, ContentMaintenanceOptions, ContentMergePolicy,
     ContentMergeTier, EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
-    IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState, Indexer, LiveIndex,
-    SearchArchiveLookup, SearchMetadataField, SearchMetadataPosting, SearchRecordColumns,
-    SearchStreamStage, VolumeIndexPolicy,
+    IndexFootprintSpec, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState,
+    Indexer, LiveIndex, SearchArchiveLookup, SearchMetadataField, SearchMetadataPosting,
+    SearchRecordColumns, SearchStreamStage, VolumeIndexPolicy,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -1092,6 +1092,87 @@ fn run() -> Result<()> {
                 print_hit(&hit);
             }
         }
+        Some("index-footprint") => {
+            let records = required_path(args.next(), "index-footprint requires a records path")?;
+            let columns =
+                optional_path_arg(args.next(), "index-footprint requires a columns path or -")?;
+            let metadata =
+                optional_path_arg(args.next(), "index-footprint requires a metadata path or -")?;
+            let prefixes =
+                optional_path_arg(args.next(), "index-footprint requires a prefixes path or -")?;
+            let fuzzy =
+                optional_path_arg(args.next(), "index-footprint requires a fuzzy path or -")?;
+            let content_manifest = optional_path_arg(
+                args.next(),
+                "index-footprint requires a content manifest path or -",
+            )?;
+            let mut spec = IndexFootprintSpec::new(records);
+            spec.columns = columns;
+            spec.metadata = metadata;
+            spec.prefixes = prefixes;
+            spec.fuzzy = fuzzy;
+            spec.content_manifest = content_manifest;
+            spec.content_segments = args.map(PathBuf::from).collect();
+            let report = gfm_index::inspect_index_footprint(&spec)?;
+            eprintln!(
+                "index-footprint\trecords={}\ttotal-bytes={}\tbytes-per-record={}\tsegments={}\tsegment-bytes={}\tcompaction-scheduled={}\treason={:?}",
+                report.record_count,
+                report.total_bytes,
+                report.bytes_per_record,
+                report.segment_count,
+                report.segment_bytes,
+                report.compaction.scheduled,
+                report.compaction.reason
+            );
+            println!(
+                "records\tcount={}\tbytes={}",
+                report.record_count, report.record_bytes
+            );
+            println!(
+                "columns\tcount={}\tbytes={}\tstring-pool-bytes={}",
+                report.column_count, report.column_bytes, report.column_string_pool_bytes
+            );
+            println!(
+                "metadata\tterms={}\tbytes={}",
+                report.metadata_terms, report.metadata_bytes
+            );
+            println!(
+                "prefixes\tkeys={}\tbytes={}",
+                report.prefix_keys, report.prefix_bytes
+            );
+            println!(
+                "fuzzy\tkeys={}\tbytes={}",
+                report.fuzzy_keys, report.fuzzy_bytes
+            );
+            println!(
+                "content\tarchives={}\tterms={}\tbytes={}",
+                report.content_archives, report.content_terms, report.content_bytes
+            );
+            println!(
+                "segments\tcount={}\tbytes={}\tpostings={}\ttombstone-segments={}\ttombstones={}",
+                report.segment_count,
+                report.segment_bytes,
+                report.segment_postings,
+                report.tombstone_segments,
+                report.tombstones
+            );
+            println!(
+                "compaction\tscheduled={}\ttier={:?}\treason={:?}\tmerge-bytes={}\tmerge-segments={}\tretained-segments={}\ttombstone-segments={}",
+                report.compaction.scheduled,
+                report.compaction.tier,
+                report.compaction.reason,
+                report.compaction.merge_bytes,
+                report.compaction.merge_segments.len(),
+                report.compaction.retained_segments.len(),
+                report.compaction.tombstone_segments
+            );
+            for path in report.compaction.merge_segments {
+                println!("merge-segment\t{}", path.display());
+            }
+            for path in report.compaction.retained_segments {
+                println!("retain-segment\t{}", path.display());
+            }
+        }
         Some("records-verify") => {
             let records = required_path(args.next(), "records-verify requires a records path")?;
             let archive = MmapRecordArchive::open(records)?;
@@ -2055,6 +2136,11 @@ fn required_path(value: Option<String>, message: &str) -> Result<PathBuf> {
         .ok_or_else(|| GfmError::Format(message.to_string()))
 }
 
+fn optional_path_arg(value: Option<String>, message: &str) -> Result<Option<PathBuf>> {
+    let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
+    Ok((value != "-").then(|| PathBuf::from(value)))
+}
+
 fn required_string(value: Option<String>, message: &str) -> Result<String> {
     value.ok_or_else(|| GfmError::Format(message.to_string()))
 }
@@ -2608,6 +2694,7 @@ fn print_usage() {
   gfm search-index-mmap <index.gfmidx> <query>
   gfm search-index-columns <index.gfmidx> <columns.gfmcols> <query>
   gfm search-index-sidecars <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <fuzzy.gfmfuzzy> <content.gfmcontent> <query>
+  gfm index-footprint <index.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <content-manifest.gfmmanifest|-> [segments.gfmseg...]
   gfm records-verify <index.gfmidx>
   gfm index-columns <records.gfmidx> <columns.gfmcols>
   gfm columns-verify <columns.gfmcols>

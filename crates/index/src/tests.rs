@@ -1,5 +1,9 @@
 use super::*;
-use gfm_store::{write_fuzzy_postings, write_prefix_postings, FuzzyPosting, PrefixPosting};
+use gfm_store::{
+    fuzzy_postings_from_records, metadata_postings_from_records, prefix_postings_from_records,
+    write_fuzzy_postings, write_metadata_postings, write_prefix_postings, write_record_columns,
+    FuzzyPosting, PrefixPosting,
+};
 use gfm_types::{FileKind, MatchReason, VolumeId};
 use std::collections::HashSet;
 use std::fs;
@@ -954,6 +958,88 @@ fn background_content_maintenance_compacts_segments_and_updates_manifest() {
     fs::remove_file(initial_content).unwrap();
     fs::remove_file(output_content).unwrap();
     fs::remove_file(manifest).unwrap();
+}
+
+#[test]
+fn index_footprint_reports_sizes_and_schedules_segment_compaction() {
+    let root = unique_temp_dir("gfm-index-footprint-root");
+    let records = unique_temp_path("gfm-index-footprint-records", "gfmidx");
+    let columns = unique_temp_path("gfm-index-footprint-columns", "gfmcols");
+    let metadata = unique_temp_path("gfm-index-footprint-metadata", "gfmmeta");
+    let prefixes = unique_temp_path("gfm-index-footprint-prefixes", "gfmprefix");
+    let fuzzy = unique_temp_path("gfm-index-footprint-fuzzy", "gfmfuzzy");
+    let content = unique_temp_path("gfm-index-footprint-content", "gfmcontent");
+    let manifest = unique_temp_path("gfm-index-footprint-content", "gfmmanifest");
+    let segment_dir = unique_temp_dir("gfm-index-footprint-segments");
+    fs::write(
+        root.join("project-needle.md"),
+        "contentneedle with footprint telemetry",
+    )
+    .unwrap();
+
+    let indexer = Indexer::default();
+    let snapshot = indexer.build(&root).unwrap();
+    snapshot
+        .save_with_content(&records, &content, &Extractor::default())
+        .unwrap();
+    write_record_columns(&columns, &snapshot.records).unwrap();
+    write_metadata_postings(
+        &metadata,
+        &metadata_postings_from_records(&snapshot.records),
+    )
+    .unwrap();
+    write_prefix_postings(&prefixes, &prefix_postings_from_records(&snapshot.records)).unwrap();
+    write_fuzzy_postings(&fuzzy, &fuzzy_postings_from_records(&snapshot.records)).unwrap();
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: content.clone(),
+    }])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+    fs::create_dir_all(&segment_dir).unwrap();
+    let segments = (0..4)
+        .map(|index| segment_dir.join(format!("footprint-{index}.gfmseg")))
+        .collect::<Vec<_>>();
+    for segment in &segments {
+        snapshot
+            .save_content_segment(segment, &Extractor::default(), Vec::new())
+            .unwrap();
+    }
+
+    let mut spec = IndexFootprintSpec::new(&records);
+    spec.columns = Some(columns.clone());
+    spec.metadata = Some(metadata.clone());
+    spec.prefixes = Some(prefixes.clone());
+    spec.fuzzy = Some(fuzzy.clone());
+    spec.content_manifest = Some(manifest.clone());
+    spec.content_segments = segments.clone();
+    let report = inspect_index_footprint(&spec).unwrap();
+
+    assert_eq!(report.record_count, snapshot.records.len());
+    assert_eq!(report.column_count, snapshot.records.len());
+    assert!(report.record_bytes > 0);
+    assert!(report.column_bytes > 0);
+    assert!(report.metadata_bytes > 0);
+    assert!(report.prefix_keys > 0);
+    assert!(report.fuzzy_keys > 0);
+    assert_eq!(report.content_archives, 1);
+    assert!(report.content_terms > 0);
+    assert_eq!(report.segment_count, 4);
+    assert_eq!(report.compaction.reason, CompactionReason::TierPressure);
+    assert!(report.compaction.scheduled);
+    assert_eq!(report.compaction.merge_segments, segments);
+    assert_eq!(report.compaction.retained_segments.len(), 0);
+    assert!(report.total_bytes >= report.segment_bytes);
+    assert!(report.bytes_per_record > 0);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segment_dir).unwrap();
+    for path in [
+        records, columns, metadata, prefixes, fuzzy, content, manifest,
+    ] {
+        fs::remove_file(path).unwrap();
+    }
 }
 
 #[test]
