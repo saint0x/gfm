@@ -86,7 +86,7 @@ The index is compact and incremental:
 
 - appendable per-volume segments
 - default recursive indexing skips generated build/cache trees such as `target`, `.git`, `.fozzy`, and `node_modules`
-- per-volume query shards with parallel fanout, bounded top-k global merge, and deterministic global ordering
+- per-volume query shards with parallel fanout, bounded per-shard and global top-k merge, and deterministic global ordering
 - front-coded dictionaries for terms, paths, shared path prefixes, extensions, tags, kinds, metadata keys, and comment tokens
 - delta-coded postings
 - tombstones for deletion and replacement

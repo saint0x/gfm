@@ -884,29 +884,25 @@ impl SearchIndex {
             score.boost(self.composite_boosts(record, query, pass));
         }
 
-        let mut hits: Vec<_> = scores
-            .into_iter()
-            .filter_map(|(id, score)| {
-                if cancellation.check().is_err() {
-                    return None;
-                }
-                self.records
-                    .get(&id)
-                    .filter(|record| self.record_matches_query(record, query, pass))
-                    .map(|record| {
-                        let (score, reason) = score.finish();
-                        SearchHit {
-                            record: record.clone(),
-                            score,
-                            reason,
-                            snippet: None,
-                        }
-                    })
-            })
-            .collect();
+        let mut hits = BoundedHitMerge::new(limit);
+        for (id, score) in scores {
+            cancellation.check()?;
+            let Some(record) = self.records.get(&id) else {
+                continue;
+            };
+            if !self.record_matches_query(record, query, pass) {
+                continue;
+            }
+            let (score, reason) = score.finish();
+            hits.push(SearchHit {
+                record: record.clone(),
+                score,
+                reason,
+                snippet: None,
+            });
+        }
 
-        sort_hits(&mut hits);
-        hits.truncate(limit);
+        let hits = hits.into_sorted_hits();
         cancellation.check()?;
         Ok(SearchQueryReport {
             hits,
@@ -1542,6 +1538,57 @@ pub(crate) fn sort_hits(hits: &mut [SearchHit]) {
             })
             .then_with(|| a.record.id.cmp(&b.record.id))
     });
+}
+
+#[derive(Debug)]
+pub(crate) struct BoundedHitMerge {
+    limit: usize,
+    hits: Vec<SearchHit>,
+}
+
+impl BoundedHitMerge {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            hits: Vec::with_capacity(limit),
+        }
+    }
+
+    pub(crate) fn push(&mut self, hit: SearchHit) {
+        if self.limit == 0 {
+            return;
+        }
+        self.hits.push(hit);
+        if self.hits.len() > self.limit.saturating_mul(2) {
+            self.trim();
+        }
+    }
+
+    pub(crate) fn extend(&mut self, hits: Vec<SearchHit>) {
+        if self.limit == 0 || hits.is_empty() {
+            return;
+        }
+        self.hits.extend(hits);
+        if self.hits.len() > self.limit.saturating_mul(2) {
+            self.trim();
+        }
+    }
+
+    pub(crate) fn into_sorted_hits(mut self) -> Vec<SearchHit> {
+        self.trim();
+        self.hits
+    }
+
+    fn trim(&mut self) {
+        sort_hits(&mut self.hits);
+        self.hits.truncate(self.limit);
+    }
+}
+
+pub(crate) fn top_hits(hits: Vec<SearchHit>, limit: usize) -> Vec<SearchHit> {
+    let mut merge = BoundedHitMerge::new(limit);
+    merge.extend(hits);
+    merge.into_sorted_hits()
 }
 
 #[cfg(test)]

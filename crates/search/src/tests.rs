@@ -1411,6 +1411,29 @@ fn sharded_search_uses_bounded_global_top_hits() {
 }
 
 #[test]
+fn search_index_uses_bounded_top_hits_for_single_shard() {
+    let mut index = SearchIndex::new();
+    for node in 1..=48 {
+        let name = format!("archive-report-{node}.md");
+        let path = format!("/tmp/{name}");
+        index.insert(record(node, &path, &name));
+    }
+    index.insert(record(98, "/tmp/b/report", "report"));
+    index.insert(record(99, "/tmp/a/report", "report"));
+
+    let hits = index.query("report", 2);
+    let paths: Vec<_> = hits.into_iter().map(|hit| hit.record.path).collect();
+
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/tmp/a/report"),
+            PathBuf::from("/tmp/b/report")
+        ]
+    );
+}
+
+#[test]
 fn sharded_search_removes_records_by_volume_and_path() {
     let mut index = ShardedSearchIndex::new();
     let first = volume_record(1, 1, "/Volumes/A/report.md", "report.md");

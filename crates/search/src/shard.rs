@@ -1,5 +1,5 @@
 use crate::{
-    sort_hits, SearchFuzzyPosting, SearchIndex, SearchLookup, SearchLookupBudget,
+    top_hits, BoundedHitMerge, SearchFuzzyPosting, SearchIndex, SearchLookup, SearchLookupBudget,
     SearchLookupTelemetry, SearchMetadataPosting, SearchPrefixPosting, SearchQuery,
     SearchQueryReport, SearchRecordColumns, SearchStreamBatch, SearchStreamStage,
     SearchSubstringPosting,
@@ -454,45 +454,4 @@ impl ShardedSearchIndex {
     fn prune_empty_shards(&mut self) {
         self.shards.retain(|_, shard| !shard.is_empty());
     }
-}
-
-#[derive(Debug)]
-struct BoundedHitMerge {
-    limit: usize,
-    hits: Vec<SearchHit>,
-}
-
-impl BoundedHitMerge {
-    fn new(limit: usize) -> Self {
-        Self {
-            limit,
-            hits: Vec::with_capacity(limit),
-        }
-    }
-
-    fn extend(&mut self, hits: Vec<SearchHit>) {
-        if self.limit == 0 || hits.is_empty() {
-            return;
-        }
-        self.hits.extend(hits);
-        if self.hits.len() > self.limit.saturating_mul(2) {
-            self.trim();
-        }
-    }
-
-    fn into_sorted_hits(mut self) -> Vec<SearchHit> {
-        self.trim();
-        self.hits
-    }
-
-    fn trim(&mut self) {
-        sort_hits(&mut self.hits);
-        self.hits.truncate(self.limit);
-    }
-}
-
-fn top_hits(hits: Vec<SearchHit>, limit: usize) -> Vec<SearchHit> {
-    let mut merge = BoundedHitMerge::new(limit);
-    merge.extend(hits);
-    merge.into_sorted_hits()
 }
