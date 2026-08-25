@@ -980,6 +980,37 @@ fn indexed_filter_expression_candidates_bound_boolean_or_queries() {
 }
 
 #[test]
+fn indexed_filter_only_query_with_no_candidates_skips_universe_seed() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/report.md", "report.md"));
+    index.insert(record(2, "/tmp/invoice.pdf", "invoice.pdf"));
+    let query = SearchQuery::parse("ext:zip");
+    let expression = query.expression.as_ref().unwrap();
+
+    let candidates = index
+        .expression_candidate_ids(expression, SearchPass::Full)
+        .unwrap();
+    let hits = index.query_structured(&query, 10);
+
+    assert!(candidates.is_empty());
+    assert!(hits.is_empty());
+}
+
+#[test]
+fn unsupported_filter_only_query_still_uses_universe_seed() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/report.md", "report.md"));
+    index.insert(record(2, "/tmp/invoice.pdf", "invoice.pdf"));
+    let query = SearchQuery::parse("scope:/tmp");
+    let expression = query.expression.as_ref().unwrap();
+
+    assert!(index
+        .expression_candidate_ids(expression, SearchPass::Full)
+        .is_none());
+    assert_eq!(index.query_structured(&query, 10).len(), 2);
+}
+
+#[test]
 fn supports_boolean_or_between_filters() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/report.md", "report.md"));

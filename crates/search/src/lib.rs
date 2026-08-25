@@ -880,7 +880,8 @@ impl SearchIndex {
 
         if query.expression.as_ref().is_some_and(|expression| {
             expression_needs_universe(expression) && expression_candidates.is_none()
-        }) || (scores.is_empty()
+        }) || (expression_candidates.is_none()
+            && scores.is_empty()
             && !query.filters.is_empty()
             && query.terms.is_empty()
             && query.phrases.is_empty()
