@@ -279,6 +279,7 @@ gfm/
 - Applies the same extraction budget derivation to adaptive persisted content search before foreground snippet extraction reopens source files.
 - Applies the same extraction budget derivation across a subprocess extraction worker boundary before worker-side file reads begin, then runs the worker through a macOS Seatbelt wrapper that denies filesystem mutation while supervisor-owned output files remain writable.
 - Supervises adaptive extraction subprocesses with timeout-bounded process-group termination and explicit worker exit classification so wedged or crashing extractors cannot stall the foreground CLI path.
+- Persists adaptive extraction worker timeout and crash failures into the extraction quarantine store before relaunch, and clears the fingerprint after successful worker output so repeated failures stop consuming foreground latency.
 - Applies the same adaptive scheduling policy to content segment maintenance before archive compaction, manifest promotion, or cleanup publication starts.
 - Applies the same adaptive scheduling policy to sidecar repair before derived sidecars are rebuilt or corrupt sidecars are quarantined.
 - Applies the same adaptive scheduling policy to persistent index repair before state rebuilds, record quarantine, or recovery publication starts.

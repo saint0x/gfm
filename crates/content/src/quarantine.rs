@@ -121,6 +121,15 @@ impl ExtractionQuarantine {
         self.record_failure_key(path, key, kind, reason)
     }
 
+    pub fn record_success(
+        &mut self,
+        path: &Path,
+        fingerprint: &ExtractionFingerprint,
+    ) -> QuarantineDecision {
+        self.entries.remove(&fingerprint.cache_key(path));
+        QuarantineDecision::Allow
+    }
+
     pub fn write(&self, path: impl AsRef<Path>) -> crate::Result<()> {
         let path = path.as_ref();
         let temp = quarantine_temp_path(path);

@@ -2,7 +2,7 @@ use gfm_config::ConfigStore;
 use gfm_content::{
     CachedExtractor, ExtractionBatteryState, ExtractionBudgetProfile, ExtractionFingerprint,
     ExtractionQuarantine, ExtractionThermalState, ExtractionUserActivity, ExtractionVolumeClass,
-    Extractor, QuarantineFailureKind,
+    Extractor, QuarantineDecision, QuarantineFailureKind,
 };
 use gfm_diagnostics::{
     export_operator_trace, inspect_storage, plan_index_recovery, rebuild_index, recover_index,
@@ -685,6 +685,32 @@ fn run() -> Result<()> {
             let pressure = parse_required_scheduling_pressure(&mut args, "extract worker")?;
             let report = run_adaptive_extraction_worker(&path, pressure)?;
             print!("{}", report);
+        }
+        Some("extract-worker-quarantine-adaptive") => {
+            let path = required_path(
+                args.next(),
+                "extract-worker-quarantine-adaptive requires a path",
+            )?;
+            let store = required_path(
+                args.next(),
+                "extract-worker-quarantine-adaptive requires a quarantine store path",
+            )?;
+            let pressure = parse_required_scheduling_pressure(&mut args, "extract worker")?;
+            let timeout = args
+                .next()
+                .map(|value| parse_u64(&value, "timeout ms"))
+                .transpose()?
+                .map(Duration::from_millis)
+                .unwrap_or(ADAPTIVE_WORKER_TIMEOUT);
+            let threshold = args
+                .next()
+                .map(|value| parse_u32(&value, "failure threshold"))
+                .transpose()?
+                .unwrap_or(2);
+            let output = run_quarantined_adaptive_extraction_worker(
+                &path, &store, pressure, timeout, threshold,
+            )?;
+            print!("{output}");
         }
         Some("extract-cache") => {
             let path = required_path(args.next(), "extract-cache requires a path")?;
@@ -3330,6 +3356,12 @@ fn parse_u32(value: &str, name: &str) -> Result<u32> {
         .map_err(|_| GfmError::Format(format!("{name} must be an unsigned 32-bit integer")))
 }
 
+fn parse_u64(value: &str, name: &str) -> Result<u64> {
+    value
+        .parse()
+        .map_err(|_| GfmError::Format(format!("{name} must be an unsigned 64-bit integer")))
+}
+
 fn parse_u32_arg(value: Option<String>, message: &str) -> Result<u32> {
     let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
     value
@@ -3793,8 +3825,17 @@ fn run_content_search(
     )
 }
 
+const ADAPTIVE_WORKER_TIMEOUT: Duration = Duration::from_secs(10);
+
 fn run_adaptive_extraction_worker(path: &Path, pressure: SchedulingPressure) -> Result<String> {
-    const WORKER_TIMEOUT: Duration = Duration::from_secs(10);
+    run_adaptive_extraction_worker_with_timeout(path, pressure, ADAPTIVE_WORKER_TIMEOUT)
+}
+
+fn run_adaptive_extraction_worker_with_timeout(
+    path: &Path,
+    pressure: SchedulingPressure,
+    timeout: Duration,
+) -> Result<String> {
     let exe = env::current_exe().map_err(|err| {
         GfmError::Format(format!(
             "could not resolve current executable for extraction worker: {err}"
@@ -3806,13 +3847,7 @@ fn run_adaptive_extraction_worker(path: &Path, pressure: SchedulingPressure) -> 
     std::fs::File::create(&stderr_path).map_err(|err| GfmError::io(&stderr_path, err))?;
     let sandbox = WorkerSandbox::new(&exe, path, &stdout_path, &stderr_path)?;
     let mut command = sandbox.command(&exe, path, pressure);
-    let output = run_supervised_worker(
-        &mut command,
-        path,
-        WORKER_TIMEOUT,
-        &stdout_path,
-        &stderr_path,
-    )?;
+    let output = run_supervised_worker(&mut command, path, timeout, &stdout_path, &stderr_path)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(GfmError::Format(format!(
@@ -3828,6 +3863,61 @@ fn run_adaptive_extraction_worker(path: &Path, pressure: SchedulingPressure) -> 
             path.display()
         ))
     })
+}
+
+fn run_quarantined_adaptive_extraction_worker(
+    path: &Path,
+    store: &Path,
+    pressure: SchedulingPressure,
+    timeout: Duration,
+    threshold: u32,
+) -> Result<String> {
+    let fingerprint = ExtractionFingerprint::for_path(path)?;
+    let mut quarantine = read_extraction_quarantine(store, threshold)?;
+    let decision = quarantine.before_extract(path, &fingerprint);
+    if matches!(decision, QuarantineDecision::Quarantined(_)) {
+        return Ok(format!("{}\n", decision.as_tsv()));
+    }
+    match run_adaptive_extraction_worker_with_timeout(path, pressure, timeout) {
+        Ok(report) => {
+            let decision = quarantine.record_success(path, &fingerprint);
+            quarantine.write(store)?;
+            Ok(format!("{report}{}\n", decision.as_tsv()))
+        }
+        Err(err) => {
+            let message = err.to_string();
+            let kind = worker_failure_kind(&message);
+            let decision =
+                quarantine.record_failure(path, &fingerprint, kind, worker_failure_reason(kind));
+            quarantine.write(store)?;
+            Ok(format!("{}\n", decision.as_tsv()))
+        }
+    }
+}
+
+fn read_extraction_quarantine(store: &Path, threshold: u32) -> Result<ExtractionQuarantine> {
+    if store.is_file() {
+        ExtractionQuarantine::read(store)
+    } else {
+        Ok(ExtractionQuarantine::new(threshold))
+    }
+}
+
+fn worker_failure_kind(message: &str) -> QuarantineFailureKind {
+    if message.contains("timed out") {
+        QuarantineFailureKind::Timeout
+    } else {
+        QuarantineFailureKind::Crash
+    }
+}
+
+fn worker_failure_reason(kind: QuarantineFailureKind) -> &'static str {
+    match kind {
+        QuarantineFailureKind::Timeout => "worker-timeout",
+        QuarantineFailureKind::Crash => "worker-crash",
+        QuarantineFailureKind::Corrupt => "worker-corrupt",
+        QuarantineFailureKind::Encrypted => "worker-encrypted",
+    }
 }
 
 struct WorkerSandbox {
@@ -4447,6 +4537,7 @@ fn print_usage() {
   gfm extract-report <path>
   gfm extract-report-adaptive <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm extract-worker-adaptive <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
+  gfm extract-worker-quarantine-adaptive <path> <store.gfmquarantine> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> [timeout-ms] [failure-threshold]
   gfm extract-cache <path>
   gfm extract-quarantine <path> <store.gfmquarantine> [corrupt|encrypted|crash|timeout] [attempts]
   gfm index-content-segment <root> <output.gfmseg>
