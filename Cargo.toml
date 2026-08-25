@@ -4,6 +4,7 @@ members = [
     "crates/app",
     "crates/config",
     "crates/content",
+    "crates/diagnostics",
     "crates/fs",
     "crates/index",
     "crates/jobs",

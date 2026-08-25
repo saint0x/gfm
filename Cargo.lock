@@ -171,6 +171,7 @@ version = "0.1.0"
 dependencies = [
  "gfm-config",
  "gfm-content",
+ "gfm-diagnostics",
  "gfm-fs",
  "gfm-index",
  "gfm-jobs",
@@ -199,6 +200,18 @@ dependencies = [
  "gfm-types",
  "plist",
  "zip",
+]
+
+[[package]]
+name = "gfm-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "gfm-config",
+ "gfm-content",
+ "gfm-index",
+ "gfm-store",
+ "gfm-telemetry",
+ "gfm-types",
 ]
 
 [[package]]

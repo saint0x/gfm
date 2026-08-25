@@ -152,6 +152,60 @@
         "/tmp/gfm-jobs.journal"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-diagnostics.md",
+      "data": "diagnostics needle"
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-index-rebuild",
+        "tmp",
+        "tmp/gfm-fozzy-diagnostics.gfmidx",
+        "tmp/gfm-fozzy-diagnostics.gfmcontent"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-storage-inspect",
+        "tmp/gfm-fozzy-diagnostics.gfmidx"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-storage-inspect",
+        "tmp/gfm-fozzy-diagnostics.gfmcontent"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-trace-export",
+        "tmp/gfm-fozzy-diagnostics-trace.json"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-parity-baseline",
+        "tmp/gfm-fozzy-config.toml",
+        "tmp/baselines",
+        "25A354"
+      ],
+      "expect_exit": 0
     }
   ]
 }

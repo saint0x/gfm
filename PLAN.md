@@ -277,6 +277,14 @@ gfm/
 - Records IO byte/op counters, CPU sample means and peaks, memory and allocation peaks, queue depth summaries, compaction summaries, cache hit rates, slow paths, index lag, and operation failures.
 - Exports local-only aggregate diagnostics atomically and rejects path, query-text, or user-identifier inclusion before writing any artifact.
 
+`diagnostics`
+
+- Owns operator-facing recovery and inspection commands.
+- Rebuilds record and content indexes through the production indexing and extraction paths.
+- Exports local-only telemetry traces through the privacy-reviewed diagnostics exporter.
+- Selects Finder parity baselines by updating the versioned config store atomically.
+- Inspects persisted record and content stores by using the same readers as search/runtime code, reporting bytes, record counts, kind counts, hidden/tagged counts, and content term counts.
+
 `testkit`
 
 - Owns deterministic filesystem fixture generation and repeatable macrobenchmarks for small, medium, huge, developer, media, iCloud, external-volume, and network-volume shaped trees.

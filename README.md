@@ -61,6 +61,7 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 - `crates/jobs`: scheduling, cancellation, prioritization, fairness, progress, and backpressure.
 - `crates/config`: versioned TOML config, Finder parity profiles, user settings, feature flags, diagnostics toggles, validation, and atomic persistence.
 - `crates/telemetry`: bounded latency histograms, hard performance budgets, frame timing, UI-thread stall detection, IO/CPU/memory/allocation/queue/compaction summaries, counters, traces, and local-only diagnostics export with privacy review.
+- `crates/diagnostics`: operator commands for index rebuilds, privacy-reviewed trace export, parity baseline selection, and persisted storage inspection.
 - `crates/testkit`: filesystem fixtures, synthetic trees, repeatable macrobenchmarks, macOS capture harnesses, pixel diffing, and benchmark utilities.
 - `crates/packaging`: deterministic macOS `.app` bundle construction, `Info.plist` generation, icon/resource placement, entitlements, ad-hoc or Developer ID signing, hardened-runtime options, Launch Services registration, document associations, and release artifact validation hooks.
 
@@ -177,6 +178,16 @@ cargo run -p gfm -- config-path
 cargo run -p gfm -- config-init ~/Library/Application\ Support/GFM/config.toml
 cargo run -p gfm -- config-check ~/Library/Application\ Support/GFM/config.toml
 cargo run -p gfm -- config-dump ~/Library/Application\ Support/GFM/config.toml
+```
+
+Run operator diagnostics:
+
+```sh
+cargo run -p gfm -- diagnostics-index-rebuild . /tmp/gfm.gfmidx /tmp/gfm.gfmcontent
+cargo run -p gfm -- diagnostics-storage-inspect /tmp/gfm.gfmidx
+cargo run -p gfm -- diagnostics-storage-inspect /tmp/gfm.gfmcontent
+cargo run -p gfm -- diagnostics-trace-export /tmp/gfm-diagnostics.json
+cargo run -p gfm -- diagnostics-parity-baseline ~/Library/Application\ Support/GFM/config.toml tests/parity/baselines 25A354
 ```
 
 Run repeatable macrobenchmarks:

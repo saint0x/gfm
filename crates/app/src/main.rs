@@ -1,5 +1,9 @@
 use gfm_config::ConfigStore;
 use gfm_content::Extractor;
+use gfm_diagnostics::{
+    export_operator_trace, inspect_storage, rebuild_index, select_parity_baseline, RebuildSpec,
+    StorageInspection,
+};
 use gfm_fs::read_directory;
 use gfm_index::{
     BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, Indexer, SearchStreamStage,
@@ -245,6 +249,88 @@ fn run() -> Result<()> {
             let store = config_store(args.next())?;
             let config = store.load_or_create_default()?;
             print!("{}", config.to_toml()?);
+        }
+        Some("diagnostics-index-rebuild") => {
+            let root = required_path(
+                args.next(),
+                "diagnostics-index-rebuild requires a root path",
+            )?;
+            let records = required_path(
+                args.next(),
+                "diagnostics-index-rebuild requires a records path",
+            )?;
+            let spec = match args.next() {
+                Some(content) => RebuildSpec::with_content(root, records, PathBuf::from(content)),
+                None => RebuildSpec::records(root, records),
+            };
+            let report = rebuild_index(&spec)?;
+            println!(
+                "{}\t{}\t{}\t{}\t{}",
+                report.root.display(),
+                report.records_path.display(),
+                report
+                    .content_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                report.records,
+                report.content_indexed
+            );
+            if report.inaccessible != 0 {
+                eprintln!("inaccessible\t{}", report.inaccessible);
+            }
+        }
+        Some("diagnostics-trace-export") => {
+            let output = required_path(
+                args.next(),
+                "diagnostics-trace-export requires an output path",
+            )?;
+            let report = export_operator_trace(output)?;
+            println!("{}\t{}", report.path.display(), report.bytes_written);
+        }
+        Some("diagnostics-parity-baseline") => {
+            let store = config_store(args.next())?;
+            let baseline = required_path(
+                args.next(),
+                "diagnostics-parity-baseline requires a baseline root",
+            )?;
+            let macos_build = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "diagnostics-parity-baseline requires a macOS build".to_string(),
+                )
+            })?;
+            let report = select_parity_baseline(&store, baseline, macos_build)?;
+            println!(
+                "{}\t{}\t{}",
+                report.config_path.display(),
+                report.baseline_root.display(),
+                report.macos_build
+            );
+        }
+        Some("diagnostics-storage-inspect") => {
+            let storage = required_path(
+                args.next(),
+                "diagnostics-storage-inspect requires a storage path",
+            )?;
+            match inspect_storage(storage)? {
+                StorageInspection::Records(report) => println!(
+                    "records\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    report.path.display(),
+                    report.bytes,
+                    report.records,
+                    report.files,
+                    report.directories,
+                    report.symlinks,
+                    report.hidden,
+                    report.tagged
+                ),
+                StorageInspection::Content(report) => println!(
+                    "content\t{}\t{}\t{}",
+                    report.path.display(),
+                    report.bytes,
+                    report.terms
+                ),
+            }
         }
         Some("macrobench") => {
             let options = macrobench_options(args.next(), args.next(), "macrobench")?;
@@ -723,6 +809,10 @@ fn print_usage() {
   gfm config-init [config.toml]
   gfm config-check [config.toml]
   gfm config-dump [config.toml]
+  gfm diagnostics-index-rebuild <root> <records.gfmidx> [content.gfmcontent]
+  gfm diagnostics-trace-export <trace.json>
+  gfm diagnostics-parity-baseline <config.toml> <baseline-root> <macos-build>
+  gfm diagnostics-storage-inspect <records.gfmidx|content.gfmcontent>
   gfm macrobench <workspace> [smoke|standard]
   gfm regression-gate <workspace> [smoke|standard]
   gfm bundle-app <executable> <GFM.icns> <output-dir> [--ad-hoc|--unsigned|developer-id]

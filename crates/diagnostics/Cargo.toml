@@ -1,0 +1,16 @@
+[package]
+name = "gfm-diagnostics"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gfm-config = { path = "../config" }
+gfm-content = { path = "../content" }
+gfm-index = { path = "../index" }
+gfm-store = { path = "../store" }
+gfm-telemetry = { path = "../telemetry" }
+gfm-types = { path = "../types" }
+
+[lints]
+workspace = true
