@@ -183,6 +183,7 @@ Run repeatable macrobenchmarks:
 ```sh
 cargo run -p gfm -- macrobench /tmp/gfm-bench smoke
 cargo run -p gfm -- macrobench /tmp/gfm-bench standard
+cargo run -p gfm -- regression-gate /tmp/gfm-bench smoke
 ```
 
 Build and query record indexes:

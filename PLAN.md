@@ -281,6 +281,7 @@ gfm/
 
 - Owns deterministic filesystem fixture generation and repeatable macrobenchmarks for small, medium, huge, developer, media, iCloud, external-volume, and network-volume shaped trees.
 - Runs macrobenchmarks through the real index build, hot search, streaming search, and content search paths, then evaluates observations against telemetry budgets.
+- Provides regression gates that fail on latency budget violations, peak memory drift, index-size density drift, and frame-time/stall drift.
 
 ## Data Model
 

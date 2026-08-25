@@ -11,7 +11,10 @@ use gfm_jobs::{
 use gfm_mac::{FileEventStream, WatchRoot};
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_store::ContentArchive;
-use gfm_testkit::{run_macrobench, MacrobenchOptions, MacrobenchScale, MacrobenchStage};
+use gfm_testkit::{
+    run_macrobench, run_regression_gate, MacrobenchOptions, MacrobenchScale, MacrobenchStage,
+    RegressionGateOptions,
+};
 use gfm_types::{FileKind, Result, SearchHit};
 use std::env;
 use std::path::PathBuf;
@@ -240,12 +243,7 @@ fn run() -> Result<()> {
             print!("{}", config.to_toml()?);
         }
         Some("macrobench") => {
-            let root = required_path(args.next(), "macrobench requires a workspace path")?;
-            let mut options = MacrobenchOptions::smoke(root);
-            if matches!(args.next().as_deref(), Some("standard")) {
-                options.scale = MacrobenchScale::standard();
-                options.limit = 50;
-            }
+            let options = macrobench_options(args.next(), args.next(), "macrobench")?;
             let report = run_macrobench(&options)?;
             println!(
                 "fixture\t{}\tfiles\t{}\tpassed\t{}",
@@ -265,6 +263,26 @@ fn run() -> Result<()> {
             }
             for violation in report.budget_violations {
                 eprintln!("budget-violation\t{violation:?}");
+            }
+        }
+        Some("regression-gate") => {
+            let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
+            let run = run_regression_gate(&options, RegressionGateOptions::default())?;
+            println!(
+                "fixture\t{}\tfiles\t{}\tindex-bytes\t{}\tpassed\t{}",
+                run.macrobench.fixture_root.display(),
+                run.macrobench.files_materialized,
+                run.index_size_bytes,
+                run.passed()
+            );
+            for violation in &run.gate.violations {
+                eprintln!("regression-violation\t{violation:?}");
+            }
+            if !run.passed() {
+                return Err(gfm_types::GfmError::Format(format!(
+                    "regression gate failed with {} violation(s)",
+                    run.gate.violations.len()
+                )));
             }
         }
         Some("jobs-recover") => {
@@ -328,6 +346,28 @@ fn config_store(value: Option<String>) -> Result<ConfigStore> {
     value
         .map(|path| Ok(ConfigStore::new(path)))
         .unwrap_or_else(ConfigStore::platform_default)
+}
+
+fn macrobench_options(
+    root: Option<String>,
+    scale: Option<String>,
+    command: &str,
+) -> Result<MacrobenchOptions> {
+    let root = required_path(root, &format!("{command} requires a workspace path"))?;
+    let mut options = MacrobenchOptions::smoke(root);
+    match scale.as_deref() {
+        Some("standard") => {
+            options.scale = MacrobenchScale::standard();
+            options.limit = 50;
+        }
+        Some("smoke") | None => {}
+        Some(other) => {
+            return Err(gfm_types::GfmError::Format(format!(
+                "{command} scale must be `smoke` or `standard`, got `{other}`"
+            )));
+        }
+    }
+    Ok(options)
 }
 
 fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<()> {
@@ -541,6 +581,7 @@ fn print_usage() {
   gfm config-check [config.toml]
   gfm config-dump [config.toml]
   gfm macrobench <workspace> [smoke|standard]
+  gfm regression-gate <workspace> [smoke|standard]
   gfm jobs-recover [jobs.journal]
   gfm watch-once <root>
   gfm copy <source> <destination>

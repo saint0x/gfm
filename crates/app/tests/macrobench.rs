@@ -26,6 +26,33 @@ fn runs_macrobench_from_binary() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn runs_regression_gate_from_binary() {
+    let root = unique_temp_dir("gfm-cli-regression-gate");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["regression-gate", root.to_str().unwrap(), "smoke"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains("fixture\t"), "{stdout}");
+    assert!(stdout.contains("index-bytes\t"), "{stdout}");
+    assert!(stdout.contains("passed\ttrue"), "{stdout}");
+    assert!(root
+        .join("gfm-macrobench-fixture")
+        .join("gate-indexes")
+        .join("small.gfmidx")
+        .exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

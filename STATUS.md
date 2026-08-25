@@ -120,22 +120,18 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 82. Implement hidden/internal performance controls without exposing non-Finder UI by default.
 83. Implement operator diagnostics commands for index rebuild, trace export, parity baseline selection, and storage inspection.
 
-## Telemetry And Performance
-
-84. Add regression gates that fail on latency, memory, index size, or frame-time drift.
-
 ## Packaging
 
-85. Build signed `.app` bundle with icons, entitlements, Info.plist, launch services registration, and document associations.
-86. Implement hardened runtime settings.
-87. Implement notarization pipeline.
-88. Implement first-run permission onboarding that remains Finder-parity by default.
-89. Implement update, rollback, crash-report, and diagnostics policy.
-90. Implement release artifact validation on clean macOS machines.
+84. Build signed `.app` bundle with icons, entitlements, Info.plist, launch services registration, and document associations.
+85. Implement hardened runtime settings.
+86. Implement notarization pipeline.
+87. Implement first-run permission onboarding that remains Finder-parity by default.
+88. Implement update, rollback, crash-report, and diagnostics policy.
+89. Implement release artifact validation on clean macOS machines.
 
 ## Documentation
 
-91. Expand `PLAN.md` when architectural decisions change materially.
-92. Keep `README.md` written as the completed product contract.
-93. Keep this file limited to unfinished work only.
-94. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+90. Expand `PLAN.md` when architectural decisions change materially.
+91. Keep `README.md` written as the completed product contract.
+92. Keep this file limited to unfinished work only.
+93. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
