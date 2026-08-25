@@ -39,8 +39,8 @@ use gfm_preview::{
 use gfm_store::{
     dictionary_terms_from_records, metadata_postings_from_records, write_dictionary,
     write_metadata_postings, write_record_columns, ContentArchive, MetadataField,
-    MmapContentArchive, MmapDictionary, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
-    MmapRecordColumns,
+    MmapContentArchive, MmapContentSet, MmapDictionary, MmapMetadataArchive, MmapPrefixArchive,
+    MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_store::{
     fuzzy_postings_from_records, prefix_postings_from_records, write_fuzzy_postings,
@@ -1222,6 +1222,32 @@ fn run() -> Result<()> {
                 print_hit(&hit);
             }
         }
+        Some("search-content-index-set") => {
+            let records = required_path(
+                args.next(),
+                "search-content-index-set requires a records path",
+            )?;
+            let query = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "search-content-index-set requires a query string".to_string(),
+                )
+            })?;
+            let content_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            if content_paths.is_empty() {
+                return Err(gfm_types::GfmError::Format(
+                    "search-content-index-set requires at least one content archive".to_string(),
+                ));
+            }
+            let (live, content_keys) =
+                Indexer::default().load_live_with_content_set(records, &content_paths, &query)?;
+            eprintln!(
+                "content-archives {} content-keys {content_keys}",
+                content_paths.len()
+            );
+            for hit in live.search(&query, 50) {
+                print_hit(&hit);
+            }
+        }
         Some("content-ids") => {
             let content = required_path(args.next(), "content-ids requires a content path")?;
             let term = args.next().ok_or_else(|| {
@@ -1238,6 +1264,21 @@ fn run() -> Result<()> {
                 gfm_types::GfmError::Format("content-ids-mmap requires a term".to_string())
             })?;
             let archive = MmapContentArchive::open(content)?;
+            for id in archive.ids_for_term(&term)? {
+                println!("{}\t{}", id.volume.0, id.node);
+            }
+        }
+        Some("content-ids-mmap-set") => {
+            let term = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format("content-ids-mmap-set requires a term".to_string())
+            })?;
+            let content_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            if content_paths.is_empty() {
+                return Err(gfm_types::GfmError::Format(
+                    "content-ids-mmap-set requires at least one content archive".to_string(),
+                ));
+            }
+            let archive = MmapContentSet::open(&content_paths)?;
             for id in archive.ids_for_term(&term)? {
                 println!("{}\t{}", id.volume.0, id.node);
             }
@@ -2389,8 +2430,10 @@ fn print_usage() {
   gfm metadata-id-block-mmap <metadata.gfmmeta> <tag|comment> <term> <block-index>
   gfm metadata-verify <metadata.gfmmeta>
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>
+  gfm search-content-index-set <records.gfmidx> <query> <content.gfmcontent...>
   gfm content-ids <content.gfmcontent> <term>
   gfm content-ids-mmap <content.gfmcontent> <term>
+  gfm content-ids-mmap-set <term> <content.gfmcontent...>
   gfm content-id-block-mmap <content.gfmcontent> <term> <block-index>
   gfm content-verify <content.gfmcontent>
   gfm config-path

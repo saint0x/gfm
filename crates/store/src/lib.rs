@@ -1,5 +1,6 @@
 mod columns;
 mod content;
+mod contentset;
 mod dictionary;
 mod durable;
 mod fuzzy;
@@ -15,6 +16,7 @@ pub use content::{
     write_content_segment, ContentArchive, ContentMergeOutcome, ContentMergePlan,
     ContentMergePolicy, ContentMergeTier, ContentSegmentSummary, MmapContentArchive,
 };
+pub use contentset::MmapContentSet;
 pub use dictionary::{
     dictionary_terms_from_records, read_dictionary, write_dictionary, MmapDictionary,
 };

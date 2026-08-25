@@ -410,6 +410,11 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - selected merge sets preserve original chronological segment order so tombstones do not resurrect older postings;
   - merge batches are bounded by segment count and byte budgets;
   - retained segments are reported explicitly for the next manifest/tier promotion step.
+- Query-time content archive sets:
+  - multiple immutable mmap content archives are opened as one logical search surface;
+  - each query term performs binary directory lookup inside each archive instead of hydrating all postings;
+  - duplicate file ids and positional offsets are merged deterministically through ordered sets;
+  - this lets background compaction publish new tier files while retained archives remain searchable.
 
 ### Query Pipeline
 

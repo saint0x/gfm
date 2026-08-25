@@ -1,4 +1,4 @@
-use gfm_store::write_content_postings;
+use gfm_store::{read_records, write_content_postings};
 use gfm_types::{ContentPosting, FileId, VolumeId};
 use std::fs;
 use std::io::{Cursor, Write};
@@ -1727,6 +1727,102 @@ fn resolves_content_ids_from_archive_directory() {
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(content).unwrap();
+}
+
+#[test]
+fn searches_persisted_content_across_mmap_archive_set_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-set-root");
+    let records = unique_temp_path("gfm-cli-content-set-records", "gfmidx");
+    let first_content = unique_temp_path("gfm-cli-content-set-first", "gfmcontent");
+    let second_content = unique_temp_path("gfm-cli-content-set-second", "gfmcontent");
+    fs::write(root.join("left.md"), "metadata only").unwrap();
+    fs::write(root.join("right.md"), "metadata only").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let indexed_records = read_records(&records).unwrap();
+    let left = indexed_records
+        .iter()
+        .find(|record| record.path.ends_with("left.md"))
+        .unwrap()
+        .id;
+    let right = indexed_records
+        .iter()
+        .find(|record| record.path.ends_with("right.md"))
+        .unwrap()
+        .id;
+    write_content_postings(
+        &first_content,
+        &[ContentPosting {
+            term: "setneedle".to_string(),
+            ids: vec![left],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    write_content_postings(
+        &second_content,
+        &[ContentPosting {
+            term: "setneedle".to_string(),
+            ids: vec![left, right],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+
+    let ids_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-ids-mmap-set",
+            "setneedle",
+            first_content.to_str().unwrap(),
+            second_content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        ids_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ids_output.stderr)
+    );
+    let ids_stdout = String::from_utf8(ids_output.stdout).unwrap();
+    assert_eq!(ids_stdout.lines().count(), 2, "{ids_stdout}");
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index-set",
+            records.to_str().unwrap(),
+            "setneedle",
+            first_content.to_str().unwrap(),
+            second_content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(stdout.contains("left.md"), "{stdout}");
+    assert!(stdout.contains("right.md"), "{stdout}");
+    let stderr = String::from_utf8(search_output.stderr).unwrap();
+    assert!(
+        stderr.contains("content-archives 2") && stderr.contains("content-keys 1"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(first_content).unwrap();
+    fs::remove_file(second_content).unwrap();
 }
 
 #[test]

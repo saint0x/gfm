@@ -322,10 +322,12 @@ Build and query content indexes:
 ```sh
 cargo run -p gfm -- index-content . /tmp/gfm.gfmidx /tmp/gfm.gfmcontent
 cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent "performance-critical"
+cargo run -p gfm -- search-content-index-set /tmp/gfm.gfmidx "performance-critical" /tmp/gfm-hot.gfmcontent /tmp/gfm-warm.gfmcontent
 cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent '"performance-critical systems"'
 cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent "near:8:performance,systems"
 cargo run -p gfm -- content-ids /tmp/gfm.gfmcontent "performance-critical"
 cargo run -p gfm -- content-ids-mmap /tmp/gfm.gfmcontent "performance-critical"
+cargo run -p gfm -- content-ids-mmap-set "performance-critical" /tmp/gfm-hot.gfmcontent /tmp/gfm-warm.gfmcontent
 cargo run -p gfm -- content-id-block-mmap /tmp/gfm.gfmcontent "performance-critical" 0
 cargo run -p gfm -- content-verify /tmp/gfm.gfmcontent
 ```

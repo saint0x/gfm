@@ -8,7 +8,7 @@ pub use gfm_search::{
 use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
     compact_content_segments, compact_content_segments_with_policy, read_content_postings,
-    read_records, write_content_postings, write_content_segment, write_records,
+    read_records, write_content_postings, write_content_segment, write_records, MmapContentSet,
 };
 pub use gfm_store::{ContentMergeOutcome, ContentMergePolicy, ContentMergeTier};
 use gfm_types::{
@@ -368,6 +368,18 @@ impl LiveIndex {
 
     pub fn load_content_postings(&mut self, path: impl AsRef<Path>) -> Result<usize> {
         let postings = read_content_postings(path)?;
+        let terms = postings.len();
+        self.index.import_content_postings(&postings);
+        Ok(terms)
+    }
+
+    pub fn load_content_set_postings(
+        &mut self,
+        paths: &[impl AsRef<Path>],
+        query: &str,
+    ) -> Result<usize> {
+        let content = MmapContentSet::open(paths)?;
+        let postings = content.postings_for_terms(content_query_terms(query))?;
         let terms = postings.len();
         self.index.import_content_postings(&postings);
         Ok(terms)
@@ -761,6 +773,17 @@ impl Indexer {
         let mut live = self.load(records_path)?.into_live();
         live.load_content_postings(content_path)?;
         Ok(live)
+    }
+
+    pub fn load_live_with_content_set(
+        &self,
+        records_path: impl AsRef<Path>,
+        content_paths: &[impl AsRef<Path>],
+        query: &str,
+    ) -> Result<(LiveIndex, usize)> {
+        let mut live = self.load(records_path)?.into_live();
+        let terms = live.load_content_set_postings(content_paths, query)?;
+        Ok((live, terms))
     }
 
     pub fn compact_content_segments(
