@@ -98,6 +98,34 @@ fn diagnostics_plans_and_recovers_persistent_index_from_binary() {
         "{plan_stdout}"
     );
 
+    let deferred = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-index-recover-adaptive",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+            quarantine.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        deferred.status.success(),
+        "{}",
+        String::from_utf8_lossy(&deferred.stderr)
+    );
+    let deferred_stderr = String::from_utf8(deferred.stderr).unwrap();
+    assert!(
+        deferred_stderr.contains("persistent-index-recovery-deferred")
+            && deferred_stderr.contains("action=Defer"),
+        "{deferred_stderr}"
+    );
+    assert!(!state.exists());
+    assert!(!quarantine.exists());
+
     let recover = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "diagnostics-index-recover",

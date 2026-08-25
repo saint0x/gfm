@@ -275,6 +275,7 @@ gfm/
 - Applies the jobs-layer adaptive scheduling policy to background content indexing so saturated I/O or critical thermal pressure defers heavy extraction, while elevated pressure, low power, or active user input throttles worker admission instead of competing with visible work.
 - Applies the same adaptive scheduling policy to content segment maintenance before archive compaction, manifest promotion, or cleanup publication starts.
 - Applies the same adaptive scheduling policy to sidecar repair before derived sidecars are rebuilt or corrupt sidecars are quarantined.
+- Applies the same adaptive scheduling policy to persistent index repair before state rebuilds, record quarantine, or recovery publication starts.
 
 `config`
 
@@ -589,6 +590,7 @@ Scheduler properties:
 - Background content indexing consumes explicit runtime pressure signals and adapts its action to run, throttle, or defer before doing extraction or compaction work.
 - Content segment maintenance consumes explicit runtime pressure signals and adapts its action before compacting segments or publishing repaired archive state.
 - Sidecar repair consumes explicit runtime pressure signals and adapts its action before rebuilding or quarantining derived sidecar archives.
+- Persistent index repair consumes explicit runtime pressure signals and adapts its action before rebuilding persistent state or quarantining corrupt record archives.
 - Operation dependencies.
 - Priority inheritance from visible UI.
 - Exact preflight item/byte totals and completion-backed progress aggregation.

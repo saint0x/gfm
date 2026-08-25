@@ -17,9 +17,9 @@ use gfm_index::{
     ContentMaintenanceOptions, ContentMaintenanceReport, ContentMergePolicy, ContentMergeTier,
     EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
     IndexFootprintSpec, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState,
-    Indexer, IoPressure, LiveIndex, SearchArchiveLookup, SearchLookupBudget, SearchMetadataField,
-    SearchMetadataPosting, SearchRecordColumns, SearchStreamStage, ThermalState, UserActivity,
-    VolumeIndexPolicy,
+    Indexer, IoPressure, LiveIndex, PersistentIndexRecovery, SearchArchiveLookup,
+    SearchLookupBudget, SearchMetadataField, SearchMetadataPosting, SearchRecordColumns,
+    SearchStreamStage, ThermalState, UserActivity, VolumeIndexPolicy,
 };
 use gfm_jobs::{
     JobBatteryState, JobIoPressure, JobJournal, JobThermalState, JobUserActivity, Priority,
@@ -2242,18 +2242,53 @@ fn run() -> Result<()> {
                 "persistent index repair",
                 move || recover_index(&spec),
             )?;
-            println!("{}", report.before.as_tsv());
-            println!(
-                "persistent-index-recovery\trebuilt-records={}\trebuilt-state={}\tquarantined-records={}",
-                report.rebuilt_records,
-                report.rebuilt_state,
-                report
-                    .quarantined_records_path
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "-".to_string())
-            );
-            println!("{}", report.after.as_tsv());
+            print_persistent_index_recovery_report(report);
+        }
+        Some("diagnostics-index-recover-adaptive") => {
+            let root = required_path(
+                args.next(),
+                "diagnostics-index-recover-adaptive requires a root path",
+            )?;
+            let records = required_path(
+                args.next(),
+                "diagnostics-index-recover-adaptive requires a records path",
+            )?;
+            let state = required_path(
+                args.next(),
+                "diagnostics-index-recover-adaptive requires a state path",
+            )?;
+            let pressure =
+                parse_required_scheduling_pressure(&mut args, "persistent index repair")?;
+            let quarantine = args
+                .next()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| records.with_extension("quarantine"));
+            let spec = PersistentIndexRecoverySpec::new(root, records, state, quarantine);
+            let volume = detect_volume_id(&spec.root)
+                .ok()
+                .or_else(|| parent_volume(&spec.records_path));
+            let outcome = run_scheduled_volume_task(
+                volume,
+                Priority::Background,
+                "persistent index repair",
+                pressure,
+                move || recover_index(&spec),
+            )?;
+            if outcome.deferred {
+                eprintln!(
+                    "persistent-index-recovery-deferred\taction={:?}",
+                    outcome.scheduling_action
+                );
+            } else {
+                let report = outcome.result.ok_or_else(|| {
+                    GfmError::Format("persistent index repair ran without a report".to_string())
+                })?;
+                eprintln!(
+                    "persistent-index-recovery-action\t{:?}",
+                    outcome.scheduling_action
+                );
+                print_persistent_index_recovery_report(report);
+            }
         }
         Some("diagnostics-trace-export") => {
             let output = required_path(
@@ -3540,6 +3575,21 @@ fn print_sidecar_recovery_report(report: SidecarRecovery) {
     }
 }
 
+fn print_persistent_index_recovery_report(report: PersistentIndexRecovery) {
+    println!("{}", report.before.as_tsv());
+    println!(
+        "persistent-index-recovery\trebuilt-records={}\trebuilt-state={}\tquarantined-records={}",
+        report.rebuilt_records,
+        report.rebuilt_state,
+        report
+            .quarantined_records_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "-".to_string())
+    );
+    println!("{}", report.after.as_tsv());
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ContentJobOutcome {
     report: Option<ContentIndexReport>,
@@ -4015,6 +4065,7 @@ fn print_usage() {
   gfm diagnostics-index-rebuild <root> <records.gfmidx> [content.gfmcontent]
   gfm diagnostics-index-recovery-plan <root> <records.gfmidx> <state.gfmstate> [quarantine-dir]
   gfm diagnostics-index-recover <root> <records.gfmidx> <state.gfmstate> [quarantine-dir]
+  gfm diagnostics-index-recover-adaptive <root> <records.gfmidx> <state.gfmstate> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> [quarantine-dir]
   gfm diagnostics-trace-export <trace.json>
   gfm diagnostics-parity-baseline <config.toml> <baseline-root> <macos-build>
   gfm diagnostics-storage-inspect <records.gfmidx|content.gfmcontent>
