@@ -1254,35 +1254,38 @@ impl SearchIndex {
             return self.content_has(id, &terms[0]);
         }
 
-        let Some(first_positions) = self
-            .content_terms
-            .get(&terms[0])
-            .and_then(|positions| positions.get(&id))
+        let mut positions = Vec::with_capacity(terms.len());
+        for term in &terms {
+            let Some(term_positions) = self
+                .content_terms
+                .get(term)
+                .and_then(|positions| positions.get(&id))
+                .filter(|positions| !positions.is_empty())
+            else {
+                return false;
+            };
+            positions.push(term_positions);
+        }
+
+        let Some((anchor_offset, anchor_positions)) = positions
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, positions)| positions.len())
         else {
             return false;
         };
-        if first_positions.is_empty() {
-            return false;
-        }
-
-        let later: Option<Vec<&Vec<u32>>> = terms
-            .iter()
-            .skip(1)
-            .map(|term| {
-                self.content_terms
-                    .get(term)
-                    .and_then(|positions| positions.get(&id))
-                    .filter(|positions| !positions.is_empty())
-            })
-            .collect();
-        let Some(later) = later else {
-            return false;
-        };
-
-        first_positions.iter().any(|start| {
-            later.iter().enumerate().all(|(offset, positions)| {
-                sorted_contains_position(positions, *start + offset as u32 + 1)
-            })
+        anchor_positions.iter().copied().any(|anchor| {
+            let Some(start) = anchor.checked_sub(anchor_offset as u32) else {
+                return false;
+            };
+            positions
+                .iter()
+                .enumerate()
+                .all(|(offset, term_positions)| {
+                    start
+                        .checked_add(offset as u32)
+                        .is_some_and(|position| sorted_contains_position(term_positions, position))
+                })
         })
     }
 

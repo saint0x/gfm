@@ -815,6 +815,77 @@ fn content_phrase_uses_rarest_posting_candidates_without_record_scan() {
 }
 
 #[test]
+fn content_phrase_anchors_on_sparse_term_positions() {
+    let mut index = SearchIndex::new();
+    let keep = record(1, "/tmp/sparse-phrase.txt", "sparse-phrase.txt");
+    let skip = record(2, "/tmp/no-phrase.txt", "no-phrase.txt");
+    index.insert(keep.clone());
+    index.insert(skip.clone());
+    index.import_content_postings(&[
+        ContentPosting {
+            term: "common".to_string(),
+            ids: vec![keep.id, skip.id],
+            positions: vec![
+                ContentPositions {
+                    id: keep.id,
+                    positions: (0..2_000).collect(),
+                },
+                ContentPositions {
+                    id: skip.id,
+                    positions: (0..2_000).collect(),
+                },
+            ],
+        },
+        ContentPosting {
+            term: "rare".to_string(),
+            ids: vec![keep.id, skip.id],
+            positions: vec![
+                ContentPositions {
+                    id: keep.id,
+                    positions: vec![1_998],
+                },
+                ContentPositions {
+                    id: skip.id,
+                    positions: vec![2_500],
+                },
+            ],
+        },
+    ]);
+
+    let hits = index.query(r#""common rare common""#, 10);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.name, "sparse-phrase.txt");
+}
+
+#[test]
+fn content_phrase_rejects_sparse_anchor_before_phrase_start() {
+    let mut index = SearchIndex::new();
+    let item = record(1, "/tmp/underflow.txt", "underflow.txt");
+    index.insert(item.clone());
+    index.import_content_postings(&[
+        ContentPosting {
+            term: "alpha".to_string(),
+            ids: vec![item.id],
+            positions: vec![ContentPositions {
+                id: item.id,
+                positions: vec![1],
+            }],
+        },
+        ContentPosting {
+            term: "beta".to_string(),
+            ids: vec![item.id],
+            positions: vec![ContentPositions {
+                id: item.id,
+                positions: vec![0],
+            }],
+        },
+    ]);
+
+    assert!(index.query(r#""alpha beta""#, 10).is_empty());
+}
+
+#[test]
 fn supports_boolean_content_phrase_queries() {
     let mut index = SearchIndex::new();
     let first = record(1, "/tmp/first.txt", "first.txt");
