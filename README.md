@@ -59,7 +59,7 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 - `crates/store`: mmap segment store, dictionaries, compressed postings, appendable content segments, tombstones, merge policy, and compaction.
 - `crates/preview`: icons, thumbnails, Quick Look previews, preview cache, and extraction budgets.
 - `crates/jobs`: scheduling, cancellation, prioritization, fairness, progress, and backpressure.
-- `crates/config`: Finder parity profiles, settings, feature flags, and per-macOS-build baselines.
+- `crates/config`: versioned TOML config, Finder parity profiles, user settings, feature flags, diagnostics toggles, validation, and atomic persistence.
 - `crates/telemetry`: latency histograms, counters, traces, and local diagnostics.
 - `crates/testkit`: filesystem fixtures, synthetic trees, macOS capture harnesses, pixel diffing, and benchmark utilities.
 
@@ -167,6 +167,15 @@ cargo run -p gfm -- search . 'README @desktop'
 cargo run -p gfm -- search-content . "Finder parity"
 cargo run -p gfm -- search-content . '"Finder parity"'
 cargo run -p gfm -- search-content . "near:6:finder,parity"
+```
+
+Manage the versioned config store:
+
+```sh
+cargo run -p gfm -- config-path
+cargo run -p gfm -- config-init ~/Library/Application\ Support/GFM/config.toml
+cargo run -p gfm -- config-check ~/Library/Application\ Support/GFM/config.toml
+cargo run -p gfm -- config-dump ~/Library/Application\ Support/GFM/config.toml
 ```
 
 Build and query record indexes:

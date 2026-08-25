@@ -262,6 +262,12 @@ gfm/
 - Owns priority queues, cancellation tokens, backpressure, progress accounting, and worker pools.
 - UI-visible jobs and invisible background jobs share one scheduler.
 
+`config`
+
+- Owns the versioned TOML configuration contract for Finder parity profiles, user settings, feature flags, diagnostics toggles, and operator-facing config commands.
+- Persists settings atomically through a schema-versioned store and migrates older config documents before validation.
+- Keeps power and diagnostic controls explicit so the default Finder-parity UI remains uncontaminated.
+
 `telemetry`
 
 - Owns local-only metrics.

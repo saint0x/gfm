@@ -1,3 +1,4 @@
+use gfm_config::ConfigStore;
 use gfm_content::Extractor;
 use gfm_fs::read_directory;
 use gfm_index::{
@@ -218,6 +219,25 @@ fn run() -> Result<()> {
                 println!("{}\t{}", id.volume.0, id.node);
             }
         }
+        Some("config-path") => {
+            println!("{}", ConfigStore::platform_default()?.path().display());
+        }
+        Some("config-init") => {
+            let store = config_store(args.next())?;
+            let config = store.load_or_create_default()?;
+            println!("{}\t{}", config.schema_version, store.path().display());
+        }
+        Some("config-check") => {
+            let store = config_store(args.next())?;
+            let config = store.load()?;
+            config.validate()?;
+            println!("{}\t{}", config.schema_version, store.path().display());
+        }
+        Some("config-dump") => {
+            let store = config_store(args.next())?;
+            let config = store.load_or_create_default()?;
+            print!("{}", config.to_toml()?);
+        }
         Some("jobs-recover") => {
             let journal = args
                 .next()
@@ -273,6 +293,12 @@ fn required_path(value: Option<String>, message: &str) -> Result<PathBuf> {
     value
         .map(PathBuf::from)
         .ok_or_else(|| gfm_types::GfmError::Format(message.to_string()))
+}
+
+fn config_store(value: Option<String>) -> Result<ConfigStore> {
+    value
+        .map(|path| Ok(ConfigStore::new(path)))
+        .unwrap_or_else(ConfigStore::platform_default)
 }
 
 fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<()> {
@@ -472,6 +498,10 @@ fn print_usage() {
   gfm search-index <index.gfmidx> <query>
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>
   gfm content-ids <content.gfmcontent> <term>
+  gfm config-path
+  gfm config-init [config.toml]
+  gfm config-check [config.toml]
+  gfm config-dump [config.toml]
   gfm jobs-recover [jobs.journal]
   gfm watch-once <root>
   gfm copy <source> <destination>

@@ -117,33 +117,31 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 ## Configuration
 
 81. Define target macOS version matrix and supported hardware profiles.
-82. Implement config crate for parity profiles, user settings, feature flags, and diagnostics toggles.
-83. Implement persistent settings storage with schema versioning and migration.
-84. Implement hidden/internal performance controls without exposing non-Finder UI by default.
-85. Implement operator diagnostics commands for index rebuild, trace export, parity baseline selection, and storage inspection.
+82. Implement hidden/internal performance controls without exposing non-Finder UI by default.
+83. Implement operator diagnostics commands for index rebuild, trace export, parity baseline selection, and storage inspection.
 
 ## Telemetry And Performance
 
-86. Implement latency histograms for navigation, selection, rename, search keystrokes, result streaming, thumbnail display, preview open, copy start, cancel, and window render.
-87. Implement frame timing and UI-thread stall detection.
-88. Implement IO, CPU, memory, allocation, queue-depth, and compaction telemetry.
-89. Implement local-only diagnostics export with privacy review.
-90. Define hard budgets for p50, p95, p99, cold start, warm start, first result, full result, directory open, and visible thumbnail completion.
-91. Build repeatable macrobenchmarks against small, medium, huge, developer, media, iCloud, external, and network-volume trees.
-92. Add regression gates that fail on latency, memory, index size, or frame-time drift.
+84. Implement latency histograms for navigation, selection, rename, search keystrokes, result streaming, thumbnail display, preview open, copy start, cancel, and window render.
+85. Implement frame timing and UI-thread stall detection.
+86. Implement IO, CPU, memory, allocation, queue-depth, and compaction telemetry.
+87. Implement local-only diagnostics export with privacy review.
+88. Define hard budgets for p50, p95, p99, cold start, warm start, first result, full result, directory open, and visible thumbnail completion.
+89. Build repeatable macrobenchmarks against small, medium, huge, developer, media, iCloud, external, and network-volume trees.
+90. Add regression gates that fail on latency, memory, index size, or frame-time drift.
 
 ## Packaging
 
-93. Build signed `.app` bundle with icons, entitlements, Info.plist, launch services registration, and document associations.
-94. Implement hardened runtime settings.
-95. Implement notarization pipeline.
-96. Implement first-run permission onboarding that remains Finder-parity by default.
-97. Implement update, rollback, crash-report, and diagnostics policy.
-98. Implement release artifact validation on clean macOS machines.
+91. Build signed `.app` bundle with icons, entitlements, Info.plist, launch services registration, and document associations.
+92. Implement hardened runtime settings.
+93. Implement notarization pipeline.
+94. Implement first-run permission onboarding that remains Finder-parity by default.
+95. Implement update, rollback, crash-report, and diagnostics policy.
+96. Implement release artifact validation on clean macOS machines.
 
 ## Documentation
 
-99. Expand `PLAN.md` when architectural decisions change materially.
-100. Keep `README.md` written as the completed product contract.
-101. Keep this file limited to unfinished work only.
-102. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+97. Expand `PLAN.md` when architectural decisions change materially.
+98. Keep `README.md` written as the completed product contract.
+99. Keep this file limited to unfinished work only.
+100. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
