@@ -433,6 +433,32 @@ impl MmapContentArchive {
             .collect()
     }
 
+    pub fn postings_for_terms_limit<I, S>(
+        &self,
+        terms: I,
+        limit_per_term: usize,
+    ) -> Result<Vec<ContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut selected = BTreeSet::new();
+        for term in terms {
+            let term = term.as_ref().trim().to_lowercase();
+            if !term.is_empty() {
+                selected.insert(term);
+            }
+        }
+
+        let mut postings = Vec::new();
+        for term in selected {
+            if let (Some(posting), _) = self.posting_for_term_limit(&term, limit_per_term)? {
+                postings.push(posting);
+            }
+        }
+        Ok(postings)
+    }
+
     pub fn postings(&self) -> Result<Vec<ContentPosting>> {
         self.directory
             .iter()

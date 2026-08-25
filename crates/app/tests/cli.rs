@@ -1787,6 +1787,7 @@ fn searches_persisted_tags_from_binary() {
             "1",
             "1",
             "1",
+            "1",
             "tag",
         ])
         .output()
@@ -1811,6 +1812,7 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_budget_stderr.contains("\tfuzzy-terms=2")
             && sidecar_budget_stderr.contains("\tfuzzy-lookup-requests=")
             && sidecar_budget_stderr.contains("\tfuzzy-cache-misses=")
+            && sidecar_budget_stderr.contains("\tcontent-budget=1")
             && sidecar_budget_stderr.contains("\tfuzzy-term-truncated-keys=2"),
         "{sidecar_budget_stderr}"
     );

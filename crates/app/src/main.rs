@@ -1532,6 +1532,10 @@ fn run() -> Result<()> {
                 args.next(),
                 "search-index-sidecars-budget requires max-fuzzy-candidates",
             )?;
+            let max_content_ids = parse_usize_arg(
+                args.next(),
+                "search-index-sidecars-budget requires max-content-ids",
+            )?;
             let query = args.next().ok_or_else(|| {
                 gfm_types::GfmError::Format(
                     "search-index-sidecars-budget requires a query string".to_string(),
@@ -1578,7 +1582,8 @@ fn run() -> Result<()> {
                     ids: posting.ids,
                 })
                 .collect();
-            let search_content = content.postings_for_terms(content_query_terms(&query))?;
+            let search_content =
+                content.postings_for_terms_limit(content_query_terms(&query), max_content_ids)?;
             let (
                 live,
                 applied,
@@ -1609,12 +1614,11 @@ fn run() -> Result<()> {
                     max_fuzzy_keys_per_term: max_fuzzy_keys,
                     max_fuzzy_terms_per_key: max_fuzzy_terms,
                     max_fuzzy_candidates_per_term: max_fuzzy_candidates,
-                    max_content_ids_per_term: SearchLookupBudget::default()
-                        .max_content_ids_per_term,
+                    max_content_ids_per_term: max_content_ids,
                 },
             )?;
             eprintln!(
-                "sidecar-budget\tcolumns-indexed={applied}\tmetadata-keys={metadata_keys}\tprefix-keys={prefix_keys}\tsubstring-keys={substring_keys}\tfuzzy-keys={fuzzy_keys}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tcontent-keys={content_keys}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
+                "sidecar-budget\tcolumns-indexed={applied}\tmetadata-keys={metadata_keys}\tprefix-keys={prefix_keys}\tsubstring-keys={substring_keys}\tfuzzy-keys={fuzzy_keys}\tcontent-keys={content_keys}\tcontent-budget={max_content_ids}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
                 lookup.indexed_prefixes(),
                 lookup.indexed_substring_grams(),
                 lookup.indexed_fuzzy_keys(),
@@ -5503,7 +5507,7 @@ fn print_usage() {
   gfm search-index-mmap <index.gfmidx> <query>
   gfm search-index-columns <index.gfmidx> <columns.gfmcols> <query>
   gfm search-index-sidecars <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <substrings.gfmsubstr> <fuzzy.gfmfuzzy> <content.gfmcontent> <query>
-  gfm search-index-sidecars-budget <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <substrings.gfmsubstr> <fuzzy.gfmfuzzy> <content.gfmcontent> <max-prefix-ids> <max-substring-grams> <max-substring-ids> <max-fuzzy-keys> <max-fuzzy-terms> <max-fuzzy-candidates> <query>
+  gfm search-index-sidecars-budget <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <substrings.gfmsubstr> <fuzzy.gfmfuzzy> <content.gfmcontent> <max-prefix-ids> <max-substring-grams> <max-substring-ids> <max-fuzzy-keys> <max-fuzzy-terms> <max-fuzzy-candidates> <max-content-ids> <query>
   gfm index-footprint <index.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <substrings.gfmsubstr|-> <fuzzy.gfmfuzzy|-> <content-manifest.gfmmanifest|-> [segments.gfmseg...]
   gfm index-compaction-plan <index.gfmidx> <content-manifest.gfmmanifest|-> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> [segments.gfmseg...]
   gfm archive-schema <records|columns|metadata|prefixes|substrings|fuzzy|dictionary|content|content-manifest> <archive-path>
