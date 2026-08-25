@@ -24,9 +24,10 @@ use gfm_preview::{
 use gfm_store::ContentArchive;
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
-    run_macrobench, run_parity_gate_manifest, run_regression_gate, MacrobenchOptions,
-    MacrobenchScale, MacrobenchStage, ParityFixtureOptions, ParityFixtureScale, ParitySurface,
-    PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
+    run_macrobench, run_parity_gate_manifest, run_regression_gate,
+    write_parity_review_bundle_manifest, MacrobenchOptions, MacrobenchScale, MacrobenchStage,
+    ParityFixtureOptions, ParityFixtureScale, ParitySurface, PixelDiffOptions, PixelDriftThreshold,
+    PixelSize, RegressionGateOptions,
 };
 use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
 use gfm_ui::{
@@ -688,6 +689,31 @@ fn run() -> Result<()> {
                 )));
             }
         }
+        Some("parity-review") => {
+            let manifest = required_path(args.next(), "parity-review requires a manifest path")?;
+            let output_dir =
+                required_path(args.next(), "parity-review requires an output directory")?;
+            let bundle = write_parity_review_bundle_manifest(&manifest, &output_dir)?;
+            println!(
+                "parity-review\tmanifest={}\toutput={}\tentries={}\tviolations={}\tpassed={}",
+                manifest.display(),
+                output_dir.display(),
+                bundle.report.entries.len(),
+                bundle.report.violations(),
+                bundle.report.passed()
+            );
+            println!("review\t{}", bundle.review_path.display());
+            println!("entries\t{}", bundle.entries_path.display());
+            println!("violations\t{}", bundle.violations_path.display());
+            println!("first-unmasked\t{}", bundle.first_mismatch_path.display());
+            println!("bundle\t{}", bundle.bundle_manifest_path.display());
+            if !bundle.report.passed() {
+                return Err(GfmError::Format(format!(
+                    "parity review captured {} violation(s)",
+                    bundle.report.violations()
+                )));
+            }
+        }
         Some("regression-gate") => {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
             let run = run_regression_gate(&options, RegressionGateOptions::default())?;
@@ -1103,6 +1129,7 @@ fn print_usage() {
   gfm pixel-diff <expected.rgba> <actual.rgba> <width> <height> [mask.tsv]
   gfm pixel-threshold-check <layout|text|icon|selection|focus|hover|toolbar|thumbnail|preview> <expected.rgba> <actual.rgba> <width> <height> [mask.tsv]
   gfm parity-gate <manifest.tsv>
+  gfm parity-review <manifest.tsv> <output-dir>
   gfm regression-gate <workspace> [smoke|standard]
   gfm release-policy
   gfm release-validate <GFM.app> [--allow-unsigned] [--skip-notarization] [--skip-gatekeeper]

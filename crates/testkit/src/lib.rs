@@ -1,13 +1,12 @@
 mod gates;
 mod macrobench;
 mod parity;
+mod parity_gate;
 mod pixel;
 
 pub use gates::{
-    evaluate_regression_gate, parse_parity_gate_manifest, run_parity_gate,
-    run_parity_gate_manifest, run_regression_gate, ParityGateEntryReport, ParityGateInput,
-    ParityGateReport, RegressionGateOptions, RegressionGateReport, RegressionGateRun,
-    RegressionGateViolation, RegressionInputs,
+    evaluate_regression_gate, run_regression_gate, RegressionGateOptions, RegressionGateReport,
+    RegressionGateRun, RegressionGateViolation, RegressionInputs,
 };
 pub use macrobench::{
     materialize_macrobench_fixture, run_macrobench, MacrobenchMeasurement, MacrobenchOptions,
@@ -16,6 +15,11 @@ pub use macrobench::{
 pub use parity::{
     materialize_parity_fixture, ParityFixtureOptions, ParityFixtureReport, ParityFixtureScale,
     ParityFixtureScenario, ParityFixtureScenarioReport,
+};
+pub use parity_gate::{
+    parse_parity_gate_manifest, run_parity_gate, run_parity_gate_manifest,
+    write_parity_review_bundle, write_parity_review_bundle_manifest, ParityGateEntryReport,
+    ParityGateInput, ParityGateReport, ParityReviewBundle,
 };
 pub use pixel::{
     diff_rgba, diff_rgba_files, evaluate_pixel_threshold, parse_masks, read_mask_file,
