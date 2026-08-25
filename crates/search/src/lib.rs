@@ -9,7 +9,7 @@ mod shard;
 pub use columns::SearchRecordColumns;
 use columns::{filter_matches_columns, RecordColumns};
 use fuzzy::{bounded_levenshtein, deletion_keys};
-use intent::{intent_score, term_matches_intent};
+use intent::{term_matches_intent, QueryIntent};
 use query::{normalize, tokenize};
 pub use query::{
     DateComparison, DateField, QueryExpr, QueryFilter, QueryKind, QueryProximity, QueryScope,
@@ -737,6 +737,7 @@ impl SearchIndex {
         let mut scores: HashMap<FileId, RankAccumulator> = HashMap::new();
         let mut telemetry = SearchLookupTelemetry::default();
         let text = query.terms.join(" ");
+        let intent = QueryIntent::from_query(query);
 
         if !text.is_empty() {
             if let Some(ids) = self.name_exact.get(&text) {
@@ -850,14 +851,16 @@ impl SearchIndex {
             }
         }
 
-        for record in self.records.values() {
-            cancellation.check()?;
-            let score = intent_score(query, record);
-            if score > 0 {
-                scores
-                    .entry(record.id)
-                    .and_modify(|current| current.boost(score))
-                    .or_insert_with(|| RankAccumulator::new(score, MatchReason::PathComponent));
+        if !intent.is_empty() {
+            for record in self.records.values() {
+                cancellation.check()?;
+                let score = intent.score(record);
+                if score > 0 {
+                    scores
+                        .entry(record.id)
+                        .and_modify(|current| current.boost(score))
+                        .or_insert_with(|| RankAccumulator::new(score, MatchReason::PathComponent));
+                }
             }
         }
 

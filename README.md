@@ -95,6 +95,7 @@ The index is compact and incremental:
 - mmap-backed index footprint telemetry with adaptive run/throttle/defer compaction scheduling
 - hot mutable buffers
 - progressive hot/deep result streaming with stable dedupe
+- query-intent preclassification so ordinary searches skip full-record Finder-intent scoring passes
 - name substring n-gram candidates and delete-key fuzzy candidate indexes for infix and typo-tolerant matches without full-record scans
 - archive-backed prefix, substring, and fuzzy lookup with explicit candidate budgets, adaptive prefix cutoffs, lookup cache telemetry, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
 - direct content-posting scoring for normal content-term queries without temporary ID-set materialization
