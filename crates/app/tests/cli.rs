@@ -1735,6 +1735,7 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     let records = unique_temp_path("gfm-cli-content-set-records", "gfmidx");
     let first_content = unique_temp_path("gfm-cli-content-set-first", "gfmcontent");
     let second_content = unique_temp_path("gfm-cli-content-set-second", "gfmcontent");
+    let third_content = unique_temp_path("gfm-cli-content-set-third", "gfmcontent");
     let manifest = unique_temp_path("gfm-cli-content-set", "gfmmanifest");
     fs::write(root.join("left.md"), "metadata only").unwrap();
     fs::write(root.join("right.md"), "metadata only").unwrap();
@@ -1774,6 +1775,15 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         &[ContentPosting {
             term: "setneedle".to_string(),
             ids: vec![left, right],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    write_content_postings(
+        &third_content,
+        &[ContentPosting {
+            term: "promotedneedle".to_string(),
+            ids: vec![right],
             positions: vec![],
         }],
     )
@@ -1895,10 +1905,58 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{manifest_stderr}"
     );
 
+    let promote_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-promote",
+            manifest.to_str().unwrap(),
+            &format!("warm:{}", third_content.display()),
+            first_content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        promote_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&promote_output.stderr)
+    );
+    let promote_stderr = String::from_utf8(promote_output.stderr).unwrap();
+    assert!(
+        promote_stderr.contains("content-manifest-promoted")
+            && promote_stderr.contains("archives=2")
+            && promote_stderr.contains("retired=1"),
+        "{promote_stderr}"
+    );
+    let promote_stdout = String::from_utf8(promote_output.stdout).unwrap();
+    assert!(
+        promote_stdout.contains(&format!("retire\t{}", first_content.display())),
+        "{promote_stdout}"
+    );
+
+    let promoted_ids_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-ids-mmap-manifest",
+            manifest.to_str().unwrap(),
+            "promotedneedle",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        promoted_ids_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&promoted_ids_output.stderr)
+    );
+    let promoted_ids_stdout = String::from_utf8(promoted_ids_output.stdout).unwrap();
+    assert_eq!(
+        promoted_ids_stdout.lines().count(),
+        1,
+        "{promoted_ids_stdout}"
+    );
+
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(first_content).unwrap();
     fs::remove_file(second_content).unwrap();
+    fs::remove_file(third_content).unwrap();
     fs::remove_file(manifest).unwrap();
 }
 

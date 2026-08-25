@@ -776,6 +776,36 @@ fn run() -> Result<()> {
                 );
             }
         }
+        Some("content-manifest-promote") => {
+            let manifest_path = required_path(
+                args.next(),
+                "content-manifest-promote requires a manifest path",
+            )?;
+            let new_archive = args.next().ok_or_else(|| {
+                GfmError::Format(
+                    "content-manifest-promote requires a hot:path, warm:path, or cold:path archive"
+                        .to_string(),
+                )
+            })?;
+            let new_archive = parse_content_manifest_archive_spec(&new_archive)?;
+            let retired_paths = args.map(PathBuf::from).collect::<Vec<_>>();
+            let manifest = ContentArchiveManifest::read(&manifest_path)?;
+            let promotion =
+                manifest.promote_archive(&manifest_path, new_archive, &retired_paths)?;
+            promotion.manifest.write(&manifest_path)?;
+            eprintln!(
+                "content-manifest-promoted\tarchives={}\tretired={}\tmissing-retirements={}",
+                promotion.manifest.archives.len(),
+                promotion.retired_archives.len(),
+                promotion.missing_retirements.len()
+            );
+            for path in promotion.retired_archives {
+                println!("retire\t{}", path.display());
+            }
+            for path in promotion.missing_retirements {
+                println!("missing-retirement\t{}", path.display());
+            }
+        }
         Some("index-content-background") => {
             let root = required_path(args.next(), "index-content-background requires a root path")?;
             let segment_dir = required_path(
@@ -2509,6 +2539,7 @@ fn print_usage() {
   gfm compact-content-tiered <output.gfmcontent> <segments.gfmseg...>
   gfm content-manifest-write <manifest.gfmmanifest> <hot|warm|cold:path...>
   gfm content-manifest-inspect <manifest.gfmmanifest>
+  gfm content-manifest-promote <manifest.gfmmanifest> <hot|warm|cold:path> [retired-archive...]
   gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent>
   gfm resume-content-background [content.job] [jobs.journal]
   gfm search <root> <query>

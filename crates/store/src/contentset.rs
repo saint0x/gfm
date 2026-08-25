@@ -18,6 +18,13 @@ pub struct ContentArchiveManifest {
     pub archives: Vec<ContentArchiveManifestEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentManifestPromotion {
+    pub manifest: ContentArchiveManifest,
+    pub retired_archives: Vec<PathBuf>,
+    pub missing_retirements: Vec<PathBuf>,
+}
+
 impl ContentArchiveManifest {
     pub fn new(archives: Vec<ContentArchiveManifestEntry>) -> Result<Self> {
         if archives.is_empty() {
@@ -94,21 +101,46 @@ impl ContentArchiveManifest {
     }
 
     pub fn resolved_archive_paths(&self, manifest_path: impl AsRef<Path>) -> Vec<PathBuf> {
-        let base = manifest_path
-            .as_ref()
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_default();
         self.archives
             .iter()
-            .map(|entry| {
-                if entry.path.is_absolute() {
-                    entry.path.clone()
-                } else {
-                    base.join(&entry.path)
-                }
-            })
+            .map(|entry| resolve_manifest_path(manifest_path.as_ref(), &entry.path))
             .collect()
+    }
+
+    pub fn promote_archive(
+        &self,
+        manifest_path: impl AsRef<Path>,
+        new_archive: ContentArchiveManifestEntry,
+        retired_paths: &[impl AsRef<Path>],
+    ) -> Result<ContentManifestPromotion> {
+        let manifest_path = manifest_path.as_ref();
+        let retired_set = retired_paths
+            .iter()
+            .map(|path| resolve_manifest_path(manifest_path, path.as_ref()))
+            .collect::<BTreeSet<_>>();
+        let new_resolved = resolve_manifest_path(manifest_path, &new_archive.path);
+        let mut retired_archives = Vec::new();
+        let mut retained = Vec::new();
+        for entry in &self.archives {
+            let resolved = resolve_manifest_path(manifest_path, &entry.path);
+            if retired_set.contains(&resolved) || resolved == new_resolved {
+                retired_archives.push(resolved);
+            } else {
+                retained.push(entry.clone());
+            }
+        }
+
+        let retired_archives_set = retired_archives.iter().cloned().collect::<BTreeSet<_>>();
+        let missing_retirements = retired_set
+            .into_iter()
+            .filter(|path| !retired_archives_set.contains(path))
+            .collect();
+        retained.push(new_archive);
+        Ok(ContentManifestPromotion {
+            manifest: Self::new(retained)?,
+            retired_archives,
+            missing_retirements,
+        })
     }
 }
 
@@ -218,6 +250,18 @@ pub fn read_content_archive_manifest(path: impl AsRef<Path>) -> Result<ContentAr
     ContentArchiveManifest::read(path)
 }
 
+pub fn promote_content_archive_manifest(
+    manifest_path: impl AsRef<Path>,
+    new_archive: ContentArchiveManifestEntry,
+    retired_paths: &[impl AsRef<Path>],
+) -> Result<ContentManifestPromotion> {
+    let manifest_path = manifest_path.as_ref();
+    let manifest = ContentArchiveManifest::read(manifest_path)?;
+    let promotion = manifest.promote_archive(manifest_path, new_archive, retired_paths)?;
+    promotion.manifest.write(manifest_path)?;
+    Ok(promotion)
+}
+
 fn canonical_term(term: &str) -> String {
     term.trim().to_lowercase()
 }
@@ -257,6 +301,17 @@ fn parse_tier(value: &str, path: &Path, line: usize) -> Result<ContentMergeTier>
             "{} line {line}: unsupported content archive tier `{other}`",
             path.display()
         ))),
+    }
+}
+
+fn resolve_manifest_path(manifest_path: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        manifest_path
+            .parent()
+            .map(|parent| parent.join(path))
+            .unwrap_or_else(|| path.to_path_buf())
     }
 }
 
@@ -405,6 +460,72 @@ mod tests {
                 .unwrap()
                 .archive_count(),
             2
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn content_archive_manifest_promotes_new_archive_and_reports_retirement_state() {
+        let dir = temp_dir("gfm-content-manifest-promote");
+        let manifest_path = dir.join("content.gfmmanifest");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let manifest = ContentArchiveManifest::new(vec![
+            ContentArchiveManifestEntry {
+                tier: ContentMergeTier::Hot,
+                path: PathBuf::from("hot-a.gfmcontent"),
+            },
+            ContentArchiveManifestEntry {
+                tier: ContentMergeTier::Hot,
+                path: PathBuf::from("hot-b.gfmcontent"),
+            },
+            ContentArchiveManifestEntry {
+                tier: ContentMergeTier::Warm,
+                path: PathBuf::from("warm-a.gfmcontent"),
+            },
+        ])
+        .unwrap();
+        manifest.write(&manifest_path).unwrap();
+
+        let promotion = promote_content_archive_manifest(
+            &manifest_path,
+            ContentArchiveManifestEntry {
+                tier: ContentMergeTier::Warm,
+                path: PathBuf::from("warm-b.gfmcontent"),
+            },
+            &[
+                PathBuf::from("hot-a.gfmcontent"),
+                PathBuf::from("missing.gfmcontent"),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            promotion.retired_archives,
+            vec![dir.join("hot-a.gfmcontent")]
+        );
+        assert_eq!(
+            promotion.missing_retirements,
+            vec![dir.join("missing.gfmcontent")]
+        );
+        let reloaded = ContentArchiveManifest::read(&manifest_path).unwrap();
+        assert_eq!(
+            reloaded.archives,
+            vec![
+                ContentArchiveManifestEntry {
+                    tier: ContentMergeTier::Hot,
+                    path: PathBuf::from("hot-b.gfmcontent"),
+                },
+                ContentArchiveManifestEntry {
+                    tier: ContentMergeTier::Warm,
+                    path: PathBuf::from("warm-a.gfmcontent"),
+                },
+                ContentArchiveManifestEntry {
+                    tier: ContentMergeTier::Warm,
+                    path: PathBuf::from("warm-b.gfmcontent"),
+                }
+            ]
         );
 
         std::fs::remove_dir_all(dir).unwrap();
