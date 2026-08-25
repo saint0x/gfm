@@ -1,7 +1,116 @@
-use crate::content::MmapContentArchive;
-use gfm_types::{ContentPositions, ContentPosting, FileId, Result};
+use crate::content::{ContentMergeTier, MmapContentArchive};
+use crate::durable;
+use gfm_types::{ContentPositions, ContentPosting, FileId, GfmError, Result};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+
+const CONTENT_MANIFEST_HEADER: &str = "gfm-content-manifest-v1";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentArchiveManifestEntry {
+    pub tier: ContentMergeTier,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentArchiveManifest {
+    pub archives: Vec<ContentArchiveManifestEntry>,
+}
+
+impl ContentArchiveManifest {
+    pub fn new(archives: Vec<ContentArchiveManifestEntry>) -> Result<Self> {
+        if archives.is_empty() {
+            return Err(GfmError::Format(
+                "content manifest requires at least one archive".to_string(),
+            ));
+        }
+        Ok(Self { archives })
+    }
+
+    pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let file = std::fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
+        let mut lines = BufReader::new(file).lines();
+        match lines.next() {
+            Some(Ok(header)) if header == CONTENT_MANIFEST_HEADER => {}
+            Some(Ok(header)) => {
+                return Err(GfmError::Format(format!(
+                    "unsupported content manifest header `{header}` in {}",
+                    path.display()
+                )))
+            }
+            Some(Err(err)) => return Err(GfmError::io(path, err)),
+            None => {
+                return Err(GfmError::Format(format!(
+                    "empty content manifest {}",
+                    path.display()
+                )))
+            }
+        }
+
+        let mut archives = Vec::new();
+        for (line_index, line) in lines.enumerate() {
+            let line = line.map_err(|err| GfmError::io(path, err))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let fields = line.split('\t').collect::<Vec<_>>();
+            if fields.len() != 3 || fields[0] != "archive" {
+                return Err(GfmError::Format(format!(
+                    "{} line {}: expected archive, tier, path",
+                    path.display(),
+                    line_index + 2
+                )));
+            }
+            archives.push(ContentArchiveManifestEntry {
+                tier: parse_tier(fields[1], path, line_index + 2)?,
+                path: PathBuf::from(unescape(fields[2])?),
+            });
+        }
+        Self::new(archives)
+    }
+
+    pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        if self.archives.is_empty() {
+            return Err(GfmError::Format(
+                "content manifest requires at least one archive".to_string(),
+            ));
+        }
+        durable::atomic_write(path, |writer| {
+            writeln!(writer, "{CONTENT_MANIFEST_HEADER}")?;
+            for archive in &self.archives {
+                writeln!(
+                    writer,
+                    "archive\t{}\t{}",
+                    tier_name(archive.tier),
+                    escape(&archive.path.to_string_lossy())
+                )?;
+            }
+            Ok(())
+        })
+        .map(|_| ())
+    }
+
+    pub fn resolved_archive_paths(&self, manifest_path: impl AsRef<Path>) -> Vec<PathBuf> {
+        let base = manifest_path
+            .as_ref()
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        self.archives
+            .iter()
+            .map(|entry| {
+                if entry.path.is_absolute() {
+                    entry.path.clone()
+                } else {
+                    base.join(&entry.path)
+                }
+            })
+            .collect()
+    }
+}
 
 #[derive(Debug)]
 pub struct MmapContentSet {
@@ -19,6 +128,12 @@ impl MmapContentSet {
             .map(MmapContentArchive::open)
             .collect::<Result<Vec<_>>>()?;
         Ok(Self { archives })
+    }
+
+    pub fn open_manifest(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let manifest = ContentArchiveManifest::read(path)?;
+        Self::open(manifest.resolved_archive_paths(path))
     }
 
     pub fn ids_for_term(&self, term: &str) -> Result<Vec<FileId>> {
@@ -92,6 +207,17 @@ impl MmapContentSet {
     }
 }
 
+pub fn write_content_archive_manifest(
+    path: impl AsRef<Path>,
+    manifest: &ContentArchiveManifest,
+) -> Result<()> {
+    manifest.write(path)
+}
+
+pub fn read_content_archive_manifest(path: impl AsRef<Path>) -> Result<ContentArchiveManifest> {
+    ContentArchiveManifest::read(path)
+}
+
 fn canonical_term(term: &str) -> String {
     term.trim().to_lowercase()
 }
@@ -114,12 +240,73 @@ fn content_posting_from_positions(
     }
 }
 
+fn tier_name(tier: ContentMergeTier) -> &'static str {
+    match tier {
+        ContentMergeTier::Hot => "hot",
+        ContentMergeTier::Warm => "warm",
+        ContentMergeTier::Cold => "cold",
+    }
+}
+
+fn parse_tier(value: &str, path: &Path, line: usize) -> Result<ContentMergeTier> {
+    match value {
+        "hot" => Ok(ContentMergeTier::Hot),
+        "warm" => Ok(ContentMergeTier::Warm),
+        "cold" => Ok(ContentMergeTier::Cold),
+        other => Err(GfmError::Format(format!(
+            "{} line {line}: unsupported content archive tier `{other}`",
+            path.display()
+        ))),
+    }
+}
+
+fn escape(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\\' => output.push_str("\\\\"),
+            '\t' => output.push_str("\\t"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            other => output.push(other),
+        }
+    }
+    output
+}
+
+fn unescape(input: &str) -> Result<String> {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            output.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => output.push('\\'),
+            Some('t') => output.push('\t'),
+            Some('n') => output.push('\n'),
+            Some('r') => output.push('\r'),
+            Some(other) => {
+                return Err(GfmError::Format(format!(
+                    "invalid content manifest escape `\\{other}`"
+                )))
+            }
+            None => {
+                return Err(GfmError::Format(
+                    "trailing content manifest escape".to_string(),
+                ))
+            }
+        }
+    }
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::content::write_content_postings;
     use gfm_types::{ContentPositions, ContentPosting, VolumeId};
-    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -183,6 +370,46 @@ mod tests {
         std::fs::remove_file(second).unwrap();
     }
 
+    #[test]
+    fn content_archive_manifest_round_trips_and_resolves_relative_paths() {
+        let dir = temp_dir("gfm-content-manifest-root");
+        let first = dir.join("hot.gfmcontent");
+        let nested = dir.join("tier");
+        let second = nested.join("warm.gfmcontent");
+        let manifest_path = dir.join("content.gfmmanifest");
+        std::fs::create_dir_all(&nested).unwrap();
+        write_content_postings(&first, &[]).unwrap();
+        write_content_postings(&second, &[]).unwrap();
+
+        let manifest = ContentArchiveManifest::new(vec![
+            ContentArchiveManifestEntry {
+                tier: ContentMergeTier::Hot,
+                path: PathBuf::from("hot.gfmcontent"),
+            },
+            ContentArchiveManifestEntry {
+                tier: ContentMergeTier::Warm,
+                path: PathBuf::from("tier/warm.gfmcontent"),
+            },
+        ])
+        .unwrap();
+        manifest.write(&manifest_path).unwrap();
+
+        let reloaded = ContentArchiveManifest::read(&manifest_path).unwrap();
+        assert_eq!(reloaded, manifest);
+        assert_eq!(
+            reloaded.resolved_archive_paths(&manifest_path),
+            vec![first, second]
+        );
+        assert_eq!(
+            MmapContentSet::open_manifest(&manifest_path)
+                .unwrap()
+                .archive_count(),
+            2
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     fn temp_path(prefix: &str, extension: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "{}-{}.{}",
@@ -192,6 +419,17 @@ mod tests {
                 .unwrap()
                 .as_nanos(),
             extension
+        ))
+    }
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "{}-{}",
+            prefix,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ))
     }
 }

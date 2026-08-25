@@ -10,7 +10,10 @@ use gfm_store::{
     compact_content_segments, compact_content_segments_with_policy, read_content_postings,
     read_records, write_content_postings, write_content_segment, write_records, MmapContentSet,
 };
-pub use gfm_store::{ContentMergeOutcome, ContentMergePolicy, ContentMergeTier};
+pub use gfm_store::{
+    ContentArchiveManifest, ContentArchiveManifestEntry, ContentMergeOutcome, ContentMergePolicy,
+    ContentMergeTier,
+};
 use gfm_types::{
     ContentPosting, ContentSegment, DirectoryPage, FileEvent, FileEventKind, FileId, FileRecord,
     GfmError, Result, ScanIssue, SearchHit,
@@ -379,6 +382,18 @@ impl LiveIndex {
         query: &str,
     ) -> Result<usize> {
         let content = MmapContentSet::open(paths)?;
+        let postings = content.postings_for_terms(content_query_terms(query))?;
+        let terms = postings.len();
+        self.index.import_content_postings(&postings);
+        Ok(terms)
+    }
+
+    pub fn load_content_manifest_postings(
+        &mut self,
+        manifest_path: impl AsRef<Path>,
+        query: &str,
+    ) -> Result<usize> {
+        let content = MmapContentSet::open_manifest(manifest_path)?;
         let postings = content.postings_for_terms(content_query_terms(query))?;
         let terms = postings.len();
         self.index.import_content_postings(&postings);
@@ -783,6 +798,17 @@ impl Indexer {
     ) -> Result<(LiveIndex, usize)> {
         let mut live = self.load(records_path)?.into_live();
         let terms = live.load_content_set_postings(content_paths, query)?;
+        Ok((live, terms))
+    }
+
+    pub fn load_live_with_content_manifest(
+        &self,
+        records_path: impl AsRef<Path>,
+        manifest_path: impl AsRef<Path>,
+        query: &str,
+    ) -> Result<(LiveIndex, usize)> {
+        let mut live = self.load(records_path)?.into_live();
+        let terms = live.load_content_manifest_postings(manifest_path, query)?;
         Ok((live, terms))
     }
 

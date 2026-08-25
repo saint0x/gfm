@@ -12,12 +12,12 @@ use gfm_fs::{
 };
 use gfm_index::{
     comment_query_terms, content_query_terms, fuzzy_query_keys, parse_volume_indexing_policy,
-    prefix_query_terms, tag_query_terms, BackgroundContentIndexer, ContentIndexJobSpec,
-    ContentIndexReport, ContentMergePolicy, EventBackpressureQueue, EventPriority, FseventsCursor,
-    FseventsCursorHealth, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor,
-    IndexVolumeState, Indexer, LiveIndex, SearchFuzzyPosting, SearchMetadataField,
-    SearchMetadataPosting, SearchPrefixPosting, SearchRecordColumns, SearchStreamStage,
-    VolumeIndexPolicy,
+    prefix_query_terms, tag_query_terms, BackgroundContentIndexer, ContentArchiveManifest,
+    ContentArchiveManifestEntry, ContentIndexJobSpec, ContentIndexReport, ContentMergePolicy,
+    ContentMergeTier, EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
+    IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState, Indexer, LiveIndex,
+    SearchFuzzyPosting, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
+    SearchRecordColumns, SearchStreamStage, VolumeIndexPolicy,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -741,6 +741,41 @@ fn run() -> Result<()> {
                 println!("retain\t{}", segment.display());
             }
         }
+        Some("content-manifest-write") => {
+            let output = required_path(
+                args.next(),
+                "content-manifest-write requires a manifest path",
+            )?;
+            let archives = args
+                .map(|spec| parse_content_manifest_archive_spec(&spec))
+                .collect::<Result<Vec<_>>>()?;
+            let manifest = ContentArchiveManifest::new(archives)?;
+            manifest.write(&output)?;
+            eprintln!("content-manifest\tarchives={}", manifest.archives.len());
+        }
+        Some("content-manifest-inspect") => {
+            let manifest_path = required_path(
+                args.next(),
+                "content-manifest-inspect requires a manifest path",
+            )?;
+            let manifest = ContentArchiveManifest::read(&manifest_path)?;
+            let paths = manifest.resolved_archive_paths(&manifest_path);
+            let set = MmapContentSet::open(&paths)?;
+            println!(
+                "content-manifest\tarchives={}\tterms={}\tbytes={}",
+                set.archive_count(),
+                set.indexed_terms(),
+                set.mapped_len()
+            );
+            for (entry, path) in manifest.archives.iter().zip(paths) {
+                println!(
+                    "archive\t{}\t{}\t{}",
+                    content_tier_name(entry.tier),
+                    entry.path.display(),
+                    path.display()
+                );
+            }
+        }
         Some("index-content-background") => {
             let root = required_path(args.next(), "index-content-background requires a root path")?;
             let segment_dir = required_path(
@@ -1248,6 +1283,27 @@ fn run() -> Result<()> {
                 print_hit(&hit);
             }
         }
+        Some("search-content-index-manifest") => {
+            let records = required_path(
+                args.next(),
+                "search-content-index-manifest requires a records path",
+            )?;
+            let manifest = required_path(
+                args.next(),
+                "search-content-index-manifest requires a manifest path",
+            )?;
+            let query = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "search-content-index-manifest requires a query string".to_string(),
+                )
+            })?;
+            let (live, content_keys) =
+                Indexer::default().load_live_with_content_manifest(records, manifest, &query)?;
+            eprintln!("content-manifest-keys {content_keys}");
+            for hit in live.search(&query, 50) {
+                print_hit(&hit);
+            }
+        }
         Some("content-ids") => {
             let content = required_path(args.next(), "content-ids requires a content path")?;
             let term = args.next().ok_or_else(|| {
@@ -1279,6 +1335,19 @@ fn run() -> Result<()> {
                 ));
             }
             let archive = MmapContentSet::open(&content_paths)?;
+            for id in archive.ids_for_term(&term)? {
+                println!("{}\t{}", id.volume.0, id.node);
+            }
+        }
+        Some("content-ids-mmap-manifest") => {
+            let manifest = required_path(
+                args.next(),
+                "content-ids-mmap-manifest requires a manifest path",
+            )?;
+            let term = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format("content-ids-mmap-manifest requires a term".to_string())
+            })?;
+            let archive = MmapContentSet::open_manifest(manifest)?;
             for id in archive.ids_for_term(&term)? {
                 println!("{}\t{}", id.volume.0, id.node);
             }
@@ -2365,6 +2434,42 @@ fn preview_decision_priority(decision: &gfm_preview::PreviewTaskDecision) -> &'s
     }
 }
 
+fn parse_content_manifest_archive_spec(value: &str) -> Result<ContentArchiveManifestEntry> {
+    let (tier, path) = value.split_once(':').ok_or_else(|| {
+        GfmError::Format(format!(
+            "content manifest archive `{value}` must be formatted as hot:path, warm:path, or cold:path"
+        ))
+    })?;
+    if path.is_empty() {
+        return Err(GfmError::Format(format!(
+            "content manifest archive `{value}` has an empty path"
+        )));
+    }
+    Ok(ContentArchiveManifestEntry {
+        tier: parse_content_tier(tier)?,
+        path: PathBuf::from(path),
+    })
+}
+
+fn parse_content_tier(value: &str) -> Result<ContentMergeTier> {
+    match value {
+        "hot" => Ok(ContentMergeTier::Hot),
+        "warm" => Ok(ContentMergeTier::Warm),
+        "cold" => Ok(ContentMergeTier::Cold),
+        other => Err(GfmError::Format(format!(
+            "content archive tier must be hot, warm, or cold; got `{other}`"
+        ))),
+    }
+}
+
+fn content_tier_name(tier: ContentMergeTier) -> &'static str {
+    match tier {
+        ContentMergeTier::Hot => "hot",
+        ContentMergeTier::Warm => "warm",
+        ContentMergeTier::Cold => "cold",
+    }
+}
+
 fn print_usage() {
     println!(
         "gfm commands:
@@ -2402,6 +2507,8 @@ fn print_usage() {
   gfm index-content-segment <root> <output.gfmseg>
   gfm compact-content <output.gfmcontent> <segments.gfmseg...>
   gfm compact-content-tiered <output.gfmcontent> <segments.gfmseg...>
+  gfm content-manifest-write <manifest.gfmmanifest> <hot|warm|cold:path...>
+  gfm content-manifest-inspect <manifest.gfmmanifest>
   gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent>
   gfm resume-content-background [content.job] [jobs.journal]
   gfm search <root> <query>
@@ -2431,9 +2538,11 @@ fn print_usage() {
   gfm metadata-verify <metadata.gfmmeta>
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>
   gfm search-content-index-set <records.gfmidx> <query> <content.gfmcontent...>
+  gfm search-content-index-manifest <records.gfmidx> <manifest.gfmmanifest> <query>
   gfm content-ids <content.gfmcontent> <term>
   gfm content-ids-mmap <content.gfmcontent> <term>
   gfm content-ids-mmap-set <term> <content.gfmcontent...>
+  gfm content-ids-mmap-manifest <manifest.gfmmanifest> <term>
   gfm content-id-block-mmap <content.gfmcontent> <term> <block-index>
   gfm content-verify <content.gfmcontent>
   gfm config-path

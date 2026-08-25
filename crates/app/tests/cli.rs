@@ -1735,6 +1735,7 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     let records = unique_temp_path("gfm-cli-content-set-records", "gfmidx");
     let first_content = unique_temp_path("gfm-cli-content-set-first", "gfmcontent");
     let second_content = unique_temp_path("gfm-cli-content-set-second", "gfmcontent");
+    let manifest = unique_temp_path("gfm-cli-content-set", "gfmmanifest");
     fs::write(root.join("left.md"), "metadata only").unwrap();
     fs::write(root.join("right.md"), "metadata only").unwrap();
 
@@ -1795,6 +1796,39 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     let ids_stdout = String::from_utf8(ids_output.stdout).unwrap();
     assert_eq!(ids_stdout.lines().count(), 2, "{ids_stdout}");
 
+    let manifest_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-write",
+            manifest.to_str().unwrap(),
+            &format!("hot:{}", first_content.display()),
+            &format!("warm:{}", second_content.display()),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        manifest_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&manifest_output.stderr)
+    );
+
+    let manifest_inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["content-manifest-inspect", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        manifest_inspect.status.success(),
+        "{}",
+        String::from_utf8_lossy(&manifest_inspect.stderr)
+    );
+    let inspect_stdout = String::from_utf8(manifest_inspect.stdout).unwrap();
+    assert!(
+        inspect_stdout.contains("content-manifest\tarchives=2")
+            && inspect_stdout.contains("\tterms=2")
+            && inspect_stdout.contains("archive\thot\t")
+            && inspect_stdout.contains("archive\twarm\t"),
+        "{inspect_stdout}"
+    );
+
     let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "search-content-index-set",
@@ -1819,10 +1853,53 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{stderr}"
     );
 
+    let manifest_ids_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-ids-mmap-manifest",
+            manifest.to_str().unwrap(),
+            "setneedle",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        manifest_ids_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&manifest_ids_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(manifest_ids_output.stdout).unwrap(),
+        ids_stdout
+    );
+
+    let manifest_search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index-manifest",
+            records.to_str().unwrap(),
+            manifest.to_str().unwrap(),
+            "setneedle",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        manifest_search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&manifest_search_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(manifest_search_output.stdout).unwrap(),
+        stdout
+    );
+    let manifest_stderr = String::from_utf8(manifest_search_output.stderr).unwrap();
+    assert!(
+        manifest_stderr.contains("content-manifest-keys 1"),
+        "{manifest_stderr}"
+    );
+
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(first_content).unwrap();
     fs::remove_file(second_content).unwrap();
+    fs::remove_file(manifest).unwrap();
 }
 
 #[test]

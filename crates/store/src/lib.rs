@@ -17,6 +17,10 @@ pub use content::{
     ContentMergePolicy, ContentMergeTier, ContentSegmentSummary, MmapContentArchive,
 };
 pub use contentset::MmapContentSet;
+pub use contentset::{
+    read_content_archive_manifest, write_content_archive_manifest, ContentArchiveManifest,
+    ContentArchiveManifestEntry,
+};
 pub use dictionary::{
     dictionary_terms_from_records, read_dictionary, write_dictionary, MmapDictionary,
 };

@@ -409,7 +409,12 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - tombstone-bearing segments are prioritized for cleanup;
   - selected merge sets preserve original chronological segment order so tombstones do not resurrect older postings;
   - merge batches are bounded by segment count and byte budgets;
-  - retained segments are reported explicitly for the next manifest/tier promotion step.
+  - retained segments are reported explicitly for manifest/tier promotion.
+- Durable content archive manifests:
+  - active hot/warm/cold content archives are published through an atomically written manifest;
+  - manifest paths resolve relative to the manifest file so shard directories can move as a unit;
+  - manifest inspection opens the same mmap archives used by search and reports live archive, term, and byte counts;
+  - search and id lookup can consume the manifest directly instead of requiring manually supplied archive lists.
 - Query-time content archive sets:
   - multiple immutable mmap content archives are opened as one logical search surface;
   - each query term performs binary directory lookup inside each archive instead of hydrating all postings;
