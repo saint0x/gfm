@@ -3594,6 +3594,80 @@ fn resumes_content_index_job_from_binary() {
 }
 
 #[test]
+fn adaptive_resume_content_index_job_applies_pressure_budgets_from_binary() {
+    let root = unique_temp_dir("gfm-cli-resume-content-budget-root");
+    let segments = unique_temp_dir("gfm-cli-resume-content-budget-segments");
+    let records = unique_temp_path("gfm-cli-resume-budget-records", "gfmidx");
+    let content = unique_temp_path("gfm-cli-resume-budget-content", "gfmcontent");
+    let journal = unique_temp_path("gfm-cli-resume-budget-jobs", "journal");
+    let spec = unique_temp_path("gfm-cli-resume-budget-content", "job");
+    let mut body = "x".repeat(1024 * 1024 + 1);
+    body.push_str(" resumepressurebudgetmarker");
+    fs::write(root.join("large-resume.md"), body).unwrap();
+    fs::write(
+        &spec,
+        format!(
+            "gfm-content-job-v1\nroot\t{}\nsegment_dir\t{}\nrecords_path\t{}\ncontent_path\t{}\nbatch_size\t1024\n",
+            root.display(),
+            segments.display(),
+            records.display(),
+            content.display()
+        ),
+    )
+    .unwrap();
+    fs::write(&journal, "99\t1\tstarted\tbackground content index\n").unwrap();
+
+    let resume_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "resume-content-background-adaptive",
+            spec.to_str().unwrap(),
+            journal.to_str().unwrap(),
+            "elevated",
+            "serious",
+            "low",
+            "active",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        resume_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resume_output.stderr)
+    );
+    let stderr = String::from_utf8(resume_output.stderr).unwrap();
+    assert!(stderr.contains("action=Throttle"), "{stderr}");
+    assert!(
+        stderr.contains("resumed-background-content-indexed 0 files"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("terms 0"), "{stderr}");
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index",
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "resumepressurebudgetmarker",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(!stdout.contains("large-resume.md"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(spec).unwrap();
+}
+
+#[test]
 fn reports_recoverable_jobs_from_binary() {
     let journal = unique_temp_path("gfm-cli-recovery-jobs", "journal");
     fs::write(

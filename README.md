@@ -148,6 +148,8 @@ Background content indexing also consumes explicit runtime pressure signals: sat
 
 Background content extraction budgets are derived from file type, size ceilings, volume class, thermal state, battery state, and user activity before extractor reads are admitted.
 
+Resumed background content jobs use the same pressure-aware budget derivation before restored extraction work restarts.
+
 Content segment maintenance uses the same adaptive scheduling policy before compaction, manifest promotion, or cleanup publication starts.
 
 Sidecar repair uses the same adaptive scheduling policy before rebuilding derived sidecars or quarantining corrupt sidecar archives.
@@ -231,6 +233,7 @@ Run operator diagnostics:
 ```sh
 cargo run -p gfm -- diagnostics-index-rebuild . /tmp/gfm.gfmidx /tmp/gfm.gfmcontent
 cargo run -p gfm -- diagnostics-index-rebuild-adaptive . /tmp/gfm.gfmidx saturated nominal ac idle /tmp/gfm.gfmcontent
+cargo run -p gfm -- resume-content-background-adaptive content.job jobs.journal elevated serious low active
 cargo run -p gfm -- diagnostics-storage-inspect /tmp/gfm.gfmidx
 cargo run -p gfm -- diagnostics-storage-inspect /tmp/gfm.gfmcontent
 cargo run -p gfm -- diagnostics-trace-export /tmp/gfm-diagnostics.json

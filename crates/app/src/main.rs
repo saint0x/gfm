@@ -1114,6 +1114,47 @@ fn run() -> Result<()> {
                 }
             }
         }
+        Some("resume-content-background-adaptive") => {
+            let spec_path = required_path(
+                args.next(),
+                "resume-content-background-adaptive requires a content job spec path",
+            )?;
+            let journal_path = required_path(
+                args.next(),
+                "resume-content-background-adaptive requires a job journal path",
+            )?;
+            let pressure = parse_required_scheduling_pressure(&mut args, "resume content job")?;
+            let journal = JobJournal::new(journal_path);
+            let recoverable = journal.recoverable(RetryPolicy { max_attempts: 2 })?;
+            if recoverable.is_empty() {
+                eprintln!("no recoverable background content jobs");
+            } else {
+                let spec = ContentIndexJobSpec::read(spec_path)?;
+                let outcome = run_content_job(&spec, &journal, pressure)?;
+                if outcome.deferred {
+                    eprintln!(
+                        "resumed-background-content-deferred action={:?}; recoverable {}",
+                        outcome.scheduling_action,
+                        recoverable.len()
+                    );
+                } else {
+                    let report = outcome.report.ok_or_else(|| {
+                        GfmError::Format(
+                            "resumed background content index ran without a report".to_string(),
+                        )
+                    })?;
+                    eprintln!(
+                        "resumed-background-content-indexed {} files; skipped {}; segments {}; terms {}; action={:?}; recoverable {}",
+                        report.indexed,
+                        report.skipped,
+                        report.segments.len(),
+                        report.terms,
+                        outcome.scheduling_action,
+                        recoverable.len()
+                    );
+                }
+            }
+        }
         Some("search") => {
             let root = required_path(args.next(), "search requires a root path")?;
             let query = args.next().ok_or_else(|| {
@@ -4094,6 +4135,7 @@ fn print_usage() {
   gfm content-maintain-segments-adaptive <manifest.gfmmanifest> <output.gfmcontent> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> <segments.gfmseg...>
   gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent> [<nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>]
   gfm resume-content-background [content.job] [jobs.journal]
+  gfm resume-content-background-adaptive <content.job> <jobs.journal> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm search <root> <query>
   gfm search-stream <root> <query>
   gfm search-content <root> <query>
