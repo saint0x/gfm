@@ -209,6 +209,7 @@ cargo run -p gfm -- diagnostics-trace-export /tmp/gfm-diagnostics.json
 cargo run -p gfm -- diagnostics-parity-baseline ~/Library/Application\ Support/GFM/config.toml tests/parity/baselines 25A354
 cargo run -p gfm -- mac-bridges
 cargo run -p gfm -- native-icon ~/Desktop/GFM.app
+cargo run -p gfm -- spotlight-reconcile ~/Desktop/Report.md
 ```
 
 Check the current host against the supported macOS and hardware matrix:

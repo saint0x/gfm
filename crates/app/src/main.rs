@@ -16,8 +16,9 @@ use gfm_jobs::{
     WorkerPool,
 };
 use gfm_mac::{
-    current_host_profile, current_permission_onboarding, FileEventStream, MacBridgeContract,
-    NativeIconDescriptor, SupportMatrix, WatchRoot,
+    current_host_profile, current_permission_onboarding, parse_spotlight_fixture, FileEventStream,
+    MacBridgeContract, NativeIconDescriptor, SpotlightMetadataReader,
+    SpotlightReconciliationReport, SupportMatrix, WatchRoot,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_preview::{
@@ -724,6 +725,23 @@ fn run() -> Result<()> {
             let path = required_path(args.next(), "native-icon requires a path")?;
             let record = record_for_path(&path, None, false)?;
             println!("{}", NativeIconDescriptor::for_record(&record).as_tsv());
+        }
+        Some("spotlight-reconcile") => {
+            let path = required_path(args.next(), "spotlight-reconcile requires a path")?;
+            let fixture_path = args.next().map(PathBuf::from);
+            let record = record_for_path(&path, None, false)?;
+            let snapshot = match fixture_path {
+                Some(fixture_path) => {
+                    let text = std::fs::read_to_string(&fixture_path)
+                        .map_err(|err| GfmError::io(&fixture_path, err))?;
+                    parse_spotlight_fixture(&path, &text)?
+                }
+                None => SpotlightMetadataReader::default().read_path(&path)?,
+            };
+            println!(
+                "{}",
+                SpotlightReconciliationReport::reconcile(record, snapshot).as_tsv()
+            );
         }
         Some("preview-check") => {
             let path = required_path(args.next(), "preview-check requires a path")?;
@@ -1529,6 +1547,7 @@ fn print_usage() {
   gfm permission-onboarding
   gfm mac-bridges
   gfm native-icon <path>
+  gfm spotlight-reconcile <path> [spotlight-fixture.tsv]
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm quicklook-session <path>
   gfm thumbnail-generation <path>

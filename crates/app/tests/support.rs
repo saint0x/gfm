@@ -125,6 +125,46 @@ fn reports_native_icon_descriptor_from_binary() {
 }
 
 #[test]
+fn reports_spotlight_reconciliation_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-spotlight-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("Primary.md");
+    let fixture = root.join("spotlight.tsv");
+    std::fs::write(&path, "spotlight body").unwrap();
+    std::fs::write(
+        &fixture,
+        "kMDItemDisplayName\tStale.md\nkMDItemKind\tMarkdown Document\nkMDItemFinderComment\tclient handoff\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("spotlight-reconcile")
+        .arg(&path)
+        .arg(&fixture)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("spotlight-reconciliation\t"));
+    assert!(stdout.contains("\tprimary=filesystem\tspotlight=available\t"));
+    assert!(stdout.contains("\tenrichments=2\tconflicts=1\t"));
+    assert!(stdout.contains(
+        "field\tdisplay-name\tprimary=Primary.md\tspotlight=Stale.md\tdecision=conflict-primary-wins"
+    ));
+    assert!(stdout.contains(
+        "field\tfinder-comment\tprimary=-\tspotlight=client handoff\tdecision=enrich-from-spotlight"
+    ));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_ui_lifecycle_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-contract", "/tmp/gfm"])

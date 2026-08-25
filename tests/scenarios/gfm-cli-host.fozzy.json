@@ -380,6 +380,26 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-spotlight.md",
+      "data": "spotlight body"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-spotlight.tsv",
+      "data": "kMDItemDisplayName\tStale.md\nkMDItemKind\tMarkdown Document\nkMDItemFinderComment\tclient handoff\n"
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "spotlight-reconcile",
+        "tmp/gfm-fozzy-spotlight.md",
+        "tmp/gfm-fozzy-spotlight.tsv"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["preview-schedule"],

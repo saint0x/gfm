@@ -8,6 +8,7 @@ use std::sync::mpsc::{self, Receiver};
 mod bridge;
 mod icon;
 mod permissions;
+mod spotlight;
 
 pub use bridge::{
     MacBridgeContract, MacBridgeSpec, MacBridgeStatus, MacBridgeThreadPolicy, MacFramework,
@@ -16,6 +17,10 @@ pub use icon::{NativeIconBadge, NativeIconDescriptor, NativeIconProvider, Native
 pub use permissions::{
     current_permission_onboarding, PermissionAction, PermissionOnboardingPlan, PermissionPolicy,
     PermissionPromptMode, PermissionReadiness, PermissionScope, PermissionState,
+};
+pub use spotlight::{
+    parse_spotlight_fixture, SpotlightField, SpotlightFieldDecision, SpotlightFieldReconciliation,
+    SpotlightMetadataReader, SpotlightReconciliationReport, SpotlightSnapshot, SpotlightStatus,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
