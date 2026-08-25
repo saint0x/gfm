@@ -40,14 +40,15 @@ use gfm_preview::{
 use gfm_store::{
     dictionary_term_report_from_records, inspect_archive_schema, metadata_postings_from_records,
     migrate_content_archive, migrate_metadata_archive, migrate_record_archive,
-    plan_columns_archive_rebuild, plan_content_archive_migration,
+    plan_archive_rebuilds, plan_columns_archive_rebuild, plan_content_archive_migration,
     plan_content_manifest_promotion_recovery, plan_content_manifest_recovery,
     plan_derived_sidecar_rebuild, plan_metadata_archive_migration, plan_record_archive_migration,
     promote_content_archive_manifest, rebuild_columns_archive, rebuild_derived_sidecar,
     recover_content_manifest, recover_content_manifest_promotion, write_dictionary,
-    write_metadata_postings, write_record_columns, ArchiveSchemaKind, ContentArchive,
-    ContentArchiveHealth, MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary,
-    MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
+    write_metadata_postings, write_record_columns, ArchiveRebuildInputs, ArchiveSchemaKind,
+    ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive, MmapContentSet,
+    MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
+    MmapRecordColumns,
 };
 use gfm_store::{
     fuzzy_postings_from_records, plan_sidecar_recovery, prefix_postings_from_records,
@@ -1505,6 +1506,44 @@ fn run() -> Result<()> {
                 })?;
             let path = required_path(args.next(), "archive-schema requires an archive path")?;
             println!("{}", inspect_archive_schema(kind, path).as_tsv());
+        }
+        Some("archive-rebuild-plan") => {
+            let records =
+                required_path(args.next(), "archive-rebuild-plan requires a records path")?;
+            let columns =
+                required_path(args.next(), "archive-rebuild-plan requires a columns path")?;
+            let metadata =
+                required_path(args.next(), "archive-rebuild-plan requires a metadata path")?;
+            let prefixes =
+                required_path(args.next(), "archive-rebuild-plan requires a prefixes path")?;
+            let fuzzy = required_path(args.next(), "archive-rebuild-plan requires a fuzzy path")?;
+            let dictionary = required_path(
+                args.next(),
+                "archive-rebuild-plan requires a dictionary path",
+            )?;
+            let content =
+                required_path(args.next(), "archive-rebuild-plan requires a content path")?;
+            let manifest = required_path(
+                args.next(),
+                "archive-rebuild-plan requires a content manifest path",
+            )?;
+            let discovered_archives = args
+                .map(|spec| parse_content_manifest_archive_spec(&spec))
+                .collect::<Result<Vec<_>>>()?;
+            let inputs = ArchiveRebuildInputs {
+                records_path: records,
+                columns_path: columns,
+                metadata_path: metadata,
+                prefixes_path: prefixes,
+                fuzzy_path: fuzzy,
+                dictionary_path: dictionary,
+                content_path: content,
+                manifest_path: manifest,
+                discovered_content_archives: discovered_archives,
+            };
+            for line in plan_archive_rebuilds(&inputs).as_tsv_lines() {
+                println!("{line}");
+            }
         }
         Some("records-migration-plan") => {
             let records = required_path(
@@ -3360,6 +3399,7 @@ fn print_usage() {
   gfm index-footprint <index.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <content-manifest.gfmmanifest|-> [segments.gfmseg...]
   gfm index-compaction-plan <index.gfmidx> <content-manifest.gfmmanifest|-> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> [segments.gfmseg...]
   gfm archive-schema <records|columns|metadata|prefixes|fuzzy|dictionary|content|content-manifest> <archive-path>
+  gfm archive-rebuild-plan <records.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <fuzzy.gfmfuzzy> <dictionary.gfmdict> <content.gfmcontent> <content-manifest.gfmmanifest> [hot|warm|cold:content.gfmcontent...]
   gfm records-migration-plan <records.gfmidx>
   gfm records-migrate <records.gfmidx> <backup-dir>
   gfm content-migration-plan <content.gfmcontent>

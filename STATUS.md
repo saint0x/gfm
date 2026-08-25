@@ -58,42 +58,41 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 ## Storage Engine
 
 37. Calibrate million-entry sidecar gate thresholds on production macOS hardware and wire the large gate into required CI artifacts with retained telemetry history.
-38. Complete storage durability beyond persistent record/state, content manifest, content manifest promotion journal recovery, search sidecar recovery, archive schema inspection, legacy record/content/metadata archive migration, derived column archive rebuild, and generic derived search sidecar rebuild by producing rebuild plans across all archive types.
-39. Implement real filesystem benchmark fixtures for millions of materialized files across developer, media, documents, iCloud, external-volume, and network-volume trees.
+38. Implement real filesystem benchmark fixtures for millions of materialized files across developer, media, documents, iCloud, external-volume, and network-volume trees.
 
 ## File Operations
 
-40. Implement APFS clone fast paths using platform-native clone semantics.
-41. Implement copyfile/Finder-compatible metadata preservation, xattrs, ACLs, resource forks, quarantine attributes, package behavior, and symlink policies.
-42. Implement operation pause, resume, cancellation, retry, and crash recovery replay.
-43. Implement progress accounting for recursive operations before and during execution.
-44. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
-45. Implement Trash restore metadata and restore operation.
-46. Implement privileged-operation flow for protected paths.
-47. Implement network-volume fallbacks and slow-volume throttling.
-48. Implement post-operation verification policy for high-risk moves/copies.
+39. Implement APFS clone fast paths using platform-native clone semantics.
+40. Implement copyfile/Finder-compatible metadata preservation, xattrs, ACLs, resource forks, quarantine attributes, package behavior, and symlink policies.
+41. Implement operation pause, resume, cancellation, retry, and crash recovery replay.
+42. Implement progress accounting for recursive operations before and during execution.
+43. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
+44. Implement Trash restore metadata and restore operation.
+45. Implement privileged-operation flow for protected paths.
+46. Implement network-volume fallbacks and slow-volume throttling.
+47. Implement post-operation verification policy for high-risk moves/copies.
 
 ## Jobs And Runtime
 
-49. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
-50. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
-51. Implement persistent progress snapshots and user-visible progress restoration after restart.
-52. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
-53. Implement per-volume concurrency limits and operation isolation.
-54. Implement structured cancellation propagation across nested jobs and subprocess extractors.
-55. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
+48. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
+49. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
+50. Implement persistent progress snapshots and user-visible progress restoration after restart.
+51. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
+52. Implement per-volume concurrency limits and operation isolation.
+53. Implement structured cancellation propagation across nested jobs and subprocess extractors.
+54. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
 
 ## Preview And Thumbnails
 
-56. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
+55. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
 
 ## Packaging
 
-57. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
+56. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
 
 ## Documentation
 
-58. Expand `PLAN.md` when architectural decisions change materially.
-59. Keep `README.md` written as the completed product contract.
-60. Keep this file limited to unfinished work only.
-61. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+57. Expand `PLAN.md` when architectural decisions change materially.
+58. Keep `README.md` written as the completed product contract.
+59. Keep this file limited to unfinished work only.
+60. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

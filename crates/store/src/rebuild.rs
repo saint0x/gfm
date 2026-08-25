@@ -1,9 +1,12 @@
 use crate::{
-    dictionary_terms_from_records, fuzzy_postings_from_records, inspect_archive_schema,
-    metadata_postings_from_records, prefix_postings_from_records, schema, sidecar_kind_name,
-    write_dictionary, write_fuzzy_postings, write_metadata_postings, write_prefix_postings,
-    write_record_columns, ArchiveSchemaKind, ArchiveSchemaReport, ArchiveSchemaStatus,
-    MmapRecordArchive, SidecarKind,
+    content_manifest_recovery_action_name, dictionary_terms_from_records,
+    fuzzy_postings_from_records, inspect_archive_schema, metadata_postings_from_records,
+    plan_content_archive_migration, plan_content_manifest_recovery, plan_record_archive_migration,
+    prefix_postings_from_records, schema, sidecar_kind_name, write_dictionary,
+    write_fuzzy_postings, write_metadata_postings, write_prefix_postings, write_record_columns,
+    ArchiveSchemaKind, ArchiveSchemaReport, ArchiveSchemaStatus, ContentArchiveManifestEntry,
+    ContentArchiveMigrationAction, ContentManifestRecoveryAction, MmapRecordArchive,
+    RecordArchiveMigrationAction, SidecarKind,
 };
 use gfm_types::{FileRecord, GfmError, Result};
 use std::path::{Path, PathBuf};
@@ -60,6 +63,123 @@ pub struct DerivedSidecarRebuild {
     pub after: ArchiveSchemaReport,
     pub rebuilt_records: usize,
     pub backup_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveRebuildRoute {
+    Ready,
+    Migrate,
+    Rebuild,
+    Recover,
+    CannotRecover,
+}
+
+impl ArchiveRebuildRoute {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Migrate => "migrate",
+            Self::Rebuild => "rebuild",
+            Self::Recover => "recover",
+            Self::CannotRecover => "cannot-recover",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveRebuildPlanEntry {
+    pub kind: &'static str,
+    pub path: PathBuf,
+    pub status: String,
+    pub route: ArchiveRebuildRoute,
+    pub source: &'static str,
+    pub detail: Option<String>,
+}
+
+impl ArchiveRebuildPlanEntry {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "archive-rebuild-entry\tkind={}\troute={}\tstatus={}\tsource={}\tpath={}\tdetail={}",
+            self.kind,
+            self.route.as_str(),
+            self.status,
+            self.source,
+            schema::escape_field(&self.path.display().to_string()),
+            self.detail
+                .as_deref()
+                .map(schema::escape_field)
+                .unwrap_or("-".to_string())
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveRebuildPlan {
+    pub entries: Vec<ArchiveRebuildPlanEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveRebuildInputs {
+    pub records_path: PathBuf,
+    pub columns_path: PathBuf,
+    pub metadata_path: PathBuf,
+    pub prefixes_path: PathBuf,
+    pub fuzzy_path: PathBuf,
+    pub dictionary_path: PathBuf,
+    pub content_path: PathBuf,
+    pub manifest_path: PathBuf,
+    pub discovered_content_archives: Vec<ContentArchiveManifestEntry>,
+}
+
+impl ArchiveRebuildPlan {
+    pub fn ready_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.route == ArchiveRebuildRoute::Ready)
+            .count()
+    }
+
+    pub fn migration_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.route == ArchiveRebuildRoute::Migrate)
+            .count()
+    }
+
+    pub fn rebuild_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.route == ArchiveRebuildRoute::Rebuild)
+            .count()
+    }
+
+    pub fn recovery_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.route == ArchiveRebuildRoute::Recover)
+            .count()
+    }
+
+    pub fn blocked_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.route == ArchiveRebuildRoute::CannotRecover)
+            .count()
+    }
+
+    pub fn as_tsv_lines(&self) -> Vec<String> {
+        let mut lines = vec![format!(
+            "archive-rebuild-plan\tentries={}\tready={}\tmigrate={}\trebuild={}\trecover={}\tblocked={}",
+            self.entries.len(),
+            self.ready_count(),
+            self.migration_count(),
+            self.rebuild_count(),
+            self.recovery_count(),
+            self.blocked_count()
+        )];
+        lines.extend(self.entries.iter().map(ArchiveRebuildPlanEntry::as_tsv));
+        lines
+    }
 }
 
 impl DerivedSidecarRebuild {
@@ -290,6 +410,48 @@ pub fn rebuild_derived_sidecar(
     })
 }
 
+pub fn plan_archive_rebuilds(inputs: &ArchiveRebuildInputs) -> ArchiveRebuildPlan {
+    let records_path = inputs.records_path.as_path();
+    let content_path = inputs.content_path.as_path();
+    let manifest_path = inputs.manifest_path.as_path();
+    let record_plan = plan_record_archive_migration(records_path);
+    let content_plan = plan_content_archive_migration(content_path);
+    let manifest_plan =
+        plan_content_manifest_recovery(manifest_path, &inputs.discovered_content_archives);
+    let mut entries = Vec::with_capacity(8);
+    entries.push(record_rebuild_entry(record_plan));
+    entries.extend([
+        derived_rebuild_entry(plan_derived_sidecar_rebuild(
+            records_path,
+            SidecarKind::Columns,
+            &inputs.columns_path,
+        )),
+        derived_rebuild_entry(plan_derived_sidecar_rebuild(
+            records_path,
+            SidecarKind::Metadata,
+            &inputs.metadata_path,
+        )),
+        derived_rebuild_entry(plan_derived_sidecar_rebuild(
+            records_path,
+            SidecarKind::Prefixes,
+            &inputs.prefixes_path,
+        )),
+        derived_rebuild_entry(plan_derived_sidecar_rebuild(
+            records_path,
+            SidecarKind::Fuzzy,
+            &inputs.fuzzy_path,
+        )),
+        derived_rebuild_entry(plan_derived_sidecar_rebuild(
+            records_path,
+            SidecarKind::Dictionary,
+            &inputs.dictionary_path,
+        )),
+    ]);
+    entries.push(content_rebuild_entry(content_plan));
+    entries.push(content_manifest_rebuild_entry(manifest_plan));
+    ArchiveRebuildPlan { entries }
+}
+
 pub fn plan_columns_archive_rebuild(
     records_path: impl AsRef<Path>,
     columns_path: impl AsRef<Path>,
@@ -331,6 +493,110 @@ fn columns_action_from_derived(action: DerivedSidecarRebuildAction) -> ColumnsAr
     }
 }
 
+fn record_rebuild_entry(plan: crate::RecordArchiveMigrationPlan) -> ArchiveRebuildPlanEntry {
+    let route = match plan.action {
+        RecordArchiveMigrationAction::Ready => ArchiveRebuildRoute::Ready,
+        RecordArchiveMigrationAction::Migrate => ArchiveRebuildRoute::Migrate,
+        RecordArchiveMigrationAction::CannotMigrate => match plan.before.status {
+            ArchiveSchemaStatus::Missing | ArchiveSchemaStatus::Unreadable => {
+                ArchiveRebuildRoute::Rebuild
+            }
+            ArchiveSchemaStatus::Unsupported
+            | ArchiveSchemaStatus::Current
+            | ArchiveSchemaStatus::Legacy => ArchiveRebuildRoute::CannotRecover,
+        },
+    };
+    ArchiveRebuildPlanEntry {
+        kind: ArchiveSchemaKind::Records.as_str(),
+        path: plan.before.path,
+        status: plan.before.status.as_str().to_string(),
+        route,
+        source: match route {
+            ArchiveRebuildRoute::Ready => "current-records",
+            ArchiveRebuildRoute::Migrate => "legacy-records",
+            ArchiveRebuildRoute::Rebuild => "filesystem-scan",
+            ArchiveRebuildRoute::Recover | ArchiveRebuildRoute::CannotRecover => "operator",
+        },
+        detail: plan.detail,
+    }
+}
+
+fn content_rebuild_entry(plan: crate::ContentArchiveMigrationPlan) -> ArchiveRebuildPlanEntry {
+    let route = match plan.action {
+        ContentArchiveMigrationAction::Ready => ArchiveRebuildRoute::Ready,
+        ContentArchiveMigrationAction::Migrate => ArchiveRebuildRoute::Migrate,
+        ContentArchiveMigrationAction::CannotMigrate => match plan.before.status {
+            ArchiveSchemaStatus::Missing | ArchiveSchemaStatus::Unreadable => {
+                ArchiveRebuildRoute::Rebuild
+            }
+            ArchiveSchemaStatus::Unsupported
+            | ArchiveSchemaStatus::Current
+            | ArchiveSchemaStatus::Legacy => ArchiveRebuildRoute::CannotRecover,
+        },
+    };
+    ArchiveRebuildPlanEntry {
+        kind: ArchiveSchemaKind::Content.as_str(),
+        path: plan.before.path,
+        status: plan.before.status.as_str().to_string(),
+        route,
+        source: match route {
+            ArchiveRebuildRoute::Ready => "current-content",
+            ArchiveRebuildRoute::Migrate => "legacy-content",
+            ArchiveRebuildRoute::Rebuild => "extraction-segments",
+            ArchiveRebuildRoute::Recover | ArchiveRebuildRoute::CannotRecover => "operator",
+        },
+        detail: plan.detail,
+    }
+}
+
+fn derived_rebuild_entry(plan: DerivedSidecarRebuildPlan) -> ArchiveRebuildPlanEntry {
+    let route = match plan.action {
+        DerivedSidecarRebuildAction::Ready => ArchiveRebuildRoute::Ready,
+        DerivedSidecarRebuildAction::Rebuild => ArchiveRebuildRoute::Rebuild,
+        DerivedSidecarRebuildAction::CannotRebuild => ArchiveRebuildRoute::CannotRecover,
+    };
+    ArchiveRebuildPlanEntry {
+        kind: sidecar_kind_name(plan.kind),
+        path: plan.sidecar.path,
+        status: plan.sidecar.status.as_str().to_string(),
+        route,
+        source: match route {
+            ArchiveRebuildRoute::Ready => "current-sidecar",
+            ArchiveRebuildRoute::Rebuild => "durable-records",
+            ArchiveRebuildRoute::Migrate
+            | ArchiveRebuildRoute::Recover
+            | ArchiveRebuildRoute::CannotRecover => "operator",
+        },
+        detail: plan.detail,
+    }
+}
+
+fn content_manifest_rebuild_entry(
+    plan: crate::ContentManifestRecoveryPlan,
+) -> ArchiveRebuildPlanEntry {
+    let route = match plan.action {
+        ContentManifestRecoveryAction::Ready => ArchiveRebuildRoute::Ready,
+        ContentManifestRecoveryAction::WriteDiscoveredManifest
+        | ContentManifestRecoveryAction::QuarantineManifestAndWriteDiscovered
+        | ContentManifestRecoveryAction::PruneInvalidArchives => ArchiveRebuildRoute::Recover,
+        ContentManifestRecoveryAction::CannotRecover => ArchiveRebuildRoute::CannotRecover,
+    };
+    ArchiveRebuildPlanEntry {
+        kind: ArchiveSchemaKind::ContentManifest.as_str(),
+        path: plan.manifest_path,
+        status: content_manifest_recovery_action_name(plan.action).to_string(),
+        route,
+        source: match route {
+            ArchiveRebuildRoute::Ready => "current-manifest",
+            ArchiveRebuildRoute::Recover => "validated-content-archives",
+            ArchiveRebuildRoute::Migrate
+            | ArchiveRebuildRoute::Rebuild
+            | ArchiveRebuildRoute::CannotRecover => "operator",
+        },
+        detail: plan.detail,
+    }
+}
+
 fn archive_kind_for_sidecar(kind: SidecarKind) -> ArchiveSchemaKind {
     match kind {
         SidecarKind::Columns => ArchiveSchemaKind::Columns,
@@ -359,8 +625,8 @@ fn write_derived_sidecar(kind: SidecarKind, path: &Path, records: &[FileRecord])
 mod tests {
     use super::*;
     use crate::{
-        read_dictionary, read_metadata_postings, write_records, MmapFuzzyArchive,
-        MmapPrefixArchive, MmapRecordColumns,
+        read_dictionary, read_metadata_postings, write_content_postings, write_records,
+        ContentMergeTier, MmapFuzzyArchive, MmapPrefixArchive, MmapRecordColumns,
     };
     use gfm_types::{FileId, FileKind, FileRecord, VolumeId};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -531,6 +797,101 @@ mod tests {
             .ids_for("instant")
             .unwrap()
             .is_empty());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plans_rebuild_routes_across_all_archive_types() {
+        let dir = temp_dir("gfm-archive-rebuild-plan-all");
+        let records = dir.join("records.gfmidx");
+        let columns = dir.join("records.gfmcols");
+        let metadata = dir.join("records.gfmmeta");
+        let prefixes = dir.join("records.gfmprefix");
+        let fuzzy = dir.join("records.gfmfuzzy");
+        let dictionary = dir.join("records.gfmdict");
+        let content = dir.join("content.gfmcontent");
+        let manifest = dir.join("content.gfmmanifest");
+        write_records(&records, &[record()]).unwrap();
+        write_content_postings(&content, &[]).unwrap();
+
+        let plan = plan_archive_rebuilds(&ArchiveRebuildInputs {
+            records_path: records,
+            columns_path: columns,
+            metadata_path: metadata,
+            prefixes_path: prefixes,
+            fuzzy_path: fuzzy,
+            dictionary_path: dictionary,
+            content_path: content.clone(),
+            manifest_path: manifest,
+            discovered_content_archives: vec![ContentArchiveManifestEntry {
+                tier: ContentMergeTier::Hot,
+                path: content.clone(),
+            }],
+        });
+
+        assert_eq!(plan.entries.len(), 8);
+        assert_eq!(plan.ready_count(), 2);
+        assert_eq!(plan.rebuild_count(), 5);
+        assert_eq!(plan.recovery_count(), 1);
+        assert_eq!(plan.blocked_count(), 0);
+        assert!(plan
+            .entries
+            .iter()
+            .any(|entry| entry.kind == "records" && entry.route == ArchiveRebuildRoute::Ready));
+        assert!(plan.entries.iter().any(|entry| entry.kind == "columns"
+            && entry.route == ArchiveRebuildRoute::Rebuild
+            && entry.source == "durable-records"));
+        assert!(plan
+            .entries
+            .iter()
+            .any(|entry| entry.kind == "content-manifest"
+                && entry.route == ArchiveRebuildRoute::Recover
+                && entry.source == "validated-content-archives"));
+        assert!(plan
+            .as_tsv_lines()
+            .first()
+            .unwrap()
+            .contains("entries=8\tready=2\tmigrate=0\trebuild=5\trecover=1\tblocked=0"));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn archive_rebuild_plan_blocks_sidecars_without_records() {
+        let dir = temp_dir("gfm-archive-rebuild-plan-blocked");
+        let records = dir.join("missing.gfmidx");
+        let content = dir.join("content.gfmcontent");
+        let manifest = dir.join("content.gfmmanifest");
+
+        let plan = plan_archive_rebuilds(&ArchiveRebuildInputs {
+            records_path: records,
+            columns_path: dir.join("records.gfmcols"),
+            metadata_path: dir.join("records.gfmmeta"),
+            prefixes_path: dir.join("records.gfmprefix"),
+            fuzzy_path: dir.join("records.gfmfuzzy"),
+            dictionary_path: dir.join("records.gfmdict"),
+            content_path: content,
+            manifest_path: manifest,
+            discovered_content_archives: Vec::new(),
+        });
+
+        assert_eq!(plan.entries.len(), 8);
+        assert_eq!(plan.rebuild_count(), 2);
+        assert_eq!(plan.blocked_count(), 6);
+        assert!(plan.entries.iter().any(|entry| entry.kind == "records"
+            && entry.route == ArchiveRebuildRoute::Rebuild
+            && entry.source == "filesystem-scan"));
+        assert!(plan
+            .entries
+            .iter()
+            .any(|entry| entry.kind == "prefixes"
+                && entry.route == ArchiveRebuildRoute::CannotRecover));
+        assert!(plan
+            .entries
+            .iter()
+            .any(|entry| entry.kind == "content-manifest"
+                && entry.route == ArchiveRebuildRoute::CannotRecover));
 
         std::fs::remove_dir_all(dir).unwrap();
     }

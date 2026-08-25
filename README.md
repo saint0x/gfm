@@ -269,6 +269,7 @@ cargo run -p gfm -- sidecar-recovery-plan records.gfmidx columns.gfmcols metadat
 cargo run -p gfm -- sidecar-recover records.gfmidx quarantine columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
 cargo run -p gfm -- archive-schema records records.gfmidx
 cargo run -p gfm -- archive-schema prefixes prefixes.gfmprefix
+cargo run -p gfm -- archive-rebuild-plan records.gfmidx columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict content.gfmcontent content.gfmmanifest hot:content.gfmcontent
 cargo run -p gfm -- records-migration-plan records.gfmidx
 cargo run -p gfm -- records-migrate records.gfmidx quarantine
 cargo run -p gfm -- content-migration-plan content.gfmcontent
@@ -288,6 +289,7 @@ cargo run -p gfm -- derived-sidecar-rebuild records.gfmidx prefixes prefixes.gfm
 `content-manifest-promotion-recovery-plan` and `content-manifest-promotion-recover` complete or clean up interrupted content manifest promotions from the durable promotion journal so compaction cannot strand a valid new content archive behind a stale manifest.
 `sidecar-recovery-plan` and `sidecar-recover` validate, quarantine, and rebuild search sidecars from the durable record archive.
 `archive-schema` classifies record, column, metadata, prefix, fuzzy, dictionary, content, and content-manifest archives as current, legacy, unsupported, missing, or unreadable while validating known schemas through the production readers used by search and diagnostics.
+`archive-rebuild-plan` emits one deterministic preflight over records, columns, metadata, prefixes, fuzzy, dictionary, content, and content-manifest state, selecting the concrete ready/migrate/rebuild/recover/blocked route for each surface before any bytes are mutated.
 `records-migration-plan` and `records-migrate` rewrite legacy record archives into the current checksummed schema after preserving a byte backup for operator rollback and forensic inspection.
 `content-migration-plan` and `content-migrate` rewrite legacy sequential content archives into the current indexed and checksummed content schema after preserving a byte backup.
 `metadata-migration-plan` and `metadata-migrate` rewrite legacy metadata archives into the current checksummed metadata schema after preserving a byte backup.
@@ -340,6 +342,7 @@ cargo run -p gfm -- archive-schema records /tmp/gfm.gfmidx
 cargo run -p gfm -- archive-schema content-manifest /tmp/gfm.gfmmanifest
 cargo run -p gfm -- records-migration-plan /tmp/gfm.gfmidx
 cargo run -p gfm -- records-migrate /tmp/gfm.gfmidx /tmp/gfm-migration-backups
+cargo run -p gfm -- archive-rebuild-plan /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmfuzzy /tmp/gfm.gfmdict /tmp/gfm.gfmcontent /tmp/gfm.gfmmanifest hot:/tmp/gfm.gfmcontent
 cargo run -p gfm -- content-migration-plan /tmp/gfm.gfmcontent
 cargo run -p gfm -- content-migrate /tmp/gfm.gfmcontent /tmp/gfm-migration-backups
 cargo run -p gfm -- metadata-migration-plan /tmp/gfm.gfmmeta

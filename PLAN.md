@@ -472,6 +472,11 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - existing unreadable, unsupported, or legacy sidecar bytes are backed up before replacement, while missing sidecars rebuild without synthetic backup artifacts;
   - rebuilt sidecars are reclassified and must reopen as the current schema for their archive kind before success is reported;
   - the operator-facing `derived-sidecar-rebuild-plan` and `derived-sidecar-rebuild` commands expose the generic path, with `columns-rebuild-plan` and `columns-rebuild` retained as column-specific aliases.
+- Aggregate archive rebuild planning:
+  - records, columns, metadata, prefixes, fuzzy, dictionary, content, and content manifests are planned through one deterministic preflight that delegates to the production migration, derived-rebuild, and manifest-recovery planners;
+  - each archive surface resolves to exactly one route before mutation: ready, migrate, rebuild, recover, or cannot-recover;
+  - record rebuild routes point at filesystem rescan, derived sidecar rebuild routes point at durable mmap records, content rebuild routes point at extraction segments, and content-manifest recovery routes point at validated content archives;
+  - the operator-facing `archive-rebuild-plan` command emits stable summary and per-archive TSV lines for CI gates, startup diagnostics, and repair runbooks.
 - Persistent index recovery:
   - record archives and volume-state files are classified before startup use as ready, missing, unreadable, schema-mismatched, root-mismatched, path-mismatched, or count-mismatched;
   - valid records with missing, stale, unreadable, or migratable state rebuild the state file without rescanning the volume;

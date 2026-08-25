@@ -440,8 +440,13 @@ fn rebuilds_columns_archive_from_binary() {
 fn rebuilds_derived_sidecars_from_binary() {
     let root = unique_temp_dir("gfm-cli-derived-rebuild-root");
     let records = unique_temp_path("gfm-cli-derived-rebuild-records", "gfmidx");
+    let columns = unique_temp_path("gfm-cli-derived-rebuild-columns", "gfmcols");
+    let metadata = unique_temp_path("gfm-cli-derived-rebuild-metadata", "gfmmeta");
     let prefixes = unique_temp_path("gfm-cli-derived-rebuild-prefixes", "gfmprefix");
+    let fuzzy = unique_temp_path("gfm-cli-derived-rebuild-fuzzy", "gfmfuzzy");
     let dictionary = unique_temp_path("gfm-cli-derived-rebuild-dictionary", "gfmdict");
+    let content = unique_temp_path("gfm-cli-derived-rebuild-content", "gfmcontent");
+    let manifest = unique_temp_path("gfm-cli-derived-rebuild-content", "gfmmanifest");
     let backup = unique_temp_dir("gfm-cli-derived-rebuild-backup");
     fs::write(root.join("DerivedNeedle.md"), "alpha").unwrap();
 
@@ -453,6 +458,39 @@ fn rebuilds_derived_sidecars_from_binary() {
         index.status.success(),
         "{}",
         String::from_utf8_lossy(&index.stderr)
+    );
+    write_content_postings(&content, &[]).unwrap();
+
+    let archive_plan = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "archive-rebuild-plan",
+            records.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+            dictionary.to_str().unwrap(),
+            content.to_str().unwrap(),
+            manifest.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        archive_plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&archive_plan.stderr)
+    );
+    let archive_plan_stdout = String::from_utf8(archive_plan.stdout).unwrap();
+    assert!(
+        archive_plan_stdout.contains(
+            "archive-rebuild-plan\tentries=8\tready=2\tmigrate=0\trebuild=5\trecover=1\tblocked=0"
+        ) && archive_plan_stdout.contains(
+            "archive-rebuild-entry\tkind=content-manifest\troute=recover\tstatus=write-discovered-manifest"
+        ) && archive_plan_stdout.contains(
+            "archive-rebuild-entry\tkind=prefixes\troute=rebuild\tstatus=missing\tsource=durable-records"
+        ),
+        "{archive_plan_stdout}"
     );
 
     let plan = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -537,6 +575,10 @@ fn rebuilds_derived_sidecars_from_binary() {
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+    if manifest.exists() {
+        fs::remove_file(manifest).unwrap();
+    }
     fs::remove_file(prefixes).unwrap();
     fs::remove_file(dictionary).unwrap();
     fs::remove_dir_all(backup).unwrap();
