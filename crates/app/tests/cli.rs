@@ -3919,6 +3919,36 @@ fn reports_retry_backoff_plan_from_binary() {
     );
 }
 
+#[test]
+fn reports_job_payload_catalog_from_binary() {
+    let catalog = unique_temp_path("gfm-cli-job-payload-catalog", "gfmjobs");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["jobs-payload-catalog", catalog.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for kind in [
+        "operation",
+        "indexing",
+        "extraction",
+        "thumbnail",
+        "preview",
+        "repair",
+    ] {
+        assert!(stdout.contains(&format!("\t{kind}\t")), "{stdout}");
+    }
+    assert!(catalog.is_file());
+
+    fs::remove_file(catalog).unwrap();
+}
+
 fn run_gfm<const N: usize>(journal: &std::path::Path, args: [&str; N]) {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_OPS_JOURNAL", journal)

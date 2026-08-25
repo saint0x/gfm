@@ -24,9 +24,10 @@ use gfm_index::{
     SearchStreamStage, ThermalState, UserActivity, VolumeIndexPolicy,
 };
 use gfm_jobs::{
-    Cancellation, JobBatteryState, JobIoPressure, JobJournal, JobThermalState, JobUserActivity,
-    Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, SchedulingAction,
-    SchedulingPressure, Task, TaskStatus, VolumeConcurrencyPolicy, WorkerPool,
+    Cancellation, JobBatteryState, JobIoPressure, JobJournal, JobPayloadCatalog, JobPayloadKind,
+    JobPayloadRecord, JobThermalState, JobUserActivity, Priority, RecoveryReason, RetriableTask,
+    RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, Task, TaskStatus,
+    VolumeConcurrencyPolicy, WorkerPool,
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, parse_spotlight_fixture, AccessIntent,
@@ -3051,6 +3052,15 @@ fn run() -> Result<()> {
                 max_attempts
             );
         }
+        Some("jobs-payload-catalog") => {
+            let path = required_path(args.next(), "jobs-payload-catalog requires a catalog path")?;
+            let catalog = JobPayloadCatalog::new(&path);
+            let records = sample_payload_catalog_records();
+            catalog.write_all(&records)?;
+            for record in catalog.read()? {
+                println!("{}", record.as_tsv());
+            }
+        }
         Some("ops-recover") => {
             let (journal, policy) = parse_ops_recover_args(&mut args)?;
             let report =
@@ -4441,6 +4451,71 @@ fn recovery_reason(reason: RecoveryReason) -> &'static str {
     }
 }
 
+fn sample_payload_catalog_records() -> Vec<JobPayloadRecord> {
+    [
+        (
+            1,
+            JobPayloadKind::Operation,
+            "copy operation",
+            "operations/copy.gfmjob",
+            Some(VolumeId(1)),
+            "copy:/source->/target",
+        ),
+        (
+            2,
+            JobPayloadKind::Indexing,
+            "content indexing",
+            "index/content.gfmjob",
+            Some(VolumeId(1)),
+            "index:/workspace",
+        ),
+        (
+            3,
+            JobPayloadKind::Extraction,
+            "content extraction",
+            "extract/report.gfmjob",
+            Some(VolumeId(1)),
+            "extract:/workspace/report.pdf",
+        ),
+        (
+            4,
+            JobPayloadKind::Thumbnail,
+            "thumbnail generation",
+            "preview/thumbnail.gfmjob",
+            Some(VolumeId(1)),
+            "thumbnail:/workspace/image.png",
+        ),
+        (
+            5,
+            JobPayloadKind::Preview,
+            "quick look preview",
+            "preview/quicklook.gfmjob",
+            Some(VolumeId(1)),
+            "preview:/workspace/report.pdf",
+        ),
+        (
+            6,
+            JobPayloadKind::Repair,
+            "sidecar repair",
+            "repair/sidecar.gfmjob",
+            None,
+            "repair:sidecars",
+        ),
+    ]
+    .into_iter()
+    .map(|(id, kind, label, path, volume, summary)| {
+        JobPayloadRecord::new(
+            gfm_jobs::JobId::from_raw(id),
+            kind,
+            label,
+            path,
+            volume,
+            summary,
+        )
+    })
+    .collect()
+}
+
 fn stream_stage(stage: SearchStreamStage) -> &'static str {
     match stage {
         SearchStreamStage::Hot => "hot",
@@ -4729,6 +4804,7 @@ fn print_usage() {
   gfm notarize-app <GFM.app> <output-dir> --api-key <AuthKey.p8> --key-id <key> --issuer <issuer>
   gfm jobs-recover [jobs.journal]
   gfm jobs-retry-plan <max-attempts> <attempts> <failure-message...>
+  gfm jobs-payload-catalog <catalog.gfmjobs>
   gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
   gfm watch-once <root>
   gfm copy <source> <destination>

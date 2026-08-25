@@ -144,6 +144,8 @@ Quick Look preview and thumbnail generation commands also enter through volume-i
 
 Background content indexing persists its `VolumeId` in the durable job spec and resumes through the same isolated, journaled, capped-retry worker path.
 
+The jobs layer also persists a typed payload catalog for operation, indexing, extraction, thumbnail, preview, and repair jobs. Catalog rows carry job id, payload kind, label, payload path, volume id, and a compact summary so recovery and diagnostics can inspect what a job was meant to do without guessing from logs.
+
 Job retries classify failures as transient, permission, missing-file, corrupt-file, offline-volume, or permanent before recovery admission. Transient and offline-volume failures receive bounded exponential backoff; permission, missing-file, corrupt-file, and permanent failures are surfaced without retry churn.
 
 Background content indexing also consumes explicit runtime pressure signals: saturated I/O or critical thermal pressure defers the durable job before extraction starts, while elevated pressure, low power, or active user input throttles worker admission.
@@ -457,6 +459,7 @@ Run the background content indexing pipeline:
 cargo run -p gfm -- index-content-background . /tmp/gfm-segments /tmp/gfm.gfmidx /tmp/gfm.gfmcontent
 cargo run -p gfm -- index-content-background . /tmp/gfm-segments /tmp/gfm.gfmidx /tmp/gfm.gfmcontent saturated nominal ac idle
 cargo run -p gfm -- jobs-recover /tmp/gfm-jobs.journal
+cargo run -p gfm -- jobs-payload-catalog /tmp/gfm-jobs.gfmjobs
 ```
 
 Watch and operate on files:

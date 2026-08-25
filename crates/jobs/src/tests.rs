@@ -391,6 +391,79 @@ fn journal_does_not_recover_exhausted_failures() {
     std::fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn payload_catalog_round_trips_all_job_families() {
+    let path = temp_path("gfm-job-payload-catalog", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+    let records = vec![
+        JobPayloadRecord::new(
+            JobId::from_raw(1),
+            JobPayloadKind::Operation,
+            "copy",
+            "ops/copy.gfmjob",
+            Some(VolumeId(7)),
+            "copy source to target",
+        ),
+        JobPayloadRecord::new(
+            JobId::from_raw(2),
+            JobPayloadKind::Indexing,
+            "index",
+            "index/content.gfmjob",
+            Some(VolumeId(7)),
+            "index content",
+        ),
+        JobPayloadRecord::new(
+            JobId::from_raw(3),
+            JobPayloadKind::Extraction,
+            "extract",
+            "extract/doc.gfmjob",
+            Some(VolumeId(7)),
+            "extract document",
+        ),
+        JobPayloadRecord::new(
+            JobId::from_raw(4),
+            JobPayloadKind::Thumbnail,
+            "thumbnail",
+            "preview/thumb.gfmjob",
+            Some(VolumeId(7)),
+            "make thumbnail",
+        ),
+        JobPayloadRecord::new(
+            JobId::from_raw(5),
+            JobPayloadKind::Preview,
+            "preview",
+            "preview/quicklook.gfmjob",
+            Some(VolumeId(7)),
+            "make preview",
+        ),
+        JobPayloadRecord::new(
+            JobId::from_raw(6),
+            JobPayloadKind::Repair,
+            "repair",
+            "repair/sidecar.gfmjob",
+            None,
+            "repair sidecar",
+        ),
+    ];
+
+    catalog.write_all(&records).unwrap();
+    assert_eq!(catalog.read().unwrap(), records);
+
+    let appended = JobPayloadRecord::new(
+        JobId::from_raw(7),
+        JobPayloadKind::Repair,
+        "repair escaped",
+        "repair/escaped.gfmjob",
+        None,
+        "line\nwith\ttabs",
+    );
+    catalog.append(&appended).unwrap();
+    let read = catalog.read().unwrap();
+    assert_eq!(read.last(), Some(&appended));
+
+    std::fs::remove_file(path).unwrap();
+}
+
 fn temp_path(prefix: &str, extension: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "{}-{}.{}",

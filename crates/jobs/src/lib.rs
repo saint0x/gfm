@@ -497,6 +497,156 @@ pub enum RecoveryReason {
     RetryableFailure,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobPayloadKind {
+    Operation,
+    Indexing,
+    Extraction,
+    Thumbnail,
+    Preview,
+    Repair,
+}
+
+impl JobPayloadKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Operation => "operation",
+            Self::Indexing => "indexing",
+            Self::Extraction => "extraction",
+            Self::Thumbnail => "thumbnail",
+            Self::Preview => "preview",
+            Self::Repair => "repair",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "operation" => Some(Self::Operation),
+            "indexing" => Some(Self::Indexing),
+            "extraction" => Some(Self::Extraction),
+            "thumbnail" => Some(Self::Thumbnail),
+            "preview" => Some(Self::Preview),
+            "repair" => Some(Self::Repair),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobPayloadRecord {
+    pub id: JobId,
+    pub kind: JobPayloadKind,
+    pub label: String,
+    pub payload_path: PathBuf,
+    pub volume: Option<VolumeId>,
+    pub summary: String,
+}
+
+impl JobPayloadRecord {
+    pub fn new(
+        id: JobId,
+        kind: JobPayloadKind,
+        label: impl Into<String>,
+        payload_path: impl Into<PathBuf>,
+        volume: Option<VolumeId>,
+        summary: impl Into<String>,
+    ) -> Self {
+        Self {
+            id,
+            kind,
+            label: label.into(),
+            payload_path: payload_path.into(),
+            volume,
+            summary: summary.into(),
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "payload\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.id.value(),
+            self.kind.as_str(),
+            escape(&self.label),
+            escape(&self.payload_path.to_string_lossy()),
+            self.volume
+                .map(|volume| volume.0.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            escape(&self.summary)
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JobPayloadCatalog {
+    path: PathBuf,
+}
+
+impl JobPayloadCatalog {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn write_all(&self, records: &[JobPayloadRecord]) -> Result<()> {
+        let file = File::create(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
+        let mut writer = BufWriter::new(file);
+        writeln!(writer, "gfm-job-payload-catalog-v1")
+            .map_err(|err| GfmError::io(&self.path, err))?;
+        for record in records {
+            writeln!(writer, "{}", record.as_tsv()).map_err(|err| GfmError::io(&self.path, err))?;
+        }
+        writer.flush().map_err(|err| GfmError::io(&self.path, err))
+    }
+
+    pub fn append(&self, record: &JobPayloadRecord) -> Result<()> {
+        if !self.path.exists() {
+            self.write_all(&[])?;
+        }
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&self.path)
+            .map_err(|err| GfmError::io(&self.path, err))?;
+        writeln!(file, "{}", record.as_tsv()).map_err(|err| GfmError::io(&self.path, err))
+    }
+
+    pub fn read(&self) -> Result<Vec<JobPayloadRecord>> {
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+        let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
+        let mut lines = BufReader::new(file).lines();
+        let header = lines
+            .next()
+            .transpose()
+            .map_err(|err| GfmError::io(&self.path, err))?
+            .ok_or_else(|| {
+                GfmError::Format(format!("empty payload catalog {}", self.path.display()))
+            })?;
+        if header != "gfm-job-payload-catalog-v1" {
+            return Err(GfmError::Format(format!(
+                "unsupported payload catalog header `{header}` in {}",
+                self.path.display()
+            )));
+        }
+        let mut records = Vec::new();
+        for (line_index, line) in lines.enumerate() {
+            let line = line.map_err(|err| GfmError::io(&self.path, err))?;
+            records.push(parse_payload_record(&line).map_err(|err| {
+                GfmError::Format(format!(
+                    "{} line {}: {}",
+                    self.path.display(),
+                    line_index + 2,
+                    err
+                ))
+            })?);
+        }
+        Ok(records)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct JobJournal {
     path: PathBuf,
@@ -961,6 +1111,39 @@ fn parse_journal_entry(line: &str) -> std::result::Result<JournalEntry, String> 
         attempt,
         status: parse_status(parts[2])?,
         label: unescape(parts[3])?,
+    })
+}
+
+fn parse_payload_record(line: &str) -> std::result::Result<JobPayloadRecord, String> {
+    let parts: Vec<_> = line.split('\t').collect();
+    if parts.len() != 7 {
+        return Err(format!("expected 7 fields, got {}", parts.len()));
+    }
+    if parts[0] != "payload" {
+        return Err(format!("expected payload row, got `{}`", parts[0]));
+    }
+    let id = parts[1]
+        .parse()
+        .map_err(|err| format!("invalid payload job id `{}`: {err}", parts[1]))?;
+    let kind = JobPayloadKind::parse(parts[2])
+        .ok_or_else(|| format!("invalid payload kind `{}`", parts[2]))?;
+    let label = unescape(parts[3])?;
+    let payload_path = PathBuf::from(unescape(parts[4])?);
+    let volume = if parts[5] == "-" {
+        None
+    } else {
+        Some(VolumeId(parts[5].parse().map_err(|err| {
+            format!("invalid payload volume id `{}`: {err}", parts[5])
+        })?))
+    };
+    let summary = unescape(parts[6])?;
+    Ok(JobPayloadRecord {
+        id: JobId::from_raw(id),
+        kind,
+        label,
+        payload_path,
+        volume,
+        summary,
     })
 }
 
