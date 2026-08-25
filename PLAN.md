@@ -394,7 +394,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
 
 - Immutable segments written append-only.
 - Memory-mapped dictionaries.
-- Front-coded sorted term dictionaries.
+- Front-coded sorted term dictionaries for filename/path terms, shared path prefixes, extensions, Finder tags, kind terms, metadata-field keys, and comment tokens.
 - Delta-encoded document IDs.
 - Roaring bitmaps for dense postings.
 - Varint or SIMD-BP128 style integer compression for sparse postings.

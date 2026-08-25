@@ -2,7 +2,7 @@ use crate::durable;
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use gfm_types::{FileKind, FileRecord, GfmError, Result};
 use memmap2::{Mmap, MmapOptions};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
@@ -12,6 +12,18 @@ const DICTIONARY_INDEX_FOOTER: &[u8] = b"gfm-dictionary-index-v1\n";
 const DICTIONARY_CHECKSUM_FOOTER: &[u8] = b"gfm-dictionary-checksum-v1\n";
 const DICTIONARY_FOOTER_LEN: u64 = 8 + DICTIONARY_INDEX_FOOTER.len() as u64;
 const DEFAULT_BLOCK_SIZE: usize = 16;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DictionaryTermReport {
+    pub terms: Vec<String>,
+    pub paths: usize,
+    pub path_prefixes: usize,
+    pub extensions: usize,
+    pub tags: usize,
+    pub kinds: usize,
+    pub metadata_keys: usize,
+    pub comment_tokens: usize,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DictionaryBlock {
@@ -30,37 +42,84 @@ pub struct MmapDictionary {
 }
 
 pub fn dictionary_terms_from_records(records: &[FileRecord]) -> Vec<String> {
+    dictionary_term_report_from_records(records).terms
+}
+
+pub fn dictionary_term_report_from_records(records: &[FileRecord]) -> DictionaryTermReport {
     let mut terms = BTreeSet::new();
-    terms.insert("field:comment".to_string());
-    terms.insert("field:extension".to_string());
-    terms.insert("field:kind".to_string());
-    terms.insert("field:path".to_string());
-    terms.insert("field:tag".to_string());
+    let mut paths = BTreeSet::new();
+    let mut path_prefix_counts = BTreeMap::new();
+    let mut path_prefixes = BTreeSet::new();
+    let mut extensions = BTreeSet::new();
+    let mut tags = BTreeSet::new();
+    let mut kinds = BTreeSet::new();
+    let mut metadata_keys = BTreeSet::new();
+    let mut comment_tokens = BTreeSet::new();
+
+    for key in [
+        "field:comment",
+        "field:extension",
+        "field:kind",
+        "field:path",
+        "field:path-prefix",
+        "field:tag",
+    ] {
+        insert_classified_term(&mut terms, &mut metadata_keys, key);
+    }
+
     for record in records {
         insert_term(&mut terms, record.name.as_str());
-        insert_term(&mut terms, kind_term(record.kind));
-        insert_term(&mut terms, &record.path.to_string_lossy());
+        insert_classified_term(&mut terms, &mut kinds, kind_term(record.kind));
+        insert_classified_term(&mut terms, &mut paths, &record.path.to_string_lossy());
         for component in record.path.components() {
             if let Some(component) = component.as_os_str().to_str() {
                 insert_term(&mut terms, component);
             }
         }
         if let Some(parent) = record.path.parent() {
-            insert_term(&mut terms, &parent.to_string_lossy());
+            insert_classified_term(&mut terms, &mut paths, &parent.to_string_lossy());
+            let mut record_prefixes = BTreeSet::new();
+            for ancestor in parent.ancestors() {
+                let prefix = normalize_path_prefix(ancestor);
+                if !prefix.is_empty() {
+                    record_prefixes.insert(prefix);
+                }
+            }
+            for prefix in record_prefixes {
+                *path_prefix_counts.entry(prefix).or_insert(0usize) += 1;
+            }
         }
         if let Some(extension) = record.extension() {
-            insert_term(&mut terms, extension);
+            insert_classified_term(&mut terms, &mut extensions, extension);
         }
         for tag in &record.tags {
-            insert_term(&mut terms, tag);
+            insert_classified_term(&mut terms, &mut tags, tag);
         }
         if let Some(comment) = &record.finder_comment {
             for token in tokenize(&normalize(comment)) {
-                insert_term(&mut terms, &token);
+                insert_classified_term(&mut terms, &mut comment_tokens, &token);
             }
         }
     }
-    terms.into_iter().collect()
+
+    for (prefix, count) in path_prefix_counts {
+        if count > 1 {
+            paths.insert(prefix.clone());
+            path_prefixes.insert(prefix.clone());
+            terms.insert(prefix);
+        }
+    }
+
+    DictionaryTermReport {
+        terms: terms.into_iter().collect(),
+        paths: paths.len(),
+        path_prefixes: path_prefixes.len(),
+        extensions: extensions.len(),
+        tags: tags.len(),
+        kinds: kinds.len(),
+        metadata_keys: metadata_keys.len(),
+        comment_tokens: comment_tokens.len(),
+    }
 }
 
 pub fn write_dictionary(path: impl AsRef<Path>, terms: &[String]) -> Result<()> {
@@ -477,6 +536,27 @@ fn insert_term(terms: &mut BTreeSet<String>, value: &str) {
     }
 }
 
+fn insert_classified_term(
+    terms: &mut BTreeSet<String>,
+    classified: &mut BTreeSet<String>,
+    value: &str,
+) {
+    let value = normalize(value);
+    if !value.is_empty() {
+        classified.insert(value.clone());
+        terms.insert(value);
+    }
+}
+
+fn normalize_path_prefix(path: &Path) -> String {
+    let value = normalize(&path.to_string_lossy());
+    if value == "/" || value == "." {
+        String::new()
+    } else {
+        value
+    }
+}
+
 fn kind_term(kind: FileKind) -> &'static str {
     match kind {
         FileKind::Directory => "kind:directory",
@@ -565,8 +645,8 @@ mod tests {
     }
 
     #[test]
-    fn dictionary_terms_include_record_paths_tags_kinds_and_metadata_keys() {
-        let record = FileRecord {
+    fn dictionary_terms_include_record_paths_tags_kinds_metadata_keys_and_shared_prefixes() {
+        let first = FileRecord {
             id: FileId::new(VolumeId(4), 12),
             parent: None,
             path: PathBuf::from("/Users/deepsaint/Documents/Report.md"),
@@ -584,15 +664,44 @@ mod tests {
             tags: vec!["Important".to_string()],
             finder_comment: Some("Client handoff".to_string()),
         };
+        let second = FileRecord {
+            id: FileId::new(VolumeId(4), 13),
+            parent: None,
+            path: PathBuf::from("/Users/deepsaint/Documents/Project/Notes.txt"),
+            name: "Notes.txt".to_string(),
+            kind: FileKind::File,
+            len: 1,
+            mode: 0,
+            owner: 0,
+            group: 0,
+            xattrs_digest: 0,
+            created: None,
+            modified: None,
+            changed: None,
+            hidden: false,
+            tags: vec!["Client".to_string()],
+            finder_comment: None,
+        };
 
-        let terms = dictionary_terms_from_records(&[record]);
+        let report = dictionary_term_report_from_records(&[first, second]);
+        let terms = report.terms;
 
         assert!(terms.contains(&"field:tag".to_string()));
+        assert!(terms.contains(&"field:path-prefix".to_string()));
         assert!(terms.contains(&"kind:file".to_string()));
         assert!(terms.contains(&"important".to_string()));
         assert!(terms.contains(&"md".to_string()));
+        assert!(terms.contains(&"txt".to_string()));
         assert!(terms.contains(&"client".to_string()));
         assert!(terms.contains(&"/users/deepsaint/documents/report.md".to_string()));
+        assert!(terms.contains(&"/users/deepsaint/documents".to_string()));
+        assert!(terms.contains(&"/users/deepsaint".to_string()));
+        assert_eq!(report.path_prefixes, 3);
+        assert_eq!(report.extensions, 2);
+        assert_eq!(report.tags, 2);
+        assert_eq!(report.kinds, 1);
+        assert_eq!(report.metadata_keys, 6);
+        assert_eq!(report.comment_tokens, 2);
     }
 
     fn temp_path(prefix: &str, extension: &str) -> PathBuf {

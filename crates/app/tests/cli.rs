@@ -875,6 +875,17 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&dictionary_output.stderr)
     );
+    let dictionary_stderr = String::from_utf8(dictionary_output.stderr).unwrap();
+    assert!(
+        dictionary_stderr.contains("dictionary-indexed\tterms=")
+            && dictionary_stderr.contains("\tpaths=")
+            && dictionary_stderr.contains("\tpath-prefixes=1")
+            && dictionary_stderr.contains("\textensions=1")
+            && dictionary_stderr.contains("\ttags=3")
+            && dictionary_stderr.contains("\tkinds=1")
+            && dictionary_stderr.contains("\tmetadata-keys=6"),
+        "{dictionary_stderr}"
+    );
 
     let lookup_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -893,6 +904,21 @@ fn searches_persisted_tags_from_binary() {
     assert!(
         lookup_stdout.starts_with("dictionary\tfound\t"),
         "{lookup_stdout}"
+    );
+
+    let prefix_lookup_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["dictionary-lookup", dictionary.to_str().unwrap(), "/tmp"])
+        .output()
+        .unwrap();
+    assert!(
+        prefix_lookup_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prefix_lookup_output.stderr)
+    );
+    let prefix_lookup_stdout = String::from_utf8(prefix_lookup_output.stdout).unwrap();
+    assert!(
+        prefix_lookup_stdout.starts_with("dictionary\tfound\t"),
+        "{prefix_lookup_stdout}"
     );
 
     let dictionary_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))

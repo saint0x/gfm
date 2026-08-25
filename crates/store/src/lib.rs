@@ -25,7 +25,8 @@ pub use contentset::{
     ContentArchiveManifestEntry, ContentManifestPromotion,
 };
 pub use dictionary::{
-    dictionary_terms_from_records, read_dictionary, write_dictionary, MmapDictionary,
+    dictionary_term_report_from_records, dictionary_terms_from_records, read_dictionary,
+    write_dictionary, DictionaryTermReport, MmapDictionary,
 };
 pub use durable::{atomic_write, DurableCommit};
 pub use fuzzy::{

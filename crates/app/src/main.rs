@@ -38,7 +38,7 @@ use gfm_preview::{
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
 use gfm_store::{
-    dictionary_terms_from_records, metadata_postings_from_records, write_dictionary,
+    dictionary_term_report_from_records, metadata_postings_from_records, write_dictionary,
     write_metadata_postings, write_record_columns, ContentArchive, MetadataField,
     MmapContentArchive, MmapContentSet, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive,
     MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
@@ -1359,9 +1359,19 @@ fn run() -> Result<()> {
                 "index-dictionary requires an output dictionary path",
             )?;
             let archive = MmapRecordArchive::open(records)?;
-            let terms = dictionary_terms_from_records(&archive.records()?);
-            write_dictionary(output, &terms)?;
-            eprintln!("dictionary-indexed {} terms", terms.len());
+            let report = dictionary_term_report_from_records(&archive.records()?);
+            write_dictionary(output, &report.terms)?;
+            eprintln!(
+                "dictionary-indexed\tterms={}\tpaths={}\tpath-prefixes={}\textensions={}\ttags={}\tkinds={}\tmetadata-keys={}\tcomment-tokens={}",
+                report.terms.len(),
+                report.paths,
+                report.path_prefixes,
+                report.extensions,
+                report.tags,
+                report.kinds,
+                report.metadata_keys,
+                report.comment_tokens
+            );
         }
         Some("index-prefixes") => {
             let records = required_path(args.next(), "index-prefixes requires a records path")?;
