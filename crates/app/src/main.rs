@@ -892,6 +892,20 @@ fn run() -> Result<()> {
                 println!("{}\t{}", id.volume.0, id.node);
             }
         }
+        Some("metadata-verify") => {
+            let metadata = required_path(args.next(), "metadata-verify requires a metadata path")?;
+            let archive = MmapMetadataArchive::open(metadata)?;
+            println!(
+                "metadata-verify\tterms={}\tbytes={}\tchecksum={}",
+                archive.indexed_terms(),
+                archive.mapped_len(),
+                if archive.is_checksummed() {
+                    "verified"
+                } else {
+                    "legacy"
+                }
+            );
+        }
         Some("search-content-index") => {
             let records =
                 required_path(args.next(), "search-content-index requires a records path")?;
@@ -2057,6 +2071,7 @@ fn print_usage() {
   gfm dictionary-lookup <dictionary.gfmdict> <term>
   gfm metadata-ids-mmap <metadata.gfmmeta> <tag|comment> <term>
   gfm metadata-id-block-mmap <metadata.gfmmeta> <tag|comment> <term> <block-index>
+  gfm metadata-verify <metadata.gfmmeta>
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>
   gfm content-ids <content.gfmcontent> <term>
   gfm content-ids-mmap <content.gfmcontent> <term>

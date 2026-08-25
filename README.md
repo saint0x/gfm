@@ -298,6 +298,7 @@ cargo run -p gfm -- search-index-mmap /tmp/gfm.gfmidx PLAN
 cargo run -p gfm -- index-metadata /tmp/gfm.gfmidx /tmp/gfm.gfmmeta
 cargo run -p gfm -- metadata-ids-mmap /tmp/gfm.gfmmeta tag Important
 cargo run -p gfm -- metadata-id-block-mmap /tmp/gfm.gfmmeta tag Important 0
+cargo run -p gfm -- metadata-verify /tmp/gfm.gfmmeta
 cargo run -p gfm -- index-dictionary /tmp/gfm.gfmidx /tmp/gfm.gfmdict
 cargo run -p gfm -- dictionary-lookup /tmp/gfm.gfmdict Important
 ```

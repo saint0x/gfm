@@ -2,22 +2,36 @@ use crate::durable;
 use crate::ids::{
     read_blocked_file_id_block_from_slice, read_blocked_file_ids, write_blocked_file_ids,
 };
+use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 const METADATA_MAGIC_V1: &[u8] = b"gfm-metadata-v1\n";
 const METADATA_MAGIC_V2: &[u8] = b"gfm-metadata-v2\n";
+const METADATA_MAGIC_V3: &[u8] = b"gfm-metadata-v3\n";
 const METADATA_INDEX_FOOTER: &[u8] = b"gfm-metadata-index-v1\n";
+const METADATA_CHECKSUM_FOOTER: &[u8] = b"gfm-metadata-checksum-v1\n";
 const METADATA_FOOTER_LEN: u64 = 8 + METADATA_INDEX_FOOTER.len() as u64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MetadataStoreVersion {
     V1,
     V2,
+    V3,
+}
+
+impl MetadataStoreVersion {
+    const fn uses_blocked_ids(self) -> bool {
+        matches!(self, Self::V2 | Self::V3)
+    }
+
+    const fn has_checksum(self) -> bool {
+        matches!(self, Self::V3)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -100,32 +114,39 @@ pub fn metadata_postings_from_records(records: &[FileRecord]) -> Vec<MetadataPos
 pub fn write_metadata_postings(path: impl AsRef<Path>, postings: &[MetadataPosting]) -> Result<()> {
     let path = path.as_ref();
     durable::atomic_write(path, |writer| {
-        let mut writer = CountingWriter::new(writer);
-        writer.write_all(METADATA_MAGIC_V2)?;
-        write_varint(&mut writer, postings.len() as u64)?;
-        let mut directory = Vec::with_capacity(postings.len());
-        let mut postings = postings.to_vec();
-        postings.sort_by(|left, right| {
-            (left.field, left.term.as_str()).cmp(&(right.field, right.term.as_str()))
-        });
-        for posting in &postings {
-            let offset = writer.position();
-            write_metadata_posting(&mut writer, posting, MetadataStoreVersion::V2)?;
-            let end = writer.position();
-            directory.push(MetadataDirectoryEntry {
-                field: posting.field,
-                term: posting.term.clone(),
-                offset,
-                len: end.saturating_sub(offset),
+        let mut bytes = Vec::new();
+        {
+            let mut archive = CountingWriter::new(&mut bytes);
+            archive.write_all(METADATA_MAGIC_V3)?;
+            write_varint(&mut archive, postings.len() as u64)?;
+            let mut directory = Vec::with_capacity(postings.len());
+            let mut postings = postings.to_vec();
+            postings.sort_by(|left, right| {
+                (left.field, left.term.as_str()).cmp(&(right.field, right.term.as_str()))
             });
+            for posting in &postings {
+                let offset = archive.position();
+                write_metadata_posting(&mut archive, posting, MetadataStoreVersion::V3)?;
+                let end = archive.position();
+                directory.push(MetadataDirectoryEntry {
+                    field: posting.field,
+                    term: posting.term.clone(),
+                    offset,
+                    len: end.saturating_sub(offset),
+                });
+            }
+            let directory_offset = archive.position();
+            write_varint(&mut archive, directory.len() as u64)?;
+            for entry in &directory {
+                write_directory_entry(&mut archive, entry)?;
+            }
+            archive.write_all(&directory_offset.to_le_bytes())?;
+            archive.write_all(METADATA_INDEX_FOOTER)?;
         }
-        let directory_offset = writer.position();
-        write_varint(&mut writer, directory.len() as u64)?;
-        for entry in &directory {
-            write_directory_entry(&mut writer, entry)?;
-        }
-        writer.write_all(&directory_offset.to_le_bytes())?;
-        writer.write_all(METADATA_INDEX_FOOTER)?;
+        let mut footer = Vec::new();
+        write_checksum_footer(&mut footer, &bytes, METADATA_CHECKSUM_FOOTER)?;
+        bytes.extend(footer);
+        writer.write_all(&bytes)?;
         Ok(())
     })
     .map(|_| ())
@@ -138,6 +159,7 @@ pub fn read_metadata_postings(path: impl AsRef<Path>) -> Result<Vec<MetadataPost
     file.read_exact(&mut magic)
         .map_err(|err| GfmError::io(path, err))?;
     let version = metadata_version(&magic, path)?;
+    verify_metadata_checksum_for_file(&mut file, path, version)?;
     let count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
@@ -160,6 +182,7 @@ impl MmapMetadataArchive {
             .get(..METADATA_MAGIC_V1.len())
             .ok_or_else(|| metadata_format_error(path, "unsupported metadata header"))?;
         let version = metadata_version(magic, path)?;
+        verify_metadata_checksum_from_slice(&mmap, path, version)?;
         let directory = read_metadata_directory_from_slice(&mmap, path)?;
         Ok(Self {
             path: path.to_path_buf(),
@@ -227,7 +250,7 @@ impl MmapMetadataArchive {
         else {
             return Ok(Vec::new());
         };
-        if self.version == MetadataStoreVersion::V1 {
+        if !self.version.uses_blocked_ids() {
             return self.ids_for(field, &term);
         }
         let bytes = self.posting_bytes(entry)?;
@@ -243,6 +266,10 @@ impl MmapMetadataArchive {
 
     pub fn mapped_len(&self) -> usize {
         self.mmap.len()
+    }
+
+    pub fn is_checksummed(&self) -> bool {
+        self.version.has_checksum()
     }
 
     fn posting_bytes(&self, entry: &MetadataDirectoryEntry) -> Result<&[u8]> {
@@ -308,19 +335,23 @@ fn read_metadata_directory_from_slice(
             "missing metadata directory footer",
         ));
     }
-    let footer_offset = bytes
+    let indexed_len = metadata_indexed_len_from_slice(bytes, path)?;
+    let archive_bytes = bytes
+        .get(..indexed_len)
+        .ok_or_else(|| metadata_format_error(path, "metadata indexed range out of bounds"))?;
+    let footer_offset = archive_bytes
         .len()
         .checked_sub(METADATA_FOOTER_LEN as usize)
         .ok_or_else(|| metadata_format_error(path, "missing metadata directory footer"))?;
     let mut offset = [0u8; 8];
     offset.copy_from_slice(
-        bytes
+        archive_bytes
             .get(footer_offset..footer_offset + 8)
             .ok_or_else(|| metadata_format_error(path, "missing metadata directory footer"))?,
     );
     let directory_offset = usize::try_from(u64::from_le_bytes(offset))
         .map_err(|_| metadata_format_error(path, "invalid metadata directory offset"))?;
-    let footer = bytes
+    let footer = archive_bytes
         .get(footer_offset + 8..)
         .ok_or_else(|| metadata_format_error(path, "missing metadata directory footer"))?;
     if footer != METADATA_INDEX_FOOTER {
@@ -335,7 +366,7 @@ fn read_metadata_directory_from_slice(
             "invalid metadata directory offset",
         ));
     }
-    let mut cursor = Cursor::new(&bytes[directory_offset..footer_offset]);
+    let mut cursor = Cursor::new(&archive_bytes[directory_offset..footer_offset]);
     let count = read_varint(&mut cursor).map_err(|err| GfmError::io(path, err))?;
     let mut directory = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
@@ -382,7 +413,9 @@ fn write_metadata_posting(
     writer.write_all(term)?;
     match version {
         MetadataStoreVersion::V1 => write_file_ids(writer, &posting.ids),
-        MetadataStoreVersion::V2 => write_blocked_file_ids(writer, &posting.ids),
+        MetadataStoreVersion::V2 | MetadataStoreVersion::V3 => {
+            write_blocked_file_ids(writer, &posting.ids)
+        }
     }
 }
 
@@ -394,7 +427,7 @@ fn read_metadata_posting(
     let (field, term) = read_metadata_posting_header(&mut reader, path)?;
     let ids = match version {
         MetadataStoreVersion::V1 => read_file_ids(reader, path)?,
-        MetadataStoreVersion::V2 => read_blocked_file_ids(reader, path)?,
+        MetadataStoreVersion::V2 | MetadataStoreVersion::V3 => read_blocked_file_ids(reader, path)?,
     };
     Ok(MetadataPosting { field, term, ids })
 }
@@ -512,7 +545,9 @@ fn metadata_field_from_code(value: u8, path: &Path) -> Result<MetadataField> {
 }
 
 fn metadata_version(bytes: &[u8], path: &Path) -> Result<MetadataStoreVersion> {
-    if bytes == METADATA_MAGIC_V2 {
+    if bytes == METADATA_MAGIC_V3 {
+        Ok(MetadataStoreVersion::V3)
+    } else if bytes == METADATA_MAGIC_V2 {
         Ok(MetadataStoreVersion::V2)
     } else if bytes == METADATA_MAGIC_V1 {
         Ok(MetadataStoreVersion::V1)
@@ -538,6 +573,66 @@ fn metadata_format_error(path: &Path, reason: &str) -> GfmError {
         "invalid metadata store {}: {reason}",
         path.display()
     ))
+}
+
+fn verify_metadata_checksum_for_file(
+    file: &mut File,
+    path: &Path,
+    version: MetadataStoreVersion,
+) -> Result<()> {
+    if !version.has_checksum() {
+        return Ok(());
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|err| GfmError::io(path, err))?;
+    let mut full = Vec::with_capacity(METADATA_MAGIC_V1.len() + bytes.len());
+    full.extend(METADATA_MAGIC_V3);
+    full.extend(bytes);
+    verify_metadata_checksum_from_slice(&full, path, version)?;
+    let data_start = METADATA_MAGIC_V1.len() as u64;
+    file.seek(std::io::SeekFrom::Start(data_start))
+        .map_err(|err| GfmError::io(path, err))?;
+    Ok(())
+}
+
+fn verify_metadata_checksum_from_slice(
+    bytes: &[u8],
+    path: &Path,
+    version: MetadataStoreVersion,
+) -> Result<()> {
+    if version.has_checksum()
+        && !verify_checksum_footer(bytes, METADATA_CHECKSUM_FOOTER, path, "metadata")?
+    {
+        return Err(metadata_format_error(
+            path,
+            "missing metadata checksum footer",
+        ));
+    }
+    Ok(())
+}
+
+fn metadata_indexed_len_from_slice(bytes: &[u8], path: &Path) -> Result<usize> {
+    let footer_len = metadata_checksum_footer_len();
+    if bytes.len() < footer_len {
+        return Ok(bytes.len());
+    }
+    let footer_start = bytes.len() - footer_len;
+    if bytes.get(footer_start + 4..) == Some(METADATA_CHECKSUM_FOOTER) {
+        Ok(footer_start)
+    } else {
+        if bytes.starts_with(METADATA_MAGIC_V3) {
+            return Err(metadata_format_error(
+                path,
+                "missing metadata checksum footer",
+            ));
+        }
+        Ok(bytes.len())
+    }
+}
+
+const fn metadata_checksum_footer_len() -> usize {
+    4 + METADATA_CHECKSUM_FOOTER.len()
 }
 
 #[cfg(test)]
@@ -623,6 +718,32 @@ mod tests {
         );
         assert_eq!(block.len(), 128);
         assert_eq!(block[0], FileId::new(VolumeId(12), 10_128));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn checksummed_metadata_archive_rejects_corruption() {
+        let path = temp_path("gfm-metadata-checksum", "gfmmeta");
+        let posting = MetadataPosting {
+            field: MetadataField::Tag,
+            term: "important".to_string(),
+            ids: vec![FileId::new(VolumeId(12), 10_000)],
+        };
+
+        write_metadata_postings(&path, &[posting]).unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        let offset = bytes
+            .windows(b"important".len())
+            .position(|window| window == b"important")
+            .expect("archive should contain the test term");
+        bytes[offset] = b'z';
+        std::fs::write(&path, bytes).unwrap();
+
+        let read_error = read_metadata_postings(&path).unwrap_err().to_string();
+        let mmap_error = MmapMetadataArchive::open(&path).unwrap_err().to_string();
+
+        assert!(read_error.contains("checksum mismatch"), "{read_error}");
+        assert!(mmap_error.contains("checksum mismatch"), "{mmap_error}");
         std::fs::remove_file(path).unwrap();
     }
 

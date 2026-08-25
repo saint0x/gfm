@@ -826,6 +826,21 @@ fn searches_persisted_tags_from_binary() {
     );
     assert_eq!(String::from_utf8(block_output.stdout).unwrap(), "1\t1\n");
 
+    let verify_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["metadata-verify", metadata.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        verify_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify_output.stderr)
+    );
+    let verify_stdout = String::from_utf8(verify_output.stdout).unwrap();
+    assert!(
+        verify_stdout.contains("\tchecksum=verified"),
+        "{verify_stdout}"
+    );
+
     let dictionary_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "index-dictionary",
