@@ -2353,6 +2353,48 @@ fn restores_trash_entry_from_binary_with_metadata_destination_and_replace() {
 }
 
 #[test]
+fn permanently_deletes_trash_entry_from_binary_and_removes_metadata() {
+    let root = unique_temp_dir("gfm-cli-ops-permanent-delete-root");
+    let journal = root.join("ops.journal");
+    let metadata = root.join("trash.tsv");
+    let trash_dir = root.join("Trash");
+    let trashed = trash_dir.join("report.md");
+    let original = root.join("Documents").join("report.md");
+    fs::create_dir_all(&trash_dir).unwrap();
+    fs::write(&trashed, "delete forever").unwrap();
+    fs::write(
+        &metadata,
+        format!(
+            "report.md\t{}\t9\ttrue\ttrue\t\n",
+            original.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .env("GFM_TRASH_METADATA", &metadata)
+        .args(["delete", trashed.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\tcompleted"), "{stdout}");
+    assert!(!trashed.exists());
+    assert!(fs::read_to_string(&metadata).unwrap().trim().is_empty());
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(journal_text.contains("\tdelete\t"), "{journal_text}");
+    assert!(journal_text.contains("\tcompleted\t"), "{journal_text}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn retries_failed_operation_from_binary_when_policy_allows_it() {
     let root = unique_temp_dir("gfm-cli-ops-retry-root");
     let journal = root.join("ops.journal");

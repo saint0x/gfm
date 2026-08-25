@@ -703,7 +703,9 @@ impl Operator {
                 resuming,
                 progress,
             ),
-            Operation::Delete { path } => delete_path(path, progress),
+            Operation::Delete { path } => {
+                delete_path(path, self.context.trash_metadata_path.as_deref(), progress)
+            }
             Operation::Trash { path } => {
                 trash_path(path, self.context.trash_metadata_path.as_deref(), progress)
             }
@@ -1594,15 +1596,18 @@ fn same_canonical_path(left: &Path, right: &Path) -> bool {
 
 fn delete_path(
     path: &Path,
+    metadata_path: Option<&Path>,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
     let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
     if metadata.is_dir() {
         fs::remove_dir_all(path).map_err(|err| GfmError::io(path, err))?;
+        remove_deleted_trash_metadata(metadata_path, path)?;
         progress.complete()
     } else {
         fs::remove_file(path).map_err(|err| GfmError::io(path, err))?;
+        remove_deleted_trash_metadata(metadata_path, path)?;
         progress.advance(&metadata)
     }
 }
@@ -1650,6 +1655,13 @@ fn restore_path(
     )?;
     if let Some(metadata_path) = metadata_path {
         remove_trash_metadata(metadata_path, from)?;
+    }
+    Ok(())
+}
+
+fn remove_deleted_trash_metadata(metadata_path: Option<&Path>, deleted_path: &Path) -> Result<()> {
+    if let Some(metadata_path) = metadata_path {
+        remove_trash_metadata(metadata_path, deleted_path)?;
     }
     Ok(())
 }
@@ -4753,6 +4765,78 @@ mod tests {
         assert!(read_trash_metadata(&metadata)
             .unwrap()
             .contains_key("report.md"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permanent_delete_removes_trash_metadata_after_success() {
+        let root = unique_temp_dir("gfm-ops-permanent-delete");
+        let journal = root.join("journal.log");
+        let metadata = root.join("trash.tsv");
+        let trash_dir = root.join("Trash");
+        let trashed = trash_dir.join("report.md");
+        let original = root.join("Documents").join("report.md");
+        fs::create_dir_all(&trash_dir).unwrap();
+        fs::write(&trashed, "delete forever").unwrap();
+        append_trash_metadata_entry(
+            &metadata,
+            &TrashRestoreMetadata {
+                name: "report.md".to_string(),
+                original_path: original,
+                deleted_at_nanos: 9,
+                can_restore: true,
+                can_delete_permanently: true,
+                permission_issue: None,
+            },
+        )
+        .unwrap();
+
+        let entry =
+            Operator::new(OperationContext::new(&journal).with_trash_metadata_path(&metadata))
+                .execute(Operation::Delete {
+                    path: trashed.clone(),
+                })
+                .unwrap();
+
+        assert_eq!(entry.status, OperationStatus::Completed);
+        assert!(!trashed.exists());
+        assert!(read_trash_metadata(&metadata).unwrap().is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_permanent_delete_preserves_trash_metadata() {
+        let root = unique_temp_dir("gfm-ops-permanent-delete-fail");
+        let journal = root.join("journal.log");
+        let metadata = root.join("trash.tsv");
+        let trashed = root.join("Trash").join("missing.md");
+        let original = root.join("Documents").join("missing.md");
+        append_trash_metadata_entry(
+            &metadata,
+            &TrashRestoreMetadata {
+                name: "missing.md".to_string(),
+                original_path: original,
+                deleted_at_nanos: 10,
+                can_restore: true,
+                can_delete_permanently: true,
+                permission_issue: None,
+            },
+        )
+        .unwrap();
+
+        let err =
+            Operator::new(OperationContext::new(&journal).with_trash_metadata_path(&metadata))
+                .execute(Operation::Delete {
+                    path: trashed.clone(),
+                })
+                .unwrap_err();
+
+        assert!(matches!(err, GfmError::Io { .. }));
+        assert!(read_trash_metadata(&metadata)
+            .unwrap()
+            .contains_key("missing.md"));
 
         fs::remove_dir_all(root).unwrap();
     }
