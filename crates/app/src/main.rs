@@ -945,6 +945,20 @@ fn run() -> Result<()> {
                 println!("{}\t{}", id.volume.0, id.node);
             }
         }
+        Some("content-verify") => {
+            let content = required_path(args.next(), "content-verify requires a content path")?;
+            let archive = MmapContentArchive::open(content)?;
+            println!(
+                "content-verify\tterms={}\tbytes={}\tchecksum={}",
+                archive.indexed_terms(),
+                archive.mapped_len(),
+                if archive.is_checksummed() {
+                    "verified"
+                } else {
+                    "legacy"
+                }
+            );
+        }
         Some("config-path") => {
             println!("{}", ConfigStore::platform_default()?.path().display());
         }
@@ -2047,6 +2061,7 @@ fn print_usage() {
   gfm content-ids <content.gfmcontent> <term>
   gfm content-ids-mmap <content.gfmcontent> <term>
   gfm content-id-block-mmap <content.gfmcontent> <term> <block-index>
+  gfm content-verify <content.gfmcontent>
   gfm config-path
   gfm config-init [config.toml]
   gfm config-check [config.toml]

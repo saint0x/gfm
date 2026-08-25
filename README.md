@@ -312,6 +312,7 @@ cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent "ne
 cargo run -p gfm -- content-ids /tmp/gfm.gfmcontent "performance-critical"
 cargo run -p gfm -- content-ids-mmap /tmp/gfm.gfmcontent "performance-critical"
 cargo run -p gfm -- content-id-block-mmap /tmp/gfm.gfmcontent "performance-critical" 0
+cargo run -p gfm -- content-verify /tmp/gfm.gfmcontent
 ```
 
 Build appendable content segments and compact them:

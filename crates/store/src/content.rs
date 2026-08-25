@@ -2,6 +2,7 @@ use crate::durable;
 use crate::ids::{
     read_blocked_file_id_block_from_slice, read_blocked_file_ids, write_blocked_file_ids,
 };
+use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use gfm_types::{
     ContentPositions, ContentPosting, ContentSegment, FileId, GfmError, Result, VolumeId,
 };
@@ -15,9 +16,11 @@ const CONTENT_MAGIC_V1: &[u8] = b"gfm-content-v1\n";
 const CONTENT_MAGIC_V2: &[u8] = b"gfm-content-v2\n";
 const CONTENT_MAGIC_V3: &[u8] = b"gfm-content-v3\n";
 const CONTENT_MAGIC_V4: &[u8] = b"gfm-content-v4\n";
+const CONTENT_MAGIC_V5: &[u8] = b"gfm-content-v5\n";
 const CONTENT_SEGMENT_MAGIC: &[u8] = b"gfm-content-segment-v1\n";
 const CONTENT_SEGMENT_MAGIC_V2: &[u8] = b"gfm-content-segment-v2\n";
 const CONTENT_INDEX_FOOTER: &[u8] = b"gfm-content-index-v1\n";
+const CONTENT_CHECKSUM_FOOTER: &[u8] = b"gfm-content-checksum-v1\n";
 const CONTENT_FOOTER_LEN: u64 = 8 + CONTENT_INDEX_FOOTER.len() as u64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,48 +29,66 @@ enum ContentStoreVersion {
     IndexedIds,
     IndexedPositions,
     IndexedBlockedPositions,
+    IndexedChecksummed,
 }
 
 impl ContentStoreVersion {
     const fn uses_positions(self) -> bool {
-        matches!(self, Self::IndexedPositions | Self::IndexedBlockedPositions)
+        matches!(
+            self,
+            Self::IndexedPositions | Self::IndexedBlockedPositions | Self::IndexedChecksummed
+        )
     }
 
     const fn uses_blocked_ids(self) -> bool {
-        matches!(self, Self::IndexedBlockedPositions)
+        matches!(
+            self,
+            Self::IndexedBlockedPositions | Self::IndexedChecksummed
+        )
+    }
+
+    const fn has_checksum(self) -> bool {
+        matches!(self, Self::IndexedChecksummed)
     }
 }
 
 pub fn write_content_postings(path: impl AsRef<Path>, postings: &[ContentPosting]) -> Result<()> {
     let path = path.as_ref();
     durable::atomic_write(path, |writer| {
-        let mut writer = CountingWriter::new(writer);
-        writer.write_all(CONTENT_MAGIC_V4)?;
-        write_varint(&mut writer, postings.len() as u64)?;
-        let mut directory = Vec::with_capacity(postings.len());
-        for posting in postings {
-            let offset = writer.position();
-            write_content_posting(
-                &mut writer,
-                posting,
-                ContentStoreVersion::IndexedBlockedPositions,
-            )?;
-            let end = writer.position();
-            directory.push(ContentDirectoryEntry {
-                term: posting.term.trim().to_lowercase(),
-                offset,
-                len: end.saturating_sub(offset),
-            });
-        }
-        directory.sort_by(|left, right| left.term.cmp(&right.term));
+        let mut bytes = Vec::new();
+        {
+            let mut archive = CountingWriter::new(&mut bytes);
+            archive.write_all(CONTENT_MAGIC_V5)?;
+            write_varint(&mut archive, postings.len() as u64)?;
+            let mut directory = Vec::with_capacity(postings.len());
+            for posting in postings {
+                let offset = archive.position();
+                write_content_posting(
+                    &mut archive,
+                    posting,
+                    ContentStoreVersion::IndexedChecksummed,
+                )?;
+                let end = archive.position();
+                directory.push(ContentDirectoryEntry {
+                    term: posting.term.trim().to_lowercase(),
+                    offset,
+                    len: end.saturating_sub(offset),
+                });
+            }
+            directory.sort_by(|left, right| left.term.cmp(&right.term));
 
-        let directory_offset = writer.position();
-        write_varint(&mut writer, directory.len() as u64)?;
-        for entry in &directory {
-            write_directory_entry(&mut writer, entry)?;
+            let directory_offset = archive.position();
+            write_varint(&mut archive, directory.len() as u64)?;
+            for entry in &directory {
+                write_directory_entry(&mut archive, entry)?;
+            }
+            archive.write_all(&directory_offset.to_le_bytes())?;
+            archive.write_all(CONTENT_INDEX_FOOTER)?;
         }
-        writer.write_all(&directory_offset.to_le_bytes())?;
-        writer.write_all(CONTENT_INDEX_FOOTER)?;
+        let mut footer = Vec::new();
+        write_checksum_footer(&mut footer, &bytes, CONTENT_CHECKSUM_FOOTER)?;
+        bytes.extend(footer);
+        writer.write_all(&bytes)?;
         Ok(())
     })
     .map(|_| ())
@@ -84,6 +105,7 @@ pub fn read_content_postings(path: impl AsRef<Path>) -> Result<Vec<ContentPostin
             path.display()
         )));
     }
+    verify_content_checksum_for_file(&mut file, path, version)?;
 
     let count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
@@ -133,7 +155,9 @@ impl ContentArchive {
             ContentStoreVersion::IndexedIds
                 | ContentStoreVersion::IndexedPositions
                 | ContentStoreVersion::IndexedBlockedPositions
+                | ContentStoreVersion::IndexedChecksummed
         ) {
+            verify_content_checksum_for_file(&mut file, path, version)?;
             let directory = read_content_directory(&mut file, path)?;
             Ok(Self {
                 path: path.to_path_buf(),
@@ -228,6 +252,7 @@ impl MmapContentArchive {
                 "legacy content archives are not mmap indexed",
             ));
         }
+        verify_content_checksum_from_slice(&mmap, path, version)?;
         let directory = read_content_directory_from_slice(&mmap, path)?;
         Ok(Self {
             path: path.to_path_buf(),
@@ -271,6 +296,10 @@ impl MmapContentArchive {
 
     pub fn indexed_terms(&self) -> usize {
         self.directory.len()
+    }
+
+    pub fn is_checksummed(&self) -> bool {
+        self.version.has_checksum()
     }
 
     pub fn id_block_for_term(&self, term: &str, block_index: usize) -> Result<Vec<FileId>> {
@@ -346,7 +375,9 @@ fn read_content_magic(mut file: impl Read, path: &Path) -> Result<Vec<u8>> {
 }
 
 fn content_version(bytes: &[u8], path: &Path) -> Result<ContentStoreVersion> {
-    if bytes == CONTENT_MAGIC_V4 {
+    if bytes == CONTENT_MAGIC_V5 {
+        Ok(ContentStoreVersion::IndexedChecksummed)
+    } else if bytes == CONTENT_MAGIC_V4 {
         Ok(ContentStoreVersion::IndexedBlockedPositions)
     } else if bytes == CONTENT_MAGIC_V3 {
         Ok(ContentStoreVersion::IndexedPositions)
@@ -493,6 +524,88 @@ fn content_format_error(path: &Path, reason: &str) -> GfmError {
     ))
 }
 
+fn verify_content_checksum_for_file(
+    file: &mut File,
+    path: &Path,
+    version: ContentStoreVersion,
+) -> Result<()> {
+    if !version.has_checksum() {
+        return Ok(());
+    }
+    let position = file
+        .stream_position()
+        .map_err(|err| GfmError::io(path, err))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|err| GfmError::io(path, err))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|err| GfmError::io(path, err))?;
+    file.seek(SeekFrom::Start(position))
+        .map_err(|err| GfmError::io(path, err))?;
+    verify_content_checksum_from_slice(&bytes, path, version)
+}
+
+fn verify_content_checksum_from_slice(
+    bytes: &[u8],
+    path: &Path,
+    version: ContentStoreVersion,
+) -> Result<()> {
+    if version.has_checksum()
+        && !verify_checksum_footer(bytes, CONTENT_CHECKSUM_FOOTER, path, "content")?
+    {
+        return Err(content_format_error(
+            path,
+            "missing content checksum footer",
+        ));
+    }
+    Ok(())
+}
+
+fn content_indexed_len_for_file(file: &mut File, path: &Path, len: u64) -> Result<u64> {
+    let footer_len = content_checksum_footer_len() as u64;
+    if len < footer_len {
+        return Ok(len);
+    }
+    let position = file
+        .stream_position()
+        .map_err(|err| GfmError::io(path, err))?;
+    file.seek(SeekFrom::Start(len - footer_len))
+        .map_err(|err| GfmError::io(path, err))?;
+    let mut footer = vec![0; footer_len as usize];
+    file.read_exact(&mut footer)
+        .map_err(|err| GfmError::io(path, err))?;
+    file.seek(SeekFrom::Start(position))
+        .map_err(|err| GfmError::io(path, err))?;
+    if footer.get(4..) == Some(CONTENT_CHECKSUM_FOOTER) {
+        Ok(len - footer_len)
+    } else {
+        Ok(len)
+    }
+}
+
+fn content_indexed_len_from_slice(bytes: &[u8], path: &Path) -> Result<usize> {
+    let footer_len = content_checksum_footer_len();
+    if bytes.len() < footer_len {
+        return Ok(bytes.len());
+    }
+    let footer_start = bytes.len() - footer_len;
+    if bytes.get(footer_start + 4..) == Some(CONTENT_CHECKSUM_FOOTER) {
+        Ok(footer_start)
+    } else {
+        if bytes.starts_with(CONTENT_MAGIC_V5) {
+            return Err(content_format_error(
+                path,
+                "missing content checksum footer",
+            ));
+        }
+        Ok(bytes.len())
+    }
+}
+
+const fn content_checksum_footer_len() -> usize {
+    4 + CONTENT_CHECKSUM_FOOTER.len()
+}
+
 fn write_directory_entry(
     mut writer: impl Write,
     entry: &ContentDirectoryEntry,
@@ -509,6 +622,7 @@ fn read_content_directory(file: &mut File, path: &Path) -> Result<Vec<ContentDir
         .metadata()
         .map_err(|err| GfmError::io(path, err))?
         .len();
+    let len = content_indexed_len_for_file(file, path, len)?;
     if len < CONTENT_MAGIC_V2.len() as u64 + CONTENT_FOOTER_LEN {
         return Err(content_format_error(
             path,
@@ -516,7 +630,7 @@ fn read_content_directory(file: &mut File, path: &Path) -> Result<Vec<ContentDir
         ));
     }
 
-    file.seek(SeekFrom::End(-(CONTENT_FOOTER_LEN as i64)))
+    file.seek(SeekFrom::Start(len.saturating_sub(CONTENT_FOOTER_LEN)))
         .map_err(|err| GfmError::io(path, err))?;
     let mut offset = [0u8; 8];
     file.read_exact(&mut offset)
@@ -549,7 +663,9 @@ fn read_content_directory(file: &mut File, path: &Path) -> Result<Vec<ContentDir
 }
 
 fn mmap_content_version(bytes: &[u8], path: &Path) -> Result<ContentStoreVersion> {
-    if bytes.starts_with(CONTENT_MAGIC_V4) {
+    if bytes.starts_with(CONTENT_MAGIC_V5) {
+        Ok(ContentStoreVersion::IndexedChecksummed)
+    } else if bytes.starts_with(CONTENT_MAGIC_V4) {
         Ok(ContentStoreVersion::IndexedBlockedPositions)
     } else if bytes.starts_with(CONTENT_MAGIC_V3) {
         Ok(ContentStoreVersion::IndexedPositions)
@@ -575,18 +691,22 @@ fn read_content_directory_from_slice(
             "missing content directory footer",
         ));
     }
-    let footer_offset = bytes
+    let indexed_len = content_indexed_len_from_slice(bytes, path)?;
+    let archive_bytes = bytes
+        .get(..indexed_len)
+        .ok_or_else(|| content_format_error(path, "content indexed range out of bounds"))?;
+    let footer_offset = archive_bytes
         .len()
         .checked_sub(CONTENT_FOOTER_LEN as usize)
         .ok_or_else(|| content_format_error(path, "missing content directory footer"))?;
-    let offset_bytes = bytes
+    let offset_bytes = archive_bytes
         .get(footer_offset..footer_offset + 8)
         .ok_or_else(|| content_format_error(path, "missing content directory footer"))?;
     let mut offset = [0u8; 8];
     offset.copy_from_slice(offset_bytes);
     let directory_offset = usize::try_from(u64::from_le_bytes(offset))
         .map_err(|_| content_format_error(path, "invalid content directory offset"))?;
-    let footer = bytes
+    let footer = archive_bytes
         .get(footer_offset + 8..)
         .ok_or_else(|| content_format_error(path, "missing content directory footer"))?;
     if footer != CONTENT_INDEX_FOOTER {
@@ -601,7 +721,7 @@ fn read_content_directory_from_slice(
             "invalid content directory offset",
         ));
     }
-    let mut cursor = Cursor::new(&bytes[directory_offset..footer_offset]);
+    let mut cursor = Cursor::new(&archive_bytes[directory_offset..footer_offset]);
     let count = read_varint(&mut cursor).map_err(|err| GfmError::io(path, err))?;
     let mut directory = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
@@ -967,6 +1087,34 @@ mod tests {
         assert_eq!(full.positions.len(), 300);
         assert_eq!(block.len(), 128);
         assert_eq!(block[0], FileId::new(VolumeId(8), 20_128));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn checksummed_content_archive_rejects_corruption() {
+        let path = temp_path("gfm-content-checksum", "gfmcontent");
+        write_content_postings(
+            &path,
+            &[ContentPosting {
+                term: "needle".to_string(),
+                ids: vec![FileId::new(VolumeId(8), 20_000)],
+                positions: Vec::new(),
+            }],
+        )
+        .unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        let offset = bytes
+            .windows(b"needle".len())
+            .position(|window| window == b"needle")
+            .expect("archive should contain the test term");
+        bytes[offset] = b'z';
+        std::fs::write(&path, bytes).unwrap();
+
+        let read_error = read_content_postings(&path).unwrap_err().to_string();
+        let mmap_error = MmapContentArchive::open(&path).unwrap_err().to_string();
+
+        assert!(read_error.contains("checksum mismatch"), "{read_error}");
+        assert!(mmap_error.contains("checksum mismatch"), "{mmap_error}");
         std::fs::remove_file(path).unwrap();
     }
 

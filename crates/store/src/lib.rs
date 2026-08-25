@@ -2,6 +2,7 @@ mod content;
 mod dictionary;
 mod durable;
 mod ids;
+mod integrity;
 mod metadata;
 
 pub use content::{
