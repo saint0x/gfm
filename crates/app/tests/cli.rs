@@ -433,6 +433,112 @@ fn rebuilds_columns_archive_from_binary() {
 }
 
 #[test]
+fn rebuilds_derived_sidecars_from_binary() {
+    let root = unique_temp_dir("gfm-cli-derived-rebuild-root");
+    let records = unique_temp_path("gfm-cli-derived-rebuild-records", "gfmidx");
+    let prefixes = unique_temp_path("gfm-cli-derived-rebuild-prefixes", "gfmprefix");
+    let dictionary = unique_temp_path("gfm-cli-derived-rebuild-dictionary", "gfmdict");
+    let backup = unique_temp_dir("gfm-cli-derived-rebuild-backup");
+    fs::write(root.join("DerivedNeedle.md"), "alpha").unwrap();
+
+    let index = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index.stderr)
+    );
+
+    let plan = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "derived-sidecar-rebuild-plan",
+            records.to_str().unwrap(),
+            "prefixes",
+            prefixes.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let plan_stdout = String::from_utf8(plan.stdout).unwrap();
+    assert!(
+        plan_stdout.contains(
+            "derived-sidecar-rebuild-plan\taction=rebuild\tkind=prefixes\trecords-status=current\tsidecar-status=missing",
+        ),
+        "{plan_stdout}"
+    );
+
+    let rebuild_prefixes = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "derived-sidecar-rebuild",
+            records.to_str().unwrap(),
+            "prefixes",
+            prefixes.to_str().unwrap(),
+            backup.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        rebuild_prefixes.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuild_prefixes.stderr)
+    );
+    let rebuild_prefixes_stdout = String::from_utf8(rebuild_prefixes.stdout).unwrap();
+    assert!(
+        rebuild_prefixes_stdout.contains(
+            "derived-sidecar-rebuild\trebuilt-records=2\tkind=prefixes\trecords-status=current\tbefore-status=missing\tafter-status=current",
+        ),
+        "{rebuild_prefixes_stdout}"
+    );
+    let prefix_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["prefix-verify", prefixes.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(prefix_verify.status.success());
+
+    fs::write(&dictionary, "not-a-dictionary").unwrap();
+    let rebuild_dictionary = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "derived-sidecar-rebuild",
+            records.to_str().unwrap(),
+            "dictionary",
+            dictionary.to_str().unwrap(),
+            backup.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        rebuild_dictionary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuild_dictionary.stderr)
+    );
+    let rebuild_dictionary_stdout = String::from_utf8(rebuild_dictionary.stdout).unwrap();
+    assert!(
+        rebuild_dictionary_stdout.contains(
+            "derived-sidecar-rebuild\trebuilt-records=2\tkind=dictionary\trecords-status=current\tbefore-status=unsupported\tafter-status=current",
+        ),
+        "{rebuild_dictionary_stdout}"
+    );
+    assert!(backup.read_dir().unwrap().next().is_some());
+    let dictionary_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["dictionary-verify", dictionary.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(dictionary_verify.status.success());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(prefixes).unwrap();
+    fs::remove_file(dictionary).unwrap();
+    fs::remove_dir_all(backup).unwrap();
+}
+
+#[test]
 fn persists_volume_index_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-index-state-root");
     let index = unique_temp_path("gfm-cli-index-state-records", "gfmidx");

@@ -52,8 +52,10 @@ pub use prefix::{
     PrefixPosting,
 };
 pub use rebuild::{
-    plan_columns_archive_rebuild, rebuild_columns_archive, ColumnsArchiveRebuild,
-    ColumnsArchiveRebuildAction, ColumnsArchiveRebuildPlan,
+    plan_columns_archive_rebuild, plan_derived_sidecar_rebuild, rebuild_columns_archive,
+    rebuild_derived_sidecar, ColumnsArchiveRebuild, ColumnsArchiveRebuildAction,
+    ColumnsArchiveRebuildPlan, DerivedSidecarRebuild, DerivedSidecarRebuildAction,
+    DerivedSidecarRebuildPlan,
 };
 pub use schema::{
     inspect_archive_schema, migrate_content_archive, migrate_metadata_archive,

@@ -467,6 +467,11 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - legacy, unsupported, and unreadable column files are copied byte-for-byte into an operator-supplied backup directory before replacement, while missing columns rebuild without fabricating a backup artifact;
   - rebuilt columns are reclassified after publication and must reopen as current checksummed `gfm-record-columns-v2` archives before the rebuild is reported successful;
   - unreadable, missing, or unsupported record archives block column rebuilds because records are the authoritative source for all column fields.
+- Derived search sidecar rebuild:
+  - metadata, prefix, fuzzy, dictionary, and column sidecars share one production rebuild engine, so missing, legacy, unsupported, and unreadable derived archives are regenerated from durable mmap records through the same encoders used by indexing;
+  - existing unreadable, unsupported, or legacy sidecar bytes are backed up before replacement, while missing sidecars rebuild without synthetic backup artifacts;
+  - rebuilt sidecars are reclassified and must reopen as the current schema for their archive kind before success is reported;
+  - the operator-facing `derived-sidecar-rebuild-plan` and `derived-sidecar-rebuild` commands expose the generic path, with `columns-rebuild-plan` and `columns-rebuild` retained as column-specific aliases.
 - Persistent index recovery:
   - record archives and volume-state files are classified before startup use as ready, missing, unreadable, schema-mismatched, root-mismatched, path-mismatched, or count-mismatched;
   - valid records with missing, stale, unreadable, or migratable state rebuild the state file without rescanning the volume;

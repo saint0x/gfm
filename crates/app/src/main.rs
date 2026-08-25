@@ -41,16 +41,16 @@ use gfm_store::{
     dictionary_term_report_from_records, inspect_archive_schema, metadata_postings_from_records,
     migrate_content_archive, migrate_metadata_archive, migrate_record_archive,
     plan_columns_archive_rebuild, plan_content_archive_migration, plan_content_manifest_recovery,
-    plan_metadata_archive_migration, plan_record_archive_migration, rebuild_columns_archive,
-    recover_content_manifest, write_dictionary, write_metadata_postings, write_record_columns,
-    ArchiveSchemaKind, ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive,
-    MmapContentSet, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
-    MmapRecordArchive, MmapRecordColumns,
+    plan_derived_sidecar_rebuild, plan_metadata_archive_migration, plan_record_archive_migration,
+    rebuild_columns_archive, rebuild_derived_sidecar, recover_content_manifest, write_dictionary,
+    write_metadata_postings, write_record_columns, ArchiveSchemaKind, ContentArchive,
+    ContentArchiveHealth, MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary,
+    MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_store::{
     fuzzy_postings_from_records, plan_sidecar_recovery, prefix_postings_from_records,
     recover_sidecars, sidecar_kind_name, write_fuzzy_postings, write_prefix_postings,
-    SidecarHealth, SidecarPaths,
+    SidecarHealth, SidecarKind, SidecarPaths,
 };
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
@@ -1543,6 +1543,38 @@ fn run() -> Result<()> {
             let rebuild = rebuild_columns_archive(records, columns, backup_dir)?;
             println!("{}", rebuild.as_tsv());
         }
+        Some("derived-sidecar-rebuild-plan") => {
+            let records = required_path(
+                args.next(),
+                "derived-sidecar-rebuild-plan requires a records path",
+            )?;
+            let kind = parse_sidecar_kind(args.next(), "derived-sidecar-rebuild-plan")?;
+            let sidecar = required_path(
+                args.next(),
+                "derived-sidecar-rebuild-plan requires a sidecar path",
+            )?;
+            println!(
+                "{}",
+                plan_derived_sidecar_rebuild(records, kind, sidecar).as_tsv()
+            );
+        }
+        Some("derived-sidecar-rebuild") => {
+            let records = required_path(
+                args.next(),
+                "derived-sidecar-rebuild requires a records path",
+            )?;
+            let kind = parse_sidecar_kind(args.next(), "derived-sidecar-rebuild")?;
+            let sidecar = required_path(
+                args.next(),
+                "derived-sidecar-rebuild requires a sidecar path",
+            )?;
+            let backup_dir = required_path(
+                args.next(),
+                "derived-sidecar-rebuild requires a backup directory",
+            )?;
+            let rebuild = rebuild_derived_sidecar(records, kind, sidecar, backup_dir)?;
+            println!("{}", rebuild.as_tsv());
+        }
         Some("index-columns") => {
             let records = required_path(args.next(), "index-columns requires a records path")?;
             let output =
@@ -2657,6 +2689,24 @@ fn parse_sidecar_paths(
     })
 }
 
+fn parse_sidecar_kind(value: Option<String>, command: &str) -> Result<SidecarKind> {
+    let value = value.ok_or_else(|| {
+        GfmError::Format(format!(
+            "{command} requires columns, metadata, prefixes, fuzzy, or dictionary"
+        ))
+    })?;
+    match value.as_str() {
+        "columns" => Ok(SidecarKind::Columns),
+        "metadata" => Ok(SidecarKind::Metadata),
+        "prefixes" | "prefix" => Ok(SidecarKind::Prefixes),
+        "fuzzy" => Ok(SidecarKind::Fuzzy),
+        "dictionary" => Ok(SidecarKind::Dictionary),
+        _ => Err(GfmError::Format(format!(
+            "{command} requires columns, metadata, prefixes, fuzzy, or dictionary"
+        ))),
+    }
+}
+
 fn required_string(value: Option<String>, message: &str) -> Result<String> {
     value.ok_or_else(|| GfmError::Format(message.to_string()))
 }
@@ -3293,6 +3343,8 @@ fn print_usage() {
   gfm metadata-migrate <metadata.gfmmeta> <backup-dir>
   gfm columns-rebuild-plan <records.gfmidx> <columns.gfmcols>
   gfm columns-rebuild <records.gfmidx> <columns.gfmcols> <backup-dir>
+  gfm derived-sidecar-rebuild-plan <records.gfmidx> <columns|metadata|prefixes|fuzzy|dictionary> <sidecar-path>
+  gfm derived-sidecar-rebuild <records.gfmidx> <columns|metadata|prefixes|fuzzy|dictionary> <sidecar-path> <backup-dir>
   gfm records-verify <index.gfmidx>
   gfm index-columns <records.gfmidx> <columns.gfmcols>
   gfm columns-verify <columns.gfmcols>
