@@ -14,9 +14,9 @@ pub(crate) fn extract_rich(
 ) -> Option<ContentDocument> {
     let raw = String::from_utf8_lossy(bytes);
     let text = match kind {
-        RichKind::Html => html_text(&raw),
-        RichKind::Rtf => rtf_text(&raw),
-        RichKind::Email => email_text(&raw),
+        RichKind::Html => html_text(&raw, max_text_bytes),
+        RichKind::Rtf => rtf_text(&raw, max_text_bytes),
+        RichKind::Email => email_text(&raw, max_text_bytes),
     };
     let text = truncate_text(&normalize_text(text.trim()), max_text_bytes);
     (!text.is_empty()).then_some(ContentDocument {
@@ -25,7 +25,7 @@ pub(crate) fn extract_rich(
     })
 }
 
-fn html_text(input: &str) -> String {
+fn html_text(input: &str, max_bytes: usize) -> String {
     let mut output = String::new();
     let mut tag = String::new();
     let mut in_tag = false;
@@ -34,6 +34,9 @@ fn html_text(input: &str) -> String {
     let mut chars = input.chars().peekable();
 
     while let Some(ch) = chars.next() {
+        if output.len() >= max_bytes {
+            break;
+        }
         match ch {
             '<' => {
                 in_tag = true;
@@ -63,7 +66,7 @@ fn html_text(input: &str) -> String {
                         skipping = None;
                     }
                     "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" if skipping.is_none() => {
-                        output.push(' ');
+                        push_separator_bounded(&mut output, max_bytes);
                     }
                     _ => {}
                 }
@@ -78,50 +81,57 @@ fn html_text(input: &str) -> String {
                     }
                     entity.push(next);
                 }
-                output.push_str(decode_entity(&entity));
+                push_str_bounded(&mut output, decode_entity(&entity), max_bytes);
             }
-            _ if skipping.is_none() => output.push(ch),
+            _ if skipping.is_none() => push_char_bounded(&mut output, ch, max_bytes),
             _ => {}
         }
     }
-    collapse_whitespace(&output)
+    collapse_whitespace_bounded(&output, max_bytes)
 }
 
-fn rtf_text(input: &str) -> String {
+fn rtf_text(input: &str, max_bytes: usize) -> String {
     let mut output = String::new();
     let mut chars = input.chars().peekable();
     let mut depth = 0usize;
     while let Some(ch) = chars.next() {
+        if output.len() >= max_bytes {
+            break;
+        }
         match ch {
             '{' => depth += 1,
             '}' => depth = depth.saturating_sub(1),
             '\\' => match chars.peek().copied() {
                 Some('\\' | '{' | '}') => {
-                    output.push(chars.next().unwrap());
+                    push_char_bounded(&mut output, chars.next().unwrap(), max_bytes);
                 }
                 Some('\'') => {
                     chars.next();
                     let hi = chars.next().and_then(|ch| ch.to_digit(16));
                     let lo = chars.next().and_then(|ch| ch.to_digit(16));
                     if let (Some(hi), Some(lo)) = (hi, lo) {
-                        output.push(char::from_u32(hi * 16 + lo).unwrap_or(' '));
+                        push_char_bounded(
+                            &mut output,
+                            char::from_u32(hi * 16 + lo).unwrap_or(' '),
+                            max_bytes,
+                        );
                     }
                 }
                 Some(_) => {
                     let control = take_control_word(&mut chars);
                     match control.as_str() {
-                        "par" | "line" | "tab" => output.push(' '),
+                        "par" | "line" | "tab" => push_separator_bounded(&mut output, max_bytes),
                         _ => {}
                     }
                 }
                 None => {}
             },
-            '\n' | '\r' => output.push(' '),
-            _ if depth > 0 => output.push(ch),
-            _ => output.push(ch),
+            '\n' | '\r' => push_separator_bounded(&mut output, max_bytes),
+            _ if depth > 0 => push_char_bounded(&mut output, ch, max_bytes),
+            _ => push_char_bounded(&mut output, ch, max_bytes),
         }
     }
-    collapse_whitespace(&output)
+    collapse_whitespace_bounded(&output, max_bytes)
 }
 
 fn take_control_word(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
@@ -142,30 +152,35 @@ fn take_control_word(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> St
     word
 }
 
-fn email_text(input: &str) -> String {
+fn email_text(input: &str, max_bytes: usize) -> String {
     let normalized = input.replace("\r\n", "\n");
     let (headers, body) = normalized
         .split_once("\n\n")
         .unwrap_or((normalized.as_str(), ""));
     let mut output = String::new();
     for line in unfolded_header_lines(headers) {
+        if output.len() >= max_bytes {
+            break;
+        }
         let lower = line.to_ascii_lowercase();
         if lower.starts_with("subject:") || lower.starts_with("from:") || lower.starts_with("to:") {
-            output.push_str(
+            push_str_bounded(
+                &mut output,
                 line.split_once(':')
                     .map(|(_, value)| value)
                     .unwrap_or(&line)
                     .trim(),
+                max_bytes,
             );
-            output.push(' ');
+            push_separator_bounded(&mut output, max_bytes);
         }
     }
     let mut budget = MimeTraversalBudget {
         remaining_parts: 128,
         remaining_depth: 8,
     };
-    output.push_str(&extract_mime_text(headers, body, &mut budget));
-    collapse_whitespace(&output)
+    append_mime_text(headers, body, &mut budget, &mut output, max_bytes);
+    collapse_whitespace_bounded(&output, max_bytes)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -174,16 +189,25 @@ struct MimeTraversalBudget {
     remaining_depth: usize,
 }
 
-fn extract_mime_text(headers: &str, body: &str, budget: &mut MimeTraversalBudget) -> String {
+fn append_mime_text(
+    headers: &str,
+    body: &str,
+    budget: &mut MimeTraversalBudget,
+    output: &mut String,
+    max_bytes: usize,
+) {
     if budget.remaining_parts == 0 || budget.remaining_depth == 0 {
-        return String::new();
+        return;
+    }
+    if output.len() >= max_bytes {
+        return;
     }
     budget.remaining_parts -= 1;
     let header_lines = unfolded_header_lines(headers);
     if header_value(&header_lines, "content-disposition")
         .is_some_and(|value| value.to_ascii_lowercase().contains("attachment"))
     {
-        return String::new();
+        return;
     }
 
     let content_type = header_value(&header_lines, "content-type")
@@ -192,33 +216,32 @@ fn extract_mime_text(headers: &str, body: &str, budget: &mut MimeTraversalBudget
     let lower_content_type = content_type.to_ascii_lowercase();
     if lower_content_type.starts_with("multipart/") {
         let Some(boundary) = header_param(&content_type, "boundary") else {
-            return String::new();
+            return;
         };
         budget.remaining_depth -= 1;
-        let mut output = String::new();
         for part in multipart_parts(body, &boundary) {
-            output.push_str(&extract_mime_text(part.headers, part.body, budget));
-            output.push(' ');
-            if budget.remaining_parts == 0 {
+            append_mime_text(part.headers, part.body, budget, output, max_bytes);
+            push_separator_bounded(output, max_bytes);
+            if budget.remaining_parts == 0 || output.len() >= max_bytes {
                 break;
             }
         }
         budget.remaining_depth += 1;
-        return output;
+        return;
     }
 
     let transfer_encoding = header_value(&header_lines, "content-transfer-encoding")
         .unwrap_or("7bit")
         .to_ascii_lowercase();
-    let decoded = decode_transfer_body(body, &transfer_encoding);
+    let remaining = remaining_bytes(output, max_bytes);
+    let decoded = decode_transfer_body(body, &transfer_encoding, remaining);
     if lower_content_type.starts_with("text/html") {
-        html_text(&decoded)
+        let visible = html_text(&decoded, remaining);
+        push_str_bounded(output, &visible, max_bytes);
     } else if lower_content_type.starts_with("text/")
         || header_value(&header_lines, "content-type").is_none()
     {
-        decoded
-    } else {
-        String::new()
+        push_str_bounded(output, &decoded, max_bytes);
     }
 }
 
@@ -293,19 +316,19 @@ fn header_param(header_value: &str, name: &str) -> Option<String> {
     })
 }
 
-fn decode_transfer_body(body: &str, encoding: &str) -> String {
+fn decode_transfer_body(body: &str, encoding: &str, max_bytes: usize) -> String {
     match encoding {
-        "quoted-printable" | "7bit" | "8bit" | "binary" => decode_quoted_printable(body),
-        "base64" => decode_base64(body),
-        _ => body.to_string(),
+        "quoted-printable" | "7bit" | "8bit" | "binary" => decode_quoted_printable(body, max_bytes),
+        "base64" => decode_base64(body, max_bytes),
+        _ => truncate_text(body, max_bytes),
     }
 }
 
-fn decode_quoted_printable(input: &str) -> String {
+fn decode_quoted_printable(input: &str, max_bytes: usize) -> String {
     let bytes = input.as_bytes();
-    let mut output = Vec::with_capacity(bytes.len());
+    let mut output = Vec::with_capacity(bytes.len().min(max_bytes));
     let mut index = 0;
-    while index < bytes.len() {
+    while index < bytes.len() && output.len() < max_bytes {
         if bytes[index] == b'=' {
             if matches!(bytes.get(index + 1), Some(b'\r' | b'\n')) {
                 index += 1;
@@ -318,34 +341,51 @@ fn decode_quoted_printable(input: &str) -> String {
                 bytes.get(index + 1).and_then(|byte| hex_value(*byte)),
                 bytes.get(index + 2).and_then(|byte| hex_value(*byte)),
             ) {
-                output.push((hi << 4) | lo);
+                push_byte_bounded(&mut output, (hi << 4) | lo, max_bytes);
                 index += 3;
                 continue;
             }
         }
-        output.push(bytes[index]);
+        push_byte_bounded(&mut output, bytes[index], max_bytes);
         index += 1;
     }
     String::from_utf8_lossy(&output).into_owned()
 }
 
-fn decode_base64(input: &str) -> String {
-    let mut output = Vec::with_capacity(input.len() * 3 / 4);
+fn decode_base64(input: &str, max_bytes: usize) -> String {
+    let mut output = Vec::with_capacity((input.len() / 4).saturating_mul(3).min(max_bytes));
     let mut quantum = [0u8; 4];
     let mut quantum_len = 0usize;
     for byte in input.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        if output.len() >= max_bytes {
+            break;
+        }
         let Some(value) = base64_value(byte) else {
             continue;
         };
         quantum[quantum_len] = value;
         quantum_len += 1;
         if quantum_len == 4 {
-            output.push((quantum[0] << 2) | (quantum[1] >> 4));
-            if quantum[2] != 64 {
-                output.push((quantum[1] << 4) | (quantum[2] >> 2));
+            if !push_byte_bounded(
+                &mut output,
+                (quantum[0] << 2) | (quantum[1] >> 4),
+                max_bytes,
+            ) {
+                break;
             }
-            if quantum[3] != 64 {
-                output.push((quantum[2] << 6) | quantum[3]);
+            if quantum[2] != 64
+                && !push_byte_bounded(
+                    &mut output,
+                    (quantum[1] << 4) | (quantum[2] >> 2),
+                    max_bytes,
+                )
+            {
+                break;
+            }
+            if quantum[3] != 64
+                && !push_byte_bounded(&mut output, (quantum[2] << 6) | quantum[3], max_bytes)
+            {
+                break;
             }
             quantum_len = 0;
         }
@@ -386,8 +426,52 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn collapse_whitespace(input: &str) -> String {
-    input.split_whitespace().collect::<Vec<_>>().join(" ")
+fn collapse_whitespace_bounded(input: &str, max_bytes: usize) -> String {
+    let mut output = String::new();
+    for token in input.split_whitespace() {
+        if output.len() >= max_bytes {
+            break;
+        }
+        if !output.is_empty() {
+            push_char_bounded(&mut output, ' ', max_bytes);
+        }
+        push_str_bounded(&mut output, token, max_bytes);
+    }
+    output
+}
+
+fn remaining_bytes(output: &str, max_bytes: usize) -> usize {
+    max_bytes.saturating_sub(output.len())
+}
+
+fn push_str_bounded(output: &mut String, value: &str, max_bytes: usize) {
+    let remaining = remaining_bytes(output, max_bytes);
+    if remaining == 0 {
+        return;
+    }
+    let end = floor_char_boundary(value, remaining);
+    output.push_str(&value[..end]);
+}
+
+fn push_char_bounded(output: &mut String, ch: char, max_bytes: usize) {
+    if output.len().saturating_add(ch.len_utf8()) <= max_bytes {
+        output.push(ch);
+    }
+}
+
+fn push_separator_bounded(output: &mut String, max_bytes: usize) {
+    if output.is_empty() || output.ends_with(char::is_whitespace) {
+        return;
+    }
+    push_char_bounded(output, ' ', max_bytes);
+}
+
+fn push_byte_bounded(output: &mut Vec<u8>, byte: u8, max_bytes: usize) -> bool {
+    if output.len() >= max_bytes {
+        return false;
+    }
+    output.push(byte);
+    true
 }
 
 fn truncate_text(text: &str, max_bytes: usize) -> String {
@@ -525,5 +609,31 @@ Content-Type: text/html
 
         assert_eq!(doc.bytes_read, "<p>alpha 東京 beta</p>".len());
         assert_eq!(doc.text, "alpha 東");
+    }
+
+    #[test]
+    fn html_budget_stops_before_late_visible_text() {
+        let doc = extract_rich(
+            b"<p>alpha</p><p>beta</p><p>gamma</p>",
+            RichKind::Html,
+            "alpha beta".len(),
+        )
+        .unwrap();
+
+        assert_eq!(doc.text, "alpha beta");
+        assert!(!doc.text.contains("gamma"), "{}", doc.text);
+    }
+
+    #[test]
+    fn email_budget_bounds_decoded_base64_body() {
+        let doc = extract_rich(
+            b"Subject: S\r\nContent-Transfer-Encoding: base64\r\n\r\nYWxwaGEgYmV0YSBnYW1tYQ==",
+            RichKind::Email,
+            "S alpha beta".len(),
+        )
+        .unwrap();
+
+        assert_eq!(doc.text, "S alpha beta");
+        assert!(!doc.text.contains("gamma"), "{}", doc.text);
     }
 }
