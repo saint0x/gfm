@@ -28,11 +28,14 @@ pub use contentrecover::{
 };
 pub use contentset::MmapContentSet;
 pub use contentset::{
-    cleanup_inactive_content_archives, plan_inactive_content_archive_cleanup,
+    cleanup_inactive_content_archives, content_manifest_promotion_journal_path,
+    plan_content_manifest_promotion_recovery, plan_inactive_content_archive_cleanup,
     promote_content_archive_manifest, read_content_archive_manifest,
-    write_content_archive_manifest, ContentArchiveCleanupAction, ContentArchiveCleanupPlan,
-    ContentArchiveCleanupPolicy, ContentArchiveCleanupReport, ContentArchiveManifest,
-    ContentArchiveManifestEntry, ContentManifestPromotion,
+    recover_content_manifest_promotion, write_content_archive_manifest,
+    ContentArchiveCleanupAction, ContentArchiveCleanupPlan, ContentArchiveCleanupPolicy,
+    ContentArchiveCleanupReport, ContentArchiveManifest, ContentArchiveManifestEntry,
+    ContentManifestPromotion, ContentManifestPromotionJournal, ContentManifestPromotionRecovery,
+    ContentManifestPromotionRecoveryAction, ContentManifestPromotionRecoveryPlan,
 };
 pub use dictionary::{
     dictionary_term_report_from_records, dictionary_terms_from_records, read_dictionary,

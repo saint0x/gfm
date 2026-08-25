@@ -6,6 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 const CONTENT_MANIFEST_HEADER: &str = "gfm-content-manifest-v1";
+const CONTENT_PROMOTION_JOURNAL_HEADER: &str = "gfm-content-promotion-journal-v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentArchiveManifestEntry {
@@ -23,6 +24,60 @@ pub struct ContentManifestPromotion {
     pub manifest: ContentArchiveManifest,
     pub retired_archives: Vec<PathBuf>,
     pub missing_retirements: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentManifestPromotionJournal {
+    pub previous: ContentArchiveManifest,
+    pub new_archive: ContentArchiveManifestEntry,
+    pub retired_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentManifestPromotionRecoveryAction {
+    Ready,
+    CompletePromotion,
+    RemoveStaleJournal,
+    CannotRecover,
+}
+
+impl ContentManifestPromotionRecoveryAction {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::CompletePromotion => "complete-promotion",
+            Self::RemoveStaleJournal => "remove-stale-journal",
+            Self::CannotRecover => "cannot-recover",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentManifestPromotionRecoveryPlan {
+    pub action: ContentManifestPromotionRecoveryAction,
+    pub manifest_path: PathBuf,
+    pub journal_path: PathBuf,
+    pub detail: Option<String>,
+}
+
+impl ContentManifestPromotionRecoveryPlan {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "content-manifest-promotion-recovery-plan\taction={}\tmanifest={}\tjournal={}\tdetail={}",
+            self.action.as_str(),
+            self.manifest_path.display(),
+            self.journal_path.display(),
+            self.detail.as_deref().unwrap_or("-")
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentManifestPromotionRecovery {
+    pub before: ContentManifestPromotionRecoveryPlan,
+    pub after: ContentManifestPromotionRecoveryPlan,
+    pub completed_promotion: bool,
+    pub removed_journal: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,6 +352,130 @@ impl ContentArchiveManifest {
     }
 }
 
+impl ContentManifestPromotionJournal {
+    pub fn new(
+        previous: ContentArchiveManifest,
+        new_archive: ContentArchiveManifestEntry,
+        retired_paths: Vec<PathBuf>,
+    ) -> Result<Self> {
+        if previous.archives.is_empty() {
+            return Err(GfmError::Format(
+                "content promotion journal requires previous manifest archives".to_string(),
+            ));
+        }
+        Ok(Self {
+            previous,
+            new_archive,
+            retired_paths,
+        })
+    }
+
+    pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let file = std::fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
+        let mut lines = BufReader::new(file).lines();
+        match lines.next() {
+            Some(Ok(header)) if header == CONTENT_PROMOTION_JOURNAL_HEADER => {}
+            Some(Ok(header)) => {
+                return Err(GfmError::Format(format!(
+                    "unsupported content promotion journal header `{header}` in {}",
+                    path.display()
+                )))
+            }
+            Some(Err(err)) => return Err(GfmError::io(path, err)),
+            None => {
+                return Err(GfmError::Format(format!(
+                    "empty content promotion journal {}",
+                    path.display()
+                )))
+            }
+        }
+
+        let mut previous = Vec::new();
+        let mut new_archive = None;
+        let mut retired_paths = Vec::new();
+        for (line_index, line) in lines.enumerate() {
+            let line = line.map_err(|err| GfmError::io(path, err))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let fields = line.split('\t').collect::<Vec<_>>();
+            match fields.as_slice() {
+                ["previous", tier, archive_path] => {
+                    previous.push(ContentArchiveManifestEntry {
+                        tier: parse_tier(tier, path, line_index + 2)?,
+                        path: PathBuf::from(unescape(archive_path)?),
+                    });
+                }
+                ["new", tier, archive_path] => {
+                    if new_archive.is_some() {
+                        return Err(GfmError::Format(format!(
+                            "{} line {}: duplicate new archive",
+                            path.display(),
+                            line_index + 2
+                        )));
+                    }
+                    new_archive = Some(ContentArchiveManifestEntry {
+                        tier: parse_tier(tier, path, line_index + 2)?,
+                        path: PathBuf::from(unescape(archive_path)?),
+                    });
+                }
+                ["retire", archive_path] => {
+                    retired_paths.push(PathBuf::from(unescape(archive_path)?));
+                }
+                _ => {
+                    return Err(GfmError::Format(format!(
+                        "{} line {}: expected previous, new, or retire entry",
+                        path.display(),
+                        line_index + 2
+                    )))
+                }
+            }
+        }
+        Self::new(
+            ContentArchiveManifest::new(previous)?,
+            new_archive.ok_or_else(|| {
+                GfmError::Format(format!(
+                    "content promotion journal {} requires a new archive",
+                    path.display()
+                ))
+            })?,
+            retired_paths,
+        )
+    }
+
+    pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        durable::atomic_write(path, |writer| {
+            writeln!(writer, "{CONTENT_PROMOTION_JOURNAL_HEADER}")?;
+            for archive in &self.previous.archives {
+                writeln!(
+                    writer,
+                    "previous\t{}\t{}",
+                    tier_name(archive.tier),
+                    escape(&archive.path.to_string_lossy())
+                )?;
+            }
+            writeln!(
+                writer,
+                "new\t{}\t{}",
+                tier_name(self.new_archive.tier),
+                escape(&self.new_archive.path.to_string_lossy())
+            )?;
+            for path in &self.retired_paths {
+                writeln!(writer, "retire\t{}", escape(&path.to_string_lossy()))?;
+            }
+            Ok(())
+        })
+        .map(|_| ())
+    }
+
+    fn promotion(&self, manifest_path: &Path) -> Result<ContentManifestPromotion> {
+        self.previous
+            .promote_archive(manifest_path, self.new_archive.clone(), &self.retired_paths)
+    }
+}
+
 #[derive(Debug)]
 pub struct MmapContentSet {
     archives: Vec<MmapContentArchive>,
@@ -410,9 +589,140 @@ pub fn promote_content_archive_manifest(
 ) -> Result<ContentManifestPromotion> {
     let manifest_path = manifest_path.as_ref();
     let manifest = ContentArchiveManifest::read(manifest_path)?;
-    let promotion = manifest.promote_archive(manifest_path, new_archive, retired_paths)?;
+    let retired_paths = retired_paths
+        .iter()
+        .map(|path| path.as_ref().to_path_buf())
+        .collect::<Vec<_>>();
+    let journal = ContentManifestPromotionJournal::new(
+        manifest.clone(),
+        new_archive.clone(),
+        retired_paths.clone(),
+    )?;
+    let journal_path = content_manifest_promotion_journal_path(manifest_path);
+    journal.write(&journal_path)?;
+    let promotion = manifest.promote_archive(manifest_path, new_archive, &retired_paths)?;
     promotion.manifest.write(manifest_path)?;
+    remove_journal_if_exists(&journal_path)?;
     Ok(promotion)
+}
+
+pub fn content_manifest_promotion_journal_path(manifest_path: impl AsRef<Path>) -> PathBuf {
+    let manifest_path = manifest_path.as_ref();
+    let file_name = manifest_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("content.gfmmanifest");
+    manifest_path.with_file_name(format!(".{file_name}.promotion-journal"))
+}
+
+pub fn plan_content_manifest_promotion_recovery(
+    manifest_path: impl AsRef<Path>,
+) -> ContentManifestPromotionRecoveryPlan {
+    let manifest_path = manifest_path.as_ref().to_path_buf();
+    let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+    if !journal_path.exists() {
+        return ContentManifestPromotionRecoveryPlan {
+            action: ContentManifestPromotionRecoveryAction::Ready,
+            manifest_path,
+            journal_path,
+            detail: Some("no pending promotion journal".to_string()),
+        };
+    }
+    let journal = match ContentManifestPromotionJournal::read(&journal_path) {
+        Ok(journal) => journal,
+        Err(err) => {
+            return ContentManifestPromotionRecoveryPlan {
+                action: ContentManifestPromotionRecoveryAction::CannotRecover,
+                manifest_path,
+                journal_path,
+                detail: Some(err.to_string()),
+            }
+        }
+    };
+    let promotion = match journal.promotion(&manifest_path) {
+        Ok(promotion) => promotion,
+        Err(err) => {
+            return ContentManifestPromotionRecoveryPlan {
+                action: ContentManifestPromotionRecoveryAction::CannotRecover,
+                manifest_path,
+                journal_path,
+                detail: Some(err.to_string()),
+            }
+        }
+    };
+    let current = ContentArchiveManifest::read(&manifest_path);
+    if current
+        .as_ref()
+        .is_ok_and(|manifest| *manifest == promotion.manifest)
+    {
+        return ContentManifestPromotionRecoveryPlan {
+            action: ContentManifestPromotionRecoveryAction::RemoveStaleJournal,
+            manifest_path,
+            journal_path,
+            detail: Some("manifest already contains promoted archive".to_string()),
+        };
+    }
+    for entry in &promotion.manifest.archives {
+        let path = resolve_manifest_path(&manifest_path, &entry.path);
+        if let Err(err) = MmapContentArchive::open(&path) {
+            return ContentManifestPromotionRecoveryPlan {
+                action: ContentManifestPromotionRecoveryAction::CannotRecover,
+                manifest_path,
+                journal_path,
+                detail: Some(format!(
+                    "promoted archive {} is not readable: {err}",
+                    path.display()
+                )),
+            };
+        }
+    }
+    ContentManifestPromotionRecoveryPlan {
+        action: ContentManifestPromotionRecoveryAction::CompletePromotion,
+        manifest_path,
+        journal_path,
+        detail: current.err().map(|err| err.to_string()),
+    }
+}
+
+pub fn recover_content_manifest_promotion(
+    manifest_path: impl AsRef<Path>,
+) -> Result<ContentManifestPromotionRecovery> {
+    let manifest_path = manifest_path.as_ref();
+    let before = plan_content_manifest_promotion_recovery(manifest_path);
+    let mut completed_promotion = false;
+    let mut removed_journal = false;
+    match before.action {
+        ContentManifestPromotionRecoveryAction::Ready => {}
+        ContentManifestPromotionRecoveryAction::RemoveStaleJournal => {
+            remove_journal_if_exists(&before.journal_path)?;
+            removed_journal = true;
+        }
+        ContentManifestPromotionRecoveryAction::CompletePromotion => {
+            let journal = ContentManifestPromotionJournal::read(&before.journal_path)?;
+            let promotion = journal.promotion(manifest_path)?;
+            promotion.manifest.write(manifest_path)?;
+            remove_journal_if_exists(&before.journal_path)?;
+            completed_promotion = true;
+            removed_journal = true;
+        }
+        ContentManifestPromotionRecoveryAction::CannotRecover => {
+            return Err(GfmError::Format(format!(
+                "{} promotion cannot be recovered: {}",
+                manifest_path.display(),
+                before
+                    .detail
+                    .as_deref()
+                    .unwrap_or("invalid promotion journal")
+            )))
+        }
+    }
+    let after = plan_content_manifest_promotion_recovery(manifest_path);
+    Ok(ContentManifestPromotionRecovery {
+        before,
+        after,
+        completed_promotion,
+        removed_journal,
+    })
 }
 
 pub fn cleanup_inactive_content_archives(
@@ -438,6 +748,17 @@ fn file_len(path: &Path) -> Result<u64> {
     match std::fs::metadata(path) {
         Ok(metadata) => Ok(metadata.len()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(err) => Err(GfmError::io(path, err)),
+    }
+}
+
+fn remove_journal_if_exists(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {
+            let _ = durable::sync_parent_for_path(path);
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(GfmError::io(path, err)),
     }
 }
@@ -650,6 +971,7 @@ mod tests {
         let dir = temp_dir("gfm-content-manifest-promote");
         let manifest_path = dir.join("content.gfmmanifest");
         std::fs::create_dir_all(&dir).unwrap();
+        write_content_postings(dir.join("warm-b.gfmcontent"), &[]).unwrap();
 
         let manifest = ContentArchiveManifest::new(vec![
             ContentArchiveManifestEntry {
@@ -707,6 +1029,101 @@ mod tests {
                 }
             ]
         );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn content_manifest_promotion_recovery_completes_pending_journal() {
+        let dir = temp_dir("gfm-content-manifest-promotion-recovery");
+        let manifest_path = dir.join("content.gfmmanifest");
+        let old_archive = dir.join("hot-a.gfmcontent");
+        let new_archive = dir.join("warm-b.gfmcontent");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_content_postings(&old_archive, &[]).unwrap();
+        write_content_postings(&new_archive, &[]).unwrap();
+        let previous = ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Hot,
+            path: PathBuf::from("hot-a.gfmcontent"),
+        }])
+        .unwrap();
+        previous.write(&manifest_path).unwrap();
+        let journal = ContentManifestPromotionJournal::new(
+            previous,
+            ContentArchiveManifestEntry {
+                tier: ContentMergeTier::Warm,
+                path: PathBuf::from("warm-b.gfmcontent"),
+            },
+            vec![PathBuf::from("hot-a.gfmcontent")],
+        )
+        .unwrap();
+        let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+        journal.write(&journal_path).unwrap();
+
+        let plan = plan_content_manifest_promotion_recovery(&manifest_path);
+        assert_eq!(
+            plan.action,
+            ContentManifestPromotionRecoveryAction::CompletePromotion
+        );
+
+        let recovery = recover_content_manifest_promotion(&manifest_path).unwrap();
+
+        assert!(recovery.completed_promotion);
+        assert!(recovery.removed_journal);
+        assert_eq!(
+            recovery.after.action,
+            ContentManifestPromotionRecoveryAction::Ready
+        );
+        assert!(!journal_path.exists());
+        let recovered = ContentArchiveManifest::read(&manifest_path).unwrap();
+        assert_eq!(
+            recovered.archives,
+            vec![ContentArchiveManifestEntry {
+                tier: ContentMergeTier::Warm,
+                path: PathBuf::from("warm-b.gfmcontent"),
+            }]
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn content_manifest_promotion_recovery_removes_stale_journal() {
+        let dir = temp_dir("gfm-content-manifest-promotion-stale");
+        let manifest_path = dir.join("content.gfmmanifest");
+        let old_archive = dir.join("hot-a.gfmcontent");
+        let new_archive = dir.join("warm-b.gfmcontent");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_content_postings(&old_archive, &[]).unwrap();
+        write_content_postings(&new_archive, &[]).unwrap();
+        let previous = ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Hot,
+            path: PathBuf::from("hot-a.gfmcontent"),
+        }])
+        .unwrap();
+        let journal = ContentManifestPromotionJournal::new(
+            previous,
+            ContentArchiveManifestEntry {
+                tier: ContentMergeTier::Warm,
+                path: PathBuf::from("warm-b.gfmcontent"),
+            },
+            vec![PathBuf::from("hot-a.gfmcontent")],
+        )
+        .unwrap();
+        let promoted = journal.promotion(&manifest_path).unwrap();
+        promoted.manifest.write(&manifest_path).unwrap();
+        let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+        journal.write(&journal_path).unwrap();
+
+        let recovery = recover_content_manifest_promotion(&manifest_path).unwrap();
+
+        assert!(!recovery.completed_promotion);
+        assert!(recovery.removed_journal);
+        assert_eq!(
+            recovery.before.action,
+            ContentManifestPromotionRecoveryAction::RemoveStaleJournal
+        );
+        assert!(!journal_path.exists());
 
         std::fs::remove_dir_all(dir).unwrap();
     }

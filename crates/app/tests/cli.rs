@@ -1,4 +1,8 @@
-use gfm_store::{read_records, write_content_postings, MetadataField, MetadataPosting};
+use gfm_store::{
+    content_manifest_promotion_journal_path, read_records, write_content_postings,
+    ContentArchiveManifest, ContentArchiveManifestEntry, ContentManifestPromotionJournal,
+    ContentMergeTier, MetadataField, MetadataPosting,
+};
 use gfm_types::{ContentPosting, FileId, VolumeId};
 use std::fs;
 use std::io::{Cursor, Write};
@@ -2557,6 +2561,24 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{promote_stdout}"
     );
 
+    let ready_recovery_plan_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-promotion-recovery-plan",
+            manifest.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        ready_recovery_plan_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ready_recovery_plan_output.stderr)
+    );
+    let ready_recovery_plan_stdout = String::from_utf8(ready_recovery_plan_output.stdout).unwrap();
+    assert!(
+        ready_recovery_plan_stdout.contains("action=ready"),
+        "{ready_recovery_plan_stdout}"
+    );
+
     let promoted_ids_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "content-ids-mmap-manifest",
@@ -2575,6 +2597,104 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         promoted_ids_stdout.lines().count(),
         1,
         "{promoted_ids_stdout}"
+    );
+
+    let crash_manifest = unique_temp_path("gfm-cli-content-promotion-crash", "gfmmanifest");
+    let crash_old = unique_temp_path("gfm-cli-content-promotion-crash-old", "gfmcontent");
+    let crash_new = unique_temp_path("gfm-cli-content-promotion-crash-new", "gfmcontent");
+    write_content_postings(
+        &crash_old,
+        &[ContentPosting {
+            term: "oldneedle".to_string(),
+            ids: vec![left],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    write_content_postings(
+        &crash_new,
+        &[ContentPosting {
+            term: "crashneedle".to_string(),
+            ids: vec![right],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    let previous_manifest = ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: crash_old.clone(),
+    }])
+    .unwrap();
+    previous_manifest.write(&crash_manifest).unwrap();
+    let promotion_journal = ContentManifestPromotionJournal::new(
+        previous_manifest,
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: crash_new.clone(),
+        },
+        vec![crash_old.clone()],
+    )
+    .unwrap();
+    let promotion_journal_path = content_manifest_promotion_journal_path(&crash_manifest);
+    promotion_journal.write(&promotion_journal_path).unwrap();
+
+    let pending_recovery_plan_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-promotion-recovery-plan",
+            crash_manifest.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        pending_recovery_plan_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pending_recovery_plan_output.stderr)
+    );
+    let pending_recovery_plan_stdout =
+        String::from_utf8(pending_recovery_plan_output.stdout).unwrap();
+    assert!(
+        pending_recovery_plan_stdout.contains("action=complete-promotion"),
+        "{pending_recovery_plan_stdout}"
+    );
+
+    let recovery_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-promotion-recover",
+            crash_manifest.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        recovery_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovery_output.stderr)
+    );
+    let recovery_stdout = String::from_utf8(recovery_output.stdout).unwrap();
+    assert!(
+        recovery_stdout.contains("completed-promotion=true\tremoved-journal=true")
+            && recovery_stdout.contains("action=ready"),
+        "{recovery_stdout}"
+    );
+    assert!(!promotion_journal_path.exists());
+
+    let crash_promoted_ids_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-ids-mmap-manifest",
+            crash_manifest.to_str().unwrap(),
+            "crashneedle",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        crash_promoted_ids_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&crash_promoted_ids_output.stderr)
+    );
+    let crash_promoted_ids_stdout = String::from_utf8(crash_promoted_ids_output.stdout).unwrap();
+    assert_eq!(
+        crash_promoted_ids_stdout.lines().count(),
+        1,
+        "{crash_promoted_ids_stdout}"
     );
 
     let cleanup_plan_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -2652,6 +2772,9 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     fs::remove_file(second_content).unwrap();
     fs::remove_file(third_content).unwrap();
     fs::remove_file(manifest).unwrap();
+    fs::remove_file(crash_manifest).unwrap();
+    fs::remove_file(crash_old).unwrap();
+    fs::remove_file(crash_new).unwrap();
 }
 
 #[test]

@@ -484,6 +484,12 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - unreadable manifests are quarantined before being replaced by a discovered-archive manifest so corrupt bytes remain available for diagnostics;
   - manifests with missing or corrupt archive entries are pruned only when at least one valid archive remains searchable;
   - recovery commands expose dry-run plans, invalid archive details, quarantine paths, and before/after recovery transcripts.
+- Content manifest promotion recovery:
+  - content archive promotions publish a durable side journal before replacing the manifest so a crash between compaction output and manifest publication is recoverable without rescanning content;
+  - pending promotion journals are classified as ready, complete-promotion, remove-stale-journal, or cannot-recover before operator or startup recovery mutates bytes;
+  - recovery validates every archive in the promoted manifest through the production mmap content reader before completing a pending promotion;
+  - stale journals left after a successful manifest write are deleted durably after the manifest already matches the promoted archive set;
+  - the operator-facing recovery commands emit deterministic TSV plans and before/after transcripts for CI replay, crash audits, and startup repair gates.
 - Search sidecar recovery:
   - record columns, metadata postings, prefix postings, fuzzy postings, and dictionary archives are validated through their mmap checksum readers before startup use;
   - missing or unreadable sidecars are rebuilt from the durable record archive using the same production encoders as indexing;

@@ -263,6 +263,8 @@ cargo run -p gfm -- diagnostics-index-recovery-plan /tmp/root records.gfmidx sta
 cargo run -p gfm -- diagnostics-index-recover /tmp/root records.gfmidx state.gfmstate quarantine
 cargo run -p gfm -- content-manifest-recovery-plan content.gfmmanifest hot:content.gfmcontent
 cargo run -p gfm -- content-manifest-recover content.gfmmanifest quarantine hot:content.gfmcontent
+cargo run -p gfm -- content-manifest-promotion-recovery-plan content.gfmmanifest
+cargo run -p gfm -- content-manifest-promotion-recover content.gfmmanifest
 cargo run -p gfm -- sidecar-recovery-plan records.gfmidx columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
 cargo run -p gfm -- sidecar-recover records.gfmidx quarantine columns.gfmcols metadata.gfmmeta prefixes.gfmprefix fuzzy.gfmfuzzy dictionary.gfmdict
 cargo run -p gfm -- archive-schema records records.gfmidx
@@ -283,6 +285,7 @@ cargo run -p gfm -- derived-sidecar-rebuild records.gfmidx prefixes prefixes.gfm
 `large-sidecar-gate` synthesizes realistic record distributions, writes real prefix/fuzzy sidecars, and verifies bounded repeated lookup behavior at million-entry scale.
 `diagnostics-index-recovery-plan` and `diagnostics-index-recover` classify persistent record/state health, rebuild missing or stale state, and quarantine corrupt record archives before rebuilding.
 `content-manifest-recovery-plan` and `content-manifest-recover` classify content manifest health, prune invalid archives, and quarantine corrupt manifests before rebuilding from mmap-validated archives.
+`content-manifest-promotion-recovery-plan` and `content-manifest-promotion-recover` complete or clean up interrupted content manifest promotions from the durable promotion journal so compaction cannot strand a valid new content archive behind a stale manifest.
 `sidecar-recovery-plan` and `sidecar-recover` validate, quarantine, and rebuild search sidecars from the durable record archive.
 `archive-schema` classifies record, column, metadata, prefix, fuzzy, dictionary, content, and content-manifest archives as current, legacy, unsupported, missing, or unreadable while validating known schemas through the production readers used by search and diagnostics.
 `records-migration-plan` and `records-migrate` rewrite legacy record archives into the current checksummed schema after preserving a byte backup for operator rollback and forensic inspection.
@@ -389,6 +392,8 @@ cargo run -p gfm -- compact-content-tiered /tmp/gfm.gfmcontent /tmp/gfm-*.gfmseg
 cargo run -p gfm -- content-manifest-write /tmp/gfm.gfmmanifest hot:/tmp/gfm-hot.gfmcontent warm:/tmp/gfm-warm.gfmcontent
 cargo run -p gfm -- content-maintain-segments /tmp/gfm.gfmmanifest /tmp/gfm-next.gfmcontent /tmp/gfm-*.gfmseg
 cargo run -p gfm -- content-manifest-promote /tmp/gfm.gfmmanifest warm:/tmp/gfm-next.gfmcontent /tmp/gfm-hot.gfmcontent
+cargo run -p gfm -- content-manifest-promotion-recovery-plan /tmp/gfm.gfmmanifest
+cargo run -p gfm -- content-manifest-promotion-recover /tmp/gfm.gfmmanifest
 cargo run -p gfm -- content-cleanup-plan /tmp/gfm.gfmmanifest 1 0 64 /tmp/gfm-hot.gfmcontent
 cargo run -p gfm -- content-manifest-cleanup /tmp/gfm.gfmmanifest /tmp/gfm-hot.gfmcontent
 cargo run -p gfm -- search-content-index-manifest /tmp/gfm.gfmidx /tmp/gfm.gfmmanifest "performance-critical"

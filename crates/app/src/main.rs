@@ -40,9 +40,11 @@ use gfm_preview::{
 use gfm_store::{
     dictionary_term_report_from_records, inspect_archive_schema, metadata_postings_from_records,
     migrate_content_archive, migrate_metadata_archive, migrate_record_archive,
-    plan_columns_archive_rebuild, plan_content_archive_migration, plan_content_manifest_recovery,
+    plan_columns_archive_rebuild, plan_content_archive_migration,
+    plan_content_manifest_promotion_recovery, plan_content_manifest_recovery,
     plan_derived_sidecar_rebuild, plan_metadata_archive_migration, plan_record_archive_migration,
-    rebuild_columns_archive, rebuild_derived_sidecar, recover_content_manifest, write_dictionary,
+    promote_content_archive_manifest, rebuild_columns_archive, rebuild_derived_sidecar,
+    recover_content_manifest, recover_content_manifest_promotion, write_dictionary,
     write_metadata_postings, write_record_columns, ArchiveSchemaKind, ContentArchive,
     ContentArchiveHealth, MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary,
     MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
@@ -833,10 +835,8 @@ fn run() -> Result<()> {
             })?;
             let new_archive = parse_content_manifest_archive_spec(&new_archive)?;
             let retired_paths = args.map(PathBuf::from).collect::<Vec<_>>();
-            let manifest = ContentArchiveManifest::read(&manifest_path)?;
             let promotion =
-                manifest.promote_archive(&manifest_path, new_archive, &retired_paths)?;
-            promotion.manifest.write(&manifest_path)?;
+                promote_content_archive_manifest(&manifest_path, new_archive, &retired_paths)?;
             eprintln!(
                 "content-manifest-promoted\tarchives={}\tretired={}\tmissing-retirements={}",
                 promotion.manifest.archives.len(),
@@ -849,6 +849,29 @@ fn run() -> Result<()> {
             for path in promotion.missing_retirements {
                 println!("missing-retirement\t{}", path.display());
             }
+        }
+        Some("content-manifest-promotion-recovery-plan") => {
+            let manifest_path = required_path(
+                args.next(),
+                "content-manifest-promotion-recovery-plan requires a manifest path",
+            )?;
+            println!(
+                "{}",
+                plan_content_manifest_promotion_recovery(manifest_path).as_tsv()
+            );
+        }
+        Some("content-manifest-promotion-recover") => {
+            let manifest_path = required_path(
+                args.next(),
+                "content-manifest-promotion-recover requires a manifest path",
+            )?;
+            let recovery = recover_content_manifest_promotion(manifest_path)?;
+            println!("{}", recovery.before.as_tsv());
+            println!(
+                "content-manifest-promotion-recovery\tcompleted-promotion={}\tremoved-journal={}",
+                recovery.completed_promotion, recovery.removed_journal
+            );
+            println!("{}", recovery.after.as_tsv());
         }
         Some("content-manifest-cleanup") => {
             let manifest_path = required_path(
@@ -3319,6 +3342,8 @@ fn print_usage() {
   gfm content-manifest-recovery-plan <manifest.gfmmanifest> [hot|warm|cold:path...]
   gfm content-manifest-recover <manifest.gfmmanifest> <quarantine-dir> [hot|warm|cold:path...]
   gfm content-manifest-promote <manifest.gfmmanifest> <hot|warm|cold:path> [retired-archive...]
+  gfm content-manifest-promotion-recovery-plan <manifest.gfmmanifest>
+  gfm content-manifest-promotion-recover <manifest.gfmmanifest>
   gfm content-manifest-cleanup <manifest.gfmmanifest> <candidate-archive...>
   gfm content-cleanup-plan <manifest.gfmmanifest> <min-retired-archives> <min-retired-bytes> <max-cleanup-archives> <candidate-archive...>
   gfm content-maintain-segments <manifest.gfmmanifest> <output.gfmcontent> <segments.gfmseg...>

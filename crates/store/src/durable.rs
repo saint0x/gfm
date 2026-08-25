@@ -59,6 +59,10 @@ pub fn atomic_write(
     })
 }
 
+pub(crate) fn sync_parent_for_path(path: &Path) -> Result<bool> {
+    sync_parent(path)
+}
+
 fn sync_parent(path: &Path) -> Result<bool> {
     let Some(parent) = path.parent() else {
         return Ok(false);

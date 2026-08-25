@@ -36,6 +36,24 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-promotion-recovery-plan",
+        "tmp/gfm-fozzy-cleanup.gfmmanifest"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-promotion-recover",
+        "tmp/gfm-fozzy-cleanup.gfmmanifest"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
