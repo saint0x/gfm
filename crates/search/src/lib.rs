@@ -193,8 +193,38 @@ pub trait SearchLookup: Sync {
     fn substring_ids(&self, gram: &str) -> gfm_types::Result<Vec<FileId>>;
     fn fuzzy_terms(&self, key: &str) -> gfm_types::Result<Vec<String>>;
 
+    fn prefix_ids_bounded(&self, prefix: &str, limit: usize) -> gfm_types::Result<SearchLookupIds> {
+        let mut ids = self.prefix_ids(prefix)?;
+        let truncated = ids.len() > limit;
+        ids.truncate(limit);
+        Ok(SearchLookupIds::new(ids, truncated))
+    }
+
+    fn substring_ids_bounded(
+        &self,
+        gram: &str,
+        limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        let mut ids = self.substring_ids(gram)?;
+        let truncated = ids.len() > limit;
+        ids.truncate(limit);
+        Ok(SearchLookupIds::new(ids, truncated))
+    }
+
     fn cache_telemetry(&self) -> SearchLookupTelemetry {
         SearchLookupTelemetry::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchLookupIds {
+    pub ids: Vec<FileId>,
+    pub truncated: bool,
+}
+
+impl SearchLookupIds {
+    pub fn new(ids: Vec<FileId>, truncated: bool) -> Self {
+        Self { ids, truncated }
     }
 }
 
@@ -1441,16 +1471,16 @@ impl SearchIndex {
             telemetry.prefix_candidate_ids += ids.len();
             return Ok(ids);
         }
-        let lookup_ids = lookup.prefix_ids(term)?;
-        telemetry.prefix_lookup_ids += lookup_ids.len();
-        if lookup_ids.len() > remaining {
+        let lookup_ids = lookup.prefix_ids_bounded(term, remaining)?;
+        telemetry.prefix_lookup_ids += lookup_ids.ids.len();
+        if lookup_ids.truncated {
             telemetry.prefix_truncated_terms += 1;
         }
         ids.extend(
             lookup_ids
+                .ids
                 .into_iter()
-                .filter(|id| self.records.contains_key(id))
-                .take(remaining),
+                .filter(|id| self.records.contains_key(id)),
         );
         telemetry.prefix_candidate_ids += ids.len();
         Ok(ids)
@@ -1484,16 +1514,17 @@ impl SearchIndex {
         for gram in grams.into_iter().take(budget.max_substring_grams_per_term) {
             telemetry.substring_grams += 1;
             let mut ids = self.name_substrings.get(&gram).cloned().unwrap_or_default();
-            let lookup_ids = lookup.substring_ids(&gram)?;
-            telemetry.substring_lookup_ids += lookup_ids.len();
-            if lookup_ids.len() > budget.max_substring_ids_per_gram {
+            let lookup_ids =
+                lookup.substring_ids_bounded(&gram, budget.max_substring_ids_per_gram)?;
+            telemetry.substring_lookup_ids += lookup_ids.ids.len();
+            if lookup_ids.truncated {
                 telemetry.substring_truncated_grams += 1;
             }
             ids.extend(
                 lookup_ids
+                    .ids
                     .into_iter()
-                    .filter(|id| self.records.contains_key(id))
-                    .take(budget.max_substring_ids_per_gram),
+                    .filter(|id| self.records.contains_key(id)),
             );
             if ids.is_empty() {
                 return Ok(BTreeSet::new());

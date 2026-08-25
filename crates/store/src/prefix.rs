@@ -1,6 +1,7 @@
 use crate::durable;
 use crate::ids::{
-    read_blocked_file_id_block_from_slice, read_blocked_file_ids, write_blocked_file_ids,
+    read_blocked_file_id_block_from_slice, read_blocked_file_ids,
+    read_blocked_file_ids_limited_from_slice, write_blocked_file_ids,
 };
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use gfm_types::{FileId, FileRecord, GfmError, Result};
@@ -135,6 +136,43 @@ impl MmapPrefixArchive {
             .posting_for(prefix)?
             .map(|posting| posting.ids)
             .unwrap_or_default())
+    }
+
+    pub fn ids_for_limit(&self, prefix: &str, limit: usize) -> Result<(Vec<FileId>, bool)> {
+        let prefix = normalize(prefix);
+        if prefix.is_empty() || limit == 0 {
+            return Ok((Vec::new(), false));
+        }
+        let Some(entry) = self
+            .directory
+            .binary_search_by(|entry| entry.prefix.as_str().cmp(prefix.as_str()))
+            .ok()
+            .map(|index| &self.directory[index])
+        else {
+            return Ok((Vec::new(), false));
+        };
+        let bytes = self.posting_bytes(entry)?;
+        let mut cursor = Cursor::new(bytes);
+        let posting_prefix = read_prefix_posting_header(&mut cursor, &self.path)?;
+        if posting_prefix != prefix {
+            return Err(prefix_format_error(
+                &self.path,
+                "prefix directory points at the wrong posting",
+            ));
+        }
+        let ids_start = usize::try_from(cursor.position())
+            .map_err(|_| prefix_format_error(&self.path, "prefix id offset overflow"))?;
+        let ids_bytes = bytes
+            .get(ids_start..)
+            .ok_or_else(|| prefix_format_error(&self.path, "prefix ids out of bounds"))?;
+        let mut ids = read_blocked_file_ids_limited_from_slice(
+            ids_bytes,
+            limit.saturating_add(1),
+            &self.path,
+        )?;
+        let truncated = ids.len() > limit;
+        ids.truncate(limit);
+        Ok((ids, truncated))
     }
 
     pub fn postings(&self) -> Result<Vec<PrefixPosting>> {
@@ -463,10 +501,18 @@ mod tests {
         let archive = MmapPrefixArchive::open(&path).unwrap();
         let ids = archive.ids_for("pro").unwrap();
         let block = archive.id_block_for("pro", 1).unwrap();
+        let (limited, truncated) = archive.ids_for_limit("pro", 129).unwrap();
+        let (all_limited, all_truncated) = archive.ids_for_limit("pro", 400).unwrap();
 
         assert_eq!(ids, posting.ids);
         assert_eq!(block.len(), 128);
         assert_eq!(block[0], FileId::new(VolumeId(5), 10_128));
+        assert!(truncated);
+        assert_eq!(limited.len(), 129);
+        assert_eq!(limited[0], FileId::new(VolumeId(5), 10_000));
+        assert_eq!(limited[128], FileId::new(VolumeId(5), 10_128));
+        assert!(!all_truncated);
+        assert_eq!(all_limited, posting.ids);
         std::fs::remove_file(path).unwrap();
     }
 

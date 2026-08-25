@@ -125,7 +125,7 @@ fn sidecar_substring_lookup_budget_caps_grams_and_reports_truncation() {
 
     assert_eq!(report.lookup.substring_terms, 1);
     assert_eq!(report.lookup.substring_grams, 1);
-    assert_eq!(report.lookup.substring_lookup_ids, 3);
+    assert_eq!(report.lookup.substring_lookup_ids, 2);
     assert_eq!(report.lookup.substring_candidate_ids, 3);
     assert_eq!(report.lookup.substring_term_truncated_grams, 1);
     assert_eq!(report.lookup.substring_truncated_grams, 1);

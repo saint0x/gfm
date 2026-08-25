@@ -6,7 +6,7 @@ use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
 pub use gfm_search::substring_candidate_grams;
 pub use gfm_search::{
-    SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupTelemetry,
+    SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupIds, SearchLookupTelemetry,
     SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting, SearchQueryReport,
     SearchRecordColumns, SearchStreamStage, SearchSubstringPosting,
 };
@@ -367,6 +367,34 @@ impl SearchLookup for SearchArchiveLookup {
         Ok(ids)
     }
 
+    fn prefix_ids_bounded(&self, prefix: &str, limit: usize) -> Result<SearchLookupIds> {
+        self.prefix_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupIds::new(Vec::new(), false));
+        }
+        if let Some(mut ids) = self
+            .prefix_cache
+            .lock()
+            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
+            .get(prefix)
+        {
+            self.prefix_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = ids.len() > limit;
+            ids.truncate(limit);
+            return Ok(SearchLookupIds::new(ids, truncated));
+        }
+
+        self.prefix_misses.fetch_add(1, Ordering::Relaxed);
+        let (ids, truncated) = self.prefixes.ids_for_limit(prefix, limit)?;
+        if !truncated {
+            self.prefix_cache
+                .lock()
+                .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
+                .insert(prefix.to_string(), ids.clone());
+        }
+        Ok(SearchLookupIds::new(ids, truncated))
+    }
+
     fn substring_ids(&self, gram: &str) -> Result<Vec<FileId>> {
         self.substring_requests.fetch_add(1, Ordering::Relaxed);
         if let Some(ids) = self
@@ -386,6 +414,34 @@ impl SearchLookup for SearchArchiveLookup {
             .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
             .insert(gram.to_string(), ids.clone());
         Ok(ids)
+    }
+
+    fn substring_ids_bounded(&self, gram: &str, limit: usize) -> Result<SearchLookupIds> {
+        self.substring_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupIds::new(Vec::new(), false));
+        }
+        if let Some(mut ids) = self
+            .substring_cache
+            .lock()
+            .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
+            .get(gram)
+        {
+            self.substring_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = ids.len() > limit;
+            ids.truncate(limit);
+            return Ok(SearchLookupIds::new(ids, truncated));
+        }
+
+        self.substring_misses.fetch_add(1, Ordering::Relaxed);
+        let (ids, truncated) = self.substrings.ids_for_limit(gram, limit)?;
+        if !truncated {
+            self.substring_cache
+                .lock()
+                .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
+                .insert(gram.to_string(), ids.clone());
+        }
+        Ok(SearchLookupIds::new(ids, truncated))
     }
 
     fn fuzzy_terms(&self, key: &str) -> Result<Vec<String>> {

@@ -119,6 +119,49 @@ pub(crate) fn read_blocked_file_ids(mut reader: impl Read, path: &Path) -> Resul
     Ok(ids)
 }
 
+pub(crate) fn read_blocked_file_ids_limited_from_slice(
+    bytes: &[u8],
+    limit: usize,
+    path: &Path,
+) -> Result<Vec<FileId>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let mut reader = Cursor::new(bytes);
+    let _count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+    let (_block_size, blocks) = read_blocked_header(&mut reader, path)?;
+    let payload_start = usize::try_from(reader.position())
+        .map_err(|_| id_format_error(path, "id block payload offset overflow"))?;
+    let mut payload_offset = 0usize;
+    let mut ids = Vec::with_capacity(limit.min(DEFAULT_ID_BLOCK_SIZE));
+    for block in &blocks {
+        let len = usize::try_from(block.len)
+            .map_err(|_| id_format_error(path, "id block length overflow"))?;
+        let start = payload_start
+            .checked_add(payload_offset)
+            .ok_or_else(|| id_format_error(path, "id block range overflow"))?;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| id_format_error(path, "id block range overflow"))?;
+        let block_bytes = bytes
+            .get(start..end)
+            .ok_or_else(|| id_format_error(path, "id block out of bounds"))?;
+        ids.extend(read_encoded_file_ids(
+            Cursor::new(block_bytes),
+            block,
+            path,
+        )?);
+        if ids.len() >= limit {
+            ids.truncate(limit);
+            return Ok(ids);
+        }
+        payload_offset = payload_offset
+            .checked_add(len)
+            .ok_or_else(|| id_format_error(path, "id block range overflow"))?;
+    }
+    Ok(ids)
+}
+
 pub(crate) fn read_blocked_file_id_block_from_slice(
     bytes: &[u8],
     block_index: usize,

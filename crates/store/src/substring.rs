@@ -1,6 +1,7 @@
 use crate::durable;
 use crate::ids::{
-    read_blocked_file_id_block_from_slice, read_blocked_file_ids, write_blocked_file_ids,
+    read_blocked_file_id_block_from_slice, read_blocked_file_ids,
+    read_blocked_file_ids_limited_from_slice, write_blocked_file_ids,
 };
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use gfm_types::{FileId, FileRecord, GfmError, Result};
@@ -136,6 +137,43 @@ impl MmapSubstringArchive {
             .posting_for(gram)?
             .map(|posting| posting.ids)
             .unwrap_or_default())
+    }
+
+    pub fn ids_for_limit(&self, gram: &str, limit: usize) -> Result<(Vec<FileId>, bool)> {
+        let gram = normalize(gram);
+        if !is_substring_gram(&gram) || limit == 0 {
+            return Ok((Vec::new(), false));
+        }
+        let Some(entry) = self
+            .directory
+            .binary_search_by(|entry| entry.gram.as_str().cmp(gram.as_str()))
+            .ok()
+            .map(|index| &self.directory[index])
+        else {
+            return Ok((Vec::new(), false));
+        };
+        let bytes = self.posting_bytes(entry)?;
+        let mut cursor = Cursor::new(bytes);
+        let posting_gram = read_substring_posting_header(&mut cursor, &self.path)?;
+        if posting_gram != gram {
+            return Err(substring_format_error(
+                &self.path,
+                "substring directory points at the wrong posting",
+            ));
+        }
+        let ids_start = usize::try_from(cursor.position())
+            .map_err(|_| substring_format_error(&self.path, "substring id offset overflow"))?;
+        let ids_bytes = bytes
+            .get(ids_start..)
+            .ok_or_else(|| substring_format_error(&self.path, "substring ids out of bounds"))?;
+        let mut ids = read_blocked_file_ids_limited_from_slice(
+            ids_bytes,
+            limit.saturating_add(1),
+            &self.path,
+        )?;
+        let truncated = ids.len() > limit;
+        ids.truncate(limit);
+        Ok((ids, truncated))
     }
 
     pub fn postings(&self) -> Result<Vec<SubstringPosting>> {
@@ -496,10 +534,18 @@ mod tests {
         let archive = MmapSubstringArchive::open(&path).unwrap();
         let ids = archive.ids_for("POR").unwrap();
         let block = archive.id_block_for("por", 1).unwrap();
+        let (limited, truncated) = archive.ids_for_limit("POR", 129).unwrap();
+        let (all_limited, all_truncated) = archive.ids_for_limit("por", 400).unwrap();
 
         assert_eq!(ids, posting.ids);
         assert_eq!(block.len(), 128);
         assert_eq!(block[0], FileId::new(VolumeId(5), 10_128));
+        assert!(truncated);
+        assert_eq!(limited.len(), 129);
+        assert_eq!(limited[0], FileId::new(VolumeId(5), 10_000));
+        assert_eq!(limited[128], FileId::new(VolumeId(5), 10_128));
+        assert!(!all_truncated);
+        assert_eq!(all_limited, posting.ids);
         std::fs::remove_file(path).unwrap();
     }
 
