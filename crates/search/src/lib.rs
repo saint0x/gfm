@@ -6,6 +6,7 @@ mod ranking;
 mod session;
 mod shard;
 
+pub use columns::SearchRecordColumns;
 use columns::{filter_matches_columns, RecordColumns};
 use fuzzy::{bounded_levenshtein, deletion_keys};
 use intent::{intent_score, term_matches_intent};
@@ -83,6 +84,17 @@ impl SearchIndex {
         self.paths.insert(path_key(&record.path), id);
         self.columns.insert(id, columns);
         self.records.insert(id, record);
+    }
+
+    pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {
+        let Some(record) = self.records.get(&columns.id).cloned() else {
+            return false;
+        };
+        self.remove_terms(&record);
+        let normalized = RecordColumns::from_search_columns(&columns);
+        self.add_terms(&record, &normalized);
+        self.columns.insert(columns.id, normalized);
+        true
     }
 
     pub fn remove(&mut self, id: FileId) -> Option<FileRecord> {

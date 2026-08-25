@@ -1,8 +1,8 @@
 use gfm_content::Extractor;
 use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
-pub use gfm_search::SearchStreamStage;
 use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
+pub use gfm_search::{SearchRecordColumns, SearchStreamStage};
 use gfm_store::{
     compact_content_segments, read_content_postings, read_records, write_content_postings,
     write_content_segment, write_records,
@@ -178,6 +178,10 @@ impl LiveIndex {
             live.index.insert(record);
         }
         live
+    }
+
+    pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {
+        self.index.apply_record_columns(columns)
     }
 
     pub fn len(&self) -> usize {

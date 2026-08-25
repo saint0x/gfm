@@ -14,7 +14,8 @@ use gfm_index::{
     parse_volume_indexing_policy, BackgroundContentIndexer, ContentIndexJobSpec,
     ContentIndexReport, EventBackpressureQueue, EventPriority, FseventsCursor,
     FseventsCursorHealth, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor,
-    IndexVolumeState, Indexer, LiveIndex, SearchStreamStage, VolumeIndexPolicy,
+    IndexVolumeState, Indexer, LiveIndex, SearchRecordColumns, SearchStreamStage,
+    VolumeIndexPolicy,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -811,6 +812,38 @@ fn run() -> Result<()> {
                 gfm_types::GfmError::Format("search-index-mmap requires a query string".to_string())
             })?;
             let live = LiveIndex::from_records(MmapRecordArchive::open(index_path)?.records()?);
+            for hit in live.search(&query, 50) {
+                print_hit(&hit);
+            }
+        }
+        Some("search-index-columns") => {
+            let records =
+                required_path(args.next(), "search-index-columns requires a records path")?;
+            let columns =
+                required_path(args.next(), "search-index-columns requires a columns path")?;
+            let query = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "search-index-columns requires a query string".to_string(),
+                )
+            })?;
+            let records = MmapRecordArchive::open(records)?;
+            let columns = MmapRecordColumns::open(columns)?;
+            let mut live = LiveIndex::from_records(records.records()?);
+            let mut applied = 0usize;
+            for index in 0..columns.len() {
+                let column = columns.column(index)?;
+                if live.apply_record_columns(SearchRecordColumns {
+                    id: column.id,
+                    name: column.name,
+                    path: column.path,
+                    extension: column.extension,
+                    tags: column.tags,
+                    comment: column.comment,
+                }) {
+                    applied += 1;
+                }
+            }
+            eprintln!("columns-applied {applied}");
             for hit in live.search(&query, 50) {
                 print_hit(&hit);
             }
@@ -2137,6 +2170,7 @@ fn print_usage() {
   gfm search-content <root> <query>
   gfm search-index <index.gfmidx> <query>
   gfm search-index-mmap <index.gfmidx> <query>
+  gfm search-index-columns <index.gfmidx> <columns.gfmcols> <query>
   gfm records-verify <index.gfmidx>
   gfm index-columns <records.gfmidx> <columns.gfmcols>
   gfm columns-verify <columns.gfmcols>

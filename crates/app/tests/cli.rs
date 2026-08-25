@@ -953,6 +953,30 @@ fn searches_persisted_tags_from_binary() {
         "{columns_lookup_stdout}"
     );
 
+    let column_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-index-columns",
+            index.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            "tag:Important",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        column_search.status.success(),
+        "{}",
+        String::from_utf8_lossy(&column_search.stderr)
+    );
+    let column_search_stdout = String::from_utf8(column_search.stdout).unwrap();
+    assert!(
+        column_search_stdout.contains("tagged.md"),
+        "{column_search_stdout}"
+    );
+    assert!(
+        !column_search_stdout.contains("other.md"),
+        "{column_search_stdout}"
+    );
+
     fs::remove_file(index).unwrap();
     fs::remove_file(metadata).unwrap();
     fs::remove_file(dictionary).unwrap();

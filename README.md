@@ -295,6 +295,7 @@ cargo run -p gfm -- fsevents-cursor-resume /tmp/gfm.gfmstate /tmp/gfm.gfmcursor
 cargo run -p gfm -- fsevents-repair-schedule /tmp/gfm.gfmstate /tmp/gfm.gfmcursor 12346,12350 kernel-dropped ~/Documents
 cargo run -p gfm -- search-index /tmp/gfm.gfmidx PLAN
 cargo run -p gfm -- search-index-mmap /tmp/gfm.gfmidx PLAN
+cargo run -p gfm -- search-index-columns /tmp/gfm.gfmidx /tmp/gfm.gfmcols PLAN
 cargo run -p gfm -- records-verify /tmp/gfm.gfmidx
 cargo run -p gfm -- index-columns /tmp/gfm.gfmidx /tmp/gfm.gfmcols
 cargo run -p gfm -- columns-verify /tmp/gfm.gfmcols

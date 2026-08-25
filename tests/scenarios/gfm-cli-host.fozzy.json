@@ -101,6 +101,17 @@
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "search-index-columns",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "tag:Important"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "index-metadata",
         "tmp/gfm-fozzy-metadata-records.gfmidx",
         "/tmp/gfm-fozzy-metadata.gfmmeta"

@@ -1,4 +1,6 @@
-use crate::{sort_hits, SearchIndex, SearchQuery, SearchStreamBatch, SearchStreamStage};
+use crate::{
+    sort_hits, SearchIndex, SearchQuery, SearchRecordColumns, SearchStreamBatch, SearchStreamStage,
+};
 use gfm_jobs::Cancellation;
 use gfm_types::{FileId, FileRecord, GfmError, Result, SearchHit, VolumeId};
 use std::collections::BTreeMap;
@@ -33,6 +35,12 @@ impl ShardedSearchIndex {
             .or_default()
             .insert(record);
         self.prune_empty_shards();
+    }
+
+    pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {
+        self.shards
+            .get_mut(&columns.id.volume)
+            .is_some_and(|shard| shard.apply_record_columns(columns))
     }
 
     pub fn remove(&mut self, id: FileId) -> Option<FileRecord> {

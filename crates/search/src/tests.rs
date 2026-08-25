@@ -51,6 +51,28 @@ fn reindexed_records_refresh_cached_columns() {
 }
 
 #[test]
+fn applied_record_columns_drive_matching_and_filters() {
+    let mut index = SearchIndex::new();
+    let item = record(1, "/tmp/original.txt", "original.txt");
+    index.insert(item.clone());
+
+    assert!(index.apply_record_columns(SearchRecordColumns {
+        id: item.id,
+        name: "cached.md".to_string(),
+        path: "/tmp/cached.md".to_string(),
+        extension: Some("md".to_string()),
+        tags: vec!["Important".to_string()],
+        comment: Some("Launch Notes".to_string()),
+    }));
+
+    assert!(index.query("original", 10).is_empty());
+    assert_eq!(
+        index.query("cached tag:important launch ext:md", 10).len(),
+        1
+    );
+}
+
+#[test]
 fn removes_subtree_by_path() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/folder", "folder"));

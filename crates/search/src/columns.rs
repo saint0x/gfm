@@ -1,6 +1,6 @@
 use crate::query::{normalize, tokenize};
 use crate::{is_fuzzy_term, QueryFilter};
-use gfm_types::FileRecord;
+use gfm_types::{FileId, FileRecord};
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,6 +14,16 @@ pub(super) struct RecordColumns {
     pub(super) path_tokens: Vec<String>,
     pub(super) metadata_tokens: Vec<String>,
     pub(super) fuzzy_terms: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchRecordColumns {
+    pub id: FileId,
+    pub name: String,
+    pub path: String,
+    pub extension: Option<String>,
+    pub tags: Vec<String>,
+    pub comment: Option<String>,
 }
 
 impl RecordColumns {
@@ -37,6 +47,40 @@ impl RecordColumns {
             .filter_map(|component| component.as_os_str().to_str())
             .flat_map(|component| tokenize(&normalize(component)))
             .collect();
+        let metadata_tokens = comment.as_deref().map(tokenize).unwrap_or_default();
+        let fuzzy_terms = name_tokens
+            .iter()
+            .filter(|term| is_fuzzy_term(term))
+            .cloned()
+            .collect();
+        Self {
+            name,
+            path,
+            extension,
+            tags,
+            comment,
+            name_tokens,
+            path_tokens,
+            metadata_tokens,
+            fuzzy_terms,
+        }
+    }
+
+    pub(super) fn from_search_columns(columns: &SearchRecordColumns) -> Self {
+        let name = normalize(&columns.name);
+        let path = normalize(&columns.path);
+        let extension = columns.extension.as_deref().map(normalize);
+        let mut tags = columns
+            .tags
+            .iter()
+            .map(|tag| normalize(tag))
+            .filter(|tag| !tag.is_empty())
+            .collect::<Vec<_>>();
+        tags.sort();
+        tags.dedup();
+        let comment = columns.comment.as_deref().map(normalize);
+        let name_tokens = tokenize(&name);
+        let path_tokens = tokenize(&path);
         let metadata_tokens = comment.as_deref().map(tokenize).unwrap_or_default();
         let fuzzy_terms = name_tokens
             .iter()
