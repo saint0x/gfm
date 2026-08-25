@@ -1378,25 +1378,30 @@ impl SearchIndex {
     }
 
     fn content_matches_proximity(&self, id: FileId, proximity: &QueryProximity) -> bool {
-        let positions: Option<Vec<&Vec<u32>>> = proximity
-            .terms
+        let mut positions = Vec::with_capacity(proximity.terms.len());
+        for term in &proximity.terms {
+            let Some(term_positions) = self
+                .content_terms
+                .get(term)
+                .and_then(|positions| positions.get(&id))
+                .filter(|positions| !positions.is_empty())
+            else {
+                return false;
+            };
+            positions.push(term_positions);
+        }
+
+        let Some((anchor_index, anchor_positions)) = positions
             .iter()
-            .map(|term| {
-                self.content_terms
-                    .get(term)
-                    .and_then(|positions| positions.get(&id))
-                    .filter(|positions| !positions.is_empty())
-            })
-            .collect();
-        let Some(positions) = positions else {
+            .enumerate()
+            .min_by_key(|(_, positions)| positions.len())
+        else {
             return false;
         };
-        let mut anchors = positions[0].iter().copied();
-        anchors.any(|anchor| {
-            positions.iter().skip(1).all(|other| {
-                other
-                    .iter()
-                    .any(|position| anchor.abs_diff(*position) <= proximity.distance)
+        anchor_positions.iter().copied().any(|anchor| {
+            positions.iter().enumerate().all(|(index, other)| {
+                index == anchor_index
+                    || sorted_has_position_within(other, anchor, proximity.distance)
             })
         })
     }
@@ -1893,6 +1898,16 @@ where
 fn sorted_contains_position(positions: &[u32], position: u32) -> bool {
     debug_assert!(positions.windows(2).all(|window| window[0] < window[1]));
     positions.binary_search(&position).is_ok()
+}
+
+fn sorted_has_position_within(positions: &[u32], anchor: u32, distance: u32) -> bool {
+    debug_assert!(positions.windows(2).all(|window| window[0] < window[1]));
+    let min = anchor.saturating_sub(distance);
+    let max = anchor.saturating_add(distance);
+    let index = positions.partition_point(|position| *position < min);
+    positions
+        .get(index)
+        .is_some_and(|position| *position <= max)
 }
 
 fn add_scores(

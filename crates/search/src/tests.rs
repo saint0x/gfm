@@ -863,6 +863,60 @@ fn supports_boolean_content_proximity_queries() {
 }
 
 #[test]
+fn content_proximity_anchors_on_sparse_term_positions() {
+    let mut index = SearchIndex::new();
+    let keep = record(1, "/tmp/rare-anchor.txt", "rare-anchor.txt");
+    let skip = record(2, "/tmp/rare-far.txt", "rare-far.txt");
+    index.insert(keep.clone());
+    index.insert(skip.clone());
+    index.import_content_postings(&[
+        ContentPosting {
+            term: "common".to_string(),
+            ids: vec![keep.id, skip.id],
+            positions: vec![
+                ContentPositions {
+                    id: keep.id,
+                    positions: (0..1_000).collect(),
+                },
+                ContentPositions {
+                    id: skip.id,
+                    positions: (0..1_000).collect(),
+                },
+            ],
+        },
+        ContentPosting {
+            term: "rare".to_string(),
+            ids: vec![keep.id, skip.id],
+            positions: vec![
+                ContentPositions {
+                    id: keep.id,
+                    positions: vec![998],
+                },
+                ContentPositions {
+                    id: skip.id,
+                    positions: vec![2_000],
+                },
+            ],
+        },
+    ]);
+
+    let hits = index.query("near:2:common,rare", 10);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.name, "rare-anchor.txt");
+}
+
+#[test]
+fn sorted_position_range_lookup_uses_distance_bounds() {
+    let positions = [4, 9, 12, 20];
+
+    assert!(sorted_has_position_within(&positions, 10, 2));
+    assert!(sorted_has_position_within(&positions, 18, 2));
+    assert!(!sorted_has_position_within(&positions, 15, 2));
+    assert!(sorted_has_position_within(&positions, 0, 4));
+}
+
+#[test]
 fn filters_by_kind_extension_path_and_size() {
     let mut index = SearchIndex::new();
     let mut keep = record(1, "/Users/me/Desktop/PLAN.md", "PLAN.md");
