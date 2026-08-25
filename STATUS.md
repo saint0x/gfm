@@ -116,18 +116,17 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Configuration
 
-81. Define target macOS version matrix and supported hardware profiles.
-82. Implement hidden/internal performance controls without exposing non-Finder UI by default.
+81. Implement hidden/internal performance controls without exposing non-Finder UI by default.
 
 ## Packaging
 
-83. Implement first-run permission onboarding that remains Finder-parity by default.
-84. Implement update, rollback, crash-report, and diagnostics policy.
-85. Implement release artifact validation on clean macOS machines.
+82. Implement first-run permission onboarding that remains Finder-parity by default.
+83. Implement update, rollback, crash-report, and diagnostics policy.
+84. Implement release artifact validation on clean macOS machines.
 
 ## Documentation
 
-86. Expand `PLAN.md` when architectural decisions change materially.
-87. Keep `README.md` written as the completed product contract.
-88. Keep this file limited to unfinished work only.
-89. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+85. Expand `PLAN.md` when architectural decisions change materially.
+86. Keep `README.md` written as the completed product contract.
+87. Keep this file limited to unfinished work only.
+88. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

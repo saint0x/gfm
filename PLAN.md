@@ -220,6 +220,8 @@ gfm/
 - Owns bindings to AppKit, Foundation, CoreServices, QuickLook, Spotlight, FSEvents, Security, DiskArbitration, FileProvider where needed.
 - Keeps unsafe and Objective-C interop isolated.
 - Public API is narrow, typed Rust.
+- Defines and evaluates the target support matrix: primary support for Apple Silicon on macOS 15 or newer, compatibility support down to macOS 14, Intel x86_64 compatibility where hardware budgets are met, an 8 GiB memory floor, and a 4 logical CPU floor.
+- Probes the current host through macOS system tools and returns an explicit primary, compatible, or unsupported tier with reasons suitable for release validation and operator diagnostics.
 
 `fs`
 

@@ -12,7 +12,7 @@ use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
     WorkerPool,
 };
-use gfm_mac::{FileEventStream, WatchRoot};
+use gfm_mac::{current_host_profile, FileEventStream, SupportMatrix, WatchRoot};
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
 use gfm_packaging::{
     build_app_bundle, notarize_app_bundle, register_launch_services, AppBundleSpec,
@@ -330,6 +330,25 @@ fn run() -> Result<()> {
                     report.bytes,
                     report.terms
                 ),
+            }
+        }
+        Some("support-check") => {
+            let matrix = SupportMatrix::default();
+            let host = current_host_profile()?;
+            let evaluation = matrix.evaluate(&host);
+            println!(
+                "{}\t{}.{}.{}\t{}\t{}\t{}\t{}",
+                evaluation.tier.as_str(),
+                host.macos_version.major,
+                host.macos_version.minor,
+                host.macos_version.patch,
+                host.build,
+                host.hardware.architecture.as_str(),
+                host.hardware.memory_bytes,
+                host.hardware.logical_cpus
+            );
+            for reason in evaluation.reasons {
+                eprintln!("unsupported\t{reason}");
             }
         }
         Some("macrobench") => {
@@ -813,6 +832,7 @@ fn print_usage() {
   gfm diagnostics-trace-export <trace.json>
   gfm diagnostics-parity-baseline <config.toml> <baseline-root> <macos-build>
   gfm diagnostics-storage-inspect <records.gfmidx|content.gfmcontent>
+  gfm support-check
   gfm macrobench <workspace> [smoke|standard]
   gfm regression-gate <workspace> [smoke|standard]
   gfm bundle-app <executable> <GFM.icns> <output-dir> [--ad-hoc|--unsigned|developer-id]

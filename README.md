@@ -51,7 +51,7 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 
 - `crates/app`: native application startup, GPUI composition, windows, menus, and command routing.
 - `crates/ui`: Finder-parity components, visual tokens, layout primitives, virtualized views, and screenshot-test surfaces.
-- `crates/mac`: narrow typed bridges to AppKit, Foundation, CoreServices, QuickLook, Spotlight, FSEvents, Security, DiskArbitration, APFS, and FileProvider.
+- `crates/mac`: narrow typed bridges to AppKit, Foundation, CoreServices, QuickLook, Spotlight, FSEvents, Security, DiskArbitration, APFS, FileProvider, host support detection, and target matrix policy.
 - `crates/fs`: filesystem enumeration, identity, permissions, package detection, aliases, symlinks, hidden files, volume behavior, and metadata reads.
 - `crates/ops`: APFS-aware file operations, clone fast paths, copy/move/delete/trash semantics, conflict handling, operation journaling, recovery, and retries.
 - `crates/index`: initial crawl, FSEvents ingestion, background metadata/content pipelines, per-volume state, and repair scheduling.
@@ -188,6 +188,12 @@ cargo run -p gfm -- diagnostics-storage-inspect /tmp/gfm.gfmidx
 cargo run -p gfm -- diagnostics-storage-inspect /tmp/gfm.gfmcontent
 cargo run -p gfm -- diagnostics-trace-export /tmp/gfm-diagnostics.json
 cargo run -p gfm -- diagnostics-parity-baseline ~/Library/Application\ Support/GFM/config.toml tests/parity/baselines 25A354
+```
+
+Check the current host against the supported macOS and hardware matrix:
+
+```sh
+cargo run -p gfm -- support-check
 ```
 
 Run repeatable macrobenchmarks:
