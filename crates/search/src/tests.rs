@@ -1465,6 +1465,42 @@ fn search_index_uses_bounded_top_hits_for_single_shard() {
 }
 
 #[test]
+fn hit_sorting_caches_keys_without_changing_tie_break_order() {
+    let mut hits = vec![
+        SearchHit {
+            record: record(3, "/tmp/b/report.md", "Report.md"),
+            score: 100,
+            reason: MatchReason::PrefixName,
+            snippet: None,
+        },
+        SearchHit {
+            record: record(2, "/tmp/a/report.md", "report.md"),
+            score: 100,
+            reason: MatchReason::PrefixName,
+            snippet: None,
+        },
+        SearchHit {
+            record: record(1, "/tmp/z/archive.md", "archive.md"),
+            score: 200,
+            reason: MatchReason::ExactName,
+            snippet: None,
+        },
+    ];
+
+    sort_hits(&mut hits);
+    let paths: Vec<_> = hits.into_iter().map(|hit| hit.record.path).collect();
+
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/tmp/z/archive.md"),
+            PathBuf::from("/tmp/a/report.md"),
+            PathBuf::from("/tmp/b/report.md"),
+        ]
+    );
+}
+
+#[test]
 fn sharded_search_removes_records_by_volume_and_path() {
     let mut index = ShardedSearchIndex::new();
     let first = volume_record(1, 1, "/Volumes/A/report.md", "report.md");

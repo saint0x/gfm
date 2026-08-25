@@ -98,6 +98,7 @@ The index is compact and incremental:
 - query-intent preclassification so ordinary searches skip full-record Finder-intent scoring passes
 - name substring n-gram candidates and delete-key fuzzy candidate indexes for infix and typo-tolerant matches without full-record scans
 - archive-backed prefix, substring, and fuzzy lookup with explicit candidate budgets, adaptive prefix cutoffs, lookup cache telemetry, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
+- cached score/name/path/id sort keys during bounded top-k ranking so deterministic ordering does not repeatedly allocate while results are merged
 - direct content-posting scoring for normal content-term queries without temporary ID-set materialization
 - exact phrase and `near:N:alpha,beta` positional content retrieval
 - bounded snippets with highlighted content matches

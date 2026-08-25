@@ -26,6 +26,7 @@ pub use shard::ShardedSearchIndex;
 
 use gfm_jobs::Cancellation;
 use gfm_types::{ContentPositions, ContentPosting, FileId, FileRecord, MatchReason, SearchHit};
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const FUZZY_MIN_TERM_LEN: usize = 2;
@@ -1534,22 +1535,13 @@ fn remove_id(map: &mut BTreeMap<String, BTreeSet<FileId>>, key: &str, id: FileId
 }
 
 pub(crate) fn sort_hits(hits: &mut [SearchHit]) {
-    hits.sort_by(|a, b| {
-        b.score
-            .cmp(&a.score)
-            .then_with(|| {
-                a.record
-                    .name
-                    .to_lowercase()
-                    .cmp(&b.record.name.to_lowercase())
-            })
-            .then_with(|| {
-                a.record
-                    .path
-                    .to_string_lossy()
-                    .cmp(&b.record.path.to_string_lossy())
-            })
-            .then_with(|| a.record.id.cmp(&b.record.id))
+    hits.sort_by_cached_key(|hit| {
+        (
+            Reverse(hit.score),
+            hit.record.name.to_lowercase(),
+            hit.record.path.to_string_lossy().into_owned(),
+            hit.record.id,
+        )
     });
 }
 
