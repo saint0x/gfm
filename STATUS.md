@@ -66,7 +66,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 40. Implement conflict UI/state machine for skip, apply to all, and per-item decisions beyond the implemented operation-engine replace, keep-both, and merge-folder policies with journaled actual destinations.
 41. Finish Finder-native Trash restore integration beyond the implemented GFM metadata-backed restore operation, including direct platform Trash item identity, Put Back parity, collision sheets, permanent delete plumbing, and captured Finder baselines.
 42. Implement privileged-operation flow for protected paths.
-43. Implement network-volume fallbacks and slow-volume throttling.
+43. Finish volume-specific network-volume fallback and slow-volume throttling policy beyond the implemented bounded streaming byte-copy fallback for unsupported or cross-device regular-file copies.
 
 ## Jobs And Runtime
 

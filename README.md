@@ -53,7 +53,7 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 - `crates/ui`: GPUI application startup, production window lifecycle, root surface, titlebar contract, activation, tab grouping, Finder-parity components, visual tokens, layout primitives, virtualized views, and screenshot-test surfaces.
 - `crates/mac`: narrow typed bridges to AppKit, Foundation, CoreServices, QuickLook, Spotlight, FSEvents, Security, DiskArbitration, APFS, FileProvider, host support detection, first-run permission readiness, and target matrix policy.
 - `crates/fs`: filesystem enumeration, identity, permissions, package detection, aliases, symlinks, hidden files, volume behavior, and metadata reads.
-- `crates/ops`: APFS-aware file operations, clone fast paths, copy/move/delete/trash semantics, conflict handling, operation journaling, recovery, and retries.
+- `crates/ops`: APFS-aware file operations, clone fast paths, bounded streaming byte-copy fallback, copy/move/delete/trash semantics, conflict handling, operation journaling, recovery, and retries.
 - `crates/index`: initial crawl, FSEvents ingestion, background metadata/content pipelines, per-volume state, and repair scheduling.
 - `crates/search`: query parsing, ranking, streaming results, filename/path/content/metadata retrieval, fuzzy matching, snippets, cancellation, supersession, and recency scoring.
 - `crates/store`: mmap segment store, dictionaries, compressed postings, appendable content segments, tombstones, merge policy, and compaction.
@@ -132,7 +132,7 @@ GFM supports:
 - network-volume fallbacks
 - checksummed verification where needed
 
-The operation engine is journaled. A crash, power loss, unmount, permission denial, cancellation, pause, or network failure leaves an inspectable recovery path instead of mystery state. File copies preserve symlink objects, try the native macOS `fclonefileat` path first for regular files, report whether the host used the APFS clone fast path or byte-copy fallback in tests, preserve ownership where the host permits it, preserve permissions, access/modified timestamps, and copyable xattrs, then verify copied regular-file output with the configured size or streaming byte policy before reporting success. Recursive copy, move, rename, delete, trash, and restore operations preflight exact item/byte totals, honor cancellation and pause checkpoints during planning and execution, resolve replace, keep-both, and merge-folder conflicts before journaling the actual target path, record GFM Trash restore metadata, restore trash entries to their metadata-backed original paths, emit completion-backed progress during execution, replay interrupted started operations from the journal with the original operation id, resume paused copy/move/rename operations through idempotent destination verification, and retry classified transient failed operations only under an explicit capped recovery policy.
+The operation engine is journaled. A crash, power loss, unmount, permission denial, cancellation, pause, or network failure leaves an inspectable recovery path instead of mystery state. File copies preserve symlink objects, try the native macOS `fclonefileat` path first for regular files, fall back to a GFM-owned bounded streaming byte-copy path for unsupported or cross-device copies, report whether the host used the APFS clone fast path or byte-copy fallback in tests, preserve ownership where the host permits it, preserve permissions, access/modified timestamps, and copyable xattrs, then verify copied regular-file output with the configured size or streaming byte policy before reporting success. Recursive copy, move, rename, delete, trash, and restore operations preflight exact item/byte totals, honor cancellation and pause checkpoints during planning and execution, resolve replace, keep-both, and merge-folder conflicts before journaling the actual target path, record GFM Trash restore metadata, restore trash entries to their metadata-backed original paths, emit completion-backed progress during execution, replay interrupted started operations from the journal with the original operation id, resume paused copy/move/rename operations through idempotent destination verification, and retry classified transient failed operations only under an explicit capped recovery policy.
 
 Runtime workers admit volume-scoped jobs through explicit per-volume limits. Heavy work on one disk, external drive, iCloud subtree, or network mount cannot consume every worker and starve visible work on another volume.
 
@@ -477,7 +477,7 @@ cargo run -p gfm -- jobs-progress-snapshot /tmp/gfm-jobs.gfmprogress
 cargo run -p gfm -- jobs-cancel-tree
 ```
 
-Watch and operate on files:
+Run internal operator/test harness file-operation checks:
 
 ```sh
 cargo run -p gfm -- watch-once .

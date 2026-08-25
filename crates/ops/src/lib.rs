@@ -53,6 +53,8 @@ pub enum CopyMethod {
     ByteCopy,
 }
 
+const COPY_BUFFER_BYTES: usize = 256 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CopyExistingMode {
     Fresh,
@@ -1129,13 +1131,43 @@ fn copy_file(from: &Path, to: &Path, verification: VerificationPolicy) -> Result
         }
         Err(err) if clone_fallback_allowed(&err) => {
             remove_failed_clone_destination(to)?;
-            fs::copy(from, to).map_err(|err| GfmError::io(from, err))?;
+            copy_file_bytes(from, to)?;
             preserve_metadata(from, to, &metadata)?;
             verify_copy(from, to, verification)?;
             Ok(CopyMethod::ByteCopy)
         }
         Err(err) => Err(GfmError::io(from, err)),
     }
+}
+
+fn copy_file_bytes(from: &Path, to: &Path) -> Result<u64> {
+    let mut source = File::open(from).map_err(|err| GfmError::io(from, err))?;
+    let mut destination = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(to)
+        .map_err(|err| GfmError::io(to, err))?;
+    let mut buffer = vec![0; COPY_BUFFER_BYTES];
+    let mut written = 0_u64;
+
+    let result = loop {
+        let read = match source.read(&mut buffer) {
+            Ok(read) => read,
+            Err(err) => break Err(GfmError::io(from, err)),
+        };
+        if read == 0 {
+            break Ok(written);
+        }
+        if let Err(err) = destination.write_all(&buffer[..read]) {
+            break Err(GfmError::io(to, err));
+        }
+        written += read as u64;
+    };
+
+    if result.is_err() {
+        let _ = fs::remove_file(to);
+    }
+    result
 }
 
 fn verify_copy(from: &Path, to: &Path, policy: VerificationPolicy) -> Result<()> {
@@ -1941,6 +1973,42 @@ mod tests {
             "clone-aware copy"
         );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn byte_copy_streams_large_file_with_bounded_buffer() {
+        let root = unique_temp_dir("gfm-ops-byte-copy-stream");
+        let source = root.join("source.bin");
+        let destination = root.join("destination.bin");
+        let mut bytes = Vec::with_capacity((COPY_BUFFER_BYTES * 2) + 17);
+        for index in 0..((COPY_BUFFER_BYTES * 2) + 17) {
+            bytes.push((index % 251) as u8);
+        }
+        fs::write(&source, &bytes).unwrap();
+
+        let copied = copy_file_bytes(&source, &destination).unwrap();
+
+        assert_eq!(copied, bytes.len() as u64);
+        assert_eq!(fs::read(&destination).unwrap(), bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn byte_copy_refuses_existing_destination() {
+        let root = unique_temp_dir("gfm-ops-byte-copy-existing");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "fresh").unwrap();
+        fs::write(&destination, "existing").unwrap();
+
+        let err = copy_file_bytes(&source, &destination).unwrap_err();
+
+        assert!(
+            matches!(err, GfmError::Io { .. }),
+            "expected io conflict, got {err:?}"
+        );
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "existing");
         fs::remove_dir_all(root).unwrap();
     }
 
