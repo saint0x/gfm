@@ -79,6 +79,21 @@ pub struct OperationRecoveryReport {
     pub outcomes: Vec<OperationRecoveryOutcome>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OperationRecoveryPolicy {
+    pub retry_failed: bool,
+    pub max_attempts: usize,
+}
+
+impl Default for OperationRecoveryPolicy {
+    fn default() -> Self {
+        Self {
+            retry_failed: false,
+            max_attempts: 1,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationRecoveryOutcome {
     pub id: u128,
@@ -155,10 +170,21 @@ impl Operator {
     }
 
     pub fn recover_interrupted(&self) -> Result<OperationRecoveryReport> {
-        let interrupted = interrupted_operations(self.journal()?);
-        let mut outcomes = Vec::with_capacity(interrupted.len());
-        for entry in interrupted {
+        self.recover_with_policy(OperationRecoveryPolicy::default())
+    }
+
+    pub fn recover_with_policy(
+        &self,
+        policy: OperationRecoveryPolicy,
+    ) -> Result<OperationRecoveryReport> {
+        let recoverable = recoverable_operations(self.journal()?, policy);
+        let mut outcomes = Vec::with_capacity(recoverable.len());
+        for plan in recoverable {
+            let entry = plan.entry;
             let operation = entry.operation;
+            if plan.append_started {
+                self.append(JournalEntry::started(entry.id, operation.clone()))?;
+            }
             match self.execute_started(entry.id, operation.clone(), &mut |_| {}) {
                 Ok(completed) => outcomes.push(OperationRecoveryOutcome {
                     id: completed.id,
@@ -239,21 +265,40 @@ struct OperationRecoveryState {
     id: u128,
     operation: Operation,
     last_status: OperationStatus,
+    started_count: usize,
+    message: Option<String>,
     timestamp_nanos: u128,
 }
 
-fn interrupted_operations(entries: Vec<JournalEntry>) -> Vec<JournalEntry> {
+#[derive(Debug, Clone)]
+struct OperationRecoveryPlan {
+    entry: JournalEntry,
+    append_started: bool,
+}
+
+fn recoverable_operations(
+    entries: Vec<JournalEntry>,
+    policy: OperationRecoveryPolicy,
+) -> Vec<OperationRecoveryPlan> {
     let mut states: Vec<OperationRecoveryState> = Vec::new();
     for entry in entries {
         if let Some(state) = states.iter_mut().find(|state| state.id == entry.id) {
+            let status = entry.status;
             state.operation = entry.operation;
-            state.last_status = entry.status;
+            state.last_status = status;
+            state.message = entry.message;
+            if status == OperationStatus::Started {
+                state.started_count += 1;
+            }
             state.timestamp_nanos = entry.timestamp_nanos;
         } else {
+            let started_count = usize::from(entry.status == OperationStatus::Started);
             states.push(OperationRecoveryState {
                 id: entry.id,
                 operation: entry.operation,
                 last_status: entry.status,
+                started_count,
+                message: entry.message,
                 timestamp_nanos: entry.timestamp_nanos,
             });
         }
@@ -261,15 +306,50 @@ fn interrupted_operations(entries: Vec<JournalEntry>) -> Vec<JournalEntry> {
     states.sort_by_key(|state| (state.timestamp_nanos, state.id));
     states
         .into_iter()
-        .filter(|state| state.last_status == OperationStatus::Started)
-        .map(|state| JournalEntry {
-            id: state.id,
-            status: state.last_status,
-            operation: state.operation,
-            message: None,
-            timestamp_nanos: state.timestamp_nanos,
+        .filter_map(|state| {
+            let append_started = if state.last_status == OperationStatus::Started {
+                false
+            } else if policy.retry_failed
+                && state.last_status == OperationStatus::Failed
+                && state.started_count < policy.max_attempts.max(1)
+                && retryable_failure_message(state.message.as_deref())
+            {
+                true
+            } else {
+                return None;
+            };
+            Some(OperationRecoveryPlan {
+                entry: JournalEntry {
+                    id: state.id,
+                    status: state.last_status,
+                    operation: state.operation,
+                    message: state.message,
+                    timestamp_nanos: state.timestamp_nanos,
+                },
+                append_started,
+            })
         })
         .collect()
+}
+
+fn retryable_failure_message(message: Option<&str>) -> bool {
+    let Some(message) = message else {
+        return false;
+    };
+    let message = message.to_ascii_lowercase();
+    [
+        "source does not exist",
+        "no such file",
+        "resource temporarily unavailable",
+        "operation timed out",
+        "network is down",
+        "network is unreachable",
+        "device not configured",
+        "stale file handle",
+        "interrupted system call",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
 }
 
 impl JournalEntry {
@@ -1350,6 +1430,84 @@ mod tests {
 
         assert!(report.outcomes.is_empty());
         assert!(!destination.exists());
+        assert_eq!(read_journal(&journal).unwrap().len(), 2);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_retries_classified_failed_operation_when_policy_allows_it() {
+        let root = unique_temp_dir("gfm-ops-retry-failed");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+        append_journal(&journal, &JournalEntry::started(44, operation.clone())).unwrap();
+        append_journal(
+            &journal,
+            &JournalEntry::failed(
+                44,
+                operation.clone(),
+                format!("{}: source does not exist", source.display()),
+            ),
+        )
+        .unwrap();
+        fs::write(&source, "arrived later").unwrap();
+
+        let report = Operator::new(OperationContext::new(&journal))
+            .recover_with_policy(OperationRecoveryPolicy {
+                retry_failed: true,
+                max_attempts: 2,
+            })
+            .unwrap();
+
+        assert_eq!(report.outcomes.len(), 1);
+        assert_eq!(report.outcomes[0].id, 44);
+        assert_eq!(report.outcomes[0].status, OperationStatus::Completed);
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "arrived later");
+        let entries = read_journal(&journal).unwrap();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[2].status, OperationStatus::Started);
+        assert_eq!(entries[3].status, OperationStatus::Completed);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_does_not_retry_non_retryable_conflict_failures() {
+        let root = unique_temp_dir("gfm-ops-retry-conflict");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "source").unwrap();
+        fs::write(&destination, "destination").unwrap();
+        let operation = Operation::Copy {
+            from: source,
+            to: destination.clone(),
+        };
+        append_journal(&journal, &JournalEntry::started(45, operation.clone())).unwrap();
+        append_journal(
+            &journal,
+            &JournalEntry::failed(
+                45,
+                operation,
+                format!("{}: destination already exists", destination.display()),
+            ),
+        )
+        .unwrap();
+
+        let report = Operator::new(OperationContext::new(&journal))
+            .recover_with_policy(OperationRecoveryPolicy {
+                retry_failed: true,
+                max_attempts: 2,
+            })
+            .unwrap();
+
+        assert!(report.outcomes.is_empty());
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "destination");
         assert_eq!(read_journal(&journal).unwrap().len(), 2);
 
         fs::remove_dir_all(root).unwrap();

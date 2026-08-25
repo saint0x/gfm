@@ -30,7 +30,7 @@ use gfm_mac::{
     SecurityScopedAccessReport, SpotlightMetadataReader, SpotlightReconciliationReport,
     SupportMatrix, VolumeDescriptor, VolumeDiscoveryReport, VolumeKind, WatchRoot,
 };
-use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
+use gfm_ops::{ConflictPolicy, Operation, OperationContext, OperationRecoveryPolicy, Operator};
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path,
     PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
@@ -2710,11 +2710,9 @@ fn run() -> Result<()> {
             }
         }
         Some("ops-recover") => {
-            let journal = args
-                .next()
-                .map(PathBuf::from)
-                .unwrap_or_else(default_journal_path);
-            let report = Operator::new(OperationContext::new(journal)).recover_interrupted()?;
+            let (journal, policy) = parse_ops_recover_args(&mut args)?;
+            let report =
+                Operator::new(OperationContext::new(journal)).recover_with_policy(policy)?;
             for outcome in report.outcomes {
                 println!(
                     "{}\t{}\t{}\t{}",
@@ -2768,6 +2766,45 @@ fn required_path(value: Option<String>, message: &str) -> Result<PathBuf> {
 fn optional_path_arg(value: Option<String>, message: &str) -> Result<Option<PathBuf>> {
     let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
     Ok((value != "-").then(|| PathBuf::from(value)))
+}
+
+fn parse_ops_recover_args(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(PathBuf, OperationRecoveryPolicy)> {
+    let mut journal = None;
+    let mut retry_failed = false;
+    let mut max_attempts = 1;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--retry-failed" => retry_failed = true,
+            "--max-attempts" => {
+                let value = args.next().ok_or_else(|| {
+                    GfmError::Format("ops-recover --max-attempts requires a value".to_string())
+                })?;
+                max_attempts = value.parse().map_err(|err| {
+                    GfmError::Format(format!("invalid ops-recover max attempts `{value}`: {err}"))
+                })?;
+            }
+            other if other.starts_with("--") => {
+                return Err(GfmError::Format(format!(
+                    "unknown ops-recover option `{other}`"
+                )));
+            }
+            path if journal.is_none() => journal = Some(PathBuf::from(path)),
+            path => {
+                return Err(GfmError::Format(format!(
+                    "unexpected ops-recover argument `{path}`"
+                )));
+            }
+        }
+    }
+    Ok((
+        journal.unwrap_or_else(default_journal_path),
+        OperationRecoveryPolicy {
+            retry_failed,
+            max_attempts,
+        },
+    ))
 }
 
 fn parse_sidecar_paths(
@@ -3557,7 +3594,7 @@ fn print_usage() {
   gfm notarize-app <GFM.app> <output-dir> --apple-id <email> --team-id <team> --password <password>
   gfm notarize-app <GFM.app> <output-dir> --api-key <AuthKey.p8> --key-id <key> --issuer <issuer>
   gfm jobs-recover [jobs.journal]
-  gfm ops-recover [ops.journal]
+  gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
   gfm watch-once <root>
   gfm copy <source> <destination>
   gfm move <source> <destination>

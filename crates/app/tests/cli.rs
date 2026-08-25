@@ -2006,6 +2006,52 @@ fn recovers_interrupted_operation_from_binary() {
 }
 
 #[test]
+fn retries_failed_operation_from_binary_when_policy_allows_it() {
+    let root = unique_temp_dir("gfm-cli-ops-retry-root");
+    let journal = root.join("ops.journal");
+    let source = root.join("late-source.txt");
+    let destination = root.join("destination.txt");
+    fs::write(
+        &journal,
+        format!(
+            "988\tstarted\t1\tcopy\t{}\t{}\t\n988\tfailed\t2\tcopy\t{}\t{}\t{}: source does not exist\n",
+            source.to_string_lossy(),
+            destination.to_string_lossy(),
+            source.to_string_lossy(),
+            destination.to_string_lossy(),
+            source.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    fs::write(&source, "late bytes").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ops-recover",
+            journal.to_str().unwrap(),
+            "--retry-failed",
+            "--max-attempts",
+            "2",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("988\tcompleted\tcopy\t"), "{stdout}");
+    assert_eq!(fs::read_to_string(&destination).unwrap(), "late bytes");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert_eq!(journal_text.matches("988\tstarted").count(), 2);
+    assert!(journal_text.contains("988\tcompleted"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_text_content_from_binary() {
     let root = unique_temp_dir("gfm-cli-content-root");
     fs::write(root.join("journal.md"), "the body contains superneedle").unwrap();
