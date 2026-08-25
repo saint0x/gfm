@@ -1,5 +1,10 @@
+mod budgets;
 mod diagnostics;
 
+pub use budgets::{
+    BudgetEvaluation, BudgetViolation, LatencyBudget, Percentile, PerformanceBudgets,
+    ScenarioBudget, ScenarioMetric,
+};
 pub use diagnostics::{
     export_diagnostics, DiagnosticExportError, DiagnosticExportReceipt, DiagnosticPrivacy,
     PrivacyReview,
