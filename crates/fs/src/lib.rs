@@ -14,6 +14,7 @@ pub struct ScanOptions {
     pub max_depth: usize,
     pub follow_symlinks: bool,
     pub include_hidden: bool,
+    pub exclude_generated: bool,
 }
 
 impl Default for ScanOptions {
@@ -22,6 +23,7 @@ impl Default for ScanOptions {
             max_depth: usize::MAX,
             follow_symlinks: false,
             include_hidden: true,
+            exclude_generated: true,
         }
     }
 }
@@ -77,7 +79,9 @@ pub fn scan_tree(root: impl AsRef<Path>, options: ScanOptions) -> Result<Directo
         };
 
         let record_id = record.id;
-        let should_descend = record.is_dir() && depth < options.max_depth;
+        let should_descend = record.is_dir()
+            && depth < options.max_depth
+            && !(options.exclude_generated && depth > 0 && is_generated_directory(&record.name));
         let should_include = options.include_hidden || !record.hidden || depth == 0;
         if should_include {
             entries.push(record);
@@ -202,6 +206,25 @@ fn finder_order(record: &FileRecord) -> (u8, String) {
     (group, record.name.to_lowercase())
 }
 
+fn is_generated_directory(name: &str) -> bool {
+    matches!(
+        name,
+        ".git"
+            | ".hg"
+            | ".svn"
+            | ".fozzy"
+            | ".next"
+            | ".turbo"
+            | ".cache"
+            | "target"
+            | "node_modules"
+            | "dist"
+            | "build"
+            | ".venv"
+            | "__pycache__"
+    )
+}
+
 #[cfg(unix)]
 fn file_id(metadata: &Metadata) -> FileId {
     FileId::new(VolumeId(metadata.dev()), metadata.ino())
@@ -256,6 +279,7 @@ mod tests {
                 max_depth: 4,
                 follow_symlinks: false,
                 include_hidden: true,
+                exclude_generated: true,
             },
         )
         .unwrap();
@@ -263,6 +287,28 @@ mod tests {
         assert!(page.entries.iter().any(|record| record.name == "note.txt"));
         assert!(page.inaccessible.is_empty());
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn skips_generated_directories_by_default() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::write(root.join("target").join("artifact.txt"), "generated").unwrap();
+        fs::write(root.join("source.txt"), "authored").unwrap();
+
+        let page = scan_tree(&root, ScanOptions::default()).unwrap();
+        let paths: Vec<_> = page
+            .entries
+            .iter()
+            .map(|record| record.path.strip_prefix(&root).unwrap().to_path_buf())
+            .collect();
+
+        assert!(paths.iter().any(|path| path == Path::new("source.txt")));
+        assert!(paths.iter().any(|path| path == Path::new("target")));
+        assert!(!paths
+            .iter()
+            .any(|path| path == Path::new("target/artifact.txt")));
         fs::remove_dir_all(root).unwrap();
     }
 

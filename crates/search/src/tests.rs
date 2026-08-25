@@ -493,6 +493,41 @@ fn fuzzy_term_candidates_survive_structured_expression_filtering() {
 }
 
 #[test]
+fn fuzzy_retrieval_uses_indexed_name_tokens() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/quartely-plan.md", "quartely-plan.md"));
+
+    let hits = index.query("quarterly", 10);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.name, "quartely-plan.md");
+    assert_eq!(hits[0].reason, MatchReason::FuzzyName);
+}
+
+#[test]
+fn removes_reindexed_fuzzy_postings() {
+    let mut index = SearchIndex::new();
+    let mut item = record(1, "/tmp/needl", "needl");
+    index.insert(item.clone());
+    item.path = PathBuf::from("/tmp/unrelated");
+    item.name = "unrelated".to_string();
+    index.insert(item);
+
+    assert!(index.query("needle", 10).is_empty());
+}
+
+#[test]
+fn fuzzy_index_ignores_unbounded_long_terms() {
+    let mut index = SearchIndex::new();
+    let long_name = format!("{}{}", "a".repeat(96), ".md");
+    index.insert(record(1, &format!("/tmp/{long_name}"), &long_name));
+
+    let hits = index.query(&"b".repeat(95), 10);
+
+    assert!(hits.is_empty());
+}
+
+#[test]
 fn sharded_search_merges_volume_results_deterministically() {
     let mut index = ShardedSearchIndex::new();
     index.insert(volume_record(2, 2, "/Volumes/B/report.md", "report.md"));

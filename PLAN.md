@@ -317,7 +317,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
 1. Hot name index
    - In-memory or memory-mapped finite-state transducer for filenames and path components.
    - Lowercased, Unicode-normalized, tokenized, and extension-aware.
-   - Prefix, substring via n-gram side index, fuzzy via bounded edit distance.
+   - Prefix, substring via n-gram side index, fuzzy via delete-key candidate indexes plus bounded edit-distance verification.
 
 2. Path component index
    - Component-level postings.

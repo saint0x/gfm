@@ -83,6 +83,7 @@ GFM indexes:
 The index is compact and incremental:
 
 - appendable per-volume segments
+- default recursive indexing skips generated build/cache trees such as `target`, `.git`, `.fozzy`, and `node_modules`
 - per-volume query shards with parallel fanout and deterministic global merge ordering
 - dictionary-compressed terms
 - delta-coded postings
@@ -91,6 +92,7 @@ The index is compact and incremental:
 - mmap immutable readers
 - hot mutable buffers
 - progressive hot/deep result streaming with stable dedupe
+- delete-key fuzzy candidate indexes for typo tolerance without full-record scans
 - exact phrase and `near:N:alpha,beta` positional content retrieval
 - bounded snippets with highlighted content matches
 - binary-signature and control-byte classification before content extraction

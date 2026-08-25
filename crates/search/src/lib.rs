@@ -4,7 +4,7 @@ mod query;
 mod session;
 mod shard;
 
-use fuzzy::bounded_levenshtein;
+use fuzzy::{bounded_levenshtein, deletion_keys};
 use intent::{intent_score, term_matches_intent};
 use query::{normalize, tokenize};
 pub use query::{
@@ -17,6 +17,9 @@ pub use shard::ShardedSearchIndex;
 use gfm_jobs::Cancellation;
 use gfm_types::{ContentPositions, ContentPosting, FileId, FileRecord, MatchReason, SearchHit};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+const FUZZY_MIN_TERM_LEN: usize = 2;
+const FUZZY_MAX_TERM_LEN: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchStreamStage {
@@ -37,6 +40,7 @@ pub struct SearchIndex {
     name_exact: BTreeMap<String, BTreeSet<FileId>>,
     name_terms: BTreeMap<String, BTreeSet<FileId>>,
     path_terms: BTreeMap<String, BTreeSet<FileId>>,
+    fuzzy_terms: BTreeMap<String, BTreeSet<String>>,
     extension: BTreeMap<String, BTreeSet<FileId>>,
     tags: BTreeMap<String, BTreeSet<FileId>>,
     content_terms: BTreeMap<String, BTreeMap<FileId, Vec<u32>>>,
@@ -322,6 +326,26 @@ impl SearchIndex {
             }
         }
 
+        if pass.includes_deep() {
+            for term in &query.terms {
+                cancellation.check()?;
+                for id in self.fuzzy_ids(term) {
+                    cancellation.check()?;
+                    let Some(record) = self.records.get(&id) else {
+                        continue;
+                    };
+                    if !record_contains_term(record, term)
+                        && record_fuzzy_matches_term(record, term)
+                    {
+                        scores
+                            .entry(id)
+                            .and_modify(|(score, _)| *score += 100)
+                            .or_insert((100, MatchReason::FuzzyName));
+                    }
+                }
+            }
+        }
+
         for phrase in &query.phrases {
             cancellation.check()?;
             for record in self.records.values().filter(|record| {
@@ -363,14 +387,6 @@ impl SearchIndex {
                         .entry(record.id)
                         .and_modify(|(score, _)| *score += 300)
                         .or_insert((300, MatchReason::SubstringName));
-                } else if pass.includes_deep()
-                    && !text.is_empty()
-                    && bounded_levenshtein(&name, &text, 2).is_some()
-                {
-                    scores
-                        .entry(record.id)
-                        .and_modify(|(score, _)| *score += 100)
-                        .or_insert((100, MatchReason::FuzzyName));
                 }
             }
         }
@@ -502,6 +518,25 @@ impl SearchIndex {
             .map(|positions| positions.keys().copied().collect())
     }
 
+    fn fuzzy_ids(&self, term: &str) -> BTreeSet<FileId> {
+        if !is_fuzzy_term(term) {
+            return BTreeSet::new();
+        }
+        let mut ids = BTreeSet::new();
+        for key in deletion_keys(term, 2) {
+            if let Some(candidates) = self.fuzzy_terms.get(&key) {
+                for candidate in candidates {
+                    if bounded_levenshtein(candidate, term, 2).is_some() {
+                        if let Some(matches) = self.name_terms.get(candidate) {
+                            ids.extend(matches);
+                        }
+                    }
+                }
+            }
+        }
+        ids
+    }
+
     fn content_matches_phrase(&self, id: FileId, phrase: &str) -> bool {
         let terms = tokenize(&normalize(phrase));
         if terms.is_empty() {
@@ -596,7 +631,14 @@ impl SearchIndex {
             .or_default()
             .insert(record.id);
         for token in tokenize(&name) {
-            self.name_terms.entry(token).or_default().insert(record.id);
+            let is_new = !self.name_terms.contains_key(&token);
+            self.name_terms
+                .entry(token.clone())
+                .or_default()
+                .insert(record.id);
+            if is_new {
+                self.add_fuzzy_term(&token);
+            }
         }
         for token in record
             .path
@@ -625,6 +667,9 @@ impl SearchIndex {
         remove_id(&mut self.name_exact, &name, record.id);
         for token in tokenize(&name) {
             remove_id(&mut self.name_terms, &token, record.id);
+            if !self.name_terms.contains_key(&token) {
+                self.remove_fuzzy_term(&token);
+            }
         }
         for token in record
             .path
@@ -645,6 +690,32 @@ impl SearchIndex {
         }
         self.content_terms
             .retain(|_, positions| !positions.is_empty());
+    }
+
+    fn add_fuzzy_term(&mut self, term: &str) {
+        if !is_fuzzy_term(term) {
+            return;
+        }
+        for key in deletion_keys(term, 2) {
+            self.fuzzy_terms
+                .entry(key)
+                .or_default()
+                .insert(term.to_string());
+        }
+    }
+
+    fn remove_fuzzy_term(&mut self, term: &str) {
+        if !is_fuzzy_term(term) {
+            return;
+        }
+        for key in deletion_keys(term, 2) {
+            if let Some(terms) = self.fuzzy_terms.get_mut(&key) {
+                terms.remove(term);
+                if terms.is_empty() {
+                    self.fuzzy_terms.remove(&key);
+                }
+            }
+        }
     }
 }
 
@@ -675,8 +746,20 @@ fn record_matches_phrase(record: &FileRecord, phrase: &str) -> bool {
 }
 
 fn record_fuzzy_matches_term(record: &FileRecord, term: &str) -> bool {
-    let name = normalize(&record.name);
-    bounded_levenshtein(&name, term, 2).is_some()
+    fuzzy_record_terms(record)
+        .into_iter()
+        .any(|candidate| bounded_levenshtein(&candidate, term, 2).is_some())
+}
+
+fn fuzzy_record_terms(record: &FileRecord) -> BTreeSet<String> {
+    tokenize(&normalize(&record.name))
+        .into_iter()
+        .filter(|term| is_fuzzy_term(term))
+        .collect()
+}
+
+fn is_fuzzy_term(term: &str) -> bool {
+    (FUZZY_MIN_TERM_LEN..=FUZZY_MAX_TERM_LEN).contains(&term.chars().count())
 }
 
 fn normalize_path(path: &std::path::Path) -> String {
