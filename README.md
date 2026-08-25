@@ -154,6 +154,8 @@ Adaptive direct content search uses the same pressure-aware budget derivation be
 
 Adaptive persisted content search uses the same pressure-aware budget derivation before foreground snippet extraction reopens source files.
 
+Adaptive subprocess extraction workers use the same pressure-aware budget derivation before worker-side file reads begin.
+
 Content segment maintenance uses the same adaptive scheduling policy before compaction, manifest promotion, or cleanup publication starts.
 
 Sidecar repair uses the same adaptive scheduling policy before rebuilding derived sidecars or quarantining corrupt sidecar archives.
@@ -361,6 +363,7 @@ cargo run -p gfm -- scan-progress . /tmp/gfm.gfmidx /tmp/gfm.gfmprogress
 cargo run -p gfm -- scan-progress-inspect /tmp/gfm.gfmprogress
 cargo run -p gfm -- fair-scan . 8 ~/Desktop ~/Documents
 cargo run -p gfm -- extract-report ~/Desktop/Report.pdf
+cargo run -p gfm -- extract-worker-adaptive ~/Desktop/Report.pdf elevated serious low active
 cargo run -p gfm -- extract-cache ~/Desktop/Report.pdf
 cargo run -p gfm -- extract-quarantine ~/Desktop/Report.pdf /tmp/gfm.gfmquarantine timeout 2
 cargo run -p gfm -- rename-correlation /tmp/OldName.md /tmp/NewName.md

@@ -83,6 +83,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 mod packaging;
@@ -660,6 +661,27 @@ fn run() -> Result<()> {
             let decision = quarantine.record_report(&report);
             println!("{}", report.as_tsv());
             println!("{}", decision.as_tsv());
+        }
+        Some("extract-report-adaptive") => {
+            let path = required_path(args.next(), "extract-report-adaptive requires a path")?;
+            let pressure = parse_required_scheduling_pressure(&mut args, "extract report")?;
+            let root = path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let extractor =
+                Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
+            let report = extractor.extract_path_report(&path)?;
+            let mut quarantine = ExtractionQuarantine::default();
+            let decision = quarantine.record_report(&report);
+            println!("{}", report.as_tsv());
+            println!("{}", decision.as_tsv());
+        }
+        Some("extract-worker-adaptive") => {
+            let path = required_path(args.next(), "extract-worker-adaptive requires a path")?;
+            let pressure = parse_required_scheduling_pressure(&mut args, "extract worker")?;
+            let report = run_adaptive_extraction_worker(&path, pressure)?;
+            print!("{}", report);
         }
         Some("extract-cache") => {
             let path = required_path(args.next(), "extract-cache requires a path")?;
@@ -3768,6 +3790,80 @@ fn run_content_search(
     )
 }
 
+fn run_adaptive_extraction_worker(path: &Path, pressure: SchedulingPressure) -> Result<String> {
+    let exe = env::current_exe().map_err(|err| {
+        GfmError::Format(format!(
+            "could not resolve current executable for extraction worker: {err}"
+        ))
+    })?;
+    let output = Command::new(exe)
+        .arg("extract-report-adaptive")
+        .arg(path)
+        .args(scheduling_pressure_args(pressure))
+        .output()
+        .map_err(|err| {
+            GfmError::Format(format!(
+                "could not launch adaptive extraction worker for {}: {err}",
+                path.display()
+            ))
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(GfmError::Format(format!(
+            "adaptive extraction worker failed for {}: {}",
+            path.display(),
+            stderr.trim()
+        )));
+    }
+    String::from_utf8(output.stdout).map_err(|err| {
+        GfmError::Format(format!(
+            "adaptive extraction worker returned non-utf8 output for {}: {err}",
+            path.display()
+        ))
+    })
+}
+
+fn scheduling_pressure_args(pressure: SchedulingPressure) -> [&'static str; 4] {
+    [
+        job_io_pressure_arg(pressure.io),
+        job_thermal_state_arg(pressure.thermal),
+        job_battery_state_arg(pressure.battery),
+        job_user_activity_arg(pressure.user_activity),
+    ]
+}
+
+fn job_io_pressure_arg(value: JobIoPressure) -> &'static str {
+    match value {
+        JobIoPressure::Nominal => "nominal",
+        JobIoPressure::Elevated => "elevated",
+        JobIoPressure::Saturated => "saturated",
+    }
+}
+
+fn job_thermal_state_arg(value: JobThermalState) -> &'static str {
+    match value {
+        JobThermalState::Nominal => "nominal",
+        JobThermalState::Fair => "fair",
+        JobThermalState::Serious => "serious",
+        JobThermalState::Critical => "critical",
+    }
+}
+
+fn job_battery_state_arg(value: JobBatteryState) -> &'static str {
+    match value {
+        JobBatteryState::AcPower => "ac",
+        JobBatteryState::Battery => "battery",
+        JobBatteryState::LowPower => "low",
+    }
+}
+
+fn job_user_activity_arg(value: JobUserActivity) -> &'static str {
+    match value {
+        JobUserActivity::Idle => "idle",
+        JobUserActivity::Active => "active",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ContentJobOutcome {
     report: Option<ContentIndexReport>,
@@ -4167,6 +4263,8 @@ fn print_usage() {
   gfm fsevents-repair-schedule <state.gfmstate> <cursor.gfmcursor> <observed-event-ids|-> [reason|-] [dropped-roots...]
   gfm index-content <root> <records.gfmidx> <content.gfmcontent>
   gfm extract-report <path>
+  gfm extract-report-adaptive <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
+  gfm extract-worker-adaptive <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm extract-cache <path>
   gfm extract-quarantine <path> <store.gfmquarantine> [corrupt|encrypted|crash|timeout] [attempts]
   gfm index-content-segment <root> <output.gfmseg>

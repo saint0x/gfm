@@ -2318,6 +2318,38 @@ fn reports_compressed_pdf_extraction_from_binary() {
 }
 
 #[test]
+fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-worker-budget-root");
+    let path = root.join("large.txt");
+    fs::write(&path, "x".repeat(1024 * 1024 + 1)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "extract-worker-adaptive",
+            path.to_str().unwrap(),
+            "elevated",
+            "serious",
+            "low",
+            "active",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\tformat=text\t"), "{stdout}");
+    assert!(stdout.contains("\tstatus=skipped\t"), "{stdout}");
+    assert!(stdout.contains("\treason=too-large\t"), "{stdout}");
+    assert!(stdout.contains("\tbytes-read=0\t"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn reports_extraction_cache_hits_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-cache-root");
     let path = root.join("Cache.md");
