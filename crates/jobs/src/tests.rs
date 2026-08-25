@@ -296,6 +296,71 @@ fn journal_identifies_interrupted_and_retryable_jobs() {
 }
 
 #[test]
+fn retry_policy_classifies_failures_and_backoff() {
+    let policy = RetryPolicy { max_attempts: 3 };
+
+    let transient = policy.retry_decision(1, "temporary busy timeout");
+    assert_eq!(transient.class, FailureClass::Transient);
+    assert!(transient.retryable);
+    assert_eq!(transient.next_delay_ms, 25);
+
+    let offline = policy.retry_decision(2, "volume is offline and not mounted");
+    assert_eq!(offline.class, FailureClass::OfflineVolume);
+    assert!(offline.retryable);
+    assert_eq!(offline.next_delay_ms, 500);
+
+    for (message, class) in [
+        ("permission denied by tcc", FailureClass::Permission),
+        ("missing source: no such file", FailureClass::MissingFile),
+        ("corrupt archive checksum", FailureClass::CorruptFile),
+        ("destination conflict", FailureClass::Permanent),
+    ] {
+        let decision = policy.retry_decision(1, message);
+        assert_eq!(decision.class, class);
+        assert!(!decision.retryable);
+        assert_eq!(decision.next_delay_ms, 0);
+    }
+}
+
+#[test]
+fn journal_skips_non_retryable_failed_jobs() {
+    let path = temp_path("gfm-job-recovery-classified", "journal");
+    let journal = JobJournal::new(&path);
+    let transient = JobId::from_raw(31);
+    let permission = JobId::from_raw(32);
+
+    for (id, label, message) in [
+        (transient, "transient", "temporary failure"),
+        (permission, "permission", "permission denied"),
+    ] {
+        journal
+            .append(&JournalEntry {
+                id,
+                label: label.to_string(),
+                attempt: 1,
+                status: TaskStatus::Started,
+            })
+            .unwrap();
+        journal
+            .append(&JournalEntry {
+                id,
+                label: label.to_string(),
+                attempt: 1,
+                status: TaskStatus::Failed(message.to_string()),
+            })
+            .unwrap();
+    }
+
+    let recoverable = journal
+        .recoverable(RetryPolicy { max_attempts: 2 })
+        .unwrap();
+    assert_eq!(recoverable.len(), 1);
+    assert_eq!(recoverable[0].id, transient);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn journal_does_not_recover_exhausted_failures() {
     let path = temp_path("gfm-job-recovery-exhausted", "journal");
     let journal = JobJournal::new(&path);

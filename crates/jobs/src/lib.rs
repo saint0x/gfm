@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 mod isolated;
 use isolated::{IsolatedRetriableTaskQueue, IsolatedTaskQueue};
@@ -368,6 +369,112 @@ impl Default for RetryPolicy {
     }
 }
 
+impl RetryPolicy {
+    pub fn classify_failure(&self, message: &str) -> FailureClass {
+        FailureClass::classify(message)
+    }
+
+    pub fn retry_decision(&self, attempts: usize, message: &str) -> RetryDecision {
+        let class = self.classify_failure(message);
+        let max_attempts = self.max_attempts.max(1);
+        let retryable = class.retryable() && attempts < max_attempts;
+        let next_delay_ms = if retryable {
+            retry_backoff_ms(class, attempts)
+        } else {
+            0
+        };
+        RetryDecision {
+            class,
+            retryable,
+            next_delay_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureClass {
+    Transient,
+    Permission,
+    MissingFile,
+    CorruptFile,
+    OfflineVolume,
+    Permanent,
+}
+
+impl FailureClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Transient => "transient",
+            Self::Permission => "permission",
+            Self::MissingFile => "missing-file",
+            Self::CorruptFile => "corrupt-file",
+            Self::OfflineVolume => "offline-volume",
+            Self::Permanent => "permanent",
+        }
+    }
+
+    pub const fn retryable(self) -> bool {
+        matches!(self, Self::Transient | Self::OfflineVolume)
+    }
+
+    fn classify(message: &str) -> Self {
+        let message = message.to_ascii_lowercase();
+        if contains_any(
+            &message,
+            &["offline", "not mounted", "unmounted", "ejected"],
+        ) {
+            Self::OfflineVolume
+        } else if contains_any(&message, &["permission", "denied", "not permitted", "tcc"]) {
+            Self::Permission
+        } else if contains_any(&message, &["missing", "not found", "no such file"]) {
+            Self::MissingFile
+        } else if contains_any(&message, &["corrupt", "checksum", "crc", "malformed"]) {
+            Self::CorruptFile
+        } else if contains_any(
+            &message,
+            &[
+                "temporary",
+                "transient",
+                "timed out",
+                "timeout",
+                "busy",
+                "again",
+            ],
+        ) {
+            Self::Transient
+        } else {
+            Self::Permanent
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetryDecision {
+    pub class: FailureClass,
+    pub retryable: bool,
+    pub next_delay_ms: u64,
+}
+
+fn retry_backoff_ms(class: FailureClass, attempts: usize) -> u64 {
+    let base_ms = match class {
+        FailureClass::Transient => 25,
+        FailureClass::OfflineVolume => 250,
+        FailureClass::Permission
+        | FailureClass::MissingFile
+        | FailureClass::CorruptFile
+        | FailureClass::Permanent => 0,
+    };
+    if base_ms == 0 {
+        return 0;
+    }
+    let exponent = attempts.saturating_sub(1).min(8) as u32;
+    base_ms * 2_u64.pow(exponent)
+}
+
+fn contains_any(message: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| message.contains(needle))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntry {
     pub id: JobId,
@@ -472,15 +579,17 @@ impl JobJournal {
                     attempts: state.attempts,
                     reason: RecoveryReason::Interrupted,
                 });
-            } else if matches!(state.last_status, Some(TaskStatus::Failed(_)))
-                && state.attempts < max_attempts
-            {
-                jobs.push(RecoveryJob {
-                    id: state.id,
-                    label: state.label,
-                    attempts: state.attempts,
-                    reason: RecoveryReason::RetryableFailure,
-                });
+            } else if let Some(TaskStatus::Failed(message)) = &state.last_status {
+                if policy.retry_decision(state.attempts, message).retryable
+                    && state.attempts < max_attempts
+                {
+                    jobs.push(RecoveryJob {
+                        id: state.id,
+                        label: state.label,
+                        attempts: state.attempts,
+                        reason: RecoveryReason::RetryableFailure,
+                    });
+                }
             }
         }
         jobs.sort_by_key(|job| job.id.value());
@@ -643,7 +752,6 @@ impl WorkerPool {
         let queue = Arc::new(Mutex::new(VecDeque::from(tasks)));
         let outcomes = Arc::new(Mutex::new(Vec::with_capacity(task_count)));
         let threads = self.threads.min(task_count);
-        let attempts = policy.max_attempts.max(1);
 
         thread::scope(|scope| {
             for _ in 0..threads {
@@ -659,7 +767,7 @@ impl WorkerPool {
                         break;
                     };
 
-                    let final_status = execute_retriable_task(&task, &journal, attempts);
+                    let final_status = execute_retriable_task(&task, &journal, policy);
 
                     outcomes
                         .lock()
@@ -698,7 +806,6 @@ impl WorkerPool {
         let queue = Arc::new(IsolatedRetriableTaskQueue::new(tasks, volume_policy));
         let outcomes = Arc::new(Mutex::new(Vec::with_capacity(task_count)));
         let threads = self.threads.min(task_count);
-        let attempts = retry_policy.max_attempts.max(1);
 
         thread::scope(|scope| {
             for _ in 0..threads {
@@ -709,7 +816,7 @@ impl WorkerPool {
                     let Some(lease) = queue.next() else {
                         break;
                     };
-                    let final_status = execute_retriable_task(&lease.task, &journal, attempts);
+                    let final_status = execute_retriable_task(&lease.task, &journal, retry_policy);
                     let job = lease.finish();
                     outcomes
                         .lock()
@@ -735,9 +842,10 @@ impl WorkerPool {
 fn execute_retriable_task(
     task: &RetriableTask,
     journal: &JobJournal,
-    attempts: usize,
+    retry_policy: RetryPolicy,
 ) -> TaskStatus {
     let mut final_status = TaskStatus::Failed("task did not run".to_string());
+    let attempts = retry_policy.max_attempts.max(1);
     for attempt in 1..=attempts {
         let started = JournalEntry {
             id: task.job.id,
@@ -772,6 +880,15 @@ fn execute_retriable_task(
         }
         if final_status == TaskStatus::Cancelled {
             break;
+        }
+        if let TaskStatus::Failed(message) = &final_status {
+            let decision = retry_policy.retry_decision(attempt, message);
+            if !decision.retryable {
+                break;
+            }
+            if decision.next_delay_ms > 0 && attempt < attempts {
+                thread::sleep(Duration::from_millis(decision.next_delay_ms));
+            }
         }
     }
     final_status

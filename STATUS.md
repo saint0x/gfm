@@ -75,7 +75,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 46. Implement persistent progress snapshots and user-visible progress restoration after restart.
 47. Bind thermal, battery, IO pressure, and user-activity adaptive scheduling into remaining foreground, preview, and thumbnail producers beyond the implemented jobs-layer policy, background content indexing hook, content maintenance hook, sidecar repair hook, persistent-index repair hook, and diagnostics-rebuild hook.
 48. Complete structured cancellation propagation across nested jobs and remaining producers beyond the implemented search/index cancellation contracts, operation cancellation checkpoints, preview offscreen cancellation, and adaptive extraction subprocess cancellation supervision.
-49. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
+49. Complete retry/backoff integration across remaining operation, indexing, extraction, thumbnail, preview, and repair producers beyond the implemented jobs-layer failure classification, retryable transient/offline-volume backoff, non-retryable permission/missing-file/corrupt-file/permanent gating, and operator retry-plan report.
 
 ## Preview And Thumbnails
 

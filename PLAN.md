@@ -267,6 +267,7 @@ gfm/
 - Owns priority queues, cancellation tokens, backpressure, progress accounting, and worker pools.
 - UI-visible jobs and invisible background jobs share one scheduler.
 - Provides volume-isolated worker admission that caps concurrent work per `VolumeId` while unrelated volumes and unscoped interactive jobs keep running.
+- Classifies retriable job failures as transient, permission, missing-file, corrupt-file, offline-volume, or permanent before recovery admission, applies bounded exponential backoff only to retryable classes, and exposes the decision through an operator CLI report.
 - Admits foreground copy, move, rename, delete, and trash operation CLI jobs through the volume-isolated worker path before they enter the operation engine.
 - Admits interactive live content extraction/search jobs through the same volume-isolated worker path before they crawl, extract, and snippet candidate files.
 - Admits Quick Look preview and thumbnail generation jobs through the same volume-isolated worker path before producing preview contracts.
@@ -606,7 +607,7 @@ Scheduler properties:
 - Exact preflight item/byte totals and completion-backed progress aggregation.
 - Cancellation checkpoints in planning and recursive execution.
 - Pause/resume where semantically safe.
-- Explicit capped retry for classified transient failed operations.
+- Explicit capped retry for classified transient and offline-volume failed work, with non-retryable permission, missing-file, corrupt-file, and permanent failures surfaced without retry churn.
 - Conflict policy engine.
 - Dry-run phase for permission/space/conflict estimation.
 - Durable operation journal with interrupted-operation replay.

@@ -3885,6 +3885,40 @@ fn reports_recoverable_jobs_from_binary() {
     fs::remove_file(journal).unwrap();
 }
 
+#[test]
+fn reports_retry_backoff_plan_from_binary() {
+    let transient = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["jobs-retry-plan", "3", "1", "temporary", "busy"])
+        .output()
+        .unwrap();
+    assert!(
+        transient.status.success(),
+        "{}",
+        String::from_utf8_lossy(&transient.stderr)
+    );
+    let transient_stdout = String::from_utf8(transient.stdout).unwrap();
+    assert!(
+        transient_stdout.contains("retry-plan\tclass=transient\tretryable=true\tnext-delay-ms=25"),
+        "{transient_stdout}"
+    );
+
+    let permission = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["jobs-retry-plan", "3", "1", "permission", "denied"])
+        .output()
+        .unwrap();
+    assert!(
+        permission.status.success(),
+        "{}",
+        String::from_utf8_lossy(&permission.stderr)
+    );
+    let permission_stdout = String::from_utf8(permission.stdout).unwrap();
+    assert!(
+        permission_stdout
+            .contains("retry-plan\tclass=permission\tretryable=false\tnext-delay-ms=0"),
+        "{permission_stdout}"
+    );
+}
+
 fn run_gfm<const N: usize>(journal: &std::path::Path, args: [&str; N]) {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_OPS_JOURNAL", journal)

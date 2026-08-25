@@ -3030,6 +3030,27 @@ fn run() -> Result<()> {
                 );
             }
         }
+        Some("jobs-retry-plan") => {
+            let max_attempts =
+                parse_usize_arg(args.next(), "jobs-retry-plan requires max attempts")?;
+            let attempts = parse_usize_arg(args.next(), "jobs-retry-plan requires attempts")?;
+            let message = args.collect::<Vec<_>>().join(" ");
+            if message.is_empty() {
+                return Err(GfmError::Format(
+                    "jobs-retry-plan requires a failure message".to_string(),
+                ));
+            }
+            let policy = RetryPolicy { max_attempts };
+            let decision = policy.retry_decision(attempts, &message);
+            println!(
+                "retry-plan\tclass={}\tretryable={}\tnext-delay-ms={}\tattempts={}\tmax-attempts={}",
+                decision.class.as_str(),
+                decision.retryable,
+                decision.next_delay_ms,
+                attempts,
+                max_attempts
+            );
+        }
         Some("ops-recover") => {
             let (journal, policy) = parse_ops_recover_args(&mut args)?;
             let report =
@@ -4707,6 +4728,7 @@ fn print_usage() {
   gfm notarize-app <GFM.app> <output-dir> --apple-id <email> --team-id <team> --password <password>
   gfm notarize-app <GFM.app> <output-dir> --api-key <AuthKey.p8> --key-id <key> --issuer <issuer>
   gfm jobs-recover [jobs.journal]
+  gfm jobs-retry-plan <max-attempts> <attempts> <failure-message...>
   gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
   gfm watch-once <root>
   gfm copy <source> <destination>
