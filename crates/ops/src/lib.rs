@@ -265,6 +265,56 @@ pub struct OperationRecoveryOutcome {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationConflictPlan {
+    pub default: ConflictPolicy,
+    target_overrides: BTreeMap<PathBuf, ConflictPolicy>,
+}
+
+impl Default for OperationConflictPlan {
+    fn default() -> Self {
+        Self {
+            default: ConflictPolicy::Fail,
+            target_overrides: BTreeMap::new(),
+        }
+    }
+}
+
+impl OperationConflictPlan {
+    pub fn new(default: ConflictPolicy) -> Self {
+        Self {
+            default,
+            target_overrides: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_target(mut self, target: impl Into<PathBuf>, conflict: ConflictPolicy) -> Self {
+        self.target_overrides.insert(target.into(), conflict);
+        self
+    }
+
+    fn conflict_for(&self, operation: &Operation) -> ConflictPolicy {
+        operation
+            .target_path()
+            .and_then(|target| self.target_overrides.get(target))
+            .copied()
+            .unwrap_or(self.default)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationBatchReport {
+    pub outcomes: Vec<OperationBatchOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationBatchOutcome {
+    pub conflict: ConflictPolicy,
+    pub status: OperationStatus,
+    pub operation: Operation,
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct OperationContext {
     pub conflict: ConflictPolicy,
@@ -378,6 +428,40 @@ impl Operator {
         self.execute_started(id, operation, &mut on_progress)
     }
 
+    pub fn execute_batch_with_conflicts(
+        &self,
+        operations: impl IntoIterator<Item = Operation>,
+        plan: OperationConflictPlan,
+    ) -> Result<OperationBatchReport> {
+        let mut outcomes = Vec::new();
+        for operation in operations {
+            let conflict = plan.conflict_for(&operation);
+            let operator = Operator::new(self.context.clone().with_conflict(conflict));
+            match operator.execute(operation.clone()) {
+                Ok(entry) => outcomes.push(OperationBatchOutcome {
+                    conflict,
+                    status: entry.status,
+                    operation: entry.operation,
+                    message: entry.message,
+                }),
+                Err(err) => {
+                    let status = operation_status_from_error(&err);
+                    outcomes.push(OperationBatchOutcome {
+                        conflict,
+                        status,
+                        operation,
+                        message: (!matches!(err, GfmError::Cancelled | GfmError::Paused))
+                            .then(|| err.to_string()),
+                    });
+                    if matches!(status, OperationStatus::Cancelled | OperationStatus::Paused) {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(OperationBatchReport { outcomes })
+    }
+
     pub fn recover_interrupted(&self) -> Result<OperationRecoveryReport> {
         self.recover_with_policy(OperationRecoveryPolicy::default())
     }
@@ -403,13 +487,7 @@ impl Operator {
                 }),
                 Err(err) => outcomes.push(OperationRecoveryOutcome {
                     id: entry.id,
-                    status: if matches!(err, GfmError::Paused) {
-                        OperationStatus::Paused
-                    } else if matches!(err, GfmError::Cancelled) {
-                        OperationStatus::Cancelled
-                    } else {
-                        OperationStatus::Failed
-                    },
+                    status: operation_status_from_error(&err),
                     operation,
                     message: (!matches!(err, GfmError::Cancelled | GfmError::Paused))
                         .then(|| err.to_string()),
@@ -525,6 +603,16 @@ impl Operator {
 
     fn append(&self, entry: JournalEntry) -> Result<()> {
         append_journal(&self.context.journal_path, &entry)
+    }
+}
+
+fn operation_status_from_error(err: &GfmError) -> OperationStatus {
+    if matches!(err, GfmError::Paused) {
+        OperationStatus::Paused
+    } else if matches!(err, GfmError::Cancelled) {
+        OperationStatus::Cancelled
+    } else {
+        OperationStatus::Failed
     }
 }
 
@@ -2644,6 +2732,107 @@ mod tests {
         assert!(report.outcomes.is_empty());
         assert_eq!(fs::read_to_string(&destination).unwrap(), "destination");
         assert_eq!(read_journal(&journal).unwrap().len(), 2);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn batch_conflict_plan_applies_default_policy_to_all_targets() {
+        let root = unique_temp_dir("gfm-ops-batch-apply-all");
+        let journal = root.join("journal.log");
+        let first_source = root.join("first-source.txt");
+        let first_destination = root.join("first-destination.txt");
+        let second_source = root.join("second-source.txt");
+        let second_destination = root.join("second-destination.txt");
+        fs::write(&first_source, "new first").unwrap();
+        fs::write(&first_destination, "old first").unwrap();
+        fs::write(&second_source, "new second").unwrap();
+        fs::write(&second_destination, "old second").unwrap();
+
+        let report = Operator::new(OperationContext::new(&journal))
+            .execute_batch_with_conflicts(
+                vec![
+                    Operation::Copy {
+                        from: first_source.clone(),
+                        to: first_destination.clone(),
+                    },
+                    Operation::Copy {
+                        from: second_source.clone(),
+                        to: second_destination.clone(),
+                    },
+                ],
+                OperationConflictPlan::new(ConflictPolicy::Skip),
+            )
+            .unwrap();
+
+        assert_eq!(report.outcomes.len(), 2);
+        assert!(report
+            .outcomes
+            .iter()
+            .all(|outcome| outcome.conflict == ConflictPolicy::Skip
+                && outcome.status == OperationStatus::Skipped));
+        assert_eq!(fs::read_to_string(&first_destination).unwrap(), "old first");
+        assert_eq!(
+            fs::read_to_string(&second_destination).unwrap(),
+            "old second"
+        );
+        let entries = read_journal(&journal).unwrap();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.status == OperationStatus::Skipped)
+                .count(),
+            2
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn batch_conflict_plan_uses_per_target_override() {
+        let root = unique_temp_dir("gfm-ops-batch-per-target");
+        let journal = root.join("journal.log");
+        let replace_source = root.join("replace-source.txt");
+        let replace_destination = root.join("replace-destination.txt");
+        let skip_source = root.join("skip-source.txt");
+        let skip_destination = root.join("skip-destination.txt");
+        fs::write(&replace_source, "new replace").unwrap();
+        fs::write(&replace_destination, "old replace").unwrap();
+        fs::write(&skip_source, "new skip").unwrap();
+        fs::write(&skip_destination, "old skip").unwrap();
+
+        let report = Operator::new(OperationContext::new(&journal))
+            .execute_batch_with_conflicts(
+                vec![
+                    Operation::Copy {
+                        from: replace_source.clone(),
+                        to: replace_destination.clone(),
+                    },
+                    Operation::Copy {
+                        from: skip_source.clone(),
+                        to: skip_destination.clone(),
+                    },
+                ],
+                OperationConflictPlan::new(ConflictPolicy::Skip)
+                    .with_target(&replace_destination, ConflictPolicy::Replace),
+            )
+            .unwrap();
+
+        assert_eq!(report.outcomes.len(), 2);
+        assert_eq!(report.outcomes[0].conflict, ConflictPolicy::Replace);
+        assert_eq!(report.outcomes[0].status, OperationStatus::Completed);
+        assert_eq!(report.outcomes[1].conflict, ConflictPolicy::Skip);
+        assert_eq!(report.outcomes[1].status, OperationStatus::Skipped);
+        assert_eq!(
+            fs::read_to_string(&replace_destination).unwrap(),
+            "new replace"
+        );
+        assert_eq!(fs::read_to_string(&skip_destination).unwrap(), "old skip");
+        let entries = read_journal(&journal).unwrap();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[1].status, OperationStatus::Completed);
+        assert_eq!(entries[3].status, OperationStatus::Skipped);
 
         fs::remove_dir_all(root).unwrap();
     }
