@@ -244,6 +244,40 @@ fn imported_prefix_postings_drive_deferred_prefix_search() {
 }
 
 #[test]
+fn sidecar_prefix_lookup_budget_caps_candidates_and_reports_truncation() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/project-alpha.md", "project-alpha.md"));
+    index.insert(record(2, "/tmp/project-beta.md", "project-beta.md"));
+    index.insert(record(3, "/tmp/project-gamma.md", "project-gamma.md"));
+    let lookup = StaticLookup {
+        prefix_ids: vec![
+            FileId::new(VolumeId(1), 1),
+            FileId::new(VolumeId(1), 2),
+            FileId::new(VolumeId(1), 3),
+        ],
+        fuzzy_terms: Vec::new(),
+    };
+
+    let report = index
+        .query_structured_with_lookup_budget_cancellable(
+            &SearchQuery::parse("proj"),
+            10,
+            &lookup,
+            SearchLookupBudget {
+                max_prefix_ids_per_term: 2,
+                ..SearchLookupBudget::default()
+            },
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(report.lookup.prefix_terms, 1);
+    assert_eq!(report.lookup.prefix_candidate_ids, 2);
+    assert!(report.lookup.prefix_truncated_terms >= 1);
+    assert!(!report.hits.is_empty());
+}
+
+#[test]
 fn imported_prefix_postings_preserve_fallback_prefix_terms() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/profile.md", "profile.md"));
@@ -950,6 +984,43 @@ fn fuzzy_retrieval_uses_indexed_name_tokens() {
 }
 
 #[test]
+fn sidecar_fuzzy_lookup_budget_caps_keys_terms_and_verified_candidates() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/needl.md", "needl.md"));
+    index.insert(record(2, "/tmp/needle.md", "needle.md"));
+    let lookup = StaticLookup {
+        prefix_ids: Vec::new(),
+        fuzzy_terms: vec![
+            "needl".to_string(),
+            "needle".to_string(),
+            "neatly".to_string(),
+        ],
+    };
+
+    let report = index
+        .query_structured_with_lookup_budget_cancellable(
+            &SearchQuery::parse("needle"),
+            10,
+            &lookup,
+            SearchLookupBudget {
+                max_fuzzy_keys_per_term: 1,
+                max_fuzzy_terms_per_key: 1,
+                max_fuzzy_candidates_per_term: 1,
+                ..SearchLookupBudget::default()
+            },
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(report.lookup.fuzzy_terms, 1);
+    assert_eq!(report.lookup.fuzzy_keys, 1);
+    assert_eq!(report.lookup.fuzzy_key_truncated_terms, 1);
+    assert_eq!(report.lookup.fuzzy_term_truncated_keys, 1);
+    assert_eq!(report.lookup.fuzzy_candidate_truncated_terms, 1);
+    assert_eq!(report.lookup.fuzzy_verified_candidates, 1);
+}
+
+#[test]
 fn removes_reindexed_fuzzy_postings() {
     let mut index = SearchIndex::new();
     let mut item = record(1, "/tmp/needl", "needl");
@@ -1227,6 +1298,21 @@ fn volume_record(volume: u64, node: u64, path: &str, name: &str) -> FileRecord {
         hidden: false,
         tags: Vec::new(),
         finder_comment: None,
+    }
+}
+
+struct StaticLookup {
+    prefix_ids: Vec<FileId>,
+    fuzzy_terms: Vec<String>,
+}
+
+impl SearchLookup for StaticLookup {
+    fn prefix_ids(&self, _prefix: &str) -> gfm_types::Result<Vec<FileId>> {
+        Ok(self.prefix_ids.clone())
+    }
+
+    fn fuzzy_terms(&self, _key: &str) -> gfm_types::Result<Vec<String>> {
+        Ok(self.fuzzy_terms.clone())
     }
 }
 

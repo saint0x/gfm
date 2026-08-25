@@ -34,6 +34,64 @@ const PREFIX_MIN_TERM_LEN: usize = 1;
 const PREFIX_MAX_TERM_LEN: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchLookupBudget {
+    pub max_prefix_ids_per_term: usize,
+    pub max_fuzzy_keys_per_term: usize,
+    pub max_fuzzy_terms_per_key: usize,
+    pub max_fuzzy_candidates_per_term: usize,
+}
+
+impl Default for SearchLookupBudget {
+    fn default() -> Self {
+        Self {
+            max_prefix_ids_per_term: 4096,
+            max_fuzzy_keys_per_term: 96,
+            max_fuzzy_terms_per_key: 512,
+            max_fuzzy_candidates_per_term: 4096,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchLookupTelemetry {
+    pub prefix_terms: usize,
+    pub prefix_lookup_ids: usize,
+    pub prefix_candidate_ids: usize,
+    pub prefix_truncated_terms: usize,
+    pub fuzzy_terms: usize,
+    pub fuzzy_keys: usize,
+    pub fuzzy_lookup_terms: usize,
+    pub fuzzy_candidate_terms: usize,
+    pub fuzzy_verified_candidates: usize,
+    pub fuzzy_key_truncated_terms: usize,
+    pub fuzzy_term_truncated_keys: usize,
+    pub fuzzy_candidate_truncated_terms: usize,
+}
+
+impl SearchLookupTelemetry {
+    pub fn merge(&mut self, other: &Self) {
+        self.prefix_terms += other.prefix_terms;
+        self.prefix_lookup_ids += other.prefix_lookup_ids;
+        self.prefix_candidate_ids += other.prefix_candidate_ids;
+        self.prefix_truncated_terms += other.prefix_truncated_terms;
+        self.fuzzy_terms += other.fuzzy_terms;
+        self.fuzzy_keys += other.fuzzy_keys;
+        self.fuzzy_lookup_terms += other.fuzzy_lookup_terms;
+        self.fuzzy_candidate_terms += other.fuzzy_candidate_terms;
+        self.fuzzy_verified_candidates += other.fuzzy_verified_candidates;
+        self.fuzzy_key_truncated_terms += other.fuzzy_key_truncated_terms;
+        self.fuzzy_term_truncated_keys += other.fuzzy_term_truncated_keys;
+        self.fuzzy_candidate_truncated_terms += other.fuzzy_candidate_truncated_terms;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchQueryReport {
+    pub hits: Vec<SearchHit>,
+    pub lookup: SearchLookupTelemetry,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchStreamStage {
     Hot,
     Deep,
@@ -444,7 +502,26 @@ impl SearchIndex {
         lookup: &dyn SearchLookup,
         cancellation: &Cancellation,
     ) -> gfm_types::Result<Vec<SearchHit>> {
-        self.query_pass(query, limit, SearchPass::Full, lookup, cancellation)
+        Ok(self
+            .query_structured_with_lookup_budget_cancellable(
+                query,
+                limit,
+                lookup,
+                SearchLookupBudget::default(),
+                cancellation,
+            )?
+            .hits)
+    }
+
+    pub fn query_structured_with_lookup_budget_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<SearchQueryReport> {
+        self.query_pass(query, limit, SearchPass::Full, lookup, budget, cancellation)
     }
 
     pub fn stream(&self, query: &str, limit: usize) -> gfm_types::Result<Vec<SearchStreamBatch>> {
@@ -479,20 +556,26 @@ impl SearchIndex {
             return Ok(Vec::new());
         }
 
-        let hot = self.query_pass(
-            query,
-            limit,
-            SearchPass::Hot,
-            &EmptySearchLookup,
-            cancellation,
-        )?;
-        let full = self.query_pass(
-            query,
-            limit,
-            SearchPass::Full,
-            &EmptySearchLookup,
-            cancellation,
-        )?;
+        let hot = self
+            .query_pass(
+                query,
+                limit,
+                SearchPass::Hot,
+                &EmptySearchLookup,
+                SearchLookupBudget::default(),
+                cancellation,
+            )?
+            .hits;
+        let full = self
+            .query_pass(
+                query,
+                limit,
+                SearchPass::Full,
+                &EmptySearchLookup,
+                SearchLookupBudget::default(),
+                cancellation,
+            )?
+            .hits;
         let mut seen: HashMap<FileId, i64> = HashMap::new();
         let mut batches = Vec::new();
 
@@ -529,14 +612,19 @@ impl SearchIndex {
         limit: usize,
         pass: SearchPass,
         lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
         cancellation: &Cancellation,
-    ) -> gfm_types::Result<Vec<SearchHit>> {
+    ) -> gfm_types::Result<SearchQueryReport> {
         cancellation.check()?;
         if query.is_empty() || limit == 0 {
-            return Ok(Vec::new());
+            return Ok(SearchQueryReport {
+                hits: Vec::new(),
+                lookup: SearchLookupTelemetry::default(),
+            });
         }
 
         let mut scores: HashMap<FileId, RankAccumulator> = HashMap::new();
+        let mut telemetry = SearchLookupTelemetry::default();
         let text = query.terms.join(" ");
 
         if !text.is_empty() {
@@ -546,7 +634,7 @@ impl SearchIndex {
         }
 
         if !text.is_empty() {
-            let ids = self.name_prefix_ids(&text, lookup)?;
+            let ids = self.name_prefix_ids(&text, lookup, budget, &mut telemetry)?;
             if !ids.is_empty() {
                 add_scores(&mut scores, &ids, PREFIX_NAME, MatchReason::PrefixName);
             }
@@ -579,7 +667,7 @@ impl SearchIndex {
         if pass.includes_deep() {
             for term in &query.terms {
                 cancellation.check()?;
-                for id in self.fuzzy_ids(term, lookup)? {
+                for id in self.fuzzy_ids(term, lookup, budget, &mut telemetry)? {
                     cancellation.check()?;
                     let Some(record) = self.records.get(&id) else {
                         continue;
@@ -705,7 +793,10 @@ impl SearchIndex {
         sort_hits(&mut hits);
         hits.truncate(limit);
         cancellation.check()?;
-        Ok(hits)
+        Ok(SearchQueryReport {
+            hits,
+            lookup: telemetry,
+        })
     }
 
     fn record_matches_query(
@@ -827,21 +918,42 @@ impl SearchIndex {
         &self,
         term: &str,
         lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        telemetry: &mut SearchLookupTelemetry,
     ) -> gfm_types::Result<BTreeSet<FileId>> {
         if !is_fuzzy_term(term) {
             return Ok(BTreeSet::new());
         }
+        telemetry.fuzzy_terms += 1;
         let mut ids = BTreeSet::new();
-        for key in deletion_keys(term, 2) {
+        let keys = deletion_keys(term, 2);
+        if keys.len() > budget.max_fuzzy_keys_per_term {
+            telemetry.fuzzy_term_truncated_keys += 1;
+        }
+        for key in keys.into_iter().take(budget.max_fuzzy_keys_per_term) {
+            telemetry.fuzzy_keys += 1;
             let mut candidates = self.fuzzy_terms.get(&key).cloned().unwrap_or_default();
+            let lookup_terms = lookup.fuzzy_terms(&key)?;
+            telemetry.fuzzy_lookup_terms += lookup_terms.len();
+            if lookup_terms.len() > budget.max_fuzzy_terms_per_key {
+                telemetry.fuzzy_key_truncated_terms += 1;
+            }
             candidates.extend(
-                lookup
-                    .fuzzy_terms(&key)?
+                lookup_terms
                     .into_iter()
+                    .take(budget.max_fuzzy_terms_per_key)
                     .map(|term| normalize(&term))
                     .filter(|term| is_fuzzy_term(term)),
             );
-            for candidate in candidates {
+            telemetry.fuzzy_candidate_terms += candidates.len();
+            if candidates.len() > budget.max_fuzzy_candidates_per_term {
+                telemetry.fuzzy_candidate_truncated_terms += 1;
+            }
+            for candidate in candidates
+                .into_iter()
+                .take(budget.max_fuzzy_candidates_per_term)
+            {
+                telemetry.fuzzy_verified_candidates += 1;
                 if bounded_levenshtein(&candidate, term, 2).is_some() {
                     if let Some(matches) = self.name_terms.get(&candidate) {
                         ids.extend(matches);
@@ -856,17 +968,34 @@ impl SearchIndex {
         &self,
         term: &str,
         lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        telemetry: &mut SearchLookupTelemetry,
     ) -> gfm_types::Result<BTreeSet<FileId>> {
         if !is_prefix_term(term) {
             return Ok(BTreeSet::new());
         }
+        telemetry.prefix_terms += 1;
         let mut ids = self.name_prefixes.get(term).cloned().unwrap_or_default();
-        ids.extend(
-            lookup
-                .prefix_ids(term)?
+        if ids.len() > budget.max_prefix_ids_per_term {
+            telemetry.prefix_truncated_terms += 1;
+            ids = ids
                 .into_iter()
-                .filter(|id| self.records.contains_key(id)),
+                .take(budget.max_prefix_ids_per_term)
+                .collect();
+        }
+        let remaining = budget.max_prefix_ids_per_term.saturating_sub(ids.len());
+        let lookup_ids = lookup.prefix_ids(term)?;
+        telemetry.prefix_lookup_ids += lookup_ids.len();
+        if lookup_ids.len() > remaining {
+            telemetry.prefix_truncated_terms += 1;
+        }
+        ids.extend(
+            lookup_ids
+                .into_iter()
+                .filter(|id| self.records.contains_key(id))
+                .take(remaining),
         );
+        telemetry.prefix_candidate_ids += ids.len();
         Ok(ids)
     }
 

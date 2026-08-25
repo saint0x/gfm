@@ -1,6 +1,7 @@
 use crate::{
-    sort_hits, SearchFuzzyPosting, SearchIndex, SearchLookup, SearchMetadataPosting,
-    SearchPrefixPosting, SearchQuery, SearchRecordColumns, SearchStreamBatch, SearchStreamStage,
+    sort_hits, SearchFuzzyPosting, SearchIndex, SearchLookup, SearchLookupBudget,
+    SearchLookupTelemetry, SearchMetadataPosting, SearchPrefixPosting, SearchQuery,
+    SearchQueryReport, SearchRecordColumns, SearchStreamBatch, SearchStreamStage,
 };
 use gfm_jobs::Cancellation;
 use gfm_types::{FileId, FileRecord, GfmError, Result, SearchHit, VolumeId};
@@ -270,22 +271,46 @@ impl ShardedSearchIndex {
         lookup: &dyn SearchLookup,
         cancellation: &Cancellation,
     ) -> Result<Vec<SearchHit>> {
+        Ok(self
+            .query_structured_with_lookup_budget_cancellable(
+                query,
+                limit,
+                lookup,
+                SearchLookupBudget::default(),
+                cancellation,
+            )?
+            .hits)
+    }
+
+    pub fn query_structured_with_lookup_budget_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<SearchQueryReport> {
         cancellation.check()?;
         if query.is_empty() || limit == 0 || self.shards.is_empty() {
-            return Ok(Vec::new());
+            return Ok(SearchQueryReport {
+                hits: Vec::new(),
+                lookup: SearchLookupTelemetry::default(),
+            });
         }
 
         let mut merged = Vec::new();
+        let mut telemetry = SearchLookupTelemetry::default();
         std::thread::scope(|scope| {
             let handles: Vec<_> = self
                 .shards
                 .values()
                 .map(|shard| {
                     scope.spawn(move || {
-                        shard.query_structured_with_lookup_cancellable(
+                        shard.query_structured_with_lookup_budget_cancellable(
                             query,
                             limit,
                             lookup,
+                            budget,
                             cancellation,
                         )
                     })
@@ -293,10 +318,11 @@ impl ShardedSearchIndex {
                 .collect();
 
             for handle in handles {
-                let mut hits = handle
+                let mut report = handle
                     .join()
                     .map_err(|_| GfmError::Format("search shard worker panicked".to_string()))??;
-                merged.append(&mut hits);
+                telemetry.merge(&report.lookup);
+                merged.append(&mut report.hits);
             }
             Ok::<(), GfmError>(())
         })?;
@@ -304,7 +330,10 @@ impl ShardedSearchIndex {
         sort_hits(&mut merged);
         merged.truncate(limit);
         cancellation.check()?;
-        Ok(merged)
+        Ok(SearchQueryReport {
+            hits: merged,
+            lookup: telemetry,
+        })
     }
 
     pub fn stream(&self, query: &str, limit: usize) -> Result<Vec<SearchStreamBatch>> {

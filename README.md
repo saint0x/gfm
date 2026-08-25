@@ -96,7 +96,7 @@ The index is compact and incremental:
 - hot mutable buffers
 - progressive hot/deep result streaming with stable dedupe
 - delete-key fuzzy candidate indexes for typo tolerance without full-record scans
-- archive-backed prefix and fuzzy lookup so machine-wide sidecars stay mmap-resident instead of being hydrated into session heap
+- archive-backed prefix and fuzzy lookup with explicit candidate budgets, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
 - exact phrase and `near:N:alpha,beta` positional content retrieval
 - bounded snippets with highlighted content matches
 - binary-signature and control-byte classification before content extraction
@@ -299,6 +299,7 @@ cargo run -p gfm -- search-index /tmp/gfm.gfmidx PLAN
 cargo run -p gfm -- search-index-mmap /tmp/gfm.gfmidx PLAN
 cargo run -p gfm -- search-index-columns /tmp/gfm.gfmidx /tmp/gfm.gfmcols PLAN
 cargo run -p gfm -- search-index-sidecars /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmfuzzy /tmp/gfm.gfmcontent PLAN
+cargo run -p gfm -- search-index-sidecars-budget /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmfuzzy /tmp/gfm.gfmcontent 4096 96 512 4096 PLAN
 cargo run -p gfm -- index-footprint /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmfuzzy /tmp/gfm.gfmmanifest /tmp/gfm-*.gfmseg
 cargo run -p gfm -- index-compaction-plan /tmp/gfm.gfmidx /tmp/gfm.gfmmanifest elevated serious battery active /tmp/gfm-*.gfmseg
 cargo run -p gfm -- records-verify /tmp/gfm.gfmidx

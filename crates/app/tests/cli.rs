@@ -1183,6 +1183,38 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_prefix_stderr.contains("prefix-archive-keys"),
         "{sidecar_prefix_stderr}"
     );
+    let sidecar_budget_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-index-sidecars-budget",
+            index.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "1",
+            "1",
+            "1",
+            "1",
+            "tag",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        sidecar_budget_search.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sidecar_budget_search.stderr)
+    );
+    let sidecar_budget_stderr = String::from_utf8(sidecar_budget_search.stderr).unwrap();
+    assert!(
+        sidecar_budget_stderr.contains("sidecar-budget")
+            && sidecar_budget_stderr.contains("\tprefix-terms=2")
+            && sidecar_budget_stderr.contains("\tprefix-lookup-ids=")
+            && sidecar_budget_stderr.contains("\tprefix-candidate-ids=")
+            && sidecar_budget_stderr.contains("\tfuzzy-terms=2")
+            && sidecar_budget_stderr.contains("\tfuzzy-term-truncated-keys=2"),
+        "{sidecar_budget_stderr}"
+    );
     let sidecar_content_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "search-index-sidecars",

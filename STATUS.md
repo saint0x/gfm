@@ -57,7 +57,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Storage Engine
 
-37. Finish benchmark-proven prefix/fuzzy lookup budgets for multi-million-entry indexes, including adaptive prefix cutoffs, fuzzy candidate caps, cache hit telemetry, and worst-case latency gates.
+37. Finish benchmark-proven prefix/fuzzy lookup budgets for multi-million-entry indexes by binding the implemented lookup caps and telemetry to adaptive prefix cutoffs, cache hit telemetry, realistic multi-million-entry fixtures, and worst-case latency gates.
 38. Implement checksums, schema migration, crash recovery, corruption detection, and rebuild plans.
 39. Implement benchmark fixtures for millions of files and realistic developer, media, documents, and iCloud trees.
 

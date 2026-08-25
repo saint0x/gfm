@@ -17,8 +17,8 @@ use gfm_index::{
     ContentMaintenanceOptions, ContentMergePolicy, ContentMergeTier, EventBackpressureQueue,
     EventPriority, FseventsCursor, FseventsCursorHealth, IndexFootprintSpec, IndexMountState,
     IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState, Indexer, IoPressure, LiveIndex,
-    SearchArchiveLookup, SearchMetadataField, SearchMetadataPosting, SearchRecordColumns,
-    SearchStreamStage, ThermalState, UserActivity, VolumeIndexPolicy,
+    SearchArchiveLookup, SearchLookupBudget, SearchMetadataField, SearchMetadataPosting,
+    SearchRecordColumns, SearchStreamStage, ThermalState, UserActivity, VolumeIndexPolicy,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -1140,6 +1140,126 @@ fn run() -> Result<()> {
                 lookup.indexed_fuzzy_keys()
             );
             for hit in live.search_with_lookup(&query, 50, &lookup)? {
+                print_hit(&hit);
+            }
+        }
+        Some("search-index-sidecars-budget") => {
+            let records = required_path(
+                args.next(),
+                "search-index-sidecars-budget requires a records path",
+            )?;
+            let columns = required_path(
+                args.next(),
+                "search-index-sidecars-budget requires a columns path",
+            )?;
+            let metadata = required_path(
+                args.next(),
+                "search-index-sidecars-budget requires a metadata path",
+            )?;
+            let prefixes = required_path(
+                args.next(),
+                "search-index-sidecars-budget requires a prefixes path",
+            )?;
+            let fuzzy = required_path(
+                args.next(),
+                "search-index-sidecars-budget requires a fuzzy path",
+            )?;
+            let content = required_path(
+                args.next(),
+                "search-index-sidecars-budget requires a content path",
+            )?;
+            let max_prefix_ids = parse_usize_arg(
+                args.next(),
+                "search-index-sidecars-budget requires max-prefix-ids",
+            )?;
+            let max_fuzzy_keys = parse_usize_arg(
+                args.next(),
+                "search-index-sidecars-budget requires max-fuzzy-keys",
+            )?;
+            let max_fuzzy_terms = parse_usize_arg(
+                args.next(),
+                "search-index-sidecars-budget requires max-fuzzy-terms",
+            )?;
+            let max_fuzzy_candidates = parse_usize_arg(
+                args.next(),
+                "search-index-sidecars-budget requires max-fuzzy-candidates",
+            )?;
+            let query = args.next().ok_or_else(|| {
+                gfm_types::GfmError::Format(
+                    "search-index-sidecars-budget requires a query string".to_string(),
+                )
+            })?;
+            let records = MmapRecordArchive::open(records)?;
+            let columns = MmapRecordColumns::open(columns)?;
+            let metadata = MmapMetadataArchive::open(metadata)?;
+            let lookup = SearchArchiveLookup::open(prefixes, fuzzy)?;
+            let content = MmapContentArchive::open(content)?;
+            let mut search_columns = Vec::with_capacity(columns.len());
+            for index in 0..columns.len() {
+                let column = columns.column(index)?;
+                search_columns.push(SearchRecordColumns {
+                    id: column.id,
+                    name: column.name,
+                    path: column.path,
+                    extension: column.extension,
+                    tags: column.tags,
+                    comment: column.comment,
+                });
+            }
+            let mut selected_metadata =
+                metadata.postings_for(MetadataField::Comment, comment_query_terms(&query))?;
+            selected_metadata
+                .extend(metadata.postings_for(MetadataField::Tag, tag_query_terms(&query))?);
+            let search_metadata = selected_metadata
+                .into_iter()
+                .map(|posting| SearchMetadataPosting {
+                    field: match posting.field {
+                        MetadataField::Tag => SearchMetadataField::Tag,
+                        MetadataField::Comment => SearchMetadataField::Comment,
+                    },
+                    term: posting.term,
+                    ids: posting.ids,
+                })
+                .collect();
+            let search_content = content.postings_for_terms(content_query_terms(&query))?;
+            let (live, applied, metadata_keys, prefix_keys, fuzzy_keys, content_keys) =
+                LiveIndex::from_records_with_sidecars(
+                    records.records()?,
+                    search_columns,
+                    search_metadata,
+                    Vec::new(),
+                    Vec::new(),
+                    search_content,
+                );
+            let report = live.search_with_lookup_budget(
+                &query,
+                50,
+                &lookup,
+                SearchLookupBudget {
+                    max_prefix_ids_per_term: max_prefix_ids,
+                    max_fuzzy_keys_per_term: max_fuzzy_keys,
+                    max_fuzzy_terms_per_key: max_fuzzy_terms,
+                    max_fuzzy_candidates_per_term: max_fuzzy_candidates,
+                },
+            )?;
+            eprintln!(
+                "sidecar-budget\tcolumns-indexed={applied}\tmetadata-keys={metadata_keys}\tprefix-keys={prefix_keys}\tfuzzy-keys={fuzzy_keys}\tprefix-archive-keys={}\tfuzzy-archive-keys={}\tcontent-keys={content_keys}\tprefix-terms={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-truncated-terms={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
+                lookup.indexed_prefixes(),
+                lookup.indexed_fuzzy_keys(),
+                report.lookup.prefix_terms,
+                report.lookup.prefix_lookup_ids,
+                report.lookup.prefix_candidate_ids,
+                report.lookup.prefix_truncated_terms,
+                report.lookup.fuzzy_terms,
+                report.lookup.fuzzy_keys,
+                report.lookup.fuzzy_lookup_terms,
+                report.lookup.fuzzy_candidate_terms,
+                report.lookup.fuzzy_verified_candidates,
+                report.lookup.fuzzy_key_truncated_terms,
+                report.lookup.fuzzy_term_truncated_keys,
+                report.lookup.fuzzy_candidate_truncated_terms
+            );
+            for hit in report.hits {
                 print_hit(&hit);
             }
         }
@@ -2861,6 +2981,7 @@ fn print_usage() {
   gfm search-index-mmap <index.gfmidx> <query>
   gfm search-index-columns <index.gfmidx> <columns.gfmcols> <query>
   gfm search-index-sidecars <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <fuzzy.gfmfuzzy> <content.gfmcontent> <query>
+  gfm search-index-sidecars-budget <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <fuzzy.gfmfuzzy> <content.gfmcontent> <max-prefix-ids> <max-fuzzy-keys> <max-fuzzy-terms> <max-fuzzy-candidates> <query>
   gfm index-footprint <index.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <fuzzy.gfmfuzzy|-> <content-manifest.gfmmanifest|-> [segments.gfmseg...]
   gfm index-compaction-plan <index.gfmidx> <content-manifest.gfmmanifest|-> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> [segments.gfmseg...]
   gfm records-verify <index.gfmidx>

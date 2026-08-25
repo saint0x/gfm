@@ -2,8 +2,9 @@ use gfm_content::Extractor;
 use gfm_fs::{scan_tree, ScanOptions};
 use gfm_jobs::Cancellation;
 pub use gfm_search::{
-    SearchFuzzyPosting, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
-    SearchRecordColumns, SearchStreamStage,
+    SearchFuzzyPosting, SearchLookupBudget, SearchLookupTelemetry, SearchMetadataField,
+    SearchMetadataPosting, SearchPrefixPosting, SearchQueryReport, SearchRecordColumns,
+    SearchStreamStage,
 };
 use gfm_search::{SearchLookup, SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
@@ -691,6 +692,22 @@ impl LiveIndex {
             &SearchQuery::parse(query),
             limit,
             lookup,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn search_with_lookup_budget(
+        &self,
+        query: &str,
+        limit: usize,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+    ) -> Result<SearchQueryReport> {
+        self.index.query_structured_with_lookup_budget_cancellable(
+            &SearchQuery::parse(query),
+            limit,
+            lookup,
+            budget,
             &Cancellation::default(),
         )
     }

@@ -433,7 +433,9 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - prefix and delete-key fuzzy sidecars expose a store-agnostic lookup contract to the search engine;
   - live hot records keep in-memory prefix/fuzzy maps while immutable sidecars answer query candidates directly from mmap archives;
   - sharded search fans out the same archive lookup across volume shards and filters candidate ids per shard;
-  - archive-backed lookup avoids importing large prefix/fuzzy candidate maps into heap memory for each machine-wide query session.
+  - archive-backed lookup avoids importing large prefix/fuzzy candidate maps into heap memory for each machine-wide query session;
+  - prefix ids, fuzzy delete keys, fuzzy terms per key, and verified fuzzy candidates are capped by an explicit search lookup budget;
+  - search reports expose prefix/fuzzy lookup telemetry, truncation counters, candidate counts, and verified-candidate counts so latency gates can enforce worst-case behavior.
 - Index footprint telemetry and maintenance scheduling:
   - record, column, metadata, prefix, fuzzy, content-manifest, and pending content-segment archives are measured from mmap readers and filesystem byte counts;
   - footprint reports include total bytes, bytes per record, sidecar key counts, content archive counts, segment postings, tombstones, and tombstone-bearing segment counts;
