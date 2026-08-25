@@ -730,6 +730,47 @@ fn matches_content_phrases_by_token_position() {
 }
 
 #[test]
+fn reindexed_content_replaces_stale_terms_and_positions() {
+    let mut index = SearchIndex::new();
+    let item = record(1, "/tmp/change.txt", "change.txt");
+    index.insert(item);
+    index.insert_content(FileId::new(VolumeId(1), 1), "oldtoken old phrase");
+    index.insert_content(FileId::new(VolumeId(1), 1), "newtoken new phrase");
+
+    assert!(index.query("oldtoken", 10).is_empty());
+    assert!(index.query(r#""old phrase""#, 10).is_empty());
+    assert_eq!(index.query("newtoken", 10).len(), 1);
+    assert_eq!(index.query(r#""new phrase""#, 10).len(), 1);
+}
+
+#[test]
+fn imported_content_positions_are_sorted_once_for_phrase_lookup() {
+    let mut index = SearchIndex::new();
+    let item = record(1, "/tmp/imported.txt", "imported.txt");
+    index.insert(item);
+    index.import_content_postings(&[
+        ContentPosting {
+            term: "alpha".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: vec![ContentPositions {
+                id: FileId::new(VolumeId(1), 1),
+                positions: vec![4, 0, 0],
+            }],
+        },
+        ContentPosting {
+            term: "beta".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: vec![ContentPositions {
+                id: FileId::new(VolumeId(1), 1),
+                positions: vec![5, 1, 1],
+            }],
+        },
+    ]);
+
+    assert_eq!(index.query(r#""alpha beta""#, 10).len(), 1);
+}
+
+#[test]
 fn content_phrase_uses_rarest_posting_candidates_without_record_scan() {
     let mut index = SearchIndex::new();
     for node in 1..=64 {

@@ -510,6 +510,7 @@ impl SearchIndex {
         if !self.records.contains_key(&id) {
             return;
         }
+        self.remove_content(id);
         for (position, token) in tokenize(&normalize(text)).into_iter().enumerate() {
             self.content_terms
                 .entry(token)
@@ -553,13 +554,24 @@ impl SearchIndex {
             }
             for positions in &posting.positions {
                 if self.records.contains_key(&positions.id) {
+                    let mut normalized_positions = positions.positions.clone();
+                    normalized_positions.sort_unstable();
+                    normalized_positions.dedup();
                     self.content_terms
                         .entry(term.clone())
                         .or_default()
-                        .insert(positions.id, positions.positions.clone());
+                        .insert(positions.id, normalized_positions);
                 }
             }
         }
+    }
+
+    pub fn remove_content(&mut self, id: FileId) {
+        for positions in self.content_terms.values_mut() {
+            positions.remove(&id);
+        }
+        self.content_terms
+            .retain(|_, positions| !positions.is_empty());
     }
 
     pub fn content_postings(&self) -> Vec<ContentPosting> {
@@ -1217,7 +1229,7 @@ impl SearchIndex {
             return false;
         }
 
-        let later: Option<Vec<BTreeSet<u32>>> = terms
+        let later: Option<Vec<&Vec<u32>>> = terms
             .iter()
             .skip(1)
             .map(|term| {
@@ -1225,7 +1237,6 @@ impl SearchIndex {
                     .get(term)
                     .and_then(|positions| positions.get(&id))
                     .filter(|positions| !positions.is_empty())
-                    .map(|positions| positions.iter().copied().collect())
             })
             .collect();
         let Some(later) = later else {
@@ -1233,10 +1244,9 @@ impl SearchIndex {
         };
 
         first_positions.iter().any(|start| {
-            later
-                .iter()
-                .enumerate()
-                .all(|(offset, positions)| positions.contains(&(*start + offset as u32 + 1)))
+            later.iter().enumerate().all(|(offset, positions)| {
+                sorted_contains_position(positions, *start + offset as u32 + 1)
+            })
         })
     }
 
@@ -1760,6 +1770,11 @@ fn rarest_content_postings<'a>(
         .collect::<Option<Vec<_>>>()?
         .into_iter()
         .min_by_key(|ids| ids.len())
+}
+
+fn sorted_contains_position(positions: &[u32], position: u32) -> bool {
+    debug_assert!(positions.windows(2).all(|window| window[0] < window[1]));
+    positions.binary_search(&position).is_ok()
 }
 
 fn add_scores(
