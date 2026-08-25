@@ -1081,6 +1081,59 @@ fn exact_boolean_and_empty_intersection_skips_candidate_seed() {
 }
 
 #[test]
+fn candidate_set_intersection_uses_exact_smallest_shared_ids() {
+    let large = [1_u64, 2, 3, 4, 5, 6]
+        .into_iter()
+        .map(|node| FileId::new(VolumeId(1), node))
+        .collect();
+    let small = [3_u64, 5]
+        .into_iter()
+        .map(|node| FileId::new(VolumeId(1), node))
+        .collect();
+    let medium = [2_u64, 3, 4, 5]
+        .into_iter()
+        .map(|node| FileId::new(VolumeId(1), node))
+        .collect();
+
+    let ids = intersect_candidate_sets([large, small, medium]).unwrap();
+
+    assert_eq!(
+        ids,
+        [3_u64, 5]
+            .into_iter()
+            .map(|node| FileId::new(VolumeId(1), node))
+            .collect()
+    );
+}
+
+#[test]
+fn nested_exact_boolean_and_candidates_remain_intersected() {
+    let mut index = SearchIndex::new();
+    let mut keep = record(1, "/tmp/report.md", "report.md");
+    keep.tags = vec!["Important".to_string()];
+    let mut wrong_extension = record(2, "/tmp/report.pdf", "report.pdf");
+    wrong_extension.tags = vec!["Important".to_string()];
+    let wrong_tag = record(3, "/tmp/report.md", "report.md");
+    index.insert(keep);
+    index.insert(wrong_extension);
+    index.insert(wrong_tag);
+    let query = SearchQuery::parse("(ext:md AND tag:important) AND name:report");
+    let expression = query.expression.as_ref().unwrap();
+
+    let candidates = index
+        .expression_candidate_ids(expression, SearchPass::Full)
+        .unwrap();
+    let hits = index.query_structured(&query, 10);
+
+    assert_eq!(
+        candidates,
+        [FileId::new(VolumeId(1), 1)].into_iter().collect()
+    );
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.id, FileId::new(VolumeId(1), 1));
+}
+
+#[test]
 fn exact_boolean_candidates_do_not_treat_term_branches_as_exact() {
     let index = SearchIndex::new();
     let query = SearchQuery::parse("(client AND ext:md) OR tag:important");

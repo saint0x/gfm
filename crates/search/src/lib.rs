@@ -1596,17 +1596,11 @@ impl SearchIndex {
         expressions: &[QueryExpr],
         pass: SearchPass,
     ) -> Option<BTreeSet<FileId>> {
-        let mut exact = expressions
+        let exact = expressions
             .iter()
             .filter_map(|expression| self.exact_expression_candidate_ids(expression, pass));
-        if let Some(first) = exact.next() {
-            let mut ids = first;
-            for candidates in exact {
-                ids.retain(|id| candidates.contains(id));
-                if ids.is_empty() {
-                    return Some(ids);
-                }
-            }
+
+        if let Some(ids) = intersect_candidate_sets(exact) {
             return Some(ids);
         }
 
@@ -1659,18 +1653,13 @@ impl SearchIndex {
         expressions: &[QueryExpr],
         pass: SearchPass,
     ) -> Option<BTreeSet<FileId>> {
-        let mut exact = expressions
-            .iter()
-            .map(|expression| self.exact_expression_candidate_ids(expression, pass));
-        let mut ids = exact.next().unwrap_or_else(|| Some(BTreeSet::new()))?;
-        for candidates in exact {
-            let candidates = candidates?;
-            ids.retain(|id| candidates.contains(id));
-            if ids.is_empty() {
-                return Some(ids);
-            }
-        }
-        Some(ids)
+        intersect_candidate_sets(
+            expressions
+                .iter()
+                .map(|expression| self.exact_expression_candidate_ids(expression, pass))
+                .collect::<Option<Vec<_>>>()?,
+        )
+        .or_else(|| Some(BTreeSet::new()))
     }
 
     fn term_candidate_ids(&self, term: &str, pass: SearchPass) -> BTreeSet<FileId> {
@@ -1881,6 +1870,24 @@ fn rarest_content_postings<'a>(
         .collect::<Option<Vec<_>>>()?
         .into_iter()
         .min_by_key(|ids| ids.len())
+}
+
+fn intersect_candidate_sets<I>(candidate_sets: I) -> Option<BTreeSet<FileId>>
+where
+    I: IntoIterator<Item = BTreeSet<FileId>>,
+{
+    let mut candidate_sets = candidate_sets.into_iter().collect::<Vec<_>>();
+    candidate_sets.sort_by_key(BTreeSet::len);
+
+    let mut sets = candidate_sets.into_iter();
+    let mut ids = sets.next()?;
+    for candidates in sets {
+        ids.retain(|id| candidates.contains(id));
+        if ids.is_empty() {
+            break;
+        }
+    }
+    Some(ids)
 }
 
 fn sorted_contains_position(positions: &[u32], position: u32) -> bool {
