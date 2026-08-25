@@ -33,6 +33,31 @@ fn bundles_unsigned_app_from_binary() {
     assert!(dist.join("GFM.app/Contents/Resources/GFM.icns").is_file());
     assert!(dist.join("GFM.entitlements").is_file());
 
+    let validate = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "release-validate",
+            dist.join("GFM.app").to_str().unwrap(),
+            "--allow-unsigned",
+            "--skip-notarization",
+            "--skip-gatekeeper",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let validate_stdout = String::from_utf8(validate.stdout).unwrap();
+    assert!(
+        validate_stdout.contains("com.saint0x.gfm"),
+        "{validate_stdout}"
+    );
+    assert!(
+        validate_stdout.contains("not-required"),
+        "{validate_stdout}"
+    );
+
     fs::remove_dir_all(root).unwrap();
 }
 

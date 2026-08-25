@@ -3,9 +3,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod artifact;
 mod notarize;
 mod policy;
 
+pub use artifact::{
+    validate_release_artifact, GatekeeperAssessment, ReleaseArtifactReport, ReleaseArtifactSpec,
+    SignatureStatus,
+};
 pub use notarize::{
     notarize_app_bundle, NotarizationCredentials, NotarizationSpec, NotarizationStatus,
     NotarizationTicket,

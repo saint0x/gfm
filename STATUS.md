@@ -117,11 +117,10 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 ## Packaging
 
 81. Implement first-run permission onboarding that remains Finder-parity by default.
-82. Implement release artifact validation on clean macOS machines.
 
 ## Documentation
 
-83. Expand `PLAN.md` when architectural decisions change materially.
-84. Keep `README.md` written as the completed product contract.
-85. Keep this file limited to unfinished work only.
-86. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+82. Expand `PLAN.md` when architectural decisions change materially.
+83. Keep `README.md` written as the completed product contract.
+84. Keep this file limited to unfinished work only.
+85. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

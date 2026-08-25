@@ -14,10 +14,6 @@ use gfm_jobs::{
 };
 use gfm_mac::{current_host_profile, FileEventStream, SupportMatrix, WatchRoot};
 use gfm_ops::{ConflictPolicy, Operation, OperationContext, Operator};
-use gfm_packaging::{
-    build_app_bundle, notarize_app_bundle, register_launch_services, AppBundleSpec,
-    NotarizationCredentials, NotarizationSpec, ReleasePolicy, SigningIdentity,
-};
 use gfm_store::ContentArchive;
 use gfm_testkit::{
     run_macrobench, run_regression_gate, MacrobenchOptions, MacrobenchScale, MacrobenchStage,
@@ -27,6 +23,8 @@ use gfm_types::{FileKind, Result, SearchHit};
 use std::env;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+mod packaging;
 
 fn main() {
     if let Err(err) = run() {
@@ -394,49 +392,11 @@ fn run() -> Result<()> {
                 )));
             }
         }
-        Some("release-policy") => {
-            let policy = ReleasePolicy::default();
-            policy.validate()?;
-            print_release_policy(&policy);
-        }
-        Some("bundle-app") => {
-            let executable = required_path(args.next(), "bundle-app requires an executable path")?;
-            let icon = required_path(args.next(), "bundle-app requires an icon path")?;
-            let output_dir = required_path(args.next(), "bundle-app requires an output directory")?;
-            let mut spec = AppBundleSpec::new(executable, icon, output_dir);
-            spec.signing_identity = match args.next().as_deref() {
-                Some("--unsigned") => SigningIdentity::Unsigned,
-                Some("--ad-hoc") | None => SigningIdentity::AdHoc,
-                Some(identity) => SigningIdentity::DeveloperId(identity.to_string()),
-            };
-            let bundle = build_app_bundle(&spec)?;
-            println!(
-                "{}\t{}\t{}",
-                bundle.app_path.display(),
-                bundle.executable_path.display(),
-                bundle.signed
-            );
-        }
-        Some("register-app") => {
-            let app_path = required_path(args.next(), "register-app requires an .app path")?;
-            register_launch_services(&app_path)?;
-            println!("{}", app_path.display());
-        }
-        Some("notarize-app") => {
-            let app_path = required_path(args.next(), "notarize-app requires an .app path")?;
-            let output_dir =
-                required_path(args.next(), "notarize-app requires an output directory")?;
-            let credentials = notarization_credentials(&mut args)?;
-            let ticket =
-                notarize_app_bundle(&NotarizationSpec::new(app_path, output_dir, credentials))?;
-            println!(
-                "{}\t{}\t{:?}\t{}",
-                ticket.submission_id,
-                ticket.archive_path.display(),
-                ticket.status,
-                ticket.stapled
-            );
-        }
+        Some("release-policy") => packaging::release_policy()?,
+        Some("release-validate") => packaging::release_validate(&mut args)?,
+        Some("bundle-app") => packaging::bundle_app(&mut args)?,
+        Some("register-app") => packaging::register_app(&mut args)?,
+        Some("notarize-app") => packaging::notarize_app(&mut args)?,
         Some("jobs-recover") => {
             let journal = args
                 .next()
@@ -520,107 +480,6 @@ fn macrobench_options(
         }
     }
     Ok(options)
-}
-
-fn notarization_credentials(
-    args: &mut impl Iterator<Item = String>,
-) -> Result<NotarizationCredentials> {
-    match args.next().as_deref() {
-        Some("--keychain-profile") => args
-            .next()
-            .map(NotarizationCredentials::KeychainProfile)
-            .ok_or_else(|| {
-                gfm_types::GfmError::Format(
-                    "notarize-app --keychain-profile requires a profile name".to_string(),
-                )
-            }),
-        Some("--apple-id") => {
-            let apple_id = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format(
-                    "notarize-app --apple-id requires an Apple ID".to_string(),
-                )
-            })?;
-            let Some(team_flag) = args.next() else {
-                return Err(gfm_types::GfmError::Format(
-                    "notarize-app --apple-id requires --team-id".to_string(),
-                ));
-            };
-            if team_flag != "--team-id" {
-                return Err(gfm_types::GfmError::Format(format!(
-                    "expected --team-id after --apple-id, got {team_flag}"
-                )));
-            }
-            let team_id = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format("notarize-app --team-id requires a team ID".to_string())
-            })?;
-            let Some(password_flag) = args.next() else {
-                return Err(gfm_types::GfmError::Format(
-                    "notarize-app --apple-id requires --password".to_string(),
-                ));
-            };
-            if password_flag != "--password" {
-                return Err(gfm_types::GfmError::Format(format!(
-                    "expected --password after --team-id, got {password_flag}"
-                )));
-            }
-            let password = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format(
-                    "notarize-app --password requires an app-specific password".to_string(),
-                )
-            })?;
-            Ok(NotarizationCredentials::AppleId {
-                apple_id,
-                team_id,
-                password,
-            })
-        }
-        Some("--api-key") => {
-            let key_path = required_path(
-                args.next(),
-                "notarize-app --api-key requires a .p8 key path",
-            )?;
-            let Some(key_id_flag) = args.next() else {
-                return Err(gfm_types::GfmError::Format(
-                    "notarize-app --api-key requires --key-id".to_string(),
-                ));
-            };
-            if key_id_flag != "--key-id" {
-                return Err(gfm_types::GfmError::Format(format!(
-                    "expected --key-id after --api-key, got {key_id_flag}"
-                )));
-            }
-            let key_id = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format("notarize-app --key-id requires a key ID".to_string())
-            })?;
-            let Some(issuer_flag) = args.next() else {
-                return Err(gfm_types::GfmError::Format(
-                    "notarize-app --api-key requires --issuer".to_string(),
-                ));
-            };
-            if issuer_flag != "--issuer" {
-                return Err(gfm_types::GfmError::Format(format!(
-                    "expected --issuer after --key-id, got {issuer_flag}"
-                )));
-            }
-            let issuer_id = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format(
-                    "notarize-app --issuer requires an issuer ID".to_string(),
-                )
-            })?;
-            Ok(NotarizationCredentials::ApiKey {
-                key_id,
-                issuer_id,
-                key_path,
-            })
-        }
-        Some(other) => Err(gfm_types::GfmError::Format(format!(
-            "unknown notarize-app credential flag {other}"
-        ))),
-        None => Err(gfm_types::GfmError::Format(
-            "notarize-app requires --keychain-profile, --apple-id, or --api-key credentials"
-                .to_string(),
-        )),
-    }
 }
 
 fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<()> {
@@ -813,38 +672,6 @@ fn macrobench_stage(stage: MacrobenchStage) -> &'static str {
     }
 }
 
-fn print_release_policy(policy: &ReleasePolicy) {
-    println!("channel\t{}", policy.channel.as_str());
-    println!(
-        "updates\t{}\tfeed={}\tinterval={}\trollout={}\trequire-notarized={}",
-        policy.updates.mode.as_str(),
-        policy.updates.feed_url.as_deref().unwrap_or("-"),
-        policy.updates.minimum_interval_secs,
-        policy.updates.staged_rollout_percent,
-        policy.updates.require_notarized
-    );
-    println!(
-        "rollback\tenabled={}\tretained={}\trequire-signed={}\tpreserve-user-state={}",
-        policy.rollback.enabled,
-        policy.rollback.retained_versions,
-        policy.rollback.require_signed_previous,
-        policy.rollback.preserve_user_state
-    );
-    println!(
-        "crash-reports\t{}\tremote-allowed={}\tretention-days={}\tinclude-minidump={}",
-        policy.crash_reports.mode.as_str(),
-        policy.remote_crash_upload_allowed(),
-        policy.crash_reports.retention_days,
-        policy.crash_reports.include_minidump
-    );
-    println!(
-        "diagnostics\t{}\tremote-allowed={}\tretention-days={}",
-        policy.diagnostics.mode.as_str(),
-        policy.remote_diagnostics_upload_allowed(),
-        policy.diagnostics.retention_days
-    );
-}
-
 fn print_usage() {
     println!(
         "gfm commands:
@@ -873,6 +700,7 @@ fn print_usage() {
   gfm macrobench <workspace> [smoke|standard]
   gfm regression-gate <workspace> [smoke|standard]
   gfm release-policy
+  gfm release-validate <GFM.app> [--allow-unsigned] [--skip-notarization] [--skip-gatekeeper]
   gfm bundle-app <executable> <GFM.icns> <output-dir> [--ad-hoc|--unsigned|developer-id]
   gfm register-app <GFM.app>
   gfm notarize-app <GFM.app> <output-dir> --keychain-profile <profile>

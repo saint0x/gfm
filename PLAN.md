@@ -306,6 +306,7 @@ gfm/
 - Supports keychain-profile, Apple ID, and App Store Connect API key credential modes without storing secrets in project files.
 - Exposes Launch Services registration as an explicit operator command so release/install flows can register GFM without hiding host mutation inside validation.
 - Owns the release policy contract for update channels, HTTPS update feeds, notarized update staging, bounded rollback retention, local-only crash reports, and privacy-reviewed diagnostics.
+- Validates release artifacts on clean macOS hosts by checking bundle layout, Finder document associations, minimum macOS version, executable permissions, code signature, stapled notarization ticket, and Gatekeeper assessment without mutating machine state.
 
 ## Data Model
 
