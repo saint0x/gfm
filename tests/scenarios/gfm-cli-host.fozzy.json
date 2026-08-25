@@ -363,6 +363,12 @@
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["parity-profile", "25A354", "dark", "2x", "display-p3"],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["release-policy"],
       "expect_exit": 0
     },

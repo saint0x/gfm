@@ -2,6 +2,7 @@ mod gates;
 mod macrobench;
 mod parity;
 mod parity_gate;
+mod parity_profile;
 mod pixel;
 
 pub use gates::{
@@ -20,6 +21,10 @@ pub use parity_gate::{
     parse_parity_gate_manifest, run_parity_gate, run_parity_gate_manifest,
     write_parity_review_bundle, write_parity_review_bundle_manifest, ParityGateEntryReport,
     ParityGateInput, ParityGateReport, ParityReviewBundle,
+};
+pub use parity_profile::{
+    ColorProfile, DimensionToken, DisplayScale, MacOsParityProfile, MaterialToken,
+    ParityAppearance, SymbolToken, TimingToken, TypographyToken,
 };
 pub use pixel::{
     diff_rgba, diff_rgba_files, evaluate_pixel_threshold, parse_masks, read_mask_file,

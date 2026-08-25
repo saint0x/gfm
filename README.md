@@ -236,6 +236,7 @@ cargo run -p gfm -- pixel-diff expected.rgba actual.rgba 3024 1890 masks.tsv
 cargo run -p gfm -- pixel-threshold-check toolbar expected.rgba actual.rgba 3024 1890 masks.tsv
 cargo run -p gfm -- parity-gate parity-gate.tsv
 cargo run -p gfm -- parity-review parity-gate.tsv /tmp/gfm-parity-review
+cargo run -p gfm -- parity-profile 25A354 dark 2x display-p3
 cargo run -p gfm -- regression-gate /tmp/gfm-bench smoke
 ```
 

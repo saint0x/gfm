@@ -25,9 +25,10 @@ use gfm_store::ContentArchive;
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_parity_fixture, read_mask_file,
     run_macrobench, run_parity_gate_manifest, run_regression_gate,
-    write_parity_review_bundle_manifest, MacrobenchOptions, MacrobenchScale, MacrobenchStage,
-    ParityFixtureOptions, ParityFixtureScale, ParitySurface, PixelDiffOptions, PixelDriftThreshold,
-    PixelSize, RegressionGateOptions,
+    write_parity_review_bundle_manifest, ColorProfile, DisplayScale, MacOsParityProfile,
+    MacrobenchOptions, MacrobenchScale, MacrobenchStage, ParityAppearance, ParityFixtureOptions,
+    ParityFixtureScale, ParitySurface, PixelDiffOptions, PixelDriftThreshold, PixelSize,
+    RegressionGateOptions,
 };
 use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
 use gfm_ui::{
@@ -714,6 +715,17 @@ fn run() -> Result<()> {
                 )));
             }
         }
+        Some("parity-profile") => {
+            let macos_build = args.next().ok_or_else(|| {
+                GfmError::Format("parity-profile requires a macOS build".to_string())
+            })?;
+            let appearance = parse_parity_appearance(args.next())?;
+            let scale = parse_display_scale(args.next())?;
+            let color_profile = parse_color_profile(args.next())?;
+            let profile =
+                MacOsParityProfile::finder_default(macos_build, appearance, scale, color_profile)?;
+            println!("{}", profile.as_tsv());
+        }
         Some("regression-gate") => {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
             let run = run_regression_gate(&options, RegressionGateOptions::default())?;
@@ -1068,6 +1080,27 @@ fn parse_preview_kind(value: Option<String>) -> Result<PreviewKind> {
     }
 }
 
+fn parse_parity_appearance(value: Option<String>) -> Result<ParityAppearance> {
+    value
+        .unwrap_or_else(|| "system".to_string())
+        .parse::<ParityAppearance>()
+        .map_err(GfmError::Format)
+}
+
+fn parse_display_scale(value: Option<String>) -> Result<DisplayScale> {
+    value
+        .unwrap_or_else(|| "2x".to_string())
+        .parse::<DisplayScale>()
+        .map_err(GfmError::Format)
+}
+
+fn parse_color_profile(value: Option<String>) -> Result<ColorProfile> {
+    value
+        .unwrap_or_else(|| "srgb".to_string())
+        .parse::<ColorProfile>()
+        .map_err(GfmError::Format)
+}
+
 fn preview_task(node: u64, x: i32, y: i32) -> PreviewTask {
     PreviewTask::new(
         PreviewRequestKey::new(
@@ -1130,6 +1163,7 @@ fn print_usage() {
   gfm pixel-threshold-check <layout|text|icon|selection|focus|hover|toolbar|thumbnail|preview> <expected.rgba> <actual.rgba> <width> <height> [mask.tsv]
   gfm parity-gate <manifest.tsv>
   gfm parity-review <manifest.tsv> <output-dir>
+  gfm parity-profile <macos-build> [system|light|dark] [1x|2x|3x] [srgb|display-p3]
   gfm regression-gate <workspace> [smoke|standard]
   gfm release-policy
   gfm release-validate <GFM.app> [--allow-unsigned] [--skip-notarization] [--skip-gatekeeper]

@@ -210,6 +210,33 @@ fn writes_parity_review_bundle_from_binary_manifest() {
 }
 
 #[test]
+fn reports_parity_profile_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["parity-profile", "25A354", "dark", "2x", "display-p3"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("profile\tbuild=25A354\tappearance=dark\tscale=2x"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("dimension\ttoolbar.height\t54px\tui/toolbar"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("symbol\tview.column\trectangle.split.3x1"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn runs_regression_gate_from_binary() {
     let root = unique_temp_dir("gfm-cli-regression-gate");
 
