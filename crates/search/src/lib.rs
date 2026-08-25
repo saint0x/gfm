@@ -32,6 +32,7 @@ const FUZZY_MIN_TERM_LEN: usize = 2;
 const FUZZY_MAX_TERM_LEN: usize = 32;
 const PREFIX_MIN_TERM_LEN: usize = 1;
 const PREFIX_MAX_TERM_LEN: usize = 32;
+const SUBSTRING_GRAM_CHARS: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchLookupBudget {
@@ -194,6 +195,7 @@ pub struct SearchIndex {
     paths: HashMap<String, FileId>,
     name_exact: BTreeMap<String, BTreeSet<FileId>>,
     name_prefixes: BTreeMap<String, BTreeSet<FileId>>,
+    name_substrings: BTreeMap<String, BTreeSet<FileId>>,
     name_terms: BTreeMap<String, BTreeSet<FileId>>,
     path_terms: BTreeMap<String, BTreeSet<FileId>>,
     metadata_terms: BTreeMap<String, BTreeSet<FileId>>,
@@ -760,7 +762,8 @@ impl SearchIndex {
         }
 
         if scores.len() < limit {
-            for record in self.records.values() {
+            let candidates = self.name_substring_candidates(&text);
+            for record in candidates {
                 cancellation.check()?;
                 if !text.is_empty()
                     && self
@@ -1166,6 +1169,12 @@ impl SearchIndex {
                 self.add_fuzzy_term(token);
             }
         }
+        for gram in substring_grams(&columns.name) {
+            self.name_substrings
+                .entry(gram)
+                .or_default()
+                .insert(record.id);
+        }
         for token in &columns.path_tokens {
             self.path_terms
                 .entry(token.clone())
@@ -1198,6 +1207,9 @@ impl SearchIndex {
             .cloned()
             .unwrap_or_else(|| RecordColumns::from_record(record));
         remove_id(&mut self.name_exact, &columns.name, record.id);
+        for gram in substring_grams(&columns.name) {
+            remove_id(&mut self.name_substrings, &gram, record.id);
+        }
         for token in &columns.name_tokens {
             remove_id(&mut self.name_terms, token, record.id);
             for prefix in token_prefixes(token) {
@@ -1278,6 +1290,35 @@ impl SearchIndex {
                 .any(|candidate| bounded_levenshtein(candidate, term, 2).is_some())
         })
     }
+
+    fn name_substring_candidates(&self, text: &str) -> Vec<&FileRecord> {
+        if text.is_empty() {
+            return Vec::new();
+        }
+        let grams = substring_grams(text);
+        if grams.is_empty() {
+            return self.records.values().collect();
+        }
+        let mut gram_sets = grams
+            .iter()
+            .filter_map(|gram| self.name_substrings.get(gram))
+            .collect::<Vec<_>>();
+        if gram_sets.len() != grams.len() {
+            return Vec::new();
+        }
+        gram_sets.sort_by_key(|ids| ids.len());
+        let mut candidates = gram_sets[0].clone();
+        for ids in gram_sets.iter().skip(1) {
+            candidates.retain(|id| ids.contains(id));
+            if candidates.is_empty() {
+                break;
+            }
+        }
+        candidates
+            .into_iter()
+            .filter_map(|id| self.records.get(&id))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1328,6 +1369,24 @@ fn token_prefixes(term: &str) -> impl Iterator<Item = String> + '_ {
         .chain(std::iter::once(term.len()))
         .take(PREFIX_MAX_TERM_LEN)
         .map(|end| term[..end].to_string())
+}
+
+fn substring_grams(value: &str) -> Vec<String> {
+    let mut starts = value
+        .char_indices()
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    starts.push(value.len());
+    if starts.len() <= SUBSTRING_GRAM_CHARS {
+        return Vec::new();
+    }
+    let mut grams = starts
+        .windows(SUBSTRING_GRAM_CHARS + 1)
+        .map(|window| value[window[0]..window[SUBSTRING_GRAM_CHARS]].to_string())
+        .collect::<Vec<_>>();
+    grams.sort();
+    grams.dedup();
+    grams
 }
 
 fn expression_needs_universe(expression: &QueryExpr) -> bool {

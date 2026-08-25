@@ -32,6 +32,33 @@ fn removes_reindexed_records() {
 }
 
 #[test]
+fn name_substring_index_finds_infix_matches_without_token_prefix() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/a.pdf", "report.pdf"));
+    index.insert(record(2, "/tmp/b.pdf", "notes.pdf"));
+
+    let hits = index.query("port", 10);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.name, "report.pdf");
+    assert_eq!(hits[0].reason, MatchReason::SubstringName);
+}
+
+#[test]
+fn reindexed_records_remove_stale_name_substring_postings() {
+    let mut index = SearchIndex::new();
+    let mut item = record(1, "/tmp/a.pdf", "report.pdf");
+    index.insert(item.clone());
+
+    item.name = "notes.pdf".to_string();
+    item.path = PathBuf::from("/tmp/b.pdf");
+    index.insert(item);
+
+    assert!(index.query("port", 10).is_empty());
+    assert_eq!(index.query("ote", 10).len(), 1);
+}
+
+#[test]
 fn reindexed_records_refresh_cached_columns() {
     let mut index = SearchIndex::new();
     let mut item = record(1, "/tmp/alpha.md", "alpha.md");

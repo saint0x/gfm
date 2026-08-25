@@ -95,7 +95,7 @@ The index is compact and incremental:
 - mmap-backed index footprint telemetry with adaptive run/throttle/defer compaction scheduling
 - hot mutable buffers
 - progressive hot/deep result streaming with stable dedupe
-- delete-key fuzzy candidate indexes for typo tolerance without full-record scans
+- name substring n-gram candidates and delete-key fuzzy candidate indexes for infix and typo-tolerant matches without full-record scans
 - archive-backed prefix and fuzzy lookup with explicit candidate budgets, adaptive prefix cutoffs, lookup cache telemetry, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
 - exact phrase and `near:N:alpha,beta` positional content retrieval
 - bounded snippets with highlighted content matches
