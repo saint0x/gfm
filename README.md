@@ -164,6 +164,7 @@ cargo run -p gfm -- ui-titlebar-contract ~/Desktop
 cargo run -p gfm -- ui-session-contract ~/Desktop
 cargo run -p gfm -- ui-toolbar-contract ~/Desktop
 cargo run -p gfm -- ui-sidebar-contract ~/Desktop
+cargo run -p gfm -- ui-icon-view-contract ~/Desktop 6 4 0
 ```
 
 Search directly:

@@ -259,6 +259,37 @@ fn reports_ui_sidebar_contract_from_binary() {
 }
 
 #[test]
+fn reports_ui_icon_view_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-icon-view-contract-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("Folder")).unwrap();
+    std::fs::write(root.join("Note.txt"), "note").unwrap();
+    std::fs::write(root.join(".hidden"), "hidden").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-icon-view-contract")
+        .arg(&root)
+        .args(["2", "2", "0"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("icon-view\tsort=finder-name\ticon=64px"));
+    assert!(stdout.contains("\ttotal=2\t"));
+    assert!(stdout.contains("hidden-filtered=1"));
+    assert!(stdout.contains("cell\t0\t"));
+    assert!(stdout.contains("\tdir\t0x0\tFolder\t"));
+    assert!(stdout.contains("\tfile\t112x0\tNote.txt\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_preview_security_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["preview-check", "/tmp/example.app", "quick-look"])

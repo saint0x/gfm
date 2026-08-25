@@ -11,6 +11,7 @@ use std::sync::{
 
 mod context;
 mod dialog;
+mod icon;
 mod menu;
 mod session;
 mod sidebar;
@@ -23,6 +24,9 @@ pub use context::{
 pub use dialog::{
     DialogButtonRole, DialogButtonSpec, DialogContract, DialogFieldKind, DialogFieldSpec,
     DialogPresentation, DialogSurface,
+};
+pub use icon::{
+    IconBadge, IconCellSpec, IconRole, IconSortMode, IconViewContract, IconViewOptions,
 };
 pub use menu::{MenuCommandSpec, MenuCommandState, MenuContract};
 pub use session::{
@@ -177,6 +181,7 @@ fn open_main_window(
             bounds_subscription: None,
             session_writer: WindowSessionWriter::new(session_store),
             sidebar: sidebar::SidebarContract::discover(&spec.initial_path),
+            icon_view: IconViewContract::from_records(&[], IconViewOptions::default()),
             initial_path: spec.initial_path,
         })
     })?;
@@ -240,6 +245,7 @@ struct RootView {
     bounds_subscription: Option<Subscription>,
     session_writer: WindowSessionWriter,
     sidebar: SidebarContract,
+    icon_view: IconViewContract,
     initial_path: PathBuf,
 }
 
@@ -264,7 +270,7 @@ impl Render for RootView {
                     .flex_1()
                     .w_full()
                     .child(sidebar::render(&self.sidebar))
-                    .child(div().flex_1().h_full().bg(rgb(0x1e1e1e))),
+                    .child(div().flex_1().h_full().child(icon::render(&self.icon_view))),
             )
     }
 }

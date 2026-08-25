@@ -33,8 +33,9 @@ use gfm_testkit::{
 use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
 use gfm_ui::{
     AppLaunchSpec, ContextMenuContract, ContextMenuInput, ContextSurface, DialogContract,
-    DialogSurface, MenuContract, SidebarContract, TitlebarContract, ToolbarContract,
-    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    DialogSurface, IconViewContract, IconViewOptions, MenuContract, SidebarContract,
+    TitlebarContract, ToolbarContract, WindowLifecycleContract, WindowSessionContract,
+    WindowSessionStore,
 };
 use std::env;
 use std::path::PathBuf;
@@ -148,6 +149,36 @@ fn run() -> Result<()> {
                 None => env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
             };
             println!("{}", SidebarContract::discover(path).as_tsv());
+        }
+        Some("ui-icon-view-contract") => {
+            let path = required_path(
+                args.next(),
+                "ui-icon-view-contract requires a directory path",
+            )?;
+            let columns = args
+                .next()
+                .map(|value| parse_u16(&value, "columns"))
+                .transpose()?
+                .unwrap_or(6);
+            let viewport_rows = args
+                .next()
+                .map(|value| parse_u16(&value, "viewport-rows"))
+                .transpose()?
+                .unwrap_or(4);
+            let scroll_row = args
+                .next()
+                .map(|value| parse_u16(&value, "scroll-row"))
+                .transpose()?
+                .unwrap_or(0);
+            let page = read_directory(&path)?;
+            let options = IconViewOptions::default()
+                .with_columns(columns)
+                .with_viewport_rows(viewport_rows)
+                .with_scroll_row(scroll_row);
+            println!(
+                "{}",
+                IconViewContract::from_records(&page.entries, options).as_tsv()
+            );
         }
         Some("list") => {
             let path = args
@@ -1132,6 +1163,7 @@ fn print_usage() {
   gfm ui-session-contract [path] [window-session.tsv]
   gfm ui-toolbar-contract [path]
   gfm ui-sidebar-contract [path]
+  gfm ui-icon-view-contract <path> [columns] [viewport-rows] [scroll-row]
   gfm list [path]
   gfm index <root> <output.gfmidx>
   gfm index-content <root> <records.gfmidx> <content.gfmcontent>
