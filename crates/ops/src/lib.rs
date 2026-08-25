@@ -1155,6 +1155,12 @@ fn copy_path_with_session(
     {
         return copy_symlink_replacing_existing(from, to, progress);
     }
+    if conflict == ConflictPolicy::Replace
+        && metadata.is_dir()
+        && replacement_destination_is_directory(to)
+    {
+        return copy_directory_replacing_existing(from, to, execution, progress, session);
+    }
     prepare_destination(to, conflict)?;
     if metadata.file_type().is_symlink() {
         copy_symlink(from, to, progress)
@@ -1202,6 +1208,38 @@ fn copy_file_replacing_existing(
     result
 }
 
+fn copy_directory_replacing_existing(
+    from: &Path,
+    to: &Path,
+    execution: CopyExecution<'_>,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+    session: &mut CopySession,
+) -> Result<()> {
+    progress.check_cancelled()?;
+    let source_metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+    let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
+    if metadata_same_file(&source_metadata, &destination_metadata) {
+        return progress.complete();
+    }
+    let stage = allocate_replace_stage_path(to)?;
+    let backup = allocate_replace_backup_path(to)?;
+    let result = (|| {
+        copy_directory(
+            from,
+            &stage,
+            execution,
+            CopyExistingMode::Fresh,
+            progress,
+            session,
+        )?;
+        commit_staged_directory_replace(&stage, to, &backup)
+    })();
+    if result.is_err() && path_exists_or_symlink(&stage) {
+        let _ = delete_path_untracked(&stage);
+    }
+    result
+}
+
 fn copy_symlink_replacing_existing(
     from: &Path,
     to: &Path,
@@ -1242,7 +1280,21 @@ fn replacement_destination_is_non_directory(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn replacement_destination_is_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+}
+
 fn allocate_replace_stage_path(to: &Path) -> Result<PathBuf> {
+    allocate_hidden_sibling_path(to, "gfm-replace")
+}
+
+fn allocate_replace_backup_path(to: &Path) -> Result<PathBuf> {
+    allocate_hidden_sibling_path(to, "gfm-replaced")
+}
+
+fn allocate_hidden_sibling_path(to: &Path, label: &str) -> Result<PathBuf> {
     let parent = to.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     let file_name = to
@@ -1252,19 +1304,51 @@ fn allocate_replace_stage_path(to: &Path) -> Result<PathBuf> {
         .unwrap_or("copy");
     let nonce = now_nanos();
     for attempt in 0..100_u32 {
-        let candidate = parent.join(format!(".{}.gfm-replace-{}-{}", file_name, nonce, attempt));
+        let candidate = parent.join(format!(".{}.{}-{}-{}", file_name, label, nonce, attempt));
         if !path_exists_or_symlink(&candidate) {
             return Ok(candidate);
         }
     }
     Err(GfmError::Conflict {
         path: to.to_path_buf(),
-        message: "could not allocate a safe replace staging path".to_string(),
+        message: format!("could not allocate a safe {label} sibling path"),
     })
 }
 
 fn rename_replacing_file(from: &Path, to: &Path) -> Result<()> {
     fs::rename(from, to).map_err(|err| GfmError::io(to, err))
+}
+
+fn commit_staged_directory_replace(stage: &Path, to: &Path, backup: &Path) -> Result<()> {
+    fs::rename(to, backup).map_err(|err| GfmError::io(to, err))?;
+    match fs::rename(stage, to) {
+        Ok(()) => {
+            if let Err(cleanup_err) = delete_path_untracked(backup) {
+                return Err(GfmError::Format(format!(
+                    "replaced {} but failed to remove previous destination backup {}: {}",
+                    to.display(),
+                    backup.display(),
+                    cleanup_err
+                )));
+            }
+            Ok(())
+        }
+        Err(replace_err) => {
+            let restore_result = fs::rename(backup, to);
+            if let Err(restore_err) = restore_result {
+                return Err(GfmError::Format(format!(
+                    "failed to install staged replacement {} -> {}: {}; also failed to restore previous destination {} -> {}: {}",
+                    stage.display(),
+                    to.display(),
+                    replace_err,
+                    backup.display(),
+                    to.display(),
+                    restore_err
+                )));
+            }
+            Err(GfmError::io(to, replace_err))
+        }
+    }
 }
 
 fn move_path(
@@ -3841,6 +3925,90 @@ mod tests {
 
         fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
         fs::set_permissions(&destination, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_replace_directory_uses_staged_destination() {
+        let root = unique_temp_dir("gfm-ops-copy-replace-directory");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("nested").join("new.txt"), "new").unwrap();
+        fs::create_dir_all(destination.join("nested")).unwrap();
+        fs::write(destination.join("nested").join("old.txt"), "old").unwrap();
+
+        Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::Replace))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(destination.join("nested").join("new.txt")).unwrap(),
+            "new"
+        );
+        assert!(!destination.join("nested").join("old.txt").exists());
+        assert_eq!(
+            fs::read_to_string(source.join("nested").join("new.txt")).unwrap(),
+            "new"
+        );
+        let leaked_replace_sibling = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| entry.file_name().to_string_lossy().contains(".gfm-replace"));
+        assert!(!leaked_replace_sibling);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_copy_replace_directory_preserves_existing_destination() {
+        let root = unique_temp_dir("gfm-ops-copy-replace-directory-cancel");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("nested").join("new.txt"), "new").unwrap();
+        fs::create_dir_all(destination.join("nested")).unwrap();
+        fs::write(destination.join("nested").join("old.txt"), "old").unwrap();
+        let cancellation = OperationCancellation::default();
+        let cancellation_callback = cancellation.clone();
+
+        let err = Operator::new(
+            OperationContext::new(&journal)
+                .with_conflict(ConflictPolicy::Replace)
+                .with_cancellation(cancellation),
+        )
+        .execute_with_progress(
+            Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            },
+            |event| {
+                if event.phase == OperationProgressPhase::Advanced
+                    && event.progress.completed_items == 1
+                {
+                    cancellation_callback.cancel();
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert_eq!(
+            fs::read_to_string(destination.join("nested").join("old.txt")).unwrap(),
+            "old"
+        );
+        assert!(!destination.join("nested").join("new.txt").exists());
+        let leaked_replace_sibling = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| entry.file_name().to_string_lossy().contains(".gfm-replace"));
+        assert!(!leaked_replace_sibling);
+
         fs::remove_dir_all(root).unwrap();
     }
 
