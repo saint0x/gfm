@@ -11,6 +11,7 @@ use gfm_types::{
     ContentSegment, DirectoryPage, FileEvent, FileEventKind, FileId, FileRecord, GfmError, Result,
     ScanIssue, SearchHit,
 };
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -178,6 +179,28 @@ impl LiveIndex {
             live.index.insert(record);
         }
         live
+    }
+
+    pub fn from_records_with_columns(
+        records: Vec<FileRecord>,
+        columns: Vec<SearchRecordColumns>,
+    ) -> (Self, usize) {
+        let mut live = Self::new();
+        let mut columns_by_id = columns
+            .into_iter()
+            .map(|columns| (columns.id, columns))
+            .collect::<HashMap<_, _>>();
+        let mut applied = 0usize;
+        for record in records {
+            if let Some(columns) = columns_by_id.remove(&record.id) {
+                if live.index.insert_with_columns(record, columns) {
+                    applied += 1;
+                }
+            } else {
+                live.index.insert(record);
+            }
+        }
+        (live, applied)
     }
 
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {

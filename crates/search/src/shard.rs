@@ -37,6 +37,21 @@ impl ShardedSearchIndex {
         self.prune_empty_shards();
     }
 
+    pub fn insert_with_columns(
+        &mut self,
+        record: FileRecord,
+        columns: SearchRecordColumns,
+    ) -> bool {
+        self.remove_path(&record.path);
+        let inserted = self
+            .shards
+            .entry(record.id.volume)
+            .or_default()
+            .insert_with_columns(record, columns);
+        self.prune_empty_shards();
+        inserted
+    }
+
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {
         self.shards
             .get_mut(&columns.id.volume)

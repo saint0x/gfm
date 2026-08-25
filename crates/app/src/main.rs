@@ -833,22 +833,21 @@ fn run() -> Result<()> {
             })?;
             let records = MmapRecordArchive::open(records)?;
             let columns = MmapRecordColumns::open(columns)?;
-            let mut live = LiveIndex::from_records(records.records()?);
-            let mut applied = 0usize;
+            let mut search_columns = Vec::with_capacity(columns.len());
             for index in 0..columns.len() {
                 let column = columns.column(index)?;
-                if live.apply_record_columns(SearchRecordColumns {
+                search_columns.push(SearchRecordColumns {
                     id: column.id,
                     name: column.name,
                     path: column.path,
                     extension: column.extension,
                     tags: column.tags,
                     comment: column.comment,
-                }) {
-                    applied += 1;
-                }
+                });
             }
-            eprintln!("columns-applied {applied}");
+            let (live, applied) =
+                LiveIndex::from_records_with_columns(records.records()?, search_columns);
+            eprintln!("columns-indexed {applied}");
             for hit in live.search(&query, 50) {
                 print_hit(&hit);
             }

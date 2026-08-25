@@ -89,6 +89,29 @@ impl SearchIndex {
         self.records.insert(id, record);
     }
 
+    pub fn insert_with_columns(
+        &mut self,
+        record: FileRecord,
+        columns: SearchRecordColumns,
+    ) -> bool {
+        if record.id != columns.id {
+            self.insert(record);
+            return false;
+        }
+        let id = record.id;
+        if let Some(old) = self.records.remove(&id) {
+            self.remove_terms(&old);
+            self.columns.remove(&id);
+            self.paths.remove(&path_key(&old.path));
+        }
+        let normalized = RecordColumns::from_search_columns(&columns);
+        self.add_terms(&record, &normalized);
+        self.paths.insert(path_key(&record.path), id);
+        self.columns.insert(id, normalized);
+        self.records.insert(id, record);
+        true
+    }
+
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {
         let Some(record) = self.records.get(&columns.id).cloned() else {
             return false;

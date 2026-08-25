@@ -1,4 +1,5 @@
 use super::*;
+use gfm_types::{FileKind, VolumeId};
 use std::collections::HashSet;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,6 +22,47 @@ fn builds_saves_loads_and_searches_snapshot() {
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(output).unwrap();
+}
+
+#[test]
+fn live_index_builds_from_records_with_columns_in_one_pass() {
+    let record = FileRecord {
+        id: FileId::new(VolumeId(1), 1),
+        parent: None,
+        path: PathBuf::from("/tmp/original.txt"),
+        name: "original.txt".to_string(),
+        kind: FileKind::File,
+        len: 0,
+        created: Some(UNIX_EPOCH),
+        modified: Some(SystemTime::now()),
+        changed: Some(SystemTime::now()),
+        mode: 0o644,
+        owner: 501,
+        group: 20,
+        hidden: false,
+        tags: Vec::new(),
+        finder_comment: None,
+        xattrs_digest: 0,
+    };
+
+    let (live, applied) = LiveIndex::from_records_with_columns(
+        vec![record.clone()],
+        vec![SearchRecordColumns {
+            id: record.id,
+            name: "cached.md".to_string(),
+            path: "/tmp/cached.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: vec!["Important".to_string()],
+            comment: Some("Launch Notes".to_string()),
+        }],
+    );
+
+    assert_eq!(applied, 1);
+    assert!(live.search("original", 5).is_empty());
+    assert_eq!(
+        live.search("cached tag:important launch ext:md", 5).len(),
+        1
+    );
 }
 
 #[test]

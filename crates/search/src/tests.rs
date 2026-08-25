@@ -73,6 +73,84 @@ fn applied_record_columns_drive_matching_and_filters() {
 }
 
 #[test]
+fn inserted_record_columns_build_terms_without_reindexing_record_fields() {
+    let mut index = SearchIndex::new();
+    let item = record(1, "/tmp/original.txt", "original.txt");
+
+    assert!(index.insert_with_columns(
+        item,
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(1), 1),
+            name: "cached.md".to_string(),
+            path: "/tmp/cached.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: vec!["Important".to_string()],
+            comment: Some("Launch Notes".to_string()),
+        },
+    ));
+
+    assert!(index.query("original", 10).is_empty());
+    assert_eq!(
+        index.query("cached tag:important launch ext:md", 10).len(),
+        1
+    );
+}
+
+#[test]
+fn reinserting_record_columns_removes_stale_sidecar_terms() {
+    let mut index = SearchIndex::new();
+    let item = record(1, "/tmp/original.txt", "original.txt");
+    assert!(index.insert_with_columns(
+        item.clone(),
+        SearchRecordColumns {
+            id: item.id,
+            name: "cached.md".to_string(),
+            path: "/tmp/cached.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: vec!["Important".to_string()],
+            comment: Some("Launch Notes".to_string()),
+        },
+    ));
+    assert!(index.insert_with_columns(
+        item.clone(),
+        SearchRecordColumns {
+            id: item.id,
+            name: "fresh.pdf".to_string(),
+            path: "/tmp/fresh.pdf".to_string(),
+            extension: Some("pdf".to_string()),
+            tags: vec!["Later".to_string()],
+            comment: Some("Archive Notes".to_string()),
+        },
+    ));
+
+    assert!(index
+        .query("cached tag:important launch ext:md", 10)
+        .is_empty());
+    assert_eq!(index.query("fresh tag:later archive ext:pdf", 10).len(), 1);
+}
+
+#[test]
+fn mismatched_record_columns_fall_back_to_record_indexing() {
+    let mut index = SearchIndex::new();
+    let item = record(1, "/tmp/original.txt", "original.txt");
+
+    assert!(!index.insert_with_columns(
+        item,
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(1), 99),
+            name: "cached.md".to_string(),
+            path: "/tmp/cached.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: Vec::new(),
+            comment: None,
+        },
+    ));
+
+    assert_eq!(index.query("original", 10).len(), 1);
+    assert!(index.query("cached ext:md", 10).is_empty());
+}
+
+#[test]
 fn name_prefix_postings_drive_interactive_prefix_search() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/project-plan.md", "project-plan.md"));
