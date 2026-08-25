@@ -168,7 +168,26 @@ fn run() -> Result<()> {
                 .unwrap_or_else(|| "alert".to_string())
                 .parse::<DialogSurface>()
                 .map_err(GfmError::Format)?;
-            println!("{}", DialogContract::finder_default(surface).as_tsv());
+            let contract = if surface == DialogSurface::Progress {
+                let paused = match args.next().as_deref() {
+                    Some("paused") => true,
+                    Some("running") | None => false,
+                    Some(other) => {
+                        return Err(GfmError::Format(format!(
+                            "progress dialog state must be running or paused; got `{other}`"
+                        )));
+                    }
+                };
+                let cancellable = args
+                    .next()
+                    .map(|value| parse_bool(&value, "progress cancellable"))
+                    .transpose()?
+                    .unwrap_or(true);
+                DialogContract::operation_progress(paused, cancellable)
+            } else {
+                DialogContract::finder_default(surface)
+            };
+            println!("{}", contract.as_tsv());
         }
         Some("ui-titlebar-contract") => {
             let spec = match args.next() {
@@ -5236,7 +5255,7 @@ fn print_usage() {
   gfm ui-contract [path]
   gfm ui-menu-contract
   gfm ui-context-menu-contract [file|folder|volume|sidebar|empty|selection|search-result|trash] [selection-count] [writable] [ejectable] [has-clipboard-items]
-  gfm ui-dialog-contract [alert|rename|popover|disclosure|progress|conflict|permission]
+  gfm ui-dialog-contract [alert|rename|popover|disclosure|progress|conflict|permission] [running|paused] [true|false]
   gfm ui-titlebar-contract [path]
   gfm ui-session-contract [path] [window-session.tsv]
   gfm ui-toolbar-contract [path]

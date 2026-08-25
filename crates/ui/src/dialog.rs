@@ -146,6 +146,21 @@ impl DialogContract {
         }
     }
 
+    pub fn operation_progress(paused: bool, cancellable: bool) -> Self {
+        let mut contract = progress_contract();
+        contract.message = if paused {
+            "Finder-compatible operation progress sheet for paused foreground work that can resume or stop."
+        } else {
+            "Finder-compatible operation progress sheet for running foreground work that can pause or stop."
+        };
+        contract.buttons = vec![
+            button("pause", "Pause", DialogButtonRole::Alternate, !paused),
+            button("resume", "Resume", DialogButtonRole::Default, paused),
+            button("stop", "Stop", DialogButtonRole::Cancel, cancellable),
+        ];
+        contract
+    }
+
     pub fn as_tsv(&self) -> String {
         let mut lines = Vec::with_capacity(self.buttons.len() + self.fields.len() + 1);
         lines.push(format!(
@@ -278,9 +293,13 @@ fn progress_contract() -> DialogContract {
         surface: DialogSurface::Progress,
         presentation: DialogPresentation::ProgressSheet,
         title: "Copying",
-        message: "Finder-compatible operation progress sheet with cancellable foreground work.",
+        message: "Finder-compatible operation progress sheet for running foreground work that can pause or stop.",
         icon: "progress",
-        buttons: vec![button("stop", "Stop", DialogButtonRole::Cancel, true)],
+        buttons: vec![
+            button("pause", "Pause", DialogButtonRole::Alternate, true),
+            button("resume", "Resume", DialogButtonRole::Default, false),
+            button("stop", "Stop", DialogButtonRole::Cancel, true),
+        ],
         fields: vec![field(
             "progress",
             "Progress",
@@ -409,6 +428,47 @@ mod tests {
             .fields
             .iter()
             .any(|field| field.kind == DialogFieldKind::Progress));
+        assert!(contract
+            .buttons
+            .iter()
+            .any(|button| button.id == "pause" && button.enabled));
+        assert!(contract
+            .buttons
+            .iter()
+            .any(|button| button.id == "resume" && !button.enabled));
+        assert!(contract
+            .buttons
+            .iter()
+            .any(|button| button.id == "stop" && button.enabled));
+    }
+
+    #[test]
+    fn paused_progress_sheet_enables_resume_and_disables_pause() {
+        let contract = DialogContract::operation_progress(true, true);
+
+        assert!(contract.message.contains("paused"));
+        assert!(contract
+            .buttons
+            .iter()
+            .any(|button| button.id == "pause" && !button.enabled));
+        assert!(contract
+            .buttons
+            .iter()
+            .any(|button| button.id == "resume" && button.enabled));
+        assert!(contract
+            .buttons
+            .iter()
+            .any(|button| button.id == "stop" && button.enabled));
+    }
+
+    #[test]
+    fn noncancellable_progress_sheet_disables_stop() {
+        let contract = DialogContract::operation_progress(false, false);
+
+        assert!(contract
+            .buttons
+            .iter()
+            .any(|button| button.id == "stop" && !button.enabled));
     }
 
     #[test]

@@ -444,6 +444,26 @@ fn reports_ui_dialog_contract_from_binary() {
 }
 
 #[test]
+fn reports_progress_dialog_pause_resume_contract_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["ui-dialog-contract", "progress", "paused", "true"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=progress\tpresentation=progress-sheet"));
+    assert!(stdout.contains("field\tprogress\tProgress\tprogress"));
+    assert!(stdout.contains("button\tpause\tPause\talternate\tenabled=false"));
+    assert!(stdout.contains("button\tresume\tResume\tdefault\tenabled=true"));
+    assert!(stdout.contains("button\tstop\tStop\tcancel\tenabled=true"));
+}
+
+#[test]
 fn reports_ui_titlebar_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-titlebar-contract", "/tmp/gfm"])
