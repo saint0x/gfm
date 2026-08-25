@@ -96,9 +96,22 @@ fn imported_substring_postings_drive_deferred_sidecar_search() {
 #[test]
 fn sidecar_substring_lookup_budget_caps_grams_and_reports_truncation() {
     let mut index = SearchIndex::new();
-    index.insert(record(1, "/tmp/report-alpha.md", "report-alpha.md"));
-    index.insert(record(2, "/tmp/report-beta.md", "report-beta.md"));
-    index.insert(record(3, "/tmp/report-gamma.md", "report-gamma.md"));
+    for (id, name) in [
+        (1, "report-alpha.md"),
+        (2, "report-beta.md"),
+        (3, "report-gamma.md"),
+    ] {
+        let item = record(id, &format!("/tmp/{name}"), name);
+        let columns = SearchRecordColumns {
+            id: item.id,
+            name: item.name.clone(),
+            path: item.path.to_string_lossy().into_owned(),
+            extension: item.extension().map(ToOwned::to_owned),
+            tags: item.tags.clone(),
+            comment: item.finder_comment.clone(),
+        };
+        assert!(index.insert_with_columns_deferred_sidecars(item, columns));
+    }
     let lookup = StaticLookup {
         prefix_ids: Vec::new(),
         substring_ids: vec![
@@ -126,10 +139,45 @@ fn sidecar_substring_lookup_budget_caps_grams_and_reports_truncation() {
     assert_eq!(report.lookup.substring_terms, 1);
     assert_eq!(report.lookup.substring_grams, 1);
     assert_eq!(report.lookup.substring_lookup_ids, 2);
-    assert_eq!(report.lookup.substring_candidate_ids, 3);
+    assert_eq!(report.lookup.substring_candidate_ids, 2);
     assert_eq!(report.lookup.substring_term_truncated_grams, 1);
     assert_eq!(report.lookup.substring_truncated_grams, 1);
     assert!(!report.hits.is_empty());
+}
+
+#[test]
+fn hot_substring_lookup_budget_caps_local_candidates_before_archive_lookup() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/report-alpha.md", "report-alpha.md"));
+    index.insert(record(2, "/tmp/report-beta.md", "report-beta.md"));
+    index.insert(record(3, "/tmp/report-gamma.md", "report-gamma.md"));
+    let lookup = StaticLookup {
+        prefix_ids: Vec::new(),
+        substring_ids: vec![FileId::new(VolumeId(1), 3)],
+        fuzzy_terms: Vec::new(),
+    };
+
+    let report = index
+        .query_structured_with_lookup_budget_cancellable(
+            &SearchQuery::parse("port"),
+            10,
+            &lookup,
+            SearchLookupBudget {
+                max_substring_grams_per_term: 1,
+                max_substring_ids_per_gram: 2,
+                ..SearchLookupBudget::default()
+            },
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(report.lookup.substring_terms, 1);
+    assert_eq!(report.lookup.substring_grams, 1);
+    assert_eq!(report.lookup.substring_lookup_ids, 0);
+    assert_eq!(report.lookup.substring_candidate_ids, 2);
+    assert_eq!(report.lookup.substring_term_truncated_grams, 1);
+    assert_eq!(report.lookup.substring_truncated_grams, 1);
+    assert_eq!(report.hits.len(), 2);
 }
 
 #[test]

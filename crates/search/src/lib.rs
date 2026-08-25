@@ -1514,18 +1514,31 @@ impl SearchIndex {
         for gram in grams.into_iter().take(budget.max_substring_grams_per_term) {
             telemetry.substring_grams += 1;
             let mut ids = self.name_substrings.get(&gram).cloned().unwrap_or_default();
-            let lookup_ids =
-                lookup.substring_ids_bounded(&gram, budget.max_substring_ids_per_gram)?;
-            telemetry.substring_lookup_ids += lookup_ids.ids.len();
-            if lookup_ids.truncated {
+            let mut gram_truncated = false;
+            if ids.len() > budget.max_substring_ids_per_gram {
+                gram_truncated = true;
+                ids = ids
+                    .into_iter()
+                    .take(budget.max_substring_ids_per_gram)
+                    .collect();
+            }
+            let remaining = budget.max_substring_ids_per_gram.saturating_sub(ids.len());
+            if remaining > 0 {
+                let lookup_ids = lookup.substring_ids_bounded(&gram, remaining)?;
+                telemetry.substring_lookup_ids += lookup_ids.ids.len();
+                if lookup_ids.truncated {
+                    gram_truncated = true;
+                }
+                ids.extend(
+                    lookup_ids
+                        .ids
+                        .into_iter()
+                        .filter(|id| self.records.contains_key(id)),
+                );
+            }
+            if gram_truncated {
                 telemetry.substring_truncated_grams += 1;
             }
-            ids.extend(
-                lookup_ids
-                    .ids
-                    .into_iter()
-                    .filter(|id| self.records.contains_key(id)),
-            );
             if ids.is_empty() {
                 return Ok(BTreeSet::new());
             }
