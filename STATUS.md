@@ -122,23 +122,22 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Telemetry And Performance
 
-84. Implement local-only diagnostics export with privacy review.
-85. Define hard budgets for p50, p95, p99, cold start, warm start, first result, full result, directory open, and visible thumbnail completion.
-86. Build repeatable macrobenchmarks against small, medium, huge, developer, media, iCloud, external, and network-volume trees.
-87. Add regression gates that fail on latency, memory, index size, or frame-time drift.
+84. Define hard budgets for p50, p95, p99, cold start, warm start, first result, full result, directory open, and visible thumbnail completion.
+85. Build repeatable macrobenchmarks against small, medium, huge, developer, media, iCloud, external, and network-volume trees.
+86. Add regression gates that fail on latency, memory, index size, or frame-time drift.
 
 ## Packaging
 
-88. Build signed `.app` bundle with icons, entitlements, Info.plist, launch services registration, and document associations.
-89. Implement hardened runtime settings.
-90. Implement notarization pipeline.
-91. Implement first-run permission onboarding that remains Finder-parity by default.
-92. Implement update, rollback, crash-report, and diagnostics policy.
-93. Implement release artifact validation on clean macOS machines.
+87. Build signed `.app` bundle with icons, entitlements, Info.plist, launch services registration, and document associations.
+88. Implement hardened runtime settings.
+89. Implement notarization pipeline.
+90. Implement first-run permission onboarding that remains Finder-parity by default.
+91. Implement update, rollback, crash-report, and diagnostics policy.
+92. Implement release artifact validation on clean macOS machines.
 
 ## Documentation
 
-94. Expand `PLAN.md` when architectural decisions change materially.
-95. Keep `README.md` written as the completed product contract.
-96. Keep this file limited to unfinished work only.
-97. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+93. Expand `PLAN.md` when architectural decisions change materially.
+94. Keep `README.md` written as the completed product contract.
+95. Keep this file limited to unfinished work only.
+96. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

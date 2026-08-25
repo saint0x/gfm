@@ -1,3 +1,10 @@
+mod diagnostics;
+
+pub use diagnostics::{
+    export_diagnostics, DiagnosticExportError, DiagnosticExportReceipt, DiagnosticPrivacy,
+    PrivacyReview,
+};
+
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 

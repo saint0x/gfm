@@ -274,6 +274,7 @@ gfm/
 - Records bounded p50/p95/p99 latency histograms for navigation, selection, rename, search keystrokes, result streaming, thumbnail display, preview open, copy start, cancel, and window render.
 - Records frame timing histograms and UI-thread stalls against explicit stall thresholds.
 - Records IO byte/op counters, CPU sample means and peaks, memory and allocation peaks, queue depth summaries, compaction summaries, cache hit rates, slow paths, index lag, and operation failures.
+- Exports local-only aggregate diagnostics atomically and rejects path, query-text, or user-identifier inclusion before writing any artifact.
 
 ## Data Model
 
