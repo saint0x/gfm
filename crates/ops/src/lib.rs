@@ -42,6 +42,26 @@ pub enum CopyMethod {
     ByteCopy,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationProgressPhase {
+    Planned,
+    Advanced,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OperationProgress {
+    pub total_items: u64,
+    pub total_bytes: u64,
+    pub completed_items: u64,
+    pub completed_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OperationProgressEvent {
+    pub phase: OperationProgressPhase,
+    pub progress: OperationProgress,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntry {
     pub id: u128,
@@ -81,9 +101,26 @@ impl Operator {
     }
 
     pub fn execute(&self, operation: Operation) -> Result<JournalEntry> {
+        self.execute_with_progress(operation, |_| {})
+    }
+
+    pub fn execute_with_progress(
+        &self,
+        operation: Operation,
+        mut on_progress: impl FnMut(OperationProgressEvent),
+    ) -> Result<JournalEntry> {
         let id = now_nanos();
         self.append(JournalEntry::started(id, operation.clone()))?;
-        match self.apply(&operation) {
+        let plan = match plan_operation(&operation) {
+            Ok(plan) => plan,
+            Err(err) => {
+                let entry = JournalEntry::failed(id, operation, err.to_string());
+                let _ = self.append(entry);
+                return Err(err);
+            }
+        };
+        let mut progress = ProgressTracker::new(plan, &mut on_progress);
+        match self.apply(&operation, &mut progress) {
             Ok(()) => {
                 let entry = JournalEntry::completed(id, operation);
                 self.append(entry.clone())?;
@@ -101,14 +138,18 @@ impl Operator {
         read_journal(&self.context.journal_path)
     }
 
-    fn apply(&self, operation: &Operation) -> Result<()> {
+    fn apply(
+        &self,
+        operation: &Operation,
+        progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+    ) -> Result<()> {
         match operation {
-            Operation::Copy { from, to } => copy_path(from, to, self.context.conflict),
+            Operation::Copy { from, to } => copy_path(from, to, self.context.conflict, progress),
             Operation::Move { from, to } | Operation::Rename { from, to } => {
-                move_path(from, to, self.context.conflict)
+                move_path(from, to, self.context.conflict, progress)
             }
-            Operation::Delete { path } => delete_path(path),
-            Operation::Trash { path } => trash_path(path),
+            Operation::Delete { path } => delete_path(path, progress),
+            Operation::Trash { path } => trash_path(path, progress),
         }
     }
 
@@ -149,30 +190,116 @@ impl JournalEntry {
     }
 }
 
-fn copy_path(from: &Path, to: &Path, conflict: ConflictPolicy) -> Result<()> {
+pub fn plan_operation(operation: &Operation) -> Result<OperationProgress> {
+    match operation {
+        Operation::Copy { from, .. }
+        | Operation::Move { from, .. }
+        | Operation::Rename { from, .. } => plan_path(from),
+        Operation::Delete { path } | Operation::Trash { path } => plan_path(path),
+    }
+}
+
+fn plan_path(path: &Path) -> Result<OperationProgress> {
+    let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
+    let mut progress = OperationProgress {
+        total_items: 1,
+        total_bytes: item_bytes(&metadata),
+        completed_items: 0,
+        completed_bytes: 0,
+    };
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path).map_err(|err| GfmError::io(path, err))? {
+            let entry = entry.map_err(|err| GfmError::io(path, err))?;
+            let child = plan_path(&entry.path())?;
+            progress.total_items += child.total_items;
+            progress.total_bytes += child.total_bytes;
+        }
+    }
+    Ok(progress)
+}
+
+struct ProgressTracker<'a, F: FnMut(OperationProgressEvent)> {
+    progress: OperationProgress,
+    on_progress: &'a mut F,
+}
+
+impl<'a, F: FnMut(OperationProgressEvent)> ProgressTracker<'a, F> {
+    fn new(plan: OperationProgress, on_progress: &'a mut F) -> Self {
+        let mut tracker = Self {
+            progress: plan,
+            on_progress,
+        };
+        tracker.emit(OperationProgressPhase::Planned);
+        tracker
+    }
+
+    fn advance(&mut self, metadata: &fs::Metadata) {
+        self.progress.completed_items += 1;
+        self.progress.completed_bytes += item_bytes(metadata);
+        self.emit(OperationProgressPhase::Advanced);
+    }
+
+    fn complete(&mut self) {
+        self.progress.completed_items = self.progress.total_items;
+        self.progress.completed_bytes = self.progress.total_bytes;
+        self.emit(OperationProgressPhase::Advanced);
+    }
+
+    fn emit(&mut self, phase: OperationProgressPhase) {
+        (self.on_progress)(OperationProgressEvent {
+            phase,
+            progress: self.progress,
+        });
+    }
+}
+
+fn item_bytes(metadata: &fs::Metadata) -> u64 {
+    if metadata.is_file() {
+        metadata.len()
+    } else {
+        0
+    }
+}
+
+fn copy_path(
+    from: &Path,
+    to: &Path,
+    conflict: ConflictPolicy,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
     ensure_source_exists(from)?;
     prepare_destination(to, conflict)?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     if metadata.file_type().is_symlink() {
-        copy_symlink(from, to)
+        copy_symlink(from, to, progress)
     } else if metadata.is_dir() {
-        copy_directory(from, to)
+        copy_directory(from, to, progress)
     } else {
-        copy_file(from, to).map(|_| ())
+        copy_file(from, to)?;
+        progress.advance(&metadata);
+        Ok(())
     }
 }
 
-fn move_path(from: &Path, to: &Path, conflict: ConflictPolicy) -> Result<()> {
+fn move_path(
+    from: &Path,
+    to: &Path,
+    conflict: ConflictPolicy,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
     ensure_source_exists(from)?;
     prepare_destination(to, conflict)?;
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
     match fs::rename(from, to) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            progress.complete();
+            Ok(())
+        }
         Err(rename_err) => {
-            copy_path(from, to, ConflictPolicy::Replace)?;
-            delete_path(from).map_err(|delete_err| {
+            copy_path(from, to, ConflictPolicy::Replace, progress)?;
+            delete_path_untracked(from).map_err(|delete_err| {
                 GfmError::Format(format!(
                     "moved copy to {} but failed to remove source {}: {}; original rename error: {}",
                     to.display(),
@@ -185,7 +312,23 @@ fn move_path(from: &Path, to: &Path, conflict: ConflictPolicy) -> Result<()> {
     }
 }
 
-fn delete_path(path: &Path) -> Result<()> {
+fn delete_path(
+    path: &Path,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
+    if metadata.is_dir() {
+        fs::remove_dir_all(path).map_err(|err| GfmError::io(path, err))?;
+        progress.complete();
+        Ok(())
+    } else {
+        fs::remove_file(path).map_err(|err| GfmError::io(path, err))?;
+        progress.advance(&metadata);
+        Ok(())
+    }
+}
+
+fn delete_path_untracked(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
     if metadata.is_dir() {
         fs::remove_dir_all(path).map_err(|err| GfmError::io(path, err))
@@ -194,15 +337,25 @@ fn delete_path(path: &Path) -> Result<()> {
     }
 }
 
-fn trash_path(path: &Path) -> Result<()> {
+fn trash_path(
+    path: &Path,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
     ensure_source_exists(path)?;
-    trash::delete(path).map_err(|err| GfmError::io(path, err))
+    trash::delete(path).map_err(|err| GfmError::io(path, err))?;
+    progress.complete();
+    Ok(())
 }
 
-fn copy_directory(from: &Path, to: &Path) -> Result<()> {
+fn copy_directory(
+    from: &Path,
+    to: &Path,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
     fs::create_dir_all(to).map_err(|err| GfmError::io(to, err))?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     preserve_metadata(from, to, &metadata)?;
+    progress.advance(&metadata);
 
     for entry in fs::read_dir(from).map_err(|err| GfmError::io(from, err))? {
         let entry = entry.map_err(|err| GfmError::io(from, err))?;
@@ -211,23 +364,31 @@ fn copy_directory(from: &Path, to: &Path) -> Result<()> {
         let child_metadata =
             fs::symlink_metadata(&source).map_err(|err| GfmError::io(&source, err))?;
         if child_metadata.file_type().is_symlink() {
-            copy_symlink(&source, &destination)?;
+            copy_symlink(&source, &destination, progress)?;
         } else if child_metadata.is_dir() {
-            copy_directory(&source, &destination)?;
+            copy_directory(&source, &destination, progress)?;
         } else {
             let _ = copy_file(&source, &destination)?;
+            progress.advance(&child_metadata);
         }
     }
     Ok(())
 }
 
-fn copy_symlink(from: &Path, to: &Path) -> Result<()> {
+fn copy_symlink(
+    from: &Path,
+    to: &Path,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
     let target = fs::read_link(from).map_err(|err| GfmError::io(from, err))?;
     create_symlink(&target, to)?;
-    preserve_xattrs(from, to)
+    preserve_xattrs(from, to)?;
+    let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+    progress.advance(&metadata);
+    Ok(())
 }
 
 fn copy_file(from: &Path, to: &Path) -> Result<CopyMethod> {
@@ -378,7 +539,7 @@ fn prepare_destination(path: &Path, conflict: ConflictPolicy) -> Result<()> {
             path: path.to_path_buf(),
             message: "destination already exists".to_string(),
         }),
-        ConflictPolicy::Replace => delete_path(path),
+        ConflictPolicy::Replace => delete_path_untracked(path),
     }
 }
 
@@ -580,6 +741,94 @@ mod tests {
     }
 
     #[test]
+    fn plans_recursive_copy_totals_before_execution() {
+        let root = unique_temp_dir("gfm-ops-plan-copy");
+        let source = root.join("source");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("alpha.txt"), "alpha").unwrap();
+        fs::write(source.join("nested").join("beta.txt"), "beta").unwrap();
+
+        let progress = plan_operation(&Operation::Copy {
+            from: source.clone(),
+            to: root.join("destination"),
+        })
+        .unwrap();
+
+        assert_eq!(progress.total_items, 4);
+        assert_eq!(progress.total_bytes, 9);
+        assert_eq!(progress.completed_items, 0);
+        assert_eq!(progress.completed_bytes, 0);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_emits_planned_and_advanced_progress() {
+        let root = unique_temp_dir("gfm-ops-progress-copy");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("first.txt"), "first").unwrap();
+        fs::write(source.join("nested").join("second.txt"), "second").unwrap();
+        let mut events = Vec::new();
+
+        Operator::new(OperationContext::new(&journal))
+            .execute_with_progress(
+                Operation::Copy {
+                    from: source.clone(),
+                    to: destination,
+                },
+                |event| events.push(event),
+            )
+            .unwrap();
+
+        assert_eq!(
+            events.first().unwrap().phase,
+            OperationProgressPhase::Planned
+        );
+        assert_eq!(events.first().unwrap().progress.total_items, 4);
+        assert_eq!(events.first().unwrap().progress.total_bytes, 11);
+        let last = events.last().unwrap();
+        assert_eq!(last.phase, OperationProgressPhase::Advanced);
+        assert_eq!(last.progress.completed_items, 4);
+        assert_eq!(last.progress.completed_bytes, 11);
+        assert_eq!(last.progress.completed_items, last.progress.total_items);
+        assert_eq!(last.progress.completed_bytes, last.progress.total_bytes);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_completes_recursive_progress_after_success() {
+        let root = unique_temp_dir("gfm-ops-progress-delete");
+        let journal = root.join("journal.log");
+        let target = root.join("target");
+        fs::create_dir_all(target.join("nested")).unwrap();
+        fs::write(target.join("nested").join("payload.txt"), "payload").unwrap();
+        let mut events = Vec::new();
+
+        Operator::new(OperationContext::new(&journal))
+            .execute_with_progress(Operation::Delete { path: target }, |event| {
+                events.push(event);
+            })
+            .unwrap();
+
+        assert_eq!(
+            events.first().unwrap().phase,
+            OperationProgressPhase::Planned
+        );
+        assert_eq!(events.first().unwrap().progress.total_items, 3);
+        assert_eq!(events.first().unwrap().progress.total_bytes, 7);
+        let last = events.last().unwrap();
+        assert_eq!(last.phase, OperationProgressPhase::Advanced);
+        assert_eq!(last.progress.completed_items, 3);
+        assert_eq!(last.progress.completed_bytes, 7);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn copy_file_reports_method_and_preserves_contents() {
         let root = unique_temp_dir("gfm-ops-copy-method");
         let source = root.join("source.txt");
@@ -761,6 +1010,30 @@ mod tests {
         assert_eq!(fs::read_to_string(&destination).unwrap(), "destination");
         let journal_entries = operator.journal().unwrap();
         assert_eq!(journal_entries.len(), 2);
+        assert_eq!(journal_entries[1].status, OperationStatus::Failed);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn journals_failed_preflight_for_missing_source() {
+        let root = unique_temp_dir("gfm-ops-missing-source");
+        let journal = root.join("journal.log");
+        let source = root.join("missing.txt");
+        let destination = root.join("destination.txt");
+
+        let operator = Operator::new(OperationContext::new(&journal));
+        let err = operator
+            .execute(Operation::Copy {
+                from: source,
+                to: destination,
+            })
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Io { .. }));
+        let journal_entries = operator.journal().unwrap();
+        assert_eq!(journal_entries.len(), 2);
+        assert_eq!(journal_entries[0].status, OperationStatus::Started);
         assert_eq!(journal_entries[1].status, OperationStatus::Failed);
 
         fs::remove_dir_all(root).unwrap();

@@ -63,34 +63,33 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 38. Finish Finder-compatible copy preservation for ownership, ACLs, birthtime, package behavior, and verified edge cases beyond the implemented symlink preservation, permissions, access/modified timestamps, and copyable xattrs.
 39. Implement operation pause, resume, cancellation, retry, and crash recovery replay.
-40. Implement progress accounting for recursive operations before and during execution.
-41. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
-42. Implement Trash restore metadata and restore operation.
-43. Implement privileged-operation flow for protected paths.
-44. Implement network-volume fallbacks and slow-volume throttling.
-45. Implement post-operation verification policy for high-risk moves/copies.
+40. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
+41. Implement Trash restore metadata and restore operation.
+42. Implement privileged-operation flow for protected paths.
+43. Implement network-volume fallbacks and slow-volume throttling.
+44. Implement post-operation verification policy for high-risk moves/copies.
 
 ## Jobs And Runtime
 
-46. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
-47. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
-48. Implement persistent progress snapshots and user-visible progress restoration after restart.
-49. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
-50. Implement per-volume concurrency limits and operation isolation.
-51. Implement structured cancellation propagation across nested jobs and subprocess extractors.
-52. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
+45. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
+46. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
+47. Implement persistent progress snapshots and user-visible progress restoration after restart.
+48. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
+49. Implement per-volume concurrency limits and operation isolation.
+50. Implement structured cancellation propagation across nested jobs and subprocess extractors.
+51. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
 
 ## Preview And Thumbnails
 
-53. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
+52. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
 
 ## Packaging
 
-54. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
+53. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
 
 ## Documentation
 
-55. Expand `PLAN.md` when architectural decisions change materially.
-56. Keep `README.md` written as the completed product contract.
-57. Keep this file limited to unfinished work only.
-58. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+54. Expand `PLAN.md` when architectural decisions change materially.
+55. Keep `README.md` written as the completed product contract.
+56. Keep this file limited to unfinished work only.
+57. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
