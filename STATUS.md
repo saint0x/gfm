@@ -49,69 +49,68 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Filesystem Indexing
 
-32. Implement dropped-event detection and subtree repair scheduling.
-33. Implement rename correlation that preserves identity and avoids delete/create churn where possible.
-34. Implement incremental metadata updates for chmod, chown, xattrs, tags, Finder comments, timestamps, and size changes.
-35. Implement backpressure so file event bursts do not stall UI or starve user-visible operations.
-36. Implement crash-safe commit points for scan progress, segment publication, tombstones, and compaction.
-37. Implement large-directory scan scheduling with fairness between visible directories and background crawl.
-38. Implement network-volume and external-volume indexing policy with opt-in, throttling, and disconnected-state handling.
+32. Implement rename correlation that preserves identity and avoids delete/create churn where possible.
+33. Implement incremental metadata updates for chmod, chown, xattrs, tags, Finder comments, timestamps, and size changes.
+34. Implement backpressure so file event bursts do not stall UI or starve user-visible operations.
+35. Implement crash-safe commit points for scan progress, segment publication, tombstones, and compaction.
+36. Implement large-directory scan scheduling with fairness between visible directories and background crawl.
+37. Implement network-volume and external-volume indexing policy with opt-in, throttling, and disconnected-state handling.
 
 ## Content Extraction
 
-39. Complete PDF extraction with sandboxed workers, compressed/encrypted PDF coverage, incremental updates, extractor-version invalidation, and corrupt-file quarantine beyond the bounded in-process text-stream extractor.
-40. Complete Office extraction beyond bounded OOXML with legacy binary format strategy, protected/encrypted document handling, sandboxed workers, extractor-version invalidation, and corrupt-package quarantine.
-41. Complete extraction policy depth beyond current UTF-8 text, HTML, RTF, email, ZIP metadata, JSON, CSV, and plist paths, including MIME multipart emails, richer archive formats, per-format invalidation, and corrupt-input quarantine.
-42. Implement OCR strategy for image-only PDFs and screenshots without blocking primary indexing.
-43. Implement extraction budgets by file type, size, volume class, thermal state, battery state, and user activity.
-44. Implement extraction caching keyed by file identity, content signature, extractor version, and metadata epoch.
-45. Implement failure quarantine for repeatedly crashing or timing-out extractors.
+38. Complete PDF extraction with sandboxed workers, compressed/encrypted PDF coverage, incremental updates, extractor-version invalidation, and corrupt-file quarantine beyond the bounded in-process text-stream extractor.
+39. Complete Office extraction beyond bounded OOXML with legacy binary format strategy, protected/encrypted document handling, sandboxed workers, extractor-version invalidation, and corrupt-package quarantine.
+40. Complete extraction policy depth beyond current UTF-8 text, HTML, RTF, email, ZIP metadata, JSON, CSV, and plist paths, including MIME multipart emails, richer archive formats, per-format invalidation, and corrupt-input quarantine.
+41. Implement OCR strategy for image-only PDFs and screenshots without blocking primary indexing.
+42. Implement extraction budgets by file type, size, volume class, thermal state, battery state, and user activity.
+43. Implement extraction caching keyed by file identity, content signature, extractor version, and metadata epoch.
+44. Implement failure quarantine for repeatedly crashing or timing-out extractors.
 
 ## Storage Engine
 
-46. Implement mmap-backed immutable archive readers for records, dictionaries, metadata postings, and content postings.
-47. Implement dictionary compression for terms, paths, extensions, tags, kinds, metadata keys, and repeated path prefixes.
-48. Implement block-level compression policy with fast random access and bounded decompression windows.
-49. Implement large-index merge policy across hot buffers, immutable segments, compacted tiers, and tombstone cleanup.
-50. Implement record column stores for high-cardinality fields and cache-friendly scan/rank passes.
-51. Implement prefix/fuzzy lookup structures suitable for machine-wide scale.
-52. Implement checksums, schema migration, crash recovery, corruption detection, and rebuild plans.
-53. Implement index size telemetry and compaction scheduling heuristics.
-54. Implement benchmark fixtures for millions of files and realistic developer, media, documents, and iCloud trees.
+45. Implement mmap-backed immutable archive readers for records, dictionaries, metadata postings, and content postings.
+46. Implement dictionary compression for terms, paths, extensions, tags, kinds, metadata keys, and repeated path prefixes.
+47. Implement block-level compression policy with fast random access and bounded decompression windows.
+48. Implement large-index merge policy across hot buffers, immutable segments, compacted tiers, and tombstone cleanup.
+49. Implement record column stores for high-cardinality fields and cache-friendly scan/rank passes.
+50. Implement prefix/fuzzy lookup structures suitable for machine-wide scale.
+51. Implement checksums, schema migration, crash recovery, corruption detection, and rebuild plans.
+52. Implement index size telemetry and compaction scheduling heuristics.
+53. Implement benchmark fixtures for millions of files and realistic developer, media, documents, and iCloud trees.
 
 ## File Operations
 
-55. Implement APFS clone fast paths using platform-native clone semantics.
-56. Implement copyfile/Finder-compatible metadata preservation, xattrs, ACLs, resource forks, quarantine attributes, package behavior, and symlink policies.
-57. Implement operation pause, resume, cancellation, retry, and crash recovery replay.
-58. Implement progress accounting for recursive operations before and during execution.
-59. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
-60. Implement Trash restore metadata and restore operation.
-61. Implement privileged-operation flow for protected paths.
-62. Implement network-volume fallbacks and slow-volume throttling.
-63. Implement post-operation verification policy for high-risk moves/copies.
+54. Implement APFS clone fast paths using platform-native clone semantics.
+55. Implement copyfile/Finder-compatible metadata preservation, xattrs, ACLs, resource forks, quarantine attributes, package behavior, and symlink policies.
+56. Implement operation pause, resume, cancellation, retry, and crash recovery replay.
+57. Implement progress accounting for recursive operations before and during execution.
+58. Implement conflict UI/state machine for replace, keep both, merge folders, skip, apply to all, and per-item decisions.
+59. Implement Trash restore metadata and restore operation.
+60. Implement privileged-operation flow for protected paths.
+61. Implement network-volume fallbacks and slow-volume throttling.
+62. Implement post-operation verification policy for high-risk moves/copies.
 
 ## Jobs And Runtime
 
-64. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
-65. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
-66. Implement persistent progress snapshots and user-visible progress restoration after restart.
-67. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
-68. Implement per-volume concurrency limits and operation isolation.
-69. Implement structured cancellation propagation across nested jobs and subprocess extractors.
-70. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
+63. Implement durable job payload catalog for all operation, indexing, extraction, thumbnail, preview, and repair jobs.
+64. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
+65. Implement persistent progress snapshots and user-visible progress restoration after restart.
+66. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
+67. Implement per-volume concurrency limits and operation isolation.
+68. Implement structured cancellation propagation across nested jobs and subprocess extractors.
+69. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
 
 ## Preview And Thumbnails
 
-71. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
+70. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
 
 ## Packaging
 
-72. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
+71. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
 
 ## Documentation
 
-73. Expand `PLAN.md` when architectural decisions change materially.
-74. Keep `README.md` written as the completed product contract.
-75. Keep this file limited to unfinished work only.
-76. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+72. Expand `PLAN.md` when architectural decisions change materially.
+73. Keep `README.md` written as the completed product contract.
+74. Keep this file limited to unfinished work only.
+75. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.

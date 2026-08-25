@@ -91,6 +91,19 @@
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fsevents-repair-schedule",
+        "/tmp/gfm-fozzy-host.gfmstate",
+        "/tmp/gfm-fozzy-host.gfmcursor",
+        "124,127",
+        "kernel-dropped",
+        "crates/index"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": ["index-content-segment", ".", "/tmp/gfm-fozzy-host.gfmseg"],
       "expect_exit": 0
     },

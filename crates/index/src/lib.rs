@@ -16,12 +16,14 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 mod cursor;
+mod repair;
 mod state;
 
 pub use cursor::{
     FseventsCursor, FseventsCursorHealth, FseventsResumeAction, FseventsResumePlan,
     FSEVENTS_CURSOR_SCHEMA_VERSION,
 };
+pub use repair::{RepairPriority, RepairReason, RepairSchedule, SubtreeRepairJob};
 pub use state::{IndexVolumeState, INDEX_STATE_SCHEMA_VERSION};
 
 #[derive(Debug, Clone)]
@@ -543,6 +545,25 @@ impl Indexer {
     ) -> Result<FseventsResumePlan> {
         let volume = IndexVolumeState::read(state_path)?;
         FseventsResumePlan::read(&volume, cursor_path)
+    }
+
+    pub fn repair_schedule(
+        &self,
+        state_path: impl AsRef<Path>,
+        cursor_path: impl AsRef<Path>,
+        observed_event_ids: &[u64],
+        dropped_roots: &[PathBuf],
+        explicit_reason: Option<&str>,
+    ) -> Result<RepairSchedule> {
+        let volume = IndexVolumeState::read(state_path)?;
+        let resume = FseventsResumePlan::read(&volume, cursor_path)?;
+        Ok(RepairSchedule::evaluate(
+            &volume,
+            resume,
+            observed_event_ids,
+            dropped_roots,
+            explicit_reason,
+        ))
     }
 
     pub fn load(&self, path: impl AsRef<Path>) -> Result<IndexSnapshot> {

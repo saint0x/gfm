@@ -240,6 +240,103 @@ fn persists_fsevents_cursor_from_binary() {
 }
 
 #[test]
+fn schedules_fsevents_repair_from_binary() {
+    let root = unique_temp_dir("gfm-cli-repair-root");
+    let index = unique_temp_path("gfm-cli-repair-records", "gfmidx");
+    let state = unique_temp_path("gfm-cli-repair-state", "gfmstate");
+    let cursor = unique_temp_path("gfm-cli-repair-cursor", "gfmcursor");
+    fs::create_dir_all(root.join("Projects").join("Nested")).unwrap();
+    fs::write(
+        root.join("Projects").join("Nested").join("Repair.md"),
+        "alpha",
+    )
+    .unwrap();
+
+    let index_state = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            root.to_str().unwrap(),
+            index.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        index_state.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_state.stderr)
+    );
+
+    let checkpoint = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-cursor-checkpoint",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "200",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        checkpoint.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checkpoint.stderr)
+    );
+
+    let gap = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-repair-schedule",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "201,204",
+            "-",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        gap.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gap.stderr)
+    );
+    let gap_stdout = String::from_utf8(gap.stdout).unwrap();
+    assert!(gap_stdout.starts_with("repair-schedule\t"), "{gap_stdout}");
+    assert!(gap_stdout.contains("\tjobs=1\t"), "{gap_stdout}");
+    assert!(
+        gap_stdout.contains("reason=event-id-gap:202-204"),
+        "{gap_stdout}"
+    );
+
+    let explicit = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-repair-schedule",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "201",
+            "kernel-dropped",
+            "Projects",
+            "Projects/Nested",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        explicit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explicit.stderr)
+    );
+    let explicit_stdout = String::from_utf8(explicit.stdout).unwrap();
+    assert!(explicit_stdout.contains("\tjobs=1\t"), "{explicit_stdout}");
+    assert!(
+        explicit_stdout.contains("reason=explicit-drop:kernel-dropped"),
+        "{explicit_stdout}"
+    );
+    assert!(explicit_stdout.contains("Projects"), "{explicit_stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(index).unwrap();
+    fs::remove_file(state).unwrap();
+    fs::remove_file(cursor).unwrap();
+}
+
+#[test]
 fn searches_with_structured_filters_from_binary() {
     let root = unique_temp_dir("gfm-cli-filter-root");
     fs::create_dir_all(root.join("Desktop").join("Client Work")).unwrap();

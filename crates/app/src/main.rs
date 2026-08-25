@@ -479,6 +479,38 @@ fn run() -> Result<()> {
                     .as_tsv()
             );
         }
+        Some("fsevents-repair-schedule") => {
+            let state = required_path(
+                args.next(),
+                "fsevents-repair-schedule requires an index state path",
+            )?;
+            let cursor = required_path(
+                args.next(),
+                "fsevents-repair-schedule requires a cursor path",
+            )?;
+            let event_ids = args.next().ok_or_else(|| {
+                GfmError::Format(
+                    "fsevents-repair-schedule requires observed event ids or `-`".to_string(),
+                )
+            })?;
+            let observed_event_ids = parse_event_ids(&event_ids)?;
+            let reason = args
+                .next()
+                .and_then(|value| (value != "-").then_some(value));
+            let dropped_roots: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            println!(
+                "{}",
+                Indexer::default()
+                    .repair_schedule(
+                        state,
+                        cursor,
+                        &observed_event_ids,
+                        &dropped_roots,
+                        reason.as_deref(),
+                    )?
+                    .as_tsv()
+            );
+        }
         Some("index-content") => {
             let root = required_path(args.next(), "index-content requires a root path")?;
             let records = required_path(args.next(), "index-content requires a records path")?;
@@ -1222,6 +1254,20 @@ fn parse_u64_arg(value: Option<String>, message: &str) -> Result<u64> {
         .map_err(|_| GfmError::Format(format!("{message}; got `{value}`")))
 }
 
+fn parse_event_ids(value: &str) -> Result<Vec<u64>> {
+    if value == "-" || value.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    value
+        .split(',')
+        .map(|part| {
+            part.parse().map_err(|_| {
+                GfmError::Format(format!("observed event id `{part}` must be unsigned"))
+            })
+        })
+        .collect()
+}
+
 fn parse_usize_arg(value: Option<String>, message: &str) -> Result<usize> {
     let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
     value
@@ -1625,6 +1671,7 @@ fn print_usage() {
   gfm fsevents-cursor-checkpoint <state.gfmstate> <cursor.gfmcursor> <last-event-id> [clean|repair-required]
   gfm fsevents-cursor-inspect <cursor.gfmcursor>
   gfm fsevents-cursor-resume <state.gfmstate> <cursor.gfmcursor>
+  gfm fsevents-repair-schedule <state.gfmstate> <cursor.gfmcursor> <observed-event-ids|-> [reason|-] [dropped-roots...]
   gfm index-content <root> <records.gfmidx> <content.gfmcontent>
   gfm index-content-segment <root> <output.gfmseg>
   gfm compact-content <output.gfmcontent> <segments.gfmseg...>

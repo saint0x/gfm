@@ -466,6 +466,143 @@ fn fsevents_cursor_rejects_unsupported_schema_versions() {
     fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn repair_schedule_detects_event_id_gaps() {
+    let root = unique_temp_dir("gfm-repair-gap-root");
+    let records = unique_temp_path("gfm-repair-gap-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-repair-gap-state", "gfmstate");
+    let cursor_path = unique_temp_path("gfm-repair-gap-cursor", "gfmcursor");
+    fs::write(root.join("Gap.md"), "repair").unwrap();
+
+    let indexer = Indexer::default();
+    indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    indexer
+        .checkpoint_fsevents_cursor(&state_path, &cursor_path, 10, FseventsCursorHealth::Clean)
+        .unwrap();
+
+    let clean = indexer
+        .repair_schedule(&state_path, &cursor_path, &[11, 12, 13], &[], None)
+        .unwrap();
+    let gap = indexer
+        .repair_schedule(&state_path, &cursor_path, &[11, 14], &[], None)
+        .unwrap();
+
+    assert!(clean.jobs.is_empty());
+    assert_eq!(clean.highest_observed_event_id, Some(13));
+    assert_eq!(gap.jobs.len(), 1);
+    assert_eq!(gap.jobs[0].path, root);
+    assert_eq!(gap.jobs[0].priority, RepairPriority::High);
+    assert_eq!(
+        gap.jobs[0].reason,
+        RepairReason::EventIdGap {
+            expected: 12,
+            observed: 14
+        }
+    );
+    assert!(gap.as_tsv().contains("repair-schedule\taction=continue"));
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+    fs::remove_file(cursor_path).unwrap();
+}
+
+#[test]
+fn repair_schedule_rescans_for_invalid_resume_and_coalesces_subtrees() {
+    let root = unique_temp_dir("gfm-repair-coalesce-root");
+    let records = unique_temp_path("gfm-repair-coalesce-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-repair-coalesce-state", "gfmstate");
+    let cursor_path = unique_temp_path("gfm-repair-coalesce-cursor", "gfmcursor");
+    fs::create_dir_all(root.join("Projects").join("Nested")).unwrap();
+    fs::write(
+        root.join("Projects").join("Nested").join("Drop.md"),
+        "repair",
+    )
+    .unwrap();
+
+    let indexer = Indexer::default();
+    indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    indexer
+        .checkpoint_fsevents_cursor(
+            &state_path,
+            &cursor_path,
+            5,
+            FseventsCursorHealth::RepairRequired,
+        )
+        .unwrap();
+
+    let schedule = indexer
+        .repair_schedule(
+            &state_path,
+            &cursor_path,
+            &[6],
+            &[
+                PathBuf::from("Projects"),
+                PathBuf::from("Projects").join("Nested"),
+            ],
+            Some("kernel-dropped"),
+        )
+        .unwrap();
+
+    assert_eq!(schedule.resume.action, FseventsResumeAction::Rescan);
+    assert_eq!(schedule.jobs.len(), 1);
+    assert_eq!(schedule.jobs[0].path, root);
+    assert_eq!(schedule.jobs[0].priority, RepairPriority::Critical);
+    assert_eq!(
+        schedule.jobs[0].reason,
+        RepairReason::ResumeRequired("repair-required".to_string())
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+    fs::remove_file(cursor_path).unwrap();
+}
+
+#[test]
+fn repair_schedule_coalesces_explicit_subtree_repairs() {
+    let root = unique_temp_dir("gfm-repair-explicit-root");
+    let records = unique_temp_path("gfm-repair-explicit-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-repair-explicit-state", "gfmstate");
+    let cursor_path = unique_temp_path("gfm-repair-explicit-cursor", "gfmcursor");
+    fs::create_dir_all(root.join("A").join("B")).unwrap();
+    fs::write(root.join("A").join("B").join("C.md"), "repair").unwrap();
+
+    let indexer = Indexer::default();
+    indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    indexer
+        .checkpoint_fsevents_cursor(&state_path, &cursor_path, 20, FseventsCursorHealth::Clean)
+        .unwrap();
+
+    let schedule = indexer
+        .repair_schedule(
+            &state_path,
+            &cursor_path,
+            &[21],
+            &[PathBuf::from("A"), PathBuf::from("A").join("B")],
+            Some("user-dropped"),
+        )
+        .unwrap();
+
+    assert_eq!(schedule.jobs.len(), 1);
+    assert_eq!(schedule.jobs[0].path, root.join("A"));
+    assert_eq!(
+        schedule.jobs[0].reason,
+        RepairReason::ExplicitDrop("user-dropped".to_string())
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+    fs::remove_file(cursor_path).unwrap();
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let path = unique_temp_path(prefix, "");
     fs::create_dir_all(&path).unwrap();
