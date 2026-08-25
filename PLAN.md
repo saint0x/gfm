@@ -268,6 +268,7 @@ gfm/
 - UI-visible jobs and invisible background jobs share one scheduler.
 - Provides volume-isolated worker admission that caps concurrent work per `VolumeId` while unrelated volumes and unscoped interactive jobs keep running.
 - Admits foreground copy, move, rename, delete, and trash operation CLI jobs through the volume-isolated worker path before they enter the operation engine.
+- Admits Quick Look preview and thumbnail generation jobs through the same volume-isolated worker path before producing preview contracts.
 - Persists background content indexing job volume identity and resumes that job through the same isolated, journaled, capped-retry worker path.
 
 `config`
@@ -579,7 +580,7 @@ All operations go through a scheduler:
 
 Scheduler properties:
 
-- Per-volume queues backed by worker admission limits so one hot volume cannot monopolize all runtime workers or destroy interactive I/O latency; foreground file operations and background content indexing already run through isolated worker admission.
+- Per-volume queues backed by worker admission limits so one hot volume cannot monopolize all runtime workers or destroy interactive I/O latency; foreground file operations, Quick Look previews, thumbnail generation, and background content indexing already run through isolated worker admission.
 - Operation dependencies.
 - Priority inheritance from visible UI.
 - Exact preflight item/byte totals and completion-backed progress aggregation.

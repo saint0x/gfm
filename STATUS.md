@@ -74,7 +74,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 45. Implement job dependency graph and fairness between foreground, visible, background, maintenance, and repair queues.
 46. Implement persistent progress snapshots and user-visible progress restoration after restart.
 47. Implement thermal, battery, IO pressure, and user-activity adaptive scheduling.
-48. Bind the implemented per-volume worker admission limits into extraction, thumbnail, preview, and repair job producers beyond the already-wired foreground operation and background content indexing producers.
+48. Bind the implemented per-volume worker admission limits into extraction and repair job producers beyond the already-wired foreground operation, Quick Look preview, thumbnail generation, and background content indexing producers.
 49. Implement structured cancellation propagation across nested jobs and subprocess extractors.
 50. Implement retry backoff with classified transient, permission, missing-file, corrupt-file, and offline-volume failures.
 

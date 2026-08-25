@@ -138,6 +138,8 @@ Runtime workers admit volume-scoped jobs through explicit per-volume limits. Hea
 
 Foreground copy, move, rename, delete, and trash commands enter the operation engine through the same volume-isolated worker admission path while preserving operation journaling and failure records.
 
+Quick Look preview and thumbnail generation commands also enter through volume-isolated worker admission before producing preview contracts.
+
 Background content indexing persists its `VolumeId` in the durable job spec and resumes through the same isolated, journaled, capped-retry worker path.
 
 ## UI Parity

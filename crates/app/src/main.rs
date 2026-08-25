@@ -2337,8 +2337,9 @@ fn run() -> Result<()> {
             let record = record_for_path(&path, None, false)?;
             let rect = Rect::new(0, 0, 640, 480);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
+            let volume = detect_volume_id(&path).ok();
             let input = QuickLookSessionInput::new(
-                PreviewRequestKey::new(record.id, path, PreviewKind::QuickLook),
+                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
                 rect,
                 viewport,
             )
@@ -2346,8 +2347,9 @@ fn run() -> Result<()> {
                 content_changed: true,
                 ..PreviewInvalidationEvent::default()
             });
-            let contract =
-                QuickLookSessionContract::from_input(&PreviewSecurityPolicy::default(), input)?;
+            let contract = run_preview_contract(volume, "quicklook preview", move || {
+                QuickLookSessionContract::from_input(&PreviewSecurityPolicy::default(), input)
+            })?;
             println!("{}", contract.as_tsv());
         }
         Some("thumbnail-generation") => {
@@ -2355,8 +2357,9 @@ fn run() -> Result<()> {
             let record = record_for_path(&path, None, false)?;
             let rect = Rect::new(0, 0, 160, 160);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
+            let volume = detect_volume_id(&path).ok();
             let input = ThumbnailGenerationInput::new(
-                PreviewRequestKey::new(record.id, path, PreviewKind::Thumbnail),
+                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
                 rect,
                 viewport,
             )
@@ -2365,8 +2368,9 @@ fn run() -> Result<()> {
                 metadata_changed: true,
                 ..PreviewInvalidationEvent::default()
             });
-            let contract =
-                ThumbnailGenerationContract::from_input(&PreviewSecurityPolicy::default(), input)?;
+            let contract = run_preview_contract(volume, "thumbnail generation", move || {
+                ThumbnailGenerationContract::from_input(&PreviewSecurityPolicy::default(), input)
+            })?;
             println!("{}", contract.as_tsv());
         }
         Some("preview-schedule") => {
@@ -3194,6 +3198,53 @@ fn operation_volume(operation: &Operation) -> Option<VolumeId> {
 fn parent_volume(path: &Path) -> Option<VolumeId> {
     path.parent()
         .and_then(|parent| detect_volume_id(parent).ok())
+}
+
+fn run_preview_contract<T>(
+    volume: Option<VolumeId>,
+    label: &'static str,
+    build: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    let result_slot = Arc::new(Mutex::new(None));
+    let result_slot_task = Arc::clone(&result_slot);
+    let mut scheduler = Scheduler::new();
+    let job = if let Some(volume) = volume {
+        scheduler.schedule_on_volume(Priority::Visible, label, volume)
+    } else {
+        scheduler.schedule(Priority::Visible, label)
+    };
+    let task = Task::new(job.clone(), move |_| {
+        let contract = build()?;
+        *result_slot_task
+            .lock()
+            .expect("preview contract lock poisoned") = Some(contract);
+        Ok(())
+    });
+    let report = WorkerPool::new(1).run_isolated(vec![task], VolumeConcurrencyPolicy::new(1));
+    let outcome = report
+        .outcomes
+        .iter()
+        .find(|outcome| outcome.id == job.id)
+        .ok_or_else(|| GfmError::Format("preview job did not run".to_string()))?;
+    match &outcome.status {
+        TaskStatus::Completed => {}
+        TaskStatus::Started => {
+            return Err(GfmError::Format("preview job is still running".to_string()))
+        }
+        TaskStatus::Cancelled => return Err(GfmError::Cancelled),
+        TaskStatus::Failed(message) => {
+            return Err(GfmError::Format(format!("preview job failed: {message}")))
+        }
+    }
+    let result = result_slot
+        .lock()
+        .expect("preview contract lock poisoned")
+        .take()
+        .ok_or_else(|| GfmError::Format("preview job completed without a contract".to_string()))?;
+    Ok(result)
 }
 
 fn run_content_job(
