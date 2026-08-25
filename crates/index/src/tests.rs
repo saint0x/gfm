@@ -357,6 +357,100 @@ fn live_index_queries_prefix_and_fuzzy_archive_lookup_without_importing_sidecars
 }
 
 #[test]
+fn search_archive_lookup_caches_are_bounded() {
+    let prefixes = unique_temp_path("gfm-prefix-cache-bound", "gfmprefix");
+    let substrings = unique_temp_path("gfm-substring-cache-bound", "gfmsubstr");
+    let fuzzy = unique_temp_path("gfm-fuzzy-cache-bound", "gfmfuzzy");
+    let id = FileId::new(VolumeId(1), 1);
+
+    write_prefix_postings(
+        &prefixes,
+        &[
+            PrefixPosting {
+                prefix: "pa".to_string(),
+                ids: vec![id],
+            },
+            PrefixPosting {
+                prefix: "pb".to_string(),
+                ids: vec![id],
+            },
+            PrefixPosting {
+                prefix: "pc".to_string(),
+                ids: vec![id],
+            },
+        ],
+    )
+    .unwrap();
+    write_substring_postings(
+        &substrings,
+        &[
+            SubstringPosting {
+                gram: "aaa".to_string(),
+                ids: vec![id],
+            },
+            SubstringPosting {
+                gram: "bbb".to_string(),
+                ids: vec![id],
+            },
+            SubstringPosting {
+                gram: "ccc".to_string(),
+                ids: vec![id],
+            },
+        ],
+    )
+    .unwrap();
+    write_fuzzy_postings(
+        &fuzzy,
+        &[
+            FuzzyPosting {
+                key: "fa".to_string(),
+                terms: vec!["fa".to_string()],
+            },
+            FuzzyPosting {
+                key: "fb".to_string(),
+                terms: vec!["fb".to_string()],
+            },
+            FuzzyPosting {
+                key: "fc".to_string(),
+                terms: vec!["fc".to_string()],
+            },
+        ],
+    )
+    .unwrap();
+
+    let lookup =
+        SearchArchiveLookup::open_with_cache_capacity(&prefixes, &substrings, &fuzzy, 2).unwrap();
+    assert_eq!(lookup.prefix_ids("pa").unwrap(), vec![id]);
+    assert_eq!(lookup.prefix_ids("pb").unwrap(), vec![id]);
+    assert_eq!(lookup.prefix_ids("pc").unwrap(), vec![id]);
+    assert_eq!(lookup.substring_ids("aaa").unwrap(), vec![id]);
+    assert_eq!(lookup.substring_ids("bbb").unwrap(), vec![id]);
+    assert_eq!(lookup.substring_ids("ccc").unwrap(), vec![id]);
+    assert_eq!(lookup.fuzzy_terms("fa").unwrap(), vec!["fa".to_string()]);
+    assert_eq!(lookup.fuzzy_terms("fb").unwrap(), vec!["fb".to_string()]);
+    assert_eq!(lookup.fuzzy_terms("fc").unwrap(), vec!["fc".to_string()]);
+
+    assert_eq!(lookup.cache_entry_counts().unwrap(), (2, 2, 2));
+    let before = lookup.cache_telemetry();
+    assert_eq!(lookup.prefix_ids("pa").unwrap(), vec![id]);
+    assert_eq!(lookup.substring_ids("aaa").unwrap(), vec![id]);
+    assert_eq!(lookup.fuzzy_terms("fa").unwrap(), vec!["fa".to_string()]);
+    let after = lookup.cache_telemetry();
+
+    assert_eq!(after.prefix_cache_misses, before.prefix_cache_misses + 1);
+    assert_eq!(
+        after.substring_cache_misses,
+        before.substring_cache_misses + 1
+    );
+    assert_eq!(after.fuzzy_cache_misses, before.fuzzy_cache_misses + 1);
+    assert_eq!(lookup.cache_entry_counts().unwrap(), (2, 2, 2));
+
+    fs::remove_file(prefixes).unwrap();
+    fs::remove_file(substrings).unwrap();
+    fs::remove_file(fuzzy).unwrap();
+}
+
+#[test]
 fn live_index_applies_create_modify_and_remove_events() {
     let root = unique_temp_dir("gfm-live-root");
     let target = root.join("Needle.txt");

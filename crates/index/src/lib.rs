@@ -27,7 +27,7 @@ use gfm_types::{
     ContentPosting, ContentSegment, DirectoryPage, FileEvent, FileEventKind, FileId, FileKind,
     FileRecord, GfmError, Result, ScanIssue, SearchHit, VolumeId,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -69,6 +69,8 @@ pub use volume::{
     IndexVolumeDescriptor, VolumeIndexAction, VolumeIndexDecision, VolumeIndexPlan,
     VolumeIndexPolicy, VolumeIndexThrottle, VolumeThrottleClass,
 };
+
+const SEARCH_ARCHIVE_LOOKUP_CACHE_CAPACITY: usize = 512;
 
 pub fn content_query_terms(query: &str) -> Vec<String> {
     SearchQuery::parse(query).content_candidate_terms()
@@ -247,9 +249,9 @@ pub struct SearchArchiveLookup {
     prefixes: MmapPrefixArchive,
     substrings: MmapSubstringArchive,
     fuzzy: MmapFuzzyArchive,
-    prefix_cache: Mutex<HashMap<String, Vec<FileId>>>,
-    substring_cache: Mutex<HashMap<String, Vec<FileId>>>,
-    fuzzy_cache: Mutex<HashMap<String, Vec<String>>>,
+    prefix_cache: Mutex<LookupCache<Vec<FileId>>>,
+    substring_cache: Mutex<LookupCache<Vec<FileId>>>,
+    fuzzy_cache: Mutex<LookupCache<Vec<String>>>,
     prefix_requests: AtomicUsize,
     prefix_hits: AtomicUsize,
     prefix_misses: AtomicUsize,
@@ -267,13 +269,27 @@ impl SearchArchiveLookup {
         substrings: impl AsRef<Path>,
         fuzzy: impl AsRef<Path>,
     ) -> Result<SearchArchiveLookup> {
+        Self::open_with_capacity(
+            prefixes,
+            substrings,
+            fuzzy,
+            SEARCH_ARCHIVE_LOOKUP_CACHE_CAPACITY,
+        )
+    }
+
+    fn open_with_capacity(
+        prefixes: impl AsRef<Path>,
+        substrings: impl AsRef<Path>,
+        fuzzy: impl AsRef<Path>,
+        cache_capacity: usize,
+    ) -> Result<SearchArchiveLookup> {
         Ok(Self {
             prefixes: MmapPrefixArchive::open(prefixes)?,
             substrings: MmapSubstringArchive::open(substrings)?,
             fuzzy: MmapFuzzyArchive::open(fuzzy)?,
-            prefix_cache: Mutex::new(HashMap::new()),
-            substring_cache: Mutex::new(HashMap::new()),
-            fuzzy_cache: Mutex::new(HashMap::new()),
+            prefix_cache: Mutex::new(LookupCache::new(cache_capacity)),
+            substring_cache: Mutex::new(LookupCache::new(cache_capacity)),
+            fuzzy_cache: Mutex::new(LookupCache::new(cache_capacity)),
             prefix_requests: AtomicUsize::new(0),
             prefix_hits: AtomicUsize::new(0),
             prefix_misses: AtomicUsize::new(0),
@@ -284,6 +300,16 @@ impl SearchArchiveLookup {
             fuzzy_hits: AtomicUsize::new(0),
             fuzzy_misses: AtomicUsize::new(0),
         })
+    }
+
+    #[cfg(test)]
+    fn open_with_cache_capacity(
+        prefixes: impl AsRef<Path>,
+        substrings: impl AsRef<Path>,
+        fuzzy: impl AsRef<Path>,
+        cache_capacity: usize,
+    ) -> Result<SearchArchiveLookup> {
+        Self::open_with_capacity(prefixes, substrings, fuzzy, cache_capacity)
     }
 
     pub fn indexed_prefixes(&self) -> usize {
@@ -297,6 +323,26 @@ impl SearchArchiveLookup {
     pub fn indexed_fuzzy_keys(&self) -> usize {
         self.fuzzy.indexed_keys()
     }
+
+    #[cfg(test)]
+    fn cache_entry_counts(&self) -> Result<(usize, usize, usize)> {
+        let prefixes = self
+            .prefix_cache
+            .lock()
+            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
+            .len();
+        let substrings = self
+            .substring_cache
+            .lock()
+            .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
+            .len();
+        let fuzzy = self
+            .fuzzy_cache
+            .lock()
+            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
+            .len();
+        Ok((prefixes, substrings, fuzzy))
+    }
 }
 
 impl SearchLookup for SearchArchiveLookup {
@@ -307,7 +353,6 @@ impl SearchLookup for SearchArchiveLookup {
             .lock()
             .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
             .get(prefix)
-            .cloned()
         {
             self.prefix_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(ids);
@@ -329,7 +374,6 @@ impl SearchLookup for SearchArchiveLookup {
             .lock()
             .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
             .get(gram)
-            .cloned()
         {
             self.substring_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(ids);
@@ -351,7 +395,6 @@ impl SearchLookup for SearchArchiveLookup {
             .lock()
             .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
             .get(key)
-            .cloned()
         {
             self.fuzzy_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(terms);
@@ -379,6 +422,48 @@ impl SearchLookup for SearchArchiveLookup {
             fuzzy_cache_misses: self.fuzzy_misses.load(Ordering::Relaxed),
             ..SearchLookupTelemetry::default()
         }
+    }
+}
+
+#[derive(Debug)]
+struct LookupCache<V> {
+    capacity: usize,
+    order: VecDeque<String>,
+    values: HashMap<String, V>,
+}
+
+impl<V: Clone> LookupCache<V> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::with_capacity(capacity),
+            values: HashMap::new(),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<V> {
+        self.values.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: String, value: V) {
+        if self.capacity == 0 {
+            return;
+        }
+        if !self.values.contains_key(&key) {
+            self.order.push_back(key.clone());
+        }
+        self.values.insert(key, value);
+        while self.values.len() > self.capacity {
+            let Some(expired) = self.order.pop_front() else {
+                break;
+            };
+            self.values.remove(&expired);
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.values.len()
     }
 }
 
