@@ -100,6 +100,12 @@
     {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": ["event-backpressure", "5", "2", "8", "2"],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
         "fsevents-cursor-checkpoint",
         "/tmp/gfm-fozzy-host.gfmstate",

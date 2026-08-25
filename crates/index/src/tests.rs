@@ -96,6 +96,56 @@ fn live_index_applies_chmod_metadata_updates() {
 }
 
 #[test]
+fn event_backpressure_coalesces_duplicate_background_bursts() {
+    let path = PathBuf::from("/tmp/hot.md");
+    let mut queue = EventBackpressureQueue::new(8, 3);
+
+    for _ in 0..20 {
+        let report = queue.enqueue(
+            EventPriority::Background,
+            FileEvent::new(&path, FileEventKind::Modify),
+        );
+        assert!(report.accepted);
+    }
+
+    let snapshot = queue.snapshot();
+    assert_eq!(snapshot.pending_background, 1);
+    assert_eq!(snapshot.coalesced, 19);
+    assert!(!snapshot.repair_required);
+}
+
+#[test]
+fn event_backpressure_preserves_visible_progress_under_background_load() {
+    let mut queue = EventBackpressureQueue::new(5, 2);
+    for index in 0..8 {
+        queue.enqueue(
+            EventPriority::Background,
+            FileEvent::new(format!("/tmp/background-{index}.md"), FileEventKind::Modify),
+        );
+    }
+    queue.enqueue(
+        EventPriority::Visible,
+        FileEvent::new("/tmp/visible-a.md", FileEventKind::Modify),
+    );
+    queue.enqueue(
+        EventPriority::Visible,
+        FileEvent::new("/tmp/visible-b.md", FileEventKind::Modify),
+    );
+
+    let snapshot = queue.snapshot();
+    assert!(snapshot.dropped > 0);
+    assert!(snapshot.repair_required);
+
+    let drained = queue.drain_batch(3);
+    assert_eq!(drained[0].path, PathBuf::from("/tmp/visible-a.md"));
+    assert_eq!(drained[1].path, PathBuf::from("/tmp/visible-b.md"));
+    assert!(drained[2]
+        .path
+        .to_string_lossy()
+        .starts_with("/tmp/background-"));
+}
+
+#[test]
 fn live_index_correlates_file_renames_without_identity_churn() {
     let root = unique_temp_dir("gfm-rename-file-root");
     let from = root.join("NeedleOld.txt");

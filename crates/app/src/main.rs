@@ -9,8 +9,9 @@ use gfm_fs::{
     PackageTraversalReport, ScanOptions,
 };
 use gfm_index::{
-    BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, FseventsCursor,
-    FseventsCursorHealth, IndexVolumeState, Indexer, LiveIndex, SearchStreamStage,
+    BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, EventBackpressureQueue,
+    EventPriority, FseventsCursor, FseventsCursorHealth, IndexVolumeState, Indexer, LiveIndex,
+    SearchStreamStage,
 };
 use gfm_jobs::{
     JobJournal, Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, TaskStatus,
@@ -38,7 +39,9 @@ use gfm_testkit::{
     ParityFixtureScale, ParitySurface, PixelDiffOptions, PixelDriftThreshold, PixelSize,
     RegressionGateOptions,
 };
-use gfm_types::{FileId, FileKind, GfmError, Result, SearchHit, VolumeId};
+use gfm_types::{
+    FileEvent, FileEventKind, FileId, FileKind, GfmError, Result, SearchHit, VolumeId,
+};
 use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
@@ -471,6 +474,42 @@ fn run() -> Result<()> {
             let mut live = LiveIndex::from_records(snapshot.records);
             let report = live.apply_metadata_update(&path)?;
             println!("{}", report.as_tsv());
+        }
+        Some("event-backpressure") => {
+            let capacity = parse_usize_arg(args.next(), "event-backpressure requires a capacity")?;
+            let visible_burst = parse_usize_arg(
+                args.next(),
+                "event-backpressure requires a visible burst size",
+            )?;
+            let background = parse_usize_arg(
+                args.next(),
+                "event-backpressure requires a background event count",
+            )?;
+            let visible = args
+                .next()
+                .map(|value| parse_usize(&value, "visible event count"))
+                .transpose()?
+                .unwrap_or(1);
+            let mut queue = EventBackpressureQueue::new(capacity, visible_burst);
+            for index in 0..background {
+                queue.enqueue(
+                    EventPriority::Background,
+                    FileEvent::new(
+                        format!("/tmp/gfm-background-{index}.md"),
+                        FileEventKind::Modify,
+                    ),
+                );
+            }
+            for index in 0..visible {
+                queue.enqueue(
+                    EventPriority::Visible,
+                    FileEvent::new(
+                        format!("/tmp/gfm-visible-{index}.md"),
+                        FileEventKind::Modify,
+                    ),
+                );
+            }
+            println!("{}", queue.snapshot().as_tsv());
         }
         Some("fsevents-cursor-checkpoint") => {
             let state = required_path(
@@ -1306,6 +1345,10 @@ fn parse_event_ids(value: &str) -> Result<Vec<u64>> {
 
 fn parse_usize_arg(value: Option<String>, message: &str) -> Result<usize> {
     let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
+    parse_usize(&value, message)
+}
+
+fn parse_usize(value: &str, message: &str) -> Result<usize> {
     value
         .parse()
         .map_err(|_| GfmError::Format(format!("{message}; got `{value}`")))
@@ -1706,6 +1749,7 @@ fn print_usage() {
   gfm index-state-inspect <state.gfmstate>
   gfm rename-correlation <source> <destination>
   gfm metadata-update <path> [append-text]
+  gfm event-backpressure <capacity> <visible-burst> <background-events> [visible-events]
   gfm fsevents-cursor-checkpoint <state.gfmstate> <cursor.gfmcursor> <last-event-id> [clean|repair-required]
   gfm fsevents-cursor-inspect <cursor.gfmcursor>
   gfm fsevents-cursor-resume <state.gfmstate> <cursor.gfmcursor>

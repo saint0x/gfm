@@ -15,12 +15,16 @@ use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+mod backpressure;
 mod cursor;
 mod metadata;
 mod rename;
 mod repair;
 mod state;
 
+pub use backpressure::{
+    EventBackpressureQueue, EventBackpressureReport, EventBackpressureSnapshot, EventPriority,
+};
 pub use cursor::{
     FseventsCursor, FseventsCursorHealth, FseventsResumeAction, FseventsResumePlan,
     FSEVENTS_CURSOR_SCHEMA_VERSION,

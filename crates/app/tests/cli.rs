@@ -183,6 +183,24 @@ fn reports_metadata_update_from_binary() {
 }
 
 #[test]
+fn reports_event_backpressure_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["event-backpressure", "5", "2", "8", "2"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("event-backpressure\t"), "{stdout}");
+    assert!(stdout.contains("\tvisible=2\t"), "{stdout}");
+    assert!(stdout.contains("repair-required=true"), "{stdout}");
+}
+
+#[test]
 fn persists_fsevents_cursor_from_binary() {
     let root = unique_temp_dir("gfm-cli-fsevents-root");
     let index = unique_temp_path("gfm-cli-fsevents-records", "gfmidx");
