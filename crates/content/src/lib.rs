@@ -25,7 +25,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use structured::{extract_structured, StructuredExtractStatus, StructuredKind};
 
-pub const TEXT_EXTRACTOR_VERSION: u32 = 3;
+pub const TEXT_EXTRACTOR_VERSION: u32 = 4;
 pub const PDF_EXTRACTOR_VERSION: u32 = 3;
 pub const OFFICE_EXTRACTOR_VERSION: u32 = 3;
 pub const RICH_EXTRACTOR_VERSION: u32 = 4;
@@ -42,6 +42,7 @@ const TEXT_EXTENSION_LIST: &[&str] = &[
 #[derive(Debug, Clone)]
 pub struct ExtractionPolicy {
     pub max_bytes: u64,
+    pub max_text_bytes: usize,
     pub max_pdf_bytes: u64,
     pub max_pdf_pages: usize,
     pub max_pdf_objects: usize,
@@ -62,6 +63,7 @@ impl ExtractionPolicy {
         let percent = percent.clamp(1, 100);
         Self {
             max_bytes: scale_u64(self.max_bytes, percent).max(16 * 1024),
+            max_text_bytes: scale_usize(self.max_text_bytes, percent).max(16 * 1024),
             max_pdf_bytes: scale_u64(self.max_pdf_bytes, percent).max(256 * 1024),
             max_pdf_pages: scale_usize(self.max_pdf_pages, percent).max(1),
             max_pdf_objects: scale_usize(self.max_pdf_objects, percent).max(128),
@@ -85,6 +87,7 @@ impl Default for ExtractionPolicy {
     fn default() -> Self {
         Self {
             max_bytes: 2 * 1024 * 1024,
+            max_text_bytes: 2 * 1024 * 1024,
             max_pdf_bytes: 16 * 1024 * 1024,
             max_pdf_pages: 256,
             max_pdf_objects: 20_000,
@@ -503,6 +506,7 @@ impl Extractor {
             });
         }
 
+        let bytes_read = bytes.len();
         let Ok(text) = String::from_utf8(bytes) else {
             return Ok(ExtractionReport {
                 path: path.to_path_buf(),
@@ -512,12 +516,9 @@ impl Extractor {
                 document: None,
             });
         };
-        let text = normalize_text(&text);
+        let text = truncate_text(&normalize_text(&text), self.policy.max_text_bytes);
 
-        let document = ContentDocument {
-            bytes_read: text.len(),
-            text,
-        };
+        let document = ContentDocument { bytes_read, text };
         Ok(ExtractionReport {
             path: path.to_path_buf(),
             format,
@@ -778,6 +779,11 @@ fn normalize_text(input: &str) -> String {
         .collect()
 }
 
+fn truncate_text(text: &str, max_bytes: usize) -> String {
+    let end = floor_char_boundary(text, max_bytes);
+    text[..end].to_string()
+}
+
 fn is_binary(bytes: &[u8]) -> bool {
     let sample = &bytes[..bytes.len().min(4096)];
     if sample.is_empty() {
@@ -888,8 +894,37 @@ mod tests {
 
         assert_eq!(profile.scale_percent(), 50);
         assert_eq!(policy.max_bytes, 1024 * 1024);
+        assert_eq!(policy.max_text_bytes, 1024 * 1024);
         assert_eq!(policy.max_pdf_bytes, 8 * 1024 * 1024);
         assert_eq!(policy.max_office_entries, 5_000);
+    }
+
+    #[test]
+    fn text_output_budget_truncates_without_splitting_utf8() {
+        let root = unique_temp_dir("gfm-content-text-output-budget");
+        let path = root.join("large.md");
+        fs::write(&path, "alpha 東京 beta").unwrap();
+        let extractor = Extractor::new(ExtractionPolicy {
+            max_text_bytes: "alpha 東".len(),
+            ..ExtractionPolicy::default()
+        });
+
+        let report = extractor.extract_path_report(&path).unwrap();
+        let document = report.document.as_ref().unwrap();
+
+        assert_eq!(report.status, ExtractionStatus::Extracted);
+        assert_eq!(document.bytes_read, "alpha 東京 beta".len());
+        assert_eq!(document.text, "alpha 東");
+        assert_eq!(
+            report.as_tsv(),
+            format!(
+                "extract\tpath={}\tformat=text\tstatus=extracted\treason=ok\tversion={TEXT_EXTRACTOR_VERSION}\tbytes-read={}\ttext-bytes={}",
+                path.display(),
+                "alpha 東京 beta".len(),
+                "alpha 東".len()
+            )
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
