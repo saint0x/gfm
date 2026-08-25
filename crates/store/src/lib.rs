@@ -21,7 +21,7 @@ pub use metadata::{
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
 use memmap2::{Mmap, MmapOptions};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -29,6 +29,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const MAGIC_V1: &str = "gfm-store-v1";
 const MAGIC_V2: &str = "gfm-store-v2";
 const MAGIC_V3: &str = "gfm-store-v3";
+const RECORD_CHECKSUM_FOOTER: &[u8] = b"gfm-records-checksum-v1\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StoreVersion {
@@ -40,10 +41,11 @@ enum StoreVersion {
 pub fn write_records(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<()> {
     let path = path.as_ref();
     durable::atomic_write(path, |writer| {
-        writeln!(writer, "{MAGIC_V3}")?;
+        let mut bytes = Vec::new();
+        writeln!(&mut bytes, "{MAGIC_V3}")?;
         for record in records {
             writeln!(
-                writer,
+                &mut bytes,
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 record.id.volume.0,
                 record.id.node,
@@ -67,6 +69,10 @@ pub fn write_records(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<(
                 escape(&record.path.to_string_lossy()),
             )?;
         }
+        let mut footer = Vec::new();
+        integrity::write_checksum_footer(&mut footer, &bytes, RECORD_CHECKSUM_FOOTER)?;
+        bytes.extend(footer);
+        writer.write_all(&bytes)?;
         Ok(())
     })
     .map(|_| ())
@@ -74,26 +80,27 @@ pub fn write_records(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<(
 
 pub fn read_records(path: impl AsRef<Path>) -> Result<Vec<FileRecord>> {
     let path = path.as_ref();
-    let file = std::fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
-    let mut lines = BufReader::new(file).lines();
-    let version = match lines.next() {
-        Some(Ok(header)) if header == MAGIC_V1 => StoreVersion::V1,
-        Some(Ok(header)) if header == MAGIC_V2 => StoreVersion::V2,
-        Some(Ok(header)) if header == MAGIC_V3 => StoreVersion::V3,
-        Some(Ok(header)) => {
-            return Err(GfmError::Format(format!(
-                "unsupported store header `{header}` in {}",
-                path.display()
-            )));
-        }
-        Some(Err(err)) => return Err(GfmError::io(path, err)),
-        None => return Err(GfmError::Format(format!("empty store {}", path.display()))),
-    };
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(|err| GfmError::io(path, err))?
+        .read_to_end(&mut bytes)
+        .map_err(|err| GfmError::io(path, err))?;
+    verify_record_checksum_from_slice(&bytes, path)?;
+    let indexed_len = record_indexed_len_from_slice(&bytes);
+    let indexed = bytes
+        .get(..indexed_len)
+        .ok_or_else(|| record_format_error(path, "record indexed range out of bounds"))?;
+    let text = std::str::from_utf8(indexed)
+        .map_err(|err| GfmError::Format(format!("invalid store {}: {err}", path.display())))?;
+    let mut lines = text.lines();
+    let header = lines
+        .next()
+        .ok_or_else(|| GfmError::Format(format!("empty store {}", path.display())))?;
+    let version = record_version(header, path)?;
 
     let mut records = Vec::new();
     for (index, line) in lines.enumerate() {
-        let line = line.map_err(|err| GfmError::io(path, err))?;
-        records.push(parse_record(&line, version).map_err(|err| {
+        records.push(parse_record(line, version).map_err(|err| {
             GfmError::Format(format!("{} line {}: {}", path.display(), index + 2, err))
         })?);
     }
@@ -118,24 +125,16 @@ impl MmapRecordArchive {
             // rename, and this API never mutates the mapped file.
             unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
         };
+        verify_record_checksum_from_slice(&mmap, path)?;
+        let indexed_len = record_indexed_len_from_slice(&mmap);
         let (header, mut offset) = next_line(&mmap, 0)
             .ok_or_else(|| GfmError::Format(format!("empty store {}", path.display())))?;
         let header = std::str::from_utf8(header).map_err(|err| {
             GfmError::Format(format!("invalid store header in {}: {err}", path.display()))
         })?;
-        let version = match header {
-            MAGIC_V1 => StoreVersion::V1,
-            MAGIC_V2 => StoreVersion::V2,
-            MAGIC_V3 => StoreVersion::V3,
-            other => {
-                return Err(GfmError::Format(format!(
-                    "unsupported store header `{other}` in {}",
-                    path.display()
-                )));
-            }
-        };
+        let version = record_version(header, path)?;
         let mut records = Vec::new();
-        while offset < mmap.len() {
+        while offset < indexed_len {
             let Some((line, next)) = next_line(&mmap, offset) else {
                 break;
             };
@@ -162,6 +161,10 @@ impl MmapRecordArchive {
 
     pub fn mapped_len(&self) -> usize {
         self.mmap.len()
+    }
+
+    pub fn is_checksummed(&self) -> bool {
+        has_record_checksum_footer(&self.mmap)
     }
 
     pub fn record(&self, index: usize) -> Result<FileRecord> {
@@ -191,6 +194,52 @@ impl MmapRecordArchive {
     pub fn records(&self) -> Result<Vec<FileRecord>> {
         (0..self.len()).map(|index| self.record(index)).collect()
     }
+}
+
+fn record_version(header: &str, path: &Path) -> Result<StoreVersion> {
+    match header {
+        MAGIC_V1 => Ok(StoreVersion::V1),
+        MAGIC_V2 => Ok(StoreVersion::V2),
+        MAGIC_V3 => Ok(StoreVersion::V3),
+        other => Err(GfmError::Format(format!(
+            "unsupported store header `{other}` in {}",
+            path.display()
+        ))),
+    }
+}
+
+fn verify_record_checksum_from_slice(bytes: &[u8], path: &Path) -> Result<()> {
+    if has_record_checksum_footer(bytes)
+        && !integrity::verify_checksum_footer(bytes, RECORD_CHECKSUM_FOOTER, path, "record")?
+    {
+        return Err(record_format_error(path, "missing record checksum footer"));
+    }
+    Ok(())
+}
+
+fn record_indexed_len_from_slice(bytes: &[u8]) -> usize {
+    let footer_len = record_checksum_footer_len();
+    if bytes.len() >= footer_len
+        && bytes.get(bytes.len() - footer_len + 4..) == Some(RECORD_CHECKSUM_FOOTER)
+    {
+        bytes.len() - footer_len
+    } else {
+        bytes.len()
+    }
+}
+
+fn has_record_checksum_footer(bytes: &[u8]) -> bool {
+    let footer_len = record_checksum_footer_len();
+    bytes.len() >= footer_len
+        && bytes.get(bytes.len() - footer_len + 4..) == Some(RECORD_CHECKSUM_FOOTER)
+}
+
+const fn record_checksum_footer_len() -> usize {
+    4 + RECORD_CHECKSUM_FOOTER.len()
+}
+
+fn record_format_error(path: &Path, reason: &str) -> GfmError {
+    GfmError::Format(format!("invalid record store {}: {reason}", path.display()))
 }
 
 fn next_line(bytes: &[u8], start: usize) -> Option<(&[u8], usize)> {
@@ -444,6 +493,7 @@ mod tests {
         let read = read_records(&path).unwrap();
 
         assert_eq!(read, records);
+        assert!(has_record_checksum_footer(&std::fs::read(&path).unwrap()));
         std::fs::remove_file(path).unwrap();
     }
 
@@ -495,8 +545,48 @@ mod tests {
         assert_eq!(archive.len(), 2);
         assert!(!archive.is_empty());
         assert!(archive.mapped_len() > 0);
+        assert!(archive.is_checksummed());
         assert_eq!(archive.record(1).unwrap(), records[1]);
         assert_eq!(archive.records().unwrap(), records);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn checksummed_record_archive_rejects_corruption() {
+        let path = temp_path("gfm-store-checksum", "idx");
+        let records = vec![FileRecord {
+            id: FileId::new(VolumeId(4), 12),
+            parent: Some(FileId::new(VolumeId(4), 1)),
+            path: PathBuf::from("/tmp/a/important.txt"),
+            name: "important.txt".to_string(),
+            kind: FileKind::File,
+            len: 42,
+            mode: 0o100644,
+            owner: 501,
+            group: 20,
+            xattrs_digest: 99,
+            created: None,
+            modified: Some(UNIX_EPOCH + Duration::from_secs(10)),
+            changed: None,
+            hidden: false,
+            tags: vec!["Important".to_string()],
+            finder_comment: Some("notes".to_string()),
+        }];
+
+        write_records(&path, &records).unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        let offset = bytes
+            .windows(b"important".len())
+            .position(|window| window == b"important")
+            .expect("archive should contain the test path");
+        bytes[offset] = b'z';
+        std::fs::write(&path, bytes).unwrap();
+
+        let read_error = read_records(&path).unwrap_err().to_string();
+        let mmap_error = MmapRecordArchive::open(&path).unwrap_err().to_string();
+
+        assert!(read_error.contains("checksum mismatch"), "{read_error}");
+        assert!(mmap_error.contains("checksum mismatch"), "{mmap_error}");
         std::fs::remove_file(path).unwrap();
     }
 

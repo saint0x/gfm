@@ -46,6 +46,21 @@ fn indexes_and_searches_real_files_from_binary() {
     );
     assert_eq!(String::from_utf8(mmap_output.stdout).unwrap(), stdout);
 
+    let verify_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["records-verify", index.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        verify_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify_output.stderr)
+    );
+    let verify_stdout = String::from_utf8(verify_output.stdout).unwrap();
+    assert!(
+        verify_stdout.contains("\tchecksum=verified"),
+        "{verify_stdout}"
+    );
+
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(index).unwrap();
 }

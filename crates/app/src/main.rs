@@ -815,6 +815,20 @@ fn run() -> Result<()> {
                 print_hit(&hit);
             }
         }
+        Some("records-verify") => {
+            let records = required_path(args.next(), "records-verify requires a records path")?;
+            let archive = MmapRecordArchive::open(records)?;
+            println!(
+                "records-verify\trecords={}\tbytes={}\tchecksum={}",
+                archive.len(),
+                archive.mapped_len(),
+                if archive.is_checksummed() {
+                    "verified"
+                } else {
+                    "legacy"
+                }
+            );
+        }
         Some("index-metadata") => {
             let records = required_path(args.next(), "index-metadata requires a records path")?;
             let output = required_path(
@@ -2081,6 +2095,7 @@ fn print_usage() {
   gfm search-content <root> <query>
   gfm search-index <index.gfmidx> <query>
   gfm search-index-mmap <index.gfmidx> <query>
+  gfm records-verify <index.gfmidx>
   gfm index-metadata <records.gfmidx> <metadata.gfmmeta>
   gfm index-dictionary <records.gfmidx> <dictionary.gfmdict>
   gfm dictionary-lookup <dictionary.gfmdict> <term>
