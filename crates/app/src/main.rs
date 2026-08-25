@@ -14,11 +14,12 @@ use gfm_index::{
     comment_query_terms, content_query_terms, parse_volume_indexing_policy, tag_query_terms,
     BackgroundContentIndexer, BatteryState, CompactionPressure, ContentArchiveCleanupPolicy,
     ContentArchiveManifest, ContentArchiveManifestEntry, ContentIndexJobSpec, ContentIndexReport,
-    ContentMaintenanceOptions, ContentMergePolicy, ContentMergeTier, EventBackpressureQueue,
-    EventPriority, FseventsCursor, FseventsCursorHealth, IndexFootprintSpec, IndexMountState,
-    IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState, Indexer, IoPressure, LiveIndex,
-    SearchArchiveLookup, SearchLookupBudget, SearchMetadataField, SearchMetadataPosting,
-    SearchRecordColumns, SearchStreamStage, ThermalState, UserActivity, VolumeIndexPolicy,
+    ContentMaintenanceOptions, ContentMaintenanceReport, ContentMergePolicy, ContentMergeTier,
+    EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
+    IndexFootprintSpec, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState,
+    Indexer, IoPressure, LiveIndex, SearchArchiveLookup, SearchLookupBudget, SearchMetadataField,
+    SearchMetadataPosting, SearchRecordColumns, SearchStreamStage, ThermalState, UserActivity,
+    VolumeIndexPolicy,
 };
 use gfm_jobs::{
     JobBatteryState, JobIoPressure, JobJournal, JobThermalState, JobUserActivity, Priority,
@@ -976,25 +977,56 @@ fn run() -> Result<()> {
                 &segments,
                 &ContentMaintenanceOptions::default(),
             )?;
-            eprintln!(
-                "content-maintenance\tscheduled={}\tterms={}\tmerged={}\tretained={}\tmanifest-archives={}\ttier={:?}\tbytes={}\ttombstone-segments={}",
-                report.scheduled,
-                report.terms,
-                report.merged_segments.len(),
-                report.retained_segments.len(),
-                report.manifest_archives,
-                report.tier,
-                report.merge_bytes,
-                report.tombstone_segments
-            );
-            if let Some(path) = report.published_archive {
-                println!("published\t{}", path.display());
+            print_content_maintenance_report(report);
+        }
+        Some("content-maintain-segments-adaptive") => {
+            let manifest_path = required_path(
+                args.next(),
+                "content-maintain-segments-adaptive requires a manifest path",
+            )?;
+            let output_archive = required_path(
+                args.next(),
+                "content-maintain-segments-adaptive requires an output archive path",
+            )?;
+            let pressure = parse_required_scheduling_pressure(&mut args, "content maintenance")?;
+            let segments = args.map(PathBuf::from).collect::<Vec<_>>();
+            if segments.is_empty() {
+                return Err(GfmError::Format(
+                    "content-maintain-segments-adaptive requires at least one segment".to_string(),
+                ));
             }
-            for path in report.merged_segments {
-                println!("merged-segment\t{}", path.display());
-            }
-            for path in report.retained_segments {
-                println!("retain-segment\t{}", path.display());
+            let volume = detect_volume_id(&manifest_path)
+                .ok()
+                .or_else(|| parent_volume(&output_archive));
+            let worker = BackgroundContentIndexer::default();
+            let outcome = run_scheduled_volume_task(
+                volume,
+                Priority::Background,
+                "content maintenance",
+                pressure,
+                move || {
+                    worker.maintain_segments(
+                        &manifest_path,
+                        &output_archive,
+                        &segments,
+                        &ContentMaintenanceOptions::default(),
+                    )
+                },
+            )?;
+            if outcome.deferred {
+                eprintln!(
+                    "content-maintenance-deferred\taction={:?}",
+                    outcome.scheduling_action
+                );
+            } else {
+                let report = outcome.result.ok_or_else(|| {
+                    GfmError::Format("content maintenance ran without a report".to_string())
+                })?;
+                eprintln!(
+                    "content-maintenance-action\t{:?}",
+                    outcome.scheduling_action
+                );
+                print_content_maintenance_report(report);
             }
         }
         Some("index-content-background") => {
@@ -2925,17 +2957,36 @@ fn parse_optional_scheduling_pressure(
     let Some(io) = args.next() else {
         return Ok(SchedulingPressure::default());
     };
+    parse_scheduling_pressure_tail(io, args, "adaptive scheduling")
+}
+
+fn parse_required_scheduling_pressure(
+    args: &mut impl Iterator<Item = String>,
+    context: &str,
+) -> Result<SchedulingPressure> {
+    let io = required_string(
+        args.next(),
+        &format!("{context} requires adaptive scheduling io pressure"),
+    )?;
+    parse_scheduling_pressure_tail(io, args, context)
+}
+
+fn parse_scheduling_pressure_tail(
+    io: String,
+    args: &mut impl Iterator<Item = String>,
+    context: &str,
+) -> Result<SchedulingPressure> {
     let thermal = required_string(
         args.next(),
-        "adaptive scheduling pressure requires thermal state",
+        &format!("{context} requires adaptive scheduling thermal state"),
     )?;
     let battery = required_string(
         args.next(),
-        "adaptive scheduling pressure requires battery state",
+        &format!("{context} requires adaptive scheduling battery state"),
     )?;
     let user_activity = required_string(
         args.next(),
-        "adaptive scheduling pressure requires user activity",
+        &format!("{context} requires adaptive scheduling user activity"),
     )?;
     Ok(SchedulingPressure {
         io: match parse_io_pressure(io)? {
@@ -3359,6 +3410,99 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct ScheduledTaskOutcome<T> {
+    result: Option<T>,
+    scheduling_action: SchedulingAction,
+    deferred: bool,
+}
+
+fn run_scheduled_volume_task<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    label: &'static str,
+    pressure: SchedulingPressure,
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<ScheduledTaskOutcome<T>>
+where
+    T: Send + 'static,
+{
+    let scheduling = pressure.decide(priority, 1, 1);
+    if scheduling.action == SchedulingAction::Defer {
+        return Ok(ScheduledTaskOutcome {
+            result: None,
+            scheduling_action: scheduling.action,
+            deferred: true,
+        });
+    }
+
+    let result_slot = Arc::new(Mutex::new(None));
+    let result_slot_task = Arc::clone(&result_slot);
+    let mut scheduler = Scheduler::new();
+    let job = if let Some(volume) = volume {
+        scheduler.schedule_on_volume(priority, label, volume)
+    } else {
+        scheduler.schedule(priority, label)
+    };
+    let task = Task::new(job.clone(), move |_| {
+        let result = work()?;
+        *result_slot_task
+            .lock()
+            .expect("scheduled task result lock poisoned") = Some(result);
+        Ok(())
+    });
+    let report = WorkerPool::new(scheduling.worker_threads)
+        .run_isolated(vec![task], scheduling.volume_policy);
+    let outcome = report
+        .outcomes
+        .iter()
+        .find(|outcome| outcome.id == job.id)
+        .ok_or_else(|| GfmError::Format(format!("{label} job did not run")))?;
+    match &outcome.status {
+        TaskStatus::Completed => {}
+        TaskStatus::Started => {
+            return Err(GfmError::Format(format!("{label} job is still running")))
+        }
+        TaskStatus::Cancelled => return Err(GfmError::Cancelled),
+        TaskStatus::Failed(message) => {
+            return Err(GfmError::Format(format!("{label} job failed: {message}")))
+        }
+    }
+    let result = result_slot
+        .lock()
+        .expect("scheduled task result lock poisoned")
+        .take()
+        .ok_or_else(|| GfmError::Format(format!("{label} job completed without a result")))?;
+    Ok(ScheduledTaskOutcome {
+        result: Some(result),
+        scheduling_action: scheduling.action,
+        deferred: false,
+    })
+}
+
+fn print_content_maintenance_report(report: ContentMaintenanceReport) {
+    eprintln!(
+        "content-maintenance\tscheduled={}\tterms={}\tmerged={}\tretained={}\tmanifest-archives={}\ttier={:?}\tbytes={}\ttombstone-segments={}",
+        report.scheduled,
+        report.terms,
+        report.merged_segments.len(),
+        report.retained_segments.len(),
+        report.manifest_archives,
+        report.tier,
+        report.merge_bytes,
+        report.tombstone_segments
+    );
+    if let Some(path) = report.published_archive {
+        println!("published\t{}", path.display());
+    }
+    for path in report.merged_segments {
+        println!("merged-segment\t{}", path.display());
+    }
+    for path in report.retained_segments {
+        println!("retain-segment\t{}", path.display());
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ContentJobOutcome {
     report: Option<ContentIndexReport>,
     inaccessible: usize,
@@ -3771,6 +3915,7 @@ fn print_usage() {
   gfm content-manifest-cleanup <manifest.gfmmanifest> <candidate-archive...>
   gfm content-cleanup-plan <manifest.gfmmanifest> <min-retired-archives> <min-retired-bytes> <max-cleanup-archives> <candidate-archive...>
   gfm content-maintain-segments <manifest.gfmmanifest> <output.gfmcontent> <segments.gfmseg...>
+  gfm content-maintain-segments-adaptive <manifest.gfmmanifest> <output.gfmcontent> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> <segments.gfmseg...>
   gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent> [<nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>]
   gfm resume-content-background [content.job] [jobs.journal]
   gfm search <root> <query>

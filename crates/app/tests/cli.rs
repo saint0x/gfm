@@ -3213,6 +3213,37 @@ fn compacts_content_segments_from_binary() {
             && adaptive_stdout.contains("effective-max-bytes=0"),
         "{adaptive_stdout}"
     );
+    let deferred_content = unique_temp_path("gfm-cli-segment-maintained-deferred", "gfmcontent");
+    let adaptive_maintenance_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-maintain-segments-adaptive",
+            manifest.to_str().unwrap(),
+            deferred_content.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        adaptive_maintenance_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&adaptive_maintenance_output.stderr)
+    );
+    let adaptive_maintenance_stderr =
+        String::from_utf8(adaptive_maintenance_output.stderr).unwrap();
+    assert!(
+        adaptive_maintenance_stderr.contains("content-maintenance-deferred")
+            && adaptive_maintenance_stderr.contains("action=Defer"),
+        "{adaptive_maintenance_stderr}"
+    );
+    assert!(!deferred_content.exists());
+
     let maintenance_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "content-maintain-segments",

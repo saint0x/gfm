@@ -146,6 +146,8 @@ Background content indexing persists its `VolumeId` in the durable job spec and 
 
 Background content indexing also consumes explicit runtime pressure signals: saturated I/O or critical thermal pressure defers the durable job before extraction starts, while elevated pressure, low power, or active user input throttles worker admission.
 
+Content segment maintenance uses the same adaptive scheduling policy before compaction, manifest promotion, or cleanup publication starts.
+
 Sidecar repair, persistent index repair, and diagnostics index rebuild commands enter through volume-isolated worker admission before scanning, rebuilding, quarantining, or publishing repaired archives.
 
 ## UI Parity
@@ -415,6 +417,7 @@ cargo run -p gfm -- content-manifest-promotion-recovery-plan /tmp/gfm.gfmmanifes
 cargo run -p gfm -- content-manifest-promotion-recover /tmp/gfm.gfmmanifest
 cargo run -p gfm -- content-cleanup-plan /tmp/gfm.gfmmanifest 1 0 64 /tmp/gfm-hot.gfmcontent
 cargo run -p gfm -- content-manifest-cleanup /tmp/gfm.gfmmanifest /tmp/gfm-hot.gfmcontent
+cargo run -p gfm -- content-maintain-segments-adaptive /tmp/gfm.gfmmanifest /tmp/gfm-next.gfmcontent saturated nominal ac idle /tmp/gfm-*.gfmseg
 cargo run -p gfm -- search-content-index-manifest /tmp/gfm.gfmidx /tmp/gfm.gfmmanifest "performance-critical"
 ```
 
