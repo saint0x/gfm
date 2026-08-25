@@ -151,6 +151,7 @@ pub enum GfmError {
     Io { path: PathBuf, message: String },
     Format(String),
     Cancelled,
+    Paused,
     Conflict { path: PathBuf, message: String },
 }
 
@@ -169,6 +170,7 @@ impl fmt::Display for GfmError {
             Self::Io { path, message } => write!(f, "{}: {}", path.display(), message),
             Self::Format(message) => f.write_str(message),
             Self::Cancelled => f.write_str("operation was cancelled"),
+            Self::Paused => f.write_str("operation was paused"),
             Self::Conflict { path, message } => write!(f, "{}: {}", path.display(), message),
         }
     }

@@ -2144,6 +2144,57 @@ fn recovers_interrupted_operation_from_binary() {
 }
 
 #[test]
+fn recovers_paused_operation_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ops-recover-paused-root");
+    let journal = root.join("ops.journal");
+    let source = root.join("source");
+    let destination = root.join("destination");
+    fs::create_dir_all(source.join("nested")).unwrap();
+    fs::write(source.join("first.txt"), "first").unwrap();
+    fs::write(source.join("nested").join("second.txt"), "second").unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    fs::write(
+        &journal,
+        format!(
+            "989\tstarted\t1\tcopy\t{}\t{}\t\n989\tpaused\t2\tcopy\t{}\t{}\t\n",
+            source.to_string_lossy(),
+            destination.to_string_lossy(),
+            source.to_string_lossy(),
+            destination.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args(["ops-recover", journal.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("989\tcompleted\tcopy\t"), "{stdout}");
+    assert_eq!(
+        fs::read_to_string(destination.join("first.txt")).unwrap(),
+        "first"
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join("nested").join("second.txt")).unwrap(),
+        "second"
+    );
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(journal_text.contains("989\tpaused"), "{journal_text}");
+    assert_eq!(journal_text.matches("989\tstarted").count(), 2);
+    assert!(journal_text.contains("989\tcompleted"), "{journal_text}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn retries_failed_operation_from_binary_when_policy_allows_it() {
     let root = unique_temp_dir("gfm-cli-ops-retry-root");
     let journal = root.join("ops.journal");

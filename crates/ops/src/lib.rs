@@ -36,6 +36,7 @@ impl Operation {
 pub enum OperationStatus {
     Started,
     Completed,
+    Paused,
     Cancelled,
     Failed,
 }
@@ -115,6 +116,7 @@ pub struct OperationContext {
     pub conflict: ConflictPolicy,
     pub journal_path: PathBuf,
     pub cancellation: OperationCancellation,
+    pub pause: OperationPause,
     pub verification: VerificationPolicy,
 }
 
@@ -124,6 +126,7 @@ impl OperationContext {
             conflict: ConflictPolicy::Fail,
             journal_path: journal_path.into(),
             cancellation: OperationCancellation::default(),
+            pause: OperationPause::default(),
             verification: VerificationPolicy::Bytes,
         }
     }
@@ -135,6 +138,11 @@ impl OperationContext {
 
     pub fn with_cancellation(mut self, cancellation: OperationCancellation) -> Self {
         self.cancellation = cancellation;
+        self
+    }
+
+    pub fn with_pause(mut self, pause: OperationPause) -> Self {
+        self.pause = pause;
         self
     }
 
@@ -155,6 +163,23 @@ impl OperationCancellation {
     pub fn check(&self) -> Result<()> {
         if self.0.load(AtomicOrdering::SeqCst) {
             Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OperationPause(Arc<AtomicBool>);
+
+impl OperationPause {
+    pub fn pause(&self) {
+        self.0.store(true, AtomicOrdering::SeqCst);
+    }
+
+    pub fn check(&self) -> Result<()> {
+        if self.0.load(AtomicOrdering::SeqCst) {
+            Err(GfmError::Paused)
         } else {
             Ok(())
         }
@@ -201,7 +226,7 @@ impl Operator {
             if plan.append_started {
                 self.append(JournalEntry::started(entry.id, operation.clone()))?;
             }
-            match self.execute_started(entry.id, operation.clone(), &mut |_| {}) {
+            match self.execute_started_resuming(entry.id, operation.clone(), &mut |_| {}) {
                 Ok(completed) => outcomes.push(OperationRecoveryOutcome {
                     id: completed.id,
                     status: completed.status,
@@ -210,13 +235,16 @@ impl Operator {
                 }),
                 Err(err) => outcomes.push(OperationRecoveryOutcome {
                     id: entry.id,
-                    status: if matches!(err, GfmError::Cancelled) {
+                    status: if matches!(err, GfmError::Paused) {
+                        OperationStatus::Paused
+                    } else if matches!(err, GfmError::Cancelled) {
                         OperationStatus::Cancelled
                     } else {
                         OperationStatus::Failed
                     },
                     operation,
-                    message: (!matches!(err, GfmError::Cancelled)).then(|| err.to_string()),
+                    message: (!matches!(err, GfmError::Cancelled | GfmError::Paused))
+                        .then(|| err.to_string()),
                 }),
             }
         }
@@ -229,6 +257,25 @@ impl Operator {
         operation: Operation,
         on_progress: &mut impl FnMut(OperationProgressEvent),
     ) -> Result<JournalEntry> {
+        self.execute_started_inner(id, operation, false, on_progress)
+    }
+
+    fn execute_started_resuming(
+        &self,
+        id: u128,
+        operation: Operation,
+        on_progress: &mut impl FnMut(OperationProgressEvent),
+    ) -> Result<JournalEntry> {
+        self.execute_started_inner(id, operation, true, on_progress)
+    }
+
+    fn execute_started_inner(
+        &self,
+        id: u128,
+        operation: Operation,
+        resuming: bool,
+        on_progress: &mut impl FnMut(OperationProgressEvent),
+    ) -> Result<JournalEntry> {
         let plan = match plan_operation_checked(&operation, &self.context.cancellation) {
             Ok(plan) => plan,
             Err(err) => {
@@ -237,8 +284,13 @@ impl Operator {
                 return Err(err);
             }
         };
-        let mut progress = ProgressTracker::new(plan, &self.context.cancellation, on_progress);
-        match self.apply(&operation, &mut progress) {
+        let mut progress = ProgressTracker::new(
+            plan,
+            &self.context.cancellation,
+            &self.context.pause,
+            on_progress,
+        );
+        match self.apply(&operation, resuming, &mut progress) {
             Ok(()) => {
                 let entry = JournalEntry::completed(id, operation);
                 self.append(entry.clone())?;
@@ -259,6 +311,7 @@ impl Operator {
     fn apply(
         &self,
         operation: &Operation,
+        resuming: bool,
         progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
     ) -> Result<()> {
         match operation {
@@ -267,6 +320,7 @@ impl Operator {
                 to,
                 self.context.conflict,
                 self.context.verification,
+                resuming,
                 progress,
             ),
             Operation::Move { from, to } | Operation::Rename { from, to } => move_path(
@@ -274,6 +328,7 @@ impl Operator {
                 to,
                 self.context.conflict,
                 self.context.verification,
+                resuming,
                 progress,
             ),
             Operation::Delete { path } => delete_path(path, progress),
@@ -333,13 +388,13 @@ fn recoverable_operations(
     states
         .into_iter()
         .filter_map(|state| {
-            let append_started = if state.last_status == OperationStatus::Started {
-                false
-            } else if policy.retry_failed
+            let failed_retryable = policy.retry_failed
                 && state.last_status == OperationStatus::Failed
                 && state.started_count < policy.max_attempts.max(1)
-                && retryable_failure_message(state.message.as_deref())
-            {
+                && retryable_failure_message(state.message.as_deref());
+            let append_started = if state.last_status == OperationStatus::Started {
+                false
+            } else if state.last_status == OperationStatus::Paused || failed_retryable {
                 true
             } else {
                 return None;
@@ -399,6 +454,16 @@ impl JournalEntry {
         }
     }
 
+    fn paused(id: u128, operation: Operation) -> Self {
+        Self {
+            id,
+            status: OperationStatus::Paused,
+            operation,
+            message: None,
+            timestamp_nanos: now_nanos(),
+        }
+    }
+
     fn cancelled(id: u128, operation: Operation) -> Self {
         Self {
             id,
@@ -420,7 +485,9 @@ impl JournalEntry {
     }
 
     fn from_error(id: u128, operation: Operation, err: &GfmError) -> Self {
-        if matches!(err, GfmError::Cancelled) {
+        if matches!(err, GfmError::Paused) {
+            Self::paused(id, operation)
+        } else if matches!(err, GfmError::Cancelled) {
             Self::cancelled(id, operation)
         } else {
             Self::failed(id, operation, err.to_string())
@@ -468,6 +535,7 @@ fn plan_path(path: &Path, cancellation: &OperationCancellation) -> Result<Operat
 struct ProgressTracker<'a, F: FnMut(OperationProgressEvent)> {
     progress: OperationProgress,
     cancellation: &'a OperationCancellation,
+    pause: &'a OperationPause,
     on_progress: &'a mut F,
 }
 
@@ -475,11 +543,13 @@ impl<'a, F: FnMut(OperationProgressEvent)> ProgressTracker<'a, F> {
     fn new(
         plan: OperationProgress,
         cancellation: &'a OperationCancellation,
+        pause: &'a OperationPause,
         on_progress: &'a mut F,
     ) -> Self {
         let mut tracker = Self {
             progress: plan,
             cancellation,
+            pause,
             on_progress,
         };
         tracker.emit(OperationProgressPhase::Planned);
@@ -487,19 +557,19 @@ impl<'a, F: FnMut(OperationProgressEvent)> ProgressTracker<'a, F> {
     }
 
     fn advance(&mut self, metadata: &fs::Metadata) -> Result<()> {
-        self.cancellation.check()?;
+        self.check_control()?;
         self.progress.completed_items += 1;
         self.progress.completed_bytes += item_bytes(metadata);
         self.emit(OperationProgressPhase::Advanced);
-        self.cancellation.check()
+        self.check_control()
     }
 
     fn complete(&mut self) -> Result<()> {
-        self.cancellation.check()?;
+        self.check_control()?;
         self.progress.completed_items = self.progress.total_items;
         self.progress.completed_bytes = self.progress.total_bytes;
         self.emit(OperationProgressPhase::Advanced);
-        self.cancellation.check()
+        self.check_control()
     }
 
     fn emit(&mut self, phase: OperationProgressPhase) {
@@ -510,7 +580,11 @@ impl<'a, F: FnMut(OperationProgressEvent)> ProgressTracker<'a, F> {
     }
 
     fn check_cancelled(&self) -> Result<()> {
-        self.cancellation.check()
+        self.check_control()
+    }
+
+    fn check_control(&self) -> Result<()> {
+        self.cancellation.check().and_then(|()| self.pause.check())
     }
 }
 
@@ -527,16 +601,20 @@ fn copy_path(
     to: &Path,
     conflict: ConflictPolicy,
     verification: VerificationPolicy,
+    resuming: bool,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
     ensure_source_exists(from)?;
-    prepare_destination(to, conflict)?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+    if resuming && path_exists_or_symlink(to) {
+        return resume_copy_path(from, to, &metadata, verification, progress);
+    }
+    prepare_destination(to, conflict)?;
     if metadata.file_type().is_symlink() {
         copy_symlink(from, to, progress)
     } else if metadata.is_dir() {
-        copy_directory(from, to, verification, progress)
+        copy_directory(from, to, verification, false, progress)
     } else {
         copy_file(from, to, verification)?;
         progress.advance(&metadata)
@@ -548,10 +626,17 @@ fn move_path(
     to: &Path,
     conflict: ConflictPolicy,
     verification: VerificationPolicy,
+    resuming: bool,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
     ensure_source_exists(from)?;
+    if resuming && path_exists_or_symlink(to) {
+        let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+        resume_copy_path(from, to, &metadata, verification, progress)?;
+        delete_path_untracked(from)?;
+        return Ok(());
+    }
     prepare_destination(to, conflict)?;
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
@@ -559,7 +644,14 @@ fn move_path(
     match fs::rename(from, to) {
         Ok(()) => progress.complete(),
         Err(rename_err) => {
-            copy_path(from, to, ConflictPolicy::Replace, verification, progress)?;
+            copy_path(
+                from,
+                to,
+                ConflictPolicy::Replace,
+                verification,
+                false,
+                progress,
+            )?;
             delete_path_untracked(from).map_err(|delete_err| {
                 GfmError::Format(format!(
                     "moved copy to {} but failed to remove source {}: {}; original rename error: {}",
@@ -611,11 +703,22 @@ fn copy_directory(
     from: &Path,
     to: &Path,
     verification: VerificationPolicy,
+    resuming: bool,
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
-    fs::create_dir_all(to).map_err(|err| GfmError::io(to, err))?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+    if resuming && path_exists_or_symlink(to) {
+        let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
+        if !destination_metadata.is_dir() {
+            return Err(GfmError::Conflict {
+                path: to.to_path_buf(),
+                message: "resume destination exists but is not a directory".to_string(),
+            });
+        }
+    } else {
+        fs::create_dir_all(to).map_err(|err| GfmError::io(to, err))?;
+    }
     preserve_metadata(from, to, &metadata)?;
     progress.advance(&metadata)?;
 
@@ -627,15 +730,70 @@ fn copy_directory(
         let child_metadata =
             fs::symlink_metadata(&source).map_err(|err| GfmError::io(&source, err))?;
         if child_metadata.file_type().is_symlink() {
-            copy_symlink(&source, &destination, progress)?;
+            if resuming && path_exists_or_symlink(&destination) {
+                resume_copy_path(
+                    &source,
+                    &destination,
+                    &child_metadata,
+                    verification,
+                    progress,
+                )?;
+            } else {
+                copy_symlink(&source, &destination, progress)?;
+            }
         } else if child_metadata.is_dir() {
-            copy_directory(&source, &destination, verification, progress)?;
+            copy_directory(&source, &destination, verification, resuming, progress)?;
+        } else if resuming && path_exists_or_symlink(&destination) {
+            resume_copy_path(
+                &source,
+                &destination,
+                &child_metadata,
+                verification,
+                progress,
+            )?;
         } else {
             let _ = copy_file(&source, &destination, verification)?;
             progress.advance(&child_metadata)?;
         }
     }
     Ok(())
+}
+
+fn resume_copy_path(
+    from: &Path,
+    to: &Path,
+    metadata: &fs::Metadata,
+    verification: VerificationPolicy,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    progress.check_cancelled()?;
+    if metadata.file_type().is_symlink() {
+        verify_existing_symlink_copy(from, to)?;
+        progress.advance(metadata)
+    } else if metadata.is_dir() {
+        copy_directory(from, to, verification, true, progress)
+    } else {
+        verify_copy(from, to, verification)?;
+        preserve_metadata(from, to, metadata)?;
+        progress.advance(metadata)
+    }
+}
+
+fn verify_existing_symlink_copy(from: &Path, to: &Path) -> Result<()> {
+    let source_target = fs::read_link(from).map_err(|err| GfmError::io(from, err))?;
+    let destination_target = fs::read_link(to).map_err(|err| GfmError::io(to, err))?;
+    if source_target == destination_target {
+        Ok(())
+    } else {
+        Err(GfmError::Conflict {
+            path: to.to_path_buf(),
+            message: format!(
+                "resume symlink target mismatch: {} != {}",
+                source_target.display(),
+                destination_target.display()
+            ),
+        })
+    }
 }
 
 fn copy_symlink(
@@ -1095,6 +1253,7 @@ fn encode_status(status: OperationStatus) -> &'static str {
     match status {
         OperationStatus::Started => "started",
         OperationStatus::Completed => "completed",
+        OperationStatus::Paused => "paused",
         OperationStatus::Cancelled => "cancelled",
         OperationStatus::Failed => "failed",
     }
@@ -1104,6 +1263,7 @@ fn decode_status(value: &str) -> std::result::Result<OperationStatus, String> {
     match value {
         "started" => Ok(OperationStatus::Started),
         "completed" => Ok(OperationStatus::Completed),
+        "paused" => Ok(OperationStatus::Paused),
         "cancelled" => Ok(OperationStatus::Cancelled),
         "failed" => Ok(OperationStatus::Failed),
         other => Err(format!("unknown status `{other}`")),
@@ -1355,6 +1515,93 @@ mod tests {
             journal_entries.last().unwrap().status,
             OperationStatus::Cancelled
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn paused_recursive_copy_journals_recoverable_pause() {
+        let root = unique_temp_dir("gfm-ops-pause-copy");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("nested").join("second.txt"), "second").unwrap();
+        fs::write(source.join("first.txt"), "first").unwrap();
+        let pause = OperationPause::default();
+        let pause_callback = pause.clone();
+        let mut events = Vec::new();
+
+        let err = Operator::new(OperationContext::new(&journal).with_pause(pause))
+            .execute_with_progress(
+                Operation::Copy {
+                    from: source.clone(),
+                    to: destination.clone(),
+                },
+                |event| {
+                    events.push(event);
+                    if event.phase == OperationProgressPhase::Advanced
+                        && event.progress.completed_items == 1
+                    {
+                        pause_callback.pause();
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Paused));
+        assert!(destination.is_dir());
+        assert!(!destination.join("first.txt").exists());
+        let entries = read_journal(&journal).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].status, OperationStatus::Started);
+        assert_eq!(entries[1].status, OperationStatus::Paused);
+        assert!(events
+            .iter()
+            .any(|event| event.phase == OperationProgressPhase::Advanced
+                && event.progress.completed_items == 1));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_resumes_paused_directory_copy_into_existing_destination() {
+        let root = unique_temp_dir("gfm-ops-resume-paused-copy");
+        let journal = root.join("journal.log");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("first.txt"), "first").unwrap();
+        fs::write(source.join("nested").join("second.txt"), "second").unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+        append_journal(&journal, &JournalEntry::started(46, operation.clone())).unwrap();
+        append_journal(&journal, &JournalEntry::paused(46, operation)).unwrap();
+
+        let report = Operator::new(OperationContext::new(&journal))
+            .recover_interrupted()
+            .unwrap();
+
+        assert_eq!(report.outcomes.len(), 1);
+        assert_eq!(report.outcomes[0].id, 46);
+        assert_eq!(report.outcomes[0].status, OperationStatus::Completed);
+        assert_eq!(
+            fs::read_to_string(destination.join("first.txt")).unwrap(),
+            "first"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("nested").join("second.txt")).unwrap(),
+            "second"
+        );
+        let entries = read_journal(&journal).unwrap();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].status, OperationStatus::Started);
+        assert_eq!(entries[1].status, OperationStatus::Paused);
+        assert_eq!(entries[2].status, OperationStatus::Started);
+        assert_eq!(entries[3].status, OperationStatus::Completed);
 
         fs::remove_dir_all(root).unwrap();
     }
