@@ -1,5 +1,5 @@
 use gfm_config::ConfigStore;
-use gfm_content::{ExtractionQuarantine, Extractor};
+use gfm_content::{CachedExtractor, ExtractionQuarantine, Extractor};
 use gfm_diagnostics::{
     export_operator_trace, inspect_storage, rebuild_index, select_parity_baseline, RebuildSpec,
     StorageInspection,
@@ -633,6 +633,13 @@ fn run() -> Result<()> {
             let decision = quarantine.record_report(&report);
             println!("{}", report.as_tsv());
             println!("{}", decision.as_tsv());
+        }
+        Some("extract-cache") => {
+            let path = required_path(args.next(), "extract-cache requires a path")?;
+            let record = record_for_path(&path, None, false)?;
+            let mut cached = CachedExtractor::default();
+            println!("{}", cached.extract_record_report(&record)?.as_tsv());
+            println!("{}", cached.extract_record_report(&record)?.as_tsv());
         }
         Some("index-content-segment") => {
             let root = required_path(args.next(), "index-content-segment requires a root path")?;
@@ -1858,6 +1865,7 @@ fn print_usage() {
   gfm fsevents-repair-schedule <state.gfmstate> <cursor.gfmcursor> <observed-event-ids|-> [reason|-] [dropped-roots...]
   gfm index-content <root> <records.gfmidx> <content.gfmcontent>
   gfm extract-report <path>
+  gfm extract-cache <path>
   gfm index-content-segment <root> <output.gfmseg>
   gfm compact-content <output.gfmcontent> <segments.gfmseg...>
   gfm index-content-background <root> <segment-dir> <records.gfmidx> <content.gfmcontent>

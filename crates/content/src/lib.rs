@@ -1,4 +1,5 @@
 mod archive;
+mod cache;
 mod ooxml;
 mod pdf;
 mod quarantine;
@@ -6,6 +7,10 @@ mod rich;
 mod structured;
 
 use archive::{extract_archive_metadata, ArchiveExtractStatus, ArchiveKind};
+pub use cache::{
+    CachedExtractionReport, CachedExtractor, ExtractionCache, ExtractionCacheKey,
+    ExtractionCacheStatus, ExtractionContentSignature,
+};
 use gfm_types::{FileKind, FileRecord, GfmError, Result, SearchSnippet, SnippetHighlight};
 use ooxml::{extract_ooxml, OoxmlExtractStatus, OoxmlKind};
 use pdf::{extract_pdf, PdfExtractStatus};
@@ -1078,6 +1083,63 @@ endobj",
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn cached_extractor_hits_for_unchanged_file_identity_and_signature() {
+        let root = unique_temp_dir("gfm-content-cache-hit");
+        let path = root.join("cache.md");
+        fs::write(&path, "cached needle").unwrap();
+        let record = record_for_path(&path);
+        let mut cached = CachedExtractor::default();
+
+        let first = cached.extract_record_report(&record).unwrap();
+        let second = cached.extract_record_report(&record).unwrap();
+
+        assert_eq!(first.status, ExtractionCacheStatus::Miss);
+        assert_eq!(second.status, ExtractionCacheStatus::Hit);
+        assert_eq!(first.key, second.key);
+        assert_eq!(cached.cache_len(), 1);
+        assert!(second.as_tsv().contains("status=hit"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cached_extractor_misses_after_content_signature_changes() {
+        let root = unique_temp_dir("gfm-content-cache-content-change");
+        let path = root.join("cache.md");
+        fs::write(&path, "cached needle").unwrap();
+        let mut record = record_for_path(&path);
+        let mut cached = CachedExtractor::default();
+
+        let first = cached.extract_record_report(&record).unwrap();
+        fs::write(&path, "cached changed needle").unwrap();
+        record = record_for_path(&path);
+        let second = cached.extract_record_report(&record).unwrap();
+
+        assert_eq!(first.status, ExtractionCacheStatus::Miss);
+        assert_eq!(second.status, ExtractionCacheStatus::Miss);
+        assert_ne!(first.key.content, second.key.content);
+        assert_eq!(cached.cache_len(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cached_extractor_misses_after_metadata_epoch_changes() {
+        let root = unique_temp_dir("gfm-content-cache-metadata-change");
+        let path = root.join("cache.md");
+        fs::write(&path, "cached needle").unwrap();
+        let mut record = record_for_path(&path);
+        let mut cached = CachedExtractor::default();
+
+        let first = cached.extract_record_report(&record).unwrap();
+        record.xattrs_digest = record.xattrs_digest.wrapping_add(1);
+        let second = cached.extract_record_report(&record).unwrap();
+
+        assert_eq!(first.status, ExtractionCacheStatus::Miss);
+        assert_eq!(second.status, ExtractionCacheStatus::Miss);
+        assert_ne!(first.key.metadata_epoch, second.key.metadata_epoch);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "{}-{}",
@@ -1089,6 +1151,28 @@ endobj",
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn record_for_path(path: &Path) -> FileRecord {
+        let metadata = fs::metadata(path).unwrap();
+        FileRecord {
+            id: FileId::new(VolumeId(1), 1),
+            parent: None,
+            path: path.to_path_buf(),
+            name: path.file_name().unwrap().to_string_lossy().into_owned(),
+            kind: FileKind::File,
+            len: metadata.len(),
+            mode: 0,
+            owner: 0,
+            group: 0,
+            xattrs_digest: 0,
+            created: metadata.created().ok(),
+            modified: metadata.modified().ok(),
+            changed: metadata.modified().ok(),
+            hidden: false,
+            tags: Vec::new(),
+            finder_comment: None,
+        }
     }
 
     fn minimal_pdf(text: &str) -> Vec<u8> {
