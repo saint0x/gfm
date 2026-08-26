@@ -8,6 +8,7 @@ use core_foundation_sys::base::{CFAllocatorRef, CFRelease, CFTypeRef};
 use core_foundation_sys::dictionary::{CFDictionaryGetValueIfPresent, CFDictionaryRef};
 use core_foundation_sys::string::CFStringRef;
 use core_foundation_sys::url::CFURLRef;
+use core_foundation_sys::uuid::{CFUUIDCreateString, CFUUIDRef};
 use libc::c_void;
 use std::path::{Path, PathBuf};
 use std::ptr;
@@ -27,19 +28,34 @@ extern "C" {
 
     static kDADiskDescriptionDeviceInternalKey: CFStringRef;
     static kDADiskDescriptionDeviceModelKey: CFStringRef;
+    static kDADiskDescriptionDevicePathKey: CFStringRef;
     static kDADiskDescriptionDeviceProtocolKey: CFStringRef;
     static kDADiskDescriptionDeviceVendorKey: CFStringRef;
+    static kDADiskDescriptionMediaBlockSizeKey: CFStringRef;
+    static kDADiskDescriptionMediaBSDMajorKey: CFStringRef;
+    static kDADiskDescriptionMediaBSDMinorKey: CFStringRef;
     static kDADiskDescriptionMediaBSDNameKey: CFStringRef;
+    static kDADiskDescriptionMediaBSDUnitKey: CFStringRef;
+    static kDADiskDescriptionMediaContentKey: CFStringRef;
+    static kDADiskDescriptionMediaEncryptedKey: CFStringRef;
     static kDADiskDescriptionMediaEjectableKey: CFStringRef;
     static kDADiskDescriptionMediaKindKey: CFStringRef;
+    static kDADiskDescriptionMediaLeafKey: CFStringRef;
+    static kDADiskDescriptionMediaNameKey: CFStringRef;
+    static kDADiskDescriptionMediaPathKey: CFStringRef;
     static kDADiskDescriptionMediaRemovableKey: CFStringRef;
     static kDADiskDescriptionMediaSizeKey: CFStringRef;
+    static kDADiskDescriptionMediaTypeKey: CFStringRef;
+    static kDADiskDescriptionMediaUUIDKey: CFStringRef;
+    static kDADiskDescriptionMediaWholeKey: CFStringRef;
     static kDADiskDescriptionMediaWritableKey: CFStringRef;
     static kDADiskDescriptionVolumeKindKey: CFStringRef;
+    static kDADiskDescriptionVolumeMountableKey: CFStringRef;
     static kDADiskDescriptionVolumeNameKey: CFStringRef;
     static kDADiskDescriptionVolumeNetworkKey: CFStringRef;
     static kDADiskDescriptionVolumePathKey: CFStringRef;
     static kDADiskDescriptionVolumeTypeKey: CFStringRef;
+    static kDADiskDescriptionVolumeUUIDKey: CFStringRef;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,17 +63,32 @@ pub struct NativeVolumeDescription {
     pub status: NativeVolumeStatus,
     pub volume_name: Option<String>,
     pub volume_kind: Option<String>,
+    pub volume_mountable: Option<bool>,
     pub volume_type: Option<String>,
+    pub volume_uuid: Option<String>,
     pub volume_path: Option<PathBuf>,
     pub volume_network: Option<bool>,
     pub media_bsd_name: Option<String>,
+    pub media_bsd_major: Option<u64>,
+    pub media_bsd_minor: Option<u64>,
+    pub media_bsd_unit: Option<u64>,
+    pub media_content: Option<String>,
     pub media_kind: Option<String>,
+    pub media_leaf: Option<bool>,
+    pub media_name: Option<String>,
+    pub media_path: Option<String>,
     pub media_removable: Option<bool>,
     pub media_ejectable: Option<bool>,
     pub media_writable: Option<bool>,
+    pub media_type: Option<String>,
+    pub media_uuid: Option<String>,
+    pub media_whole: Option<bool>,
+    pub media_encrypted: Option<bool>,
+    pub media_block_size_bytes: Option<u64>,
     pub media_size_bytes: Option<u64>,
     pub device_internal: Option<bool>,
     pub device_model: Option<String>,
+    pub device_path: Option<String>,
     pub device_protocol: Option<String>,
     pub device_vendor: Option<String>,
     pub reason: Option<String>,
@@ -68,6 +99,16 @@ pub enum NativeVolumeStatus {
     Available,
     Missing,
     Unavailable,
+}
+
+impl NativeVolumeStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Missing => "missing",
+            Self::Unavailable => "unavailable",
+        }
+    }
 }
 
 pub fn copy_volume_description_for_path(path: &Path) -> NativeVolumeDescription {
@@ -87,6 +128,9 @@ pub fn copy_volume_description_for_path(path: &Path) -> NativeVolumeDescription 
         DADiskCreateFromVolumePath(kCFAllocatorDefault, session, url.as_concrete_TypeRef())
     };
     if disk.is_null() {
+        unsafe {
+            CFRelease(session as CFTypeRef);
+        }
         return unavailable(format!(
             "DiskArbitration did not return a disk for {}",
             path.display()
@@ -112,17 +156,36 @@ pub fn copy_volume_description_for_path(path: &Path) -> NativeVolumeDescription 
         status: NativeVolumeStatus::Available,
         volume_name: string_value(&description, unsafe { kDADiskDescriptionVolumeNameKey }),
         volume_kind: string_value(&description, unsafe { kDADiskDescriptionVolumeKindKey }),
+        volume_mountable: bool_value(&description, unsafe {
+            kDADiskDescriptionVolumeMountableKey
+        }),
         volume_type: string_value(&description, unsafe { kDADiskDescriptionVolumeTypeKey }),
+        volume_uuid: uuid_value(&description, unsafe { kDADiskDescriptionVolumeUUIDKey }),
         volume_path: url_value(&description, unsafe { kDADiskDescriptionVolumePathKey }),
         volume_network: bool_value(&description, unsafe { kDADiskDescriptionVolumeNetworkKey }),
         media_bsd_name: string_value(&description, unsafe { kDADiskDescriptionMediaBSDNameKey }),
+        media_bsd_major: u64_value(&description, unsafe { kDADiskDescriptionMediaBSDMajorKey }),
+        media_bsd_minor: u64_value(&description, unsafe { kDADiskDescriptionMediaBSDMinorKey }),
+        media_bsd_unit: u64_value(&description, unsafe { kDADiskDescriptionMediaBSDUnitKey }),
+        media_content: string_value(&description, unsafe { kDADiskDescriptionMediaContentKey }),
         media_kind: string_value(&description, unsafe { kDADiskDescriptionMediaKindKey }),
+        media_leaf: bool_value(&description, unsafe { kDADiskDescriptionMediaLeafKey }),
+        media_name: string_value(&description, unsafe { kDADiskDescriptionMediaNameKey }),
+        media_path: string_value(&description, unsafe { kDADiskDescriptionMediaPathKey }),
         media_removable: bool_value(&description, unsafe { kDADiskDescriptionMediaRemovableKey }),
         media_ejectable: bool_value(&description, unsafe { kDADiskDescriptionMediaEjectableKey }),
         media_writable: bool_value(&description, unsafe { kDADiskDescriptionMediaWritableKey }),
+        media_type: string_value(&description, unsafe { kDADiskDescriptionMediaTypeKey }),
+        media_uuid: uuid_value(&description, unsafe { kDADiskDescriptionMediaUUIDKey }),
+        media_whole: bool_value(&description, unsafe { kDADiskDescriptionMediaWholeKey }),
+        media_encrypted: bool_value(&description, unsafe { kDADiskDescriptionMediaEncryptedKey }),
+        media_block_size_bytes: u64_value(&description, unsafe {
+            kDADiskDescriptionMediaBlockSizeKey
+        }),
         media_size_bytes: u64_value(&description, unsafe { kDADiskDescriptionMediaSizeKey }),
         device_internal: bool_value(&description, unsafe { kDADiskDescriptionDeviceInternalKey }),
         device_model: string_value(&description, unsafe { kDADiskDescriptionDeviceModelKey }),
+        device_path: string_value(&description, unsafe { kDADiskDescriptionDevicePathKey }),
         device_protocol: string_value(&description, unsafe { kDADiskDescriptionDeviceProtocolKey }),
         device_vendor: string_value(&description, unsafe { kDADiskDescriptionDeviceVendorKey }),
         reason: None,
@@ -155,6 +218,20 @@ fn u64_value(
     value_for_key(description, key)
         .and_then(|raw| unsafe { CFNumber::wrap_under_get_rule(raw as _) }.to_i64())
         .and_then(|value| u64::try_from(value).ok())
+}
+
+fn uuid_value(
+    description: &CFDictionary<*const c_void, *const c_void>,
+    key: CFStringRef,
+) -> Option<String> {
+    value_for_key(description, key)
+        .and_then(|raw| {
+            let value = unsafe { CFUUIDCreateString(kCFAllocatorDefault, raw as CFUUIDRef) };
+            (!value.is_null()).then_some(value)
+        })
+        .map(|value| unsafe { CFString::wrap_under_create_rule(value) })
+        .map(|value| value.to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn url_value(
@@ -197,17 +274,32 @@ fn unavailable_with_status(
         status,
         volume_name: None,
         volume_kind: None,
+        volume_mountable: None,
         volume_type: None,
+        volume_uuid: None,
         volume_path: None,
         volume_network: None,
         media_bsd_name: None,
+        media_bsd_major: None,
+        media_bsd_minor: None,
+        media_bsd_unit: None,
+        media_content: None,
         media_kind: None,
+        media_leaf: None,
+        media_name: None,
+        media_path: None,
         media_removable: None,
         media_ejectable: None,
         media_writable: None,
+        media_type: None,
+        media_uuid: None,
+        media_whole: None,
+        media_encrypted: None,
+        media_block_size_bytes: None,
         media_size_bytes: None,
         device_internal: None,
         device_model: None,
+        device_path: None,
         device_protocol: None,
         device_vendor: None,
         reason: Some(reason.into()),

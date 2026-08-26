@@ -1,3 +1,4 @@
+use gfm_mac_sys::{NativeVolumeDescription, NativeVolumeStatus};
 use gfm_types::{GfmError, Result, VolumeId};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -94,6 +95,7 @@ impl VolumeCapacity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeDescriptor {
     pub id: VolumeId,
+    pub stable_identity: String,
     pub label: String,
     pub path: PathBuf,
     pub kind: VolumeKind,
@@ -101,8 +103,20 @@ pub struct VolumeDescriptor {
     pub removable: bool,
     pub network: bool,
     pub ejectable: bool,
+    pub writable: bool,
+    pub read_only: bool,
+    pub mountable: Option<bool>,
     pub capacity: VolumeCapacity,
     pub commands: VolumeCommandPolicy,
+    pub native_status: Option<NativeVolumeStatus>,
+    pub bsd_name: Option<String>,
+    pub volume_uuid: Option<String>,
+    pub media_uuid: Option<String>,
+    pub filesystem: Option<String>,
+    pub media_content: Option<String>,
+    pub device_protocol: Option<String>,
+    pub device_model: Option<String>,
+    pub device_vendor: Option<String>,
     pub source: String,
 }
 
@@ -115,6 +129,7 @@ impl VolumeDescriptor {
         let native = marker
             .is_none()
             .then(|| gfm_mac_sys::copy_volume_description_for_path(&path));
+        let native_status = native.as_ref().map(|native| native.status);
         let label = native
             .as_ref()
             .and_then(|native| native.volume_name.clone())
@@ -142,14 +157,22 @@ impl VolumeDescriptor {
             .as_ref()
             .and_then(|native| native.media_ejectable)
             .unwrap_or(removable || network);
+        let writable = native
+            .as_ref()
+            .and_then(|native| native.media_writable)
+            .unwrap_or_else(|| !metadata.permissions().readonly());
+        let read_only = !writable;
+        let mountable = native.as_ref().and_then(|native| native.volume_mountable);
         let capacity = VolumeCapacity::read(&path);
         let commands = command_policy(kind, mount_state, ejectable);
+        let stable_identity = stable_identity(id, &path, native.as_ref());
         let source = marker
             .map(|marker| format!("fixture-marker:{marker}"))
             .unwrap_or_else(|| volume_source(native.as_ref()));
 
         Ok(Self {
             id,
+            stable_identity,
             label,
             path,
             kind,
@@ -157,15 +180,44 @@ impl VolumeDescriptor {
             removable,
             network,
             ejectable,
+            writable,
+            read_only,
+            mountable,
             capacity,
             commands,
+            native_status,
+            bsd_name: native
+                .as_ref()
+                .and_then(|native| native.media_bsd_name.clone()),
+            volume_uuid: native
+                .as_ref()
+                .and_then(|native| native.volume_uuid.clone()),
+            media_uuid: native.as_ref().and_then(|native| native.media_uuid.clone()),
+            filesystem: native.as_ref().and_then(|native| {
+                native
+                    .volume_kind
+                    .clone()
+                    .or_else(|| native.volume_type.clone())
+            }),
+            media_content: native
+                .as_ref()
+                .and_then(|native| native.media_content.clone()),
+            device_protocol: native
+                .as_ref()
+                .and_then(|native| native.device_protocol.clone()),
+            device_model: native
+                .as_ref()
+                .and_then(|native| native.device_model.clone()),
+            device_vendor: native
+                .as_ref()
+                .and_then(|native| native.device_vendor.clone()),
             source,
         })
     }
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -182,6 +234,47 @@ impl VolumeDescriptor {
             escape_field(&self.source),
             self.commands
                 .reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            escape_field(&self.stable_identity),
+            self.native_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            self.writable,
+            self.read_only,
+            self.mountable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.bsd_name
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.volume_uuid
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.media_uuid
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.filesystem
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.media_content
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.device_protocol
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.device_model
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.device_vendor
                 .as_deref()
                 .map(escape_field)
                 .unwrap_or_else(|| "-".to_string())
@@ -269,10 +362,9 @@ fn classify_volume(
 
 fn classify_native_volume(
     path: &Path,
-    native: Option<&gfm_mac_sys::NativeVolumeDescription>,
+    native: Option<&NativeVolumeDescription>,
 ) -> Option<VolumeKind> {
-    let native =
-        native.filter(|native| native.status == gfm_mac_sys::NativeVolumeStatus::Available)?;
+    let native = native.filter(|native| native.status == NativeVolumeStatus::Available)?;
     if path == Path::new("/") {
         return Some(VolumeKind::System);
     }
@@ -313,9 +405,9 @@ fn classify_native_volume(
     None
 }
 
-fn volume_source(native: Option<&gfm_mac_sys::NativeVolumeDescription>) -> String {
+fn volume_source(native: Option<&NativeVolumeDescription>) -> String {
     match native {
-        Some(native) if native.status == gfm_mac_sys::NativeVolumeStatus::Available => {
+        Some(native) if native.status == NativeVolumeStatus::Available => {
             let mut fields = vec!["diskarbitration".to_string()];
             if let Some(name) = native.media_bsd_name.as_deref() {
                 fields.push(format!("bsd={}", escape_field(name)));
@@ -327,11 +419,7 @@ fn volume_source(native: Option<&gfm_mac_sys::NativeVolumeDescription>) -> Strin
         }
         Some(native) => format!(
             "filesystem;diskarbitration-{}:{}",
-            match native.status {
-                gfm_mac_sys::NativeVolumeStatus::Available => "available",
-                gfm_mac_sys::NativeVolumeStatus::Missing => "missing",
-                gfm_mac_sys::NativeVolumeStatus::Unavailable => "unavailable",
-            },
+            native.status.as_str(),
             native
                 .reason
                 .as_deref()
@@ -340,6 +428,22 @@ fn volume_source(native: Option<&gfm_mac_sys::NativeVolumeDescription>) -> Strin
         ),
         None => "filesystem".to_string(),
     }
+}
+
+fn stable_identity(id: VolumeId, path: &Path, native: Option<&NativeVolumeDescription>) -> String {
+    if let Some(native) = native.filter(|native| native.status == NativeVolumeStatus::Available) {
+        if let Some(uuid) = native
+            .volume_uuid
+            .as_deref()
+            .or(native.media_uuid.as_deref())
+        {
+            return format!("diskarbitration:uuid:{}", escape_field(uuid));
+        }
+        if let Some(bsd_name) = native.media_bsd_name.as_deref() {
+            return format!("diskarbitration:bsd:{}", escape_field(bsd_name));
+        }
+    }
+    format!("dev:{}:{}", id.0, escape_field(&path.display().to_string()))
 }
 
 fn command_policy(
@@ -426,8 +530,17 @@ mod tests {
 
         assert_eq!(descriptor.kind, VolumeKind::System);
         assert!(!descriptor.ejectable);
+        assert_eq!(
+            descriptor.native_status,
+            Some(NativeVolumeStatus::Available)
+        );
+        assert_eq!(descriptor.read_only, !descriptor.writable);
+        assert!(descriptor.stable_identity.starts_with("diskarbitration:"));
         assert_eq!(descriptor.commands.eject, VolumeCommandState::Hidden);
         assert!(descriptor.capacity.total_bytes > 0);
+        assert!(descriptor.as_tsv().contains("\tnative-status=available\t"));
+        assert!(descriptor.as_tsv().contains("\tstable-id="));
+        assert!(descriptor.as_tsv().contains("\tread-only="));
     }
 
     #[test]
@@ -440,6 +553,8 @@ mod tests {
         assert_eq!(descriptor.kind, VolumeKind::External);
         assert!(descriptor.removable);
         assert!(descriptor.ejectable);
+        assert_eq!(descriptor.native_status, None);
+        assert!(descriptor.stable_identity.starts_with("dev:"));
         assert_eq!(descriptor.commands.eject, VolumeCommandState::Enabled);
         assert!(descriptor
             .as_tsv()
