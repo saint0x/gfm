@@ -4608,7 +4608,7 @@ fn defers_background_content_indexer_under_saturated_io_from_binary() {
         stderr.contains("background-content-deferred action=Defer"),
         "{stderr}"
     );
-    assert!(records.exists());
+    assert!(!records.exists());
     assert!(!content.exists());
     assert!(fs::read_to_string(&spec)
         .unwrap()
@@ -4618,7 +4618,6 @@ fn defers_background_content_indexer_under_saturated_io_from_binary() {
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(segments).unwrap();
-    fs::remove_file(records).unwrap();
     fs::remove_file(spec).unwrap();
 }
 

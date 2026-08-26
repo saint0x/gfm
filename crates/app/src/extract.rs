@@ -64,21 +64,6 @@ fn extraction_volume_class_for_path(path: &Path) -> ExtractionVolumeClass {
     }
 }
 
-pub(crate) fn run_adaptive_extraction_worker(
-    path: &Path,
-    pressure: SchedulingPressure,
-) -> Result<String> {
-    run_adaptive_extraction_worker_with_timeout(path, pressure, ADAPTIVE_WORKER_TIMEOUT)
-}
-
-pub(crate) fn run_adaptive_extraction_worker_with_timeout(
-    path: &Path,
-    pressure: SchedulingPressure,
-    timeout: Duration,
-) -> Result<String> {
-    run_adaptive_extraction_worker_cancellable(path, pressure, timeout, &Cancellation::default())
-}
-
 pub(crate) fn run_adaptive_extraction_worker_cancellable(
     path: &Path,
     pressure: SchedulingPressure,
@@ -127,22 +112,28 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
     })
 }
 
-pub(crate) fn run_quarantined_adaptive_extraction_worker(
+pub(crate) fn run_quarantined_adaptive_extraction_worker_cancellable(
     path: &Path,
     store: &Path,
     pressure: SchedulingPressure,
     timeout: Duration,
     threshold: u32,
+    cancellation: &Cancellation,
 ) -> Result<String> {
+    cancellation.check()?;
     let fingerprint = ExtractionFingerprint::for_path(path)?;
+    cancellation.check()?;
     let mut quarantine = read_extraction_quarantine(store, threshold)?;
+    cancellation.check()?;
     let decision = quarantine.before_extract(path, &fingerprint);
     if matches!(decision, QuarantineDecision::Quarantined(_)) {
         return Ok(format!("{}\n", decision.as_tsv()));
     }
-    match run_adaptive_extraction_worker_with_timeout(path, pressure, timeout) {
+    match run_adaptive_extraction_worker_cancellable(path, pressure, timeout, cancellation) {
         Ok(report) => {
+            cancellation.check()?;
             let decision = quarantine.record_success(path, &fingerprint);
+            cancellation.check()?;
             quarantine.write(store)?;
             Ok(format!("{report}{}\n", decision.as_tsv()))
         }
@@ -151,6 +142,7 @@ pub(crate) fn run_quarantined_adaptive_extraction_worker(
             let kind = worker_failure_kind(&message);
             let decision =
                 quarantine.record_failure(path, &fingerprint, kind, worker_failure_reason(kind));
+            cancellation.check()?;
             quarantine.write(store)?;
             Ok(format!("{}\n", decision.as_tsv()))
         }

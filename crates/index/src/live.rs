@@ -329,9 +329,31 @@ impl LiveIndex {
         extractor: &Extractor,
         context_bytes: usize,
     ) -> Result<Vec<SearchHit>> {
+        self.search_with_snippets_cancellable(
+            query,
+            limit,
+            extractor,
+            context_bytes,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn search_with_snippets_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        extractor: &Extractor,
+        context_bytes: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchHit>> {
+        cancellation.check()?;
         let parsed = SearchQuery::parse(query);
-        let mut hits = self.index.query_structured(&parsed, limit);
+        cancellation.check()?;
+        let mut hits = self
+            .index
+            .query_structured_cancellable(&parsed, limit, cancellation)?;
         for hit in &mut hits {
+            cancellation.check()?;
             if matches!(hit.reason, gfm_types::MatchReason::Content) {
                 hit.snippet = extractor.snippet_for_record(
                     &hit.record,
@@ -339,6 +361,7 @@ impl LiveIndex {
                     &parsed.phrases,
                     context_bytes,
                 )?;
+                cancellation.check()?;
             }
         }
         Ok(hits)

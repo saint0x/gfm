@@ -1524,6 +1524,28 @@ fn live_search_honors_cancellation() {
 }
 
 #[test]
+fn live_snippet_search_honors_cancellation_before_querying() {
+    let root = unique_temp_dir("gfm-cancelled-snippet-search-root");
+    fs::write(root.join("notes.md"), "snippetcancel appears in content").unwrap();
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let mut live = snapshot.into_live();
+    live.index_content(&Extractor::default()).unwrap();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = live.search_with_snippets_cancellable(
+        "snippetcancel",
+        5,
+        &Extractor::default(),
+        16,
+        &cancellation,
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn durable_content_postings_survive_reload() {
     let root = unique_temp_dir("gfm-durable-content-root");
     let records = unique_temp_path("gfm-durable-content-records", "gfmidx");

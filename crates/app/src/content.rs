@@ -1,11 +1,11 @@
 use crate::extract::{
-    extraction_budget_profile, read_extraction_quarantine, run_adaptive_extraction_worker,
-    run_adaptive_extraction_worker_cancellable, run_quarantined_adaptive_extraction_worker,
-    ADAPTIVE_WORKER_TIMEOUT,
+    extraction_budget_profile, read_extraction_quarantine,
+    run_adaptive_extraction_worker_cancellable,
+    run_quarantined_adaptive_extraction_worker_cancellable, ADAPTIVE_WORKER_TIMEOUT,
 };
 use crate::runtime::{
     default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
-    run_scheduled_volume_task_cancellable, run_volume_task, RuntimeJobHandle,
+    run_scheduled_volume_task_cancellable, run_volume_task_cancellable, RuntimeJobHandle,
 };
 use crate::{
     detect_volume_id, optional_path_arg, parent_volume, parse_battery_state, parse_io_pressure,
@@ -76,11 +76,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&path)
                 .ok()
                 .or_else(|| parent_volume(&path));
-            let report = run_volume_task(
+            let report = run_volume_task_cancellable(
                 volume,
                 Priority::Background,
                 "adaptive extraction",
-                move || run_adaptive_extraction_worker(&path, pressure),
+                move |cancellation| {
+                    run_adaptive_extraction_worker_cancellable(
+                        &path,
+                        pressure,
+                        ADAPTIVE_WORKER_TIMEOUT,
+                        &cancellation,
+                    )
+                },
             )?;
             print!("{}", report);
         }
@@ -129,13 +136,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&path)
                 .ok()
                 .or_else(|| parent_volume(&path));
-            let output = run_volume_task(
+            let output = run_volume_task_cancellable(
                 volume,
                 Priority::Background,
                 "quarantined adaptive extraction",
-                move || {
-                    run_quarantined_adaptive_extraction_worker(
-                        &path, &store, pressure, timeout, threshold,
+                move |cancellation| {
+                    run_quarantined_adaptive_extraction_worker_cancellable(
+                        &path,
+                        &store,
+                        pressure,
+                        timeout,
+                        threshold,
+                        &cancellation,
                     )
                 },
             )?;
@@ -604,15 +616,16 @@ pub(crate) fn run_content_search(
     extractor: Extractor,
 ) -> Result<(usize, Vec<SearchHit>)> {
     let volume = detect_volume_id(&root).ok();
-    run_volume_task(
+    run_volume_task_cancellable(
         volume,
         Priority::Visible,
         "content extraction search",
-        move || {
-            let snapshot = Indexer::default().build(root)?;
+        move |cancellation| {
+            let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
             let mut live = snapshot.into_live();
-            let indexed = live.index_content(&extractor)?;
-            let hits = live.search_with_snippets(&query, 50, &extractor, 96)?;
+            let indexed = live.index_content_cancellable(&extractor, &cancellation)?;
+            let hits =
+                live.search_with_snippets_cancellable(&query, 50, &extractor, 96, &cancellation)?;
             Ok((indexed, hits))
         },
     )
@@ -631,6 +644,15 @@ pub(crate) fn run_content_job(
     journal: &JobJournal,
     pressure: SchedulingPressure,
 ) -> Result<ContentJobOutcome> {
+    let scheduling = pressure.decide(Priority::Background, 1, 1);
+    if scheduling.action == SchedulingAction::Defer {
+        return Ok(ContentJobOutcome {
+            report: None,
+            inaccessible: 0,
+            scheduling_action: scheduling.action,
+            deferred: true,
+        });
+    }
     let snapshot = Indexer::default().build(&spec.root)?;
     let inaccessible = snapshot.inaccessible.len();
     let previous_records = if spec.records_path.is_file() && spec.content_path.is_file() {
@@ -649,15 +671,6 @@ pub(crate) fn run_content_job(
             ))
         })?;
     snapshot.save(&spec.records_path)?;
-    let scheduling = pressure.decide(Priority::Background, 1, 1);
-    if scheduling.action == SchedulingAction::Defer {
-        return Ok(ContentJobOutcome {
-            report: None,
-            inaccessible,
-            scheduling_action: scheduling.action,
-            deferred: true,
-        });
-    }
     let extractor = Extractor::with_budget_profile(extraction_budget_profile(&spec.root, pressure));
     let worker = BackgroundContentIndexer::new(extractor, spec.options());
     let quarantine_store = default_extraction_quarantine_path();
