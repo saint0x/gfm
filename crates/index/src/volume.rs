@@ -1,5 +1,6 @@
 use gfm_config::VolumeIndexingPolicy;
-use gfm_types::{GfmError, Result};
+use gfm_search::SearchVolumeScope;
+use gfm_types::{GfmError, Result, VolumeId};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -171,6 +172,7 @@ impl VolumeIndexThrottle {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexVolumeDescriptor {
+    pub id: Option<VolumeId>,
     pub label: String,
     pub path: PathBuf,
     pub class: IndexVolumeClass,
@@ -185,11 +187,17 @@ impl IndexVolumeDescriptor {
         mount_state: IndexMountState,
     ) -> Self {
         Self {
+            id: None,
             label: label.into(),
             path: path.into(),
             class,
             mount_state,
         }
+    }
+
+    pub fn with_volume_id(mut self, id: VolumeId) -> Self {
+        self.id = Some(id);
+        self
     }
 }
 
@@ -299,6 +307,7 @@ impl VolumeIndexPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeIndexDecision {
+    pub id: Option<VolumeId>,
     pub label: String,
     pub path: PathBuf,
     pub class: IndexVolumeClass,
@@ -316,6 +325,7 @@ impl VolumeIndexDecision {
         reason: impl Into<String>,
     ) -> Self {
         Self {
+            id: volume.id,
             label: volume.label.clone(),
             path: volume.path.clone(),
             class: volume.class,
@@ -332,8 +342,11 @@ impl VolumeIndexDecision {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-index\t{}\tpath={}\tclass={}\tmount={}\taction={}\t{}\treason={}",
+            "volume-index\t{}\tid={}\tpath={}\tclass={}\tmount={}\taction={}\t{}\treason={}",
             escape_field(&self.label),
+            self.id
+                .map(|id| id.0.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             self.path.display(),
             self.class.as_str(),
             self.mount_state.as_str(),
@@ -474,6 +487,26 @@ impl VolumeIndexPlan {
             .filter(|decision| decision.should_index())
             .map(|decision| decision.path.clone())
             .collect()
+    }
+
+    pub fn included_volume_scope(&self) -> SearchVolumeScope {
+        let included = self
+            .decisions
+            .iter()
+            .filter(|decision| decision.should_index())
+            .collect::<Vec<_>>();
+        if included.is_empty() {
+            return SearchVolumeScope::only([]);
+        }
+        let volumes = included
+            .iter()
+            .filter_map(|decision| decision.id)
+            .collect::<Vec<_>>();
+        if volumes.len() == included.len() {
+            SearchVolumeScope::only(volumes)
+        } else {
+            SearchVolumeScope::All
+        }
     }
 
     pub fn as_tsv(&self) -> String {

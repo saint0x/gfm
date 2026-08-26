@@ -147,6 +147,15 @@ impl IndexQuerySession {
         self.live.search_with_volume_scope(query, limit, scope)
     }
 
+    pub fn search_with_volume_plan(
+        &self,
+        query: &str,
+        limit: usize,
+        plan: &VolumeIndexPlan,
+    ) -> Result<Vec<SearchHit>> {
+        self.search_with_volume_scope(query, limit, &plan.included_volume_scope())
+    }
+
     pub fn stream_search(&self, query: &str, limit: usize) -> Result<Vec<SearchStreamBatch>> {
         self.live.stream_search(query, limit)
     }
@@ -159,6 +168,15 @@ impl IndexQuerySession {
     ) -> Result<Vec<SearchStreamBatch>> {
         self.live
             .stream_search_with_volume_scope(query, limit, scope)
+    }
+
+    pub fn stream_search_with_volume_plan(
+        &self,
+        query: &str,
+        limit: usize,
+        plan: &VolumeIndexPlan,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.stream_search_with_volume_scope(query, limit, &plan.included_volume_scope())
     }
 
     pub fn search_cancellable(

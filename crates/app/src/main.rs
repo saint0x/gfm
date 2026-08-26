@@ -245,6 +245,7 @@ pub(crate) fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeD
         index_volume_class(volume.kind),
         index_mount_state(volume.mount_state),
     )
+    .with_volume_id(volume.id)
 }
 
 fn index_volume_class(kind: VolumeKind) -> IndexVolumeClass {

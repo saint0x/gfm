@@ -146,6 +146,95 @@ fn query_session_streams_only_admitted_volume_scope() {
 }
 
 #[test]
+fn query_session_searches_through_volume_admission_plan() {
+    let session = IndexSnapshot {
+        root: PathBuf::from("/Volumes"),
+        records: vec![
+            volume_file_record(1, 1, "/Volumes/Macintosh/report.md", "report.md"),
+            volume_file_record(2, 1, "/Volumes/Work/report.md", "report.md"),
+            volume_file_record(3, 1, "/Volumes/Team/report.md", "report.md"),
+        ],
+        inaccessible: Vec::new(),
+    }
+    .query_session();
+    let policy = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Enabled,
+        gfm_config::VolumeIndexingPolicy::Disabled,
+    );
+    let plan = policy.plan(vec![
+        IndexVolumeDescriptor::new(
+            "Macintosh HD",
+            "/Volumes/Macintosh",
+            IndexVolumeClass::System,
+            IndexMountState::Mounted,
+        )
+        .with_volume_id(VolumeId(1)),
+        IndexVolumeDescriptor::new(
+            "Work",
+            "/Volumes/Work",
+            IndexVolumeClass::External,
+            IndexMountState::Mounted,
+        )
+        .with_volume_id(VolumeId(2)),
+        IndexVolumeDescriptor::new(
+            "Team",
+            "/Volumes/Team",
+            IndexVolumeClass::Network,
+            IndexMountState::Mounted,
+        )
+        .with_volume_id(VolumeId(3)),
+    ]);
+
+    let hits = session
+        .search_with_volume_plan("report", 10, &plan)
+        .unwrap();
+    let paths = hits
+        .into_iter()
+        .map(|hit| hit.record.path)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/Volumes/Macintosh/report.md"),
+            PathBuf::from("/Volumes/Work/report.md"),
+        ]
+    );
+}
+
+#[test]
+fn query_session_streams_through_empty_volume_admission_plan() {
+    let session = IndexSnapshot {
+        root: PathBuf::from("/Volumes"),
+        records: vec![volume_file_record(
+            2,
+            1,
+            "/Volumes/Work/needle.md",
+            "needle.md",
+        )],
+        inaccessible: Vec::new(),
+    }
+    .query_session();
+    let policy = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Disabled,
+        gfm_config::VolumeIndexingPolicy::Disabled,
+    );
+    let plan = policy.plan(vec![IndexVolumeDescriptor::new(
+        "Work",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(2))]);
+
+    let batches = session
+        .stream_search_with_volume_plan("needle", 10, &plan)
+        .unwrap();
+
+    assert!(batches.is_empty());
+}
+
+#[test]
 fn query_session_honors_cancellation() {
     let root = unique_temp_dir("gfm-query-session-cancel-root");
     fs::write(root.join("notes.md"), "needle").unwrap();
@@ -1420,9 +1509,67 @@ fn volume_index_policy_includes_local_and_defers_remote_by_default() {
     assert_eq!(plan.decisions[1].action, VolumeIndexAction::DeferredOptIn);
     assert_eq!(plan.decisions[2].action, VolumeIndexAction::DeferredOptIn);
     assert_eq!(plan.included_roots(), vec![PathBuf::from("/")]);
+    assert_eq!(plan.included_volume_scope(), SearchVolumeScope::All);
     assert!(plan
         .as_tsv()
         .starts_with("volume-index-plan\tcount=3\tincluded=1"));
+}
+
+#[test]
+fn volume_index_plan_builds_precise_search_scope_from_included_volume_ids() {
+    let policy = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Enabled,
+        gfm_config::VolumeIndexingPolicy::Disabled,
+    );
+    let local = IndexVolumeDescriptor::new(
+        "Macintosh HD",
+        "/",
+        IndexVolumeClass::System,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(1));
+    let external = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(2));
+    let network = IndexVolumeDescriptor::new(
+        "Team Share",
+        "/Volumes/Team",
+        IndexVolumeClass::Network,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(3));
+
+    let plan = policy.plan(vec![network, external, local]);
+
+    assert_eq!(
+        plan.included_volume_scope(),
+        SearchVolumeScope::only([VolumeId(1), VolumeId(2)])
+    );
+    assert!(plan.as_tsv().contains("\tid=2\tpath=/Volumes/Work\t"));
+}
+
+#[test]
+fn volume_index_plan_search_scope_is_empty_when_nothing_is_admitted() {
+    let policy = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Disabled,
+        gfm_config::VolumeIndexingPolicy::Disabled,
+    );
+    let external = IndexVolumeDescriptor::new(
+        "Backup",
+        "/Volumes/Backup",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(2));
+
+    let plan = policy.plan(vec![external]);
+
+    assert_eq!(plan.included_roots(), Vec::<PathBuf>::new());
+    assert_eq!(plan.included_volume_scope(), SearchVolumeScope::only([]));
 }
 
 #[test]
