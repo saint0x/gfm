@@ -1,10 +1,10 @@
-use core_foundation::base::{kCFAllocatorDefault, TCFType};
-use core_foundation::boolean::CFBoolean;
+use core_foundation::base::{kCFAllocatorDefault, CFType, TCFType};
+use core_foundation::boolean::{CFBoolean, CFBooleanRef};
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 use core_foundation::url::CFURL;
-use core_foundation_sys::base::{CFAllocatorRef, CFRelease, CFTypeRef};
+use core_foundation_sys::base::{CFAllocatorRef, CFGetTypeID, CFRelease, CFTypeRef};
 use core_foundation_sys::dictionary::{CFDictionaryGetValueIfPresent, CFDictionaryRef};
 use core_foundation_sys::string::CFStringRef;
 use core_foundation_sys::url::CFURLRef;
@@ -73,6 +73,28 @@ extern "C" {
     static kDADiskDescriptionVolumeUUIDKey: CFStringRef;
 }
 
+#[link(name = "Foundation", kind = "framework")]
+extern "C" {
+    static NSURLVolumeIsEjectableKey: CFStringRef;
+    static NSURLVolumeIsInternalKey: CFStringRef;
+    static NSURLVolumeIsLocalKey: CFStringRef;
+    static NSURLVolumeIsReadOnlyKey: CFStringRef;
+    static NSURLVolumeIsRemovableKey: CFStringRef;
+    static NSURLVolumeSupportsCasePreservedNamesKey: CFStringRef;
+    static NSURLVolumeSupportsCaseSensitiveNamesKey: CFStringRef;
+
+    fn CFURLCopyResourcePropertyForKey(
+        url: CFURLRef,
+        key: CFStringRef,
+        property_value_type_ref_ptr: *mut CFTypeRef,
+        error: *mut core_foundation_sys::error::CFErrorRef,
+    ) -> core_foundation_sys::base::Boolean;
+}
+
+extern "C" {
+    fn CFBooleanGetTypeID() -> core_foundation_sys::base::CFTypeID;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeVolumeDescription {
     pub status: NativeVolumeStatus,
@@ -106,6 +128,19 @@ pub struct NativeVolumeDescription {
     pub device_path: Option<String>,
     pub device_protocol: Option<String>,
     pub device_vendor: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeVolumeResourceValues {
+    pub status: NativeVolumeStatus,
+    pub is_ejectable: Option<bool>,
+    pub is_internal: Option<bool>,
+    pub is_local: Option<bool>,
+    pub is_read_only: Option<bool>,
+    pub is_removable: Option<bool>,
+    pub supports_case_preserved_names: Option<bool>,
+    pub supports_case_sensitive_names: Option<bool>,
     pub reason: Option<String>,
 }
 
@@ -290,6 +325,38 @@ pub fn submit_volume_operation(
     }
 }
 
+pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
+    if !path.exists() {
+        return unavailable_resource_values(
+            NativeVolumeStatus::Missing,
+            format!("volume path does not exist: {}", path.display()),
+        );
+    }
+    let Some(url) = CFURL::from_path(path, path.is_dir()) else {
+        return unavailable_resource_values(
+            NativeVolumeStatus::Unavailable,
+            format!("invalid volume path URL: {}", path.display()),
+        );
+    };
+    let url = url.as_concrete_TypeRef();
+
+    NativeVolumeResourceValues {
+        status: NativeVolumeStatus::Available,
+        is_ejectable: copy_resource_bool(url, unsafe { NSURLVolumeIsEjectableKey }),
+        is_internal: copy_resource_bool(url, unsafe { NSURLVolumeIsInternalKey }),
+        is_local: copy_resource_bool(url, unsafe { NSURLVolumeIsLocalKey }),
+        is_read_only: copy_resource_bool(url, unsafe { NSURLVolumeIsReadOnlyKey }),
+        is_removable: copy_resource_bool(url, unsafe { NSURLVolumeIsRemovableKey }),
+        supports_case_preserved_names: copy_resource_bool(url, unsafe {
+            NSURLVolumeSupportsCasePreservedNamesKey
+        }),
+        supports_case_sensitive_names: copy_resource_bool(url, unsafe {
+            NSURLVolumeSupportsCaseSensitiveNamesKey
+        }),
+        reason: None,
+    }
+}
+
 fn create_disk_for_volume_path(path: &Path) -> Option<(DASessionRef, DADiskRef)> {
     if !path.exists() {
         return None;
@@ -362,6 +429,25 @@ fn url_value(
         .and_then(|url| url.to_path())
 }
 
+fn copy_resource_bool(url: CFURLRef, key: CFStringRef) -> Option<bool> {
+    let value = copy_resource_value(url, key)?;
+    if unsafe { CFGetTypeID(value.as_CFTypeRef()) } != unsafe { CFBooleanGetTypeID() } {
+        return None;
+    }
+    let typed = unsafe { CFBoolean::wrap_under_get_rule(value.as_CFTypeRef() as CFBooleanRef) };
+    Some(typed.into())
+}
+
+fn copy_resource_value(url: CFURLRef, key: CFStringRef) -> Option<CFType> {
+    let mut value: CFTypeRef = ptr::null();
+    let copied = unsafe { CFURLCopyResourcePropertyForKey(url, key, &mut value, ptr::null_mut()) };
+    if copied == 0 || value.is_null() {
+        None
+    } else {
+        Some(unsafe { CFType::wrap_under_create_rule(value) })
+    }
+}
+
 fn value_for_key(
     description: &CFDictionary<*const c_void, *const c_void>,
     key: CFStringRef,
@@ -425,6 +511,23 @@ fn unavailable_with_status(
     }
 }
 
+fn unavailable_resource_values(
+    status: NativeVolumeStatus,
+    reason: impl Into<String>,
+) -> NativeVolumeResourceValues {
+    NativeVolumeResourceValues {
+        status,
+        is_ejectable: None,
+        is_internal: None,
+        is_local: None,
+        is_read_only: None,
+        is_removable: None,
+        supports_case_preserved_names: None,
+        supports_case_sensitive_names: None,
+        reason: Some(reason.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +553,14 @@ mod tests {
 
         assert_eq!(description.status, NativeVolumeStatus::Missing);
         assert!(description.reason.unwrap().contains("does not exist"));
+    }
+
+    #[test]
+    fn resolves_root_volume_resource_values() {
+        let values = copy_volume_resource_values(Path::new("/"));
+
+        assert_eq!(values.status, NativeVolumeStatus::Available);
+        assert!(values.is_local.is_some() || values.is_read_only.is_some());
     }
 
     #[test]

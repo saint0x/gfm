@@ -1,5 +1,6 @@
 use gfm_mac_sys::{
-    NativeVolumeDescription, NativeVolumeOperation, NativeVolumeOperationStatus, NativeVolumeStatus,
+    NativeVolumeDescription, NativeVolumeOperation, NativeVolumeOperationStatus,
+    NativeVolumeResourceValues, NativeVolumeStatus,
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::fs;
@@ -107,6 +108,10 @@ pub struct VolumeDescriptor {
     pub ejectable: bool,
     pub writable: bool,
     pub read_only: bool,
+    pub case_sensitive: Option<bool>,
+    pub case_preserving: Option<bool>,
+    pub local: Option<bool>,
+    pub internal: Option<bool>,
     pub mountable: Option<bool>,
     pub capacity: VolumeCapacity,
     pub commands: VolumeCommandPolicy,
@@ -131,7 +136,11 @@ impl VolumeDescriptor {
         let native = marker
             .is_none()
             .then(|| gfm_mac_sys::copy_volume_description_for_path(&path));
+        let resource = marker
+            .is_none()
+            .then(|| gfm_mac_sys::copy_volume_resource_values(&path));
         let native_status = native.as_ref().map(|native| native.status);
+        let resource_status = resource.as_ref().map(|resource| resource.status);
         let label = native
             .as_ref()
             .and_then(|native| native.volume_name.clone())
@@ -142,28 +151,45 @@ impl VolumeDescriptor {
         } else {
             MountState::Stale
         };
-        let removable = native
+        let removable = resource
             .as_ref()
-            .and_then(|native| native.media_removable)
+            .and_then(|resource| resource.is_removable)
+            .or_else(|| native.as_ref().and_then(|native| native.media_removable))
             .unwrap_or({
                 matches!(
                     kind,
                     VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage
                 )
             });
-        let network = native
-            .as_ref()
-            .and_then(|native| native.volume_network)
+        let local = resource.as_ref().and_then(|resource| resource.is_local);
+        let network = local
+            .map(|local| !local)
+            .or_else(|| native.as_ref().and_then(|native| native.volume_network))
             .unwrap_or(kind == VolumeKind::Network);
-        let ejectable = native
+        let ejectable = resource
             .as_ref()
-            .and_then(|native| native.media_ejectable)
+            .and_then(|resource| resource.is_ejectable)
+            .or_else(|| native.as_ref().and_then(|native| native.media_ejectable))
             .unwrap_or(removable || network);
-        let writable = native
+        let writable = resource
             .as_ref()
-            .and_then(|native| native.media_writable)
+            .and_then(|resource| resource.is_read_only.map(|read_only| !read_only))
+            .or_else(|| native.as_ref().and_then(|native| native.media_writable))
             .unwrap_or_else(|| !metadata.permissions().readonly());
-        let read_only = !writable;
+        let read_only = resource
+            .as_ref()
+            .and_then(|resource| resource.is_read_only)
+            .unwrap_or(!writable);
+        let case_sensitive = resource
+            .as_ref()
+            .and_then(|resource| resource.supports_case_sensitive_names);
+        let case_preserving = resource
+            .as_ref()
+            .and_then(|resource| resource.supports_case_preserved_names);
+        let internal = resource
+            .as_ref()
+            .and_then(|resource| resource.is_internal)
+            .or_else(|| native.as_ref().and_then(|native| native.device_internal));
         let mountable = native.as_ref().and_then(|native| native.volume_mountable);
         let capacity = VolumeCapacity::read(&path);
         let commands = command_policy(kind, mount_state, ejectable);
@@ -184,6 +210,10 @@ impl VolumeDescriptor {
             ejectable,
             writable,
             read_only,
+            case_sensitive,
+            case_preserving,
+            local,
+            internal,
             mountable,
             capacity,
             commands,
@@ -213,13 +243,13 @@ impl VolumeDescriptor {
             device_vendor: native
                 .as_ref()
                 .and_then(|native| native.device_vendor.clone()),
-            source,
+            source: enrich_volume_source(source, resource_status, resource.as_ref()),
         })
     }
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -245,6 +275,18 @@ impl VolumeDescriptor {
                 .unwrap_or("-"),
             self.writable,
             self.read_only,
+            self.case_sensitive
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.case_preserving
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.local
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.internal
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             self.mountable
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
@@ -655,6 +697,22 @@ fn volume_source(native: Option<&NativeVolumeDescription>) -> String {
     }
 }
 
+fn enrich_volume_source(
+    source: String,
+    resource_status: Option<NativeVolumeStatus>,
+    resource: Option<&NativeVolumeResourceValues>,
+) -> String {
+    let Some(status) = resource_status else {
+        return source;
+    };
+    let mut source = format!("{source};url-resource={}", status.as_str());
+    if let Some(reason) = resource.and_then(|resource| resource.reason.as_deref()) {
+        source.push(':');
+        source.push_str(&escape_field(reason));
+    }
+    source
+}
+
 fn stable_identity(id: VolumeId, path: &Path, native: Option<&NativeVolumeDescription>) -> String {
     if let Some(native) = native.filter(|native| native.status == NativeVolumeStatus::Available) {
         if let Some(uuid) = native
@@ -766,6 +824,9 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tnative-status=available\t"));
         assert!(descriptor.as_tsv().contains("\tstable-id="));
         assert!(descriptor.as_tsv().contains("\tread-only="));
+        assert!(descriptor.as_tsv().contains("\tcase-sensitive="));
+        assert!(descriptor.as_tsv().contains("\tlocal="));
+        assert!(descriptor.source.contains("url-resource=available"));
     }
 
     #[test]
@@ -784,6 +845,8 @@ mod tests {
         assert!(descriptor
             .as_tsv()
             .contains("source=fixture-marker:external-removable"));
+        assert_eq!(descriptor.case_sensitive, None);
+        assert!(!descriptor.source.contains("url-resource="));
 
         fs::remove_dir_all(root).unwrap();
     }

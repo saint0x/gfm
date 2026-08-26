@@ -23,7 +23,7 @@ pub use spotlight::{
     NativeSpotlightStatus,
 };
 pub use volume::{
-    copy_volume_description_for_path, submit_volume_operation, NativeVolumeDescription,
-    NativeVolumeOperation, NativeVolumeOperationResult, NativeVolumeOperationStatus,
-    NativeVolumeStatus,
+    copy_volume_description_for_path, copy_volume_resource_values, submit_volume_operation,
+    NativeVolumeDescription, NativeVolumeOperation, NativeVolumeOperationResult,
+    NativeVolumeOperationStatus, NativeVolumeResourceValues, NativeVolumeStatus,
 };
