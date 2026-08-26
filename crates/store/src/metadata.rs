@@ -66,6 +66,12 @@ pub struct MetadataPosting {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LimitedMetadataPosting {
+    pub posting: MetadataPosting,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct MetadataDirectoryEntry {
     field: MetadataField,
     term: String,
@@ -220,35 +226,8 @@ impl MmapMetadataArchive {
         else {
             return Ok((Vec::new(), false));
         };
-        let bytes = self.posting_bytes(entry)?;
-        let mut cursor = Cursor::new(bytes);
-        let (posting_field, posting_term) = read_metadata_posting_header(&mut cursor, &self.path)?;
-        if posting_field != field || posting_term != term {
-            return Err(metadata_format_error(
-                &self.path,
-                "metadata directory points at the wrong posting",
-            ));
-        }
-        let ids_start = usize::try_from(cursor.position())
-            .map_err(|_| metadata_format_error(&self.path, "metadata id offset overflow"))?;
-        let id_bytes = bytes
-            .get(ids_start..)
-            .ok_or_else(|| metadata_format_error(&self.path, "metadata id offset out of bounds"))?;
-        let mut ids = match self.version {
-            MetadataStoreVersion::V1 => {
-                read_file_ids_limited(Cursor::new(id_bytes), &self.path, limit.saturating_add(1))?
-            }
-            MetadataStoreVersion::V2 | MetadataStoreVersion::V3 => {
-                read_blocked_file_ids_limited_from_slice(
-                    id_bytes,
-                    limit.saturating_add(1),
-                    &self.path,
-                )?
-            }
-        };
-        let truncated = ids.len() > limit;
-        ids.truncate(limit);
-        Ok((ids, truncated))
+        let posting = self.limited_posting_for_entry(entry, limit)?;
+        Ok((posting.posting.ids, posting.truncated))
     }
 
     pub fn postings(&self) -> Result<Vec<MetadataPosting>> {
@@ -280,6 +259,59 @@ impl MmapMetadataArchive {
             .collect()
     }
 
+    pub fn postings_for_sorted_terms_limit<I, S>(
+        &self,
+        field: MetadataField,
+        terms: I,
+        limit_per_term: usize,
+    ) -> Result<Vec<LimitedMetadataPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        if limit_per_term == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut postings = Vec::new();
+        let mut directory_index = 0usize;
+        let mut previous: Option<String> = None;
+
+        for term in terms {
+            let term = normalize(term.as_ref());
+            if term.is_empty() {
+                continue;
+            }
+            if let Some(previous_term) = previous.as_ref() {
+                if term < *previous_term {
+                    return Err(metadata_format_error(
+                        &self.path,
+                        "batch metadata lookup terms must be sorted",
+                    ));
+                }
+                if term == *previous_term {
+                    continue;
+                }
+            }
+
+            while let Some(entry) = self.directory.get(directory_index) {
+                if (entry.field, entry.term.as_str()) >= (field, term.as_str()) {
+                    break;
+                }
+                directory_index += 1;
+            }
+
+            if let Some(entry) = self.directory.get(directory_index) {
+                if entry.field == field && entry.term.as_str() == term.as_str() {
+                    postings.push(self.limited_posting_for_entry(entry, limit_per_term)?);
+                }
+            }
+            previous = Some(term);
+        }
+
+        Ok(postings)
+    }
+
     pub fn postings_for_limit<I, S>(
         &self,
         field: MetadataField,
@@ -298,14 +330,13 @@ impl MmapMetadataArchive {
             }
         }
 
-        let mut postings = Vec::new();
-        for term in selected {
-            let (ids, _) = self.ids_for_limit(field, &term, limit_per_term)?;
-            if !ids.is_empty() {
-                postings.push(MetadataPosting { field, term, ids });
-            }
-        }
-        Ok(postings)
+        self.postings_for_sorted_terms_limit(field, selected, limit_per_term)
+            .map(|postings| {
+                postings
+                    .into_iter()
+                    .map(|posting| posting.posting)
+                    .collect()
+            })
     }
 
     pub fn posting_for(&self, field: MetadataField, term: &str) -> Result<Option<MetadataPosting>> {
@@ -392,6 +423,49 @@ impl MmapMetadataArchive {
         self.mmap
             .get(start..end)
             .ok_or_else(|| metadata_format_error(&self.path, "posting range out of bounds"))
+    }
+
+    fn limited_posting_for_entry(
+        &self,
+        entry: &MetadataDirectoryEntry,
+        limit: usize,
+    ) -> Result<LimitedMetadataPosting> {
+        let bytes = self.posting_bytes(entry)?;
+        let mut cursor = Cursor::new(bytes);
+        let (posting_field, posting_term) = read_metadata_posting_header(&mut cursor, &self.path)?;
+        if posting_field != entry.field || posting_term != entry.term {
+            return Err(metadata_format_error(
+                &self.path,
+                "metadata directory points at the wrong posting",
+            ));
+        }
+        let ids_start = usize::try_from(cursor.position())
+            .map_err(|_| metadata_format_error(&self.path, "metadata id offset overflow"))?;
+        let id_bytes = bytes
+            .get(ids_start..)
+            .ok_or_else(|| metadata_format_error(&self.path, "metadata id offset out of bounds"))?;
+        let mut ids = match self.version {
+            MetadataStoreVersion::V1 => {
+                read_file_ids_limited(Cursor::new(id_bytes), &self.path, limit.saturating_add(1))?
+            }
+            MetadataStoreVersion::V2 | MetadataStoreVersion::V3 => {
+                read_blocked_file_ids_limited_from_slice(
+                    id_bytes,
+                    limit.saturating_add(1),
+                    &self.path,
+                )?
+            }
+        };
+        let truncated = ids.len() > limit;
+        ids.truncate(limit);
+        Ok(LimitedMetadataPosting {
+            posting: MetadataPosting {
+                field: posting_field,
+                term: posting_term,
+                ids,
+            },
+            truncated,
+        })
     }
 }
 
@@ -901,6 +975,61 @@ mod tests {
         assert_eq!(limited[0].term, "important");
         assert_eq!(limited[0].ids.len(), 3);
         assert_eq!(comments, vec![postings[1].clone()]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_metadata_archive_reads_bounded_sorted_terms_in_one_pass() {
+        let path = temp_path("gfm-metadata-batch-postings", "gfmmeta");
+        let postings = vec![
+            MetadataPosting {
+                field: MetadataField::Tag,
+                term: "cold".to_string(),
+                ids: vec![FileId::new(VolumeId(3), 1)],
+            },
+            MetadataPosting {
+                field: MetadataField::Tag,
+                term: "important".to_string(),
+                ids: (0..5)
+                    .map(|node| FileId::new(VolumeId(12), 20_000 + node))
+                    .collect(),
+            },
+            MetadataPosting {
+                field: MetadataField::Comment,
+                term: "handoff".to_string(),
+                ids: (0..4)
+                    .map(|node| FileId::new(VolumeId(7), 100 + node))
+                    .collect(),
+            },
+        ];
+
+        write_metadata_postings(&path, &postings).unwrap();
+        let archive = MmapMetadataArchive::open(&path).unwrap();
+        let tags = archive
+            .postings_for_sorted_terms_limit(
+                MetadataField::Tag,
+                ["cold", "important", "important", "missing"],
+                3,
+            )
+            .unwrap();
+        let comments = archive
+            .postings_for_sorted_terms_limit(MetadataField::Comment, ["handoff"], 2)
+            .unwrap();
+
+        assert_eq!(tags.len(), 2);
+        assert_eq!(tags[0].posting.term, "cold");
+        assert_eq!(tags[0].posting.ids, postings[0].ids);
+        assert!(!tags[0].truncated);
+        assert_eq!(tags[1].posting.term, "important");
+        assert_eq!(tags[1].posting.ids, postings[1].ids[..3]);
+        assert!(tags[1].truncated);
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].posting.term, "handoff");
+        assert_eq!(comments[0].posting.ids, postings[2].ids[..2]);
+        assert!(comments[0].truncated);
+        assert!(archive
+            .postings_for_sorted_terms_limit(MetadataField::Tag, ["important", "cold"], 3)
+            .is_err());
         std::fs::remove_file(path).unwrap();
     }
 

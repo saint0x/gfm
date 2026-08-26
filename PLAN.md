@@ -477,8 +477,9 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - filter-only, negative-only, and other genuinely unanchored universe queries conservatively hydrate the full record set because correctness requires evaluating all records;
   - positive `name:`, `path:`, `ext:`, `tag:`, and `kind:` filters seed boolean expression candidates from maintained posting maps before final expression evaluation, so indexed filter `AND`/`OR` branches do not force a full-record universe scan;
   - sharded search fans out the same archive lookup across volume shards and filters candidate ids per shard;
-  - archive-backed lookup avoids importing large prefix/substring/fuzzy candidate maps into heap memory for each machine-wide query session;
+  - archive-backed lookup avoids importing large metadata/prefix/substring/fuzzy candidate maps into heap memory for each machine-wide query session;
   - default sidecar-backed search imports only budgeted query-matching metadata, prefix, substring, fuzzy-term, and content postings before ranking; explicit operator budget commands can lower or raise those caps for diagnostics;
+  - query metadata imports resolve tag/comment terms through one sorted pass per field over the mmap metadata directory, decoding only bounded ID heads and avoiding one binary archive lookup per selected term;
   - direct prefix terms and fuzzy-expanded prefix terms are deduplicated into one bounded prefix-posting import set before mmap prefix lookup, preventing repeated cache probes and duplicate prefix postings for the same query candidate;
   - uncached query prefix imports resolve through one sorted pass over the mmap prefix directory, decoding only bounded ID heads, preserving per-prefix cache telemetry, and avoiding one binary archive lookup per prefix candidate;
   - query substring gram imports resolve through one sorted pass over the mmap substring directory, decoding only bounded ID heads and avoiding one binary archive lookup per selected gram;
