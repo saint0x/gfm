@@ -1,10 +1,7 @@
+use gfm_mac_sys::{read_spotlight_attributes, NativeSpotlightStatus};
 use gfm_types::{FileKind, FileRecord, GfmError, Result};
-use plist::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
-const SPOTLIGHT_MAX_PLIST_BYTES: usize = 512 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpotlightStatus {
@@ -77,6 +74,17 @@ impl SpotlightField {
     }
 }
 
+const SPOTLIGHT_FIELDS: [SpotlightField; 8] = [
+    SpotlightField::DisplayName,
+    SpotlightField::Kind,
+    SpotlightField::ContentType,
+    SpotlightField::FinderComment,
+    SpotlightField::UserTags,
+    SpotlightField::Authors,
+    SpotlightField::WhereFroms,
+    SpotlightField::LastUsedDate,
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpotlightSnapshot {
     pub path: PathBuf,
@@ -118,44 +126,24 @@ impl SpotlightSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SpotlightMetadataReader {
-    max_plist_bytes: usize,
-}
+pub struct SpotlightMetadataReader;
 
 impl Default for SpotlightMetadataReader {
     fn default() -> Self {
-        Self {
-            max_plist_bytes: SPOTLIGHT_MAX_PLIST_BYTES,
-        }
+        Self
     }
 }
 
 impl SpotlightMetadataReader {
     pub fn read_path(&self, path: impl AsRef<Path>) -> Result<SpotlightSnapshot> {
         let path = path.as_ref().to_path_buf();
-        let output = Command::new("mdls")
-            .args(["-plist", "-"])
-            .arg(&path)
-            .output()
-            .map_err(|err| GfmError::Format(format!("failed to run mdls: {err}")))?;
-
-        if !output.status.success() {
-            let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            if reason.contains("could not find") {
-                return Ok(SpotlightSnapshot::missing(path, reason));
-            }
-            return Ok(SpotlightSnapshot::unavailable(path, reason));
-        }
-        if output.stdout.len() > self.max_plist_bytes {
-            return Ok(SpotlightSnapshot::unavailable(
-                path,
-                format!(
-                    "mdls plist output exceeded {} byte budget",
-                    self.max_plist_bytes
-                ),
-            ));
-        }
-        parse_mdls_plist(&path, &output.stdout)
+        let keys = SPOTLIGHT_FIELDS
+            .iter()
+            .map(|field| field.key())
+            .collect::<Vec<_>>();
+        read_spotlight_attributes(&path, &keys)
+            .map(|snapshot| native_snapshot(path, snapshot))
+            .map_err(|err| GfmError::Format(format!("failed to read Spotlight metadata: {err}")))
     }
 }
 
@@ -285,23 +273,34 @@ pub fn parse_spotlight_fixture(path: impl Into<PathBuf>, text: &str) -> Result<S
     Ok(SpotlightSnapshot::available(path, attributes))
 }
 
-fn parse_mdls_plist(path: &Path, bytes: &[u8]) -> Result<SpotlightSnapshot> {
-    let value = Value::from_reader_xml(bytes)
-        .map_err(|err| GfmError::Format(format!("failed to parse mdls plist: {err}")))?;
-    let dict = value
-        .as_dictionary()
-        .ok_or_else(|| GfmError::Format("mdls plist root was not a dictionary".to_string()))?;
-    let mut attributes = BTreeMap::new();
-    for (key, value) in dict {
-        let Some(field) = SpotlightField::from_key(key) else {
-            continue;
-        };
-        let values = plist_values(value);
-        if !values.is_empty() {
-            attributes.insert(field, values);
-        }
+fn native_snapshot(
+    path: PathBuf,
+    snapshot: gfm_mac_sys::NativeSpotlightSnapshot,
+) -> SpotlightSnapshot {
+    match snapshot.status {
+        NativeSpotlightStatus::Available => SpotlightSnapshot::available(
+            path,
+            snapshot
+                .attributes
+                .into_iter()
+                .filter_map(|(key, values)| {
+                    SpotlightField::from_key(&key).map(|field| (field, values))
+                })
+                .collect(),
+        ),
+        NativeSpotlightStatus::Missing => SpotlightSnapshot::missing(
+            path,
+            snapshot
+                .reason
+                .unwrap_or_else(|| "Spotlight metadata item is missing".to_string()),
+        ),
+        NativeSpotlightStatus::Unavailable => SpotlightSnapshot::unavailable(
+            path,
+            snapshot
+                .reason
+                .unwrap_or_else(|| "Spotlight metadata is unavailable".to_string()),
+        ),
     }
-    Ok(SpotlightSnapshot::available(path, attributes))
 }
 
 fn reconcile_field(
@@ -356,21 +355,6 @@ fn file_kind(kind: FileKind) -> &'static str {
         FileKind::File => "file",
         FileKind::Symlink => "symlink",
         FileKind::Other => "other",
-    }
-}
-
-fn plist_values(value: &Value) -> Vec<String> {
-    match value {
-        Value::String(value) => (!value.is_empty())
-            .then(|| value.clone())
-            .into_iter()
-            .collect(),
-        Value::Array(values) => values.iter().flat_map(plist_values).collect(),
-        Value::Date(value) => vec![value.to_xml_format()],
-        Value::Boolean(value) => vec![value.to_string()],
-        Value::Integer(value) => vec![value.to_string()],
-        Value::Real(value) => vec![value.to_string()],
-        _ => Vec::new(),
     }
 }
 
@@ -458,6 +442,31 @@ mod tests {
         assert!(report.as_tsv().starts_with(
             "spotlight-reconciliation\t/tmp/Local.txt\t1:9\tprimary=filesystem\tspotlight=missing"
         ));
+    }
+
+    #[test]
+    fn converts_native_spotlight_snapshot_to_typed_fields() {
+        let mut attributes = BTreeMap::new();
+        attributes.insert(
+            "kMDItemDisplayName".to_string(),
+            vec!["Native.md".to_string()],
+        );
+        attributes.insert("unknown".to_string(), vec!["ignored".to_string()]);
+
+        let snapshot = native_snapshot(
+            PathBuf::from("/tmp/Native.md"),
+            gfm_mac_sys::NativeSpotlightSnapshot {
+                status: NativeSpotlightStatus::Available,
+                attributes,
+                reason: None,
+            },
+        );
+
+        assert_eq!(
+            snapshot.attributes.get(&SpotlightField::DisplayName),
+            Some(&vec!["Native.md".to_string()])
+        );
+        assert_eq!(snapshot.attributes.len(), 1);
     }
 
     fn record(name: &str) -> FileRecord {

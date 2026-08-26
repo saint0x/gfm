@@ -1736,10 +1736,19 @@ name = "gfm-mac"
 version = "0.1.0"
 dependencies = [
  "fs2",
+ "gfm-mac-sys",
  "gfm-types",
  "notify",
- "plist",
  "xattr 1.6.1",
+]
+
+[[package]]
+name = "gfm-mac-sys"
+version = "0.1.0"
+dependencies = [
+ "core-foundation 0.10.0",
+ "core-foundation-sys",
+ "libc",
 ]
 
 [[package]]
