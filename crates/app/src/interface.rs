@@ -3,15 +3,17 @@ use gfm_fs::{
     ScanOptions,
 };
 use gfm_index::Indexer;
+use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore};
 use gfm_types::{FileKind, GfmError, Result};
 use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
-    MenuContract, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
-    SearchResultsStage, SidebarContract, TitlebarContract, ToolbarContract, TrashEntryMetadata,
-    TrashViewContract, TrashViewOptions, VirtualSurface, VirtualizationContract,
-    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    MenuContract, OperationProgressContract, OperationProgressInput, OperationProgressState,
+    SearchResultsBatch, SearchResultsContract, SearchResultsOptions, SearchResultsStage,
+    SidebarContract, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
+    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
+    WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -93,6 +95,28 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 DialogContract::finder_default(surface)
             };
             println!("{}", contract.as_tsv());
+        }
+        "ui-progress-job-contract" => {
+            let path = required_path(
+                args.next(),
+                "ui-progress-job-contract requires a progress path",
+            )?;
+            let job_id = JobId::from_raw(parse_u64_arg(
+                args.next(),
+                "ui-progress-job-contract requires a job id",
+            )?);
+            let snapshots = JobProgressStore::new(&path).read()?;
+            let snapshot = snapshots
+                .iter()
+                .find(|snapshot| snapshot.id == job_id)
+                .ok_or_else(|| {
+                    GfmError::Format(format!(
+                        "progress store {} does not contain job {}",
+                        path.display(),
+                        job_id.value()
+                    ))
+                })?;
+            println!("{}", operation_progress_contract(snapshot).as_tsv());
         }
         "ui-titlebar-contract" => {
             let spec = app_launch_spec(args.next());
@@ -339,6 +363,13 @@ fn parse_u32_arg(value: Option<String>, message: &str) -> Result<u32> {
         .map_err(|_| GfmError::Format(format!("{message}; got `{value}`")))
 }
 
+fn parse_u64_arg(value: Option<String>, message: &str) -> Result<u64> {
+    let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
+    value
+        .parse()
+        .map_err(|_| GfmError::Format(format!("{message}; got `{value}`")))
+}
+
 fn parse_usize_arg(value: Option<String>, message: &str) -> Result<usize> {
     let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
     value
@@ -425,6 +456,27 @@ fn search_results_stage(stage: gfm_index::SearchStreamStage) -> SearchResultsSta
     match stage {
         gfm_index::SearchStreamStage::Hot => SearchResultsStage::Hot,
         gfm_index::SearchStreamStage::Deep => SearchResultsStage::Deep,
+    }
+}
+
+fn operation_progress_contract(snapshot: &JobProgressSnapshot) -> OperationProgressContract {
+    OperationProgressContract::from_input(OperationProgressInput::new(
+        snapshot.label.clone(),
+        operation_progress_state(snapshot.state),
+        snapshot.completed_units,
+        snapshot.total_units,
+        snapshot.detail.clone(),
+    ))
+}
+
+fn operation_progress_state(state: JobProgressState) -> OperationProgressState {
+    match state {
+        JobProgressState::Planned => OperationProgressState::Planned,
+        JobProgressState::Running => OperationProgressState::Running,
+        JobProgressState::Paused => OperationProgressState::Paused,
+        JobProgressState::Completed => OperationProgressState::Completed,
+        JobProgressState::Cancelled => OperationProgressState::Cancelled,
+        JobProgressState::Failed => OperationProgressState::Failed,
     }
 }
 

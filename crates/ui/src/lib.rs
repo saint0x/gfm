@@ -33,7 +33,8 @@ pub use context::{
 };
 pub use dialog::{
     DialogButtonRole, DialogButtonSpec, DialogContract, DialogFieldKind, DialogFieldSpec,
-    DialogPresentation, DialogSurface,
+    DialogPresentation, DialogSurface, OperationProgressContract, OperationProgressInput,
+    OperationProgressState,
 };
 pub use gallery::{
     render as render_gallery_view, GalleryFilmstripItemSpec, GalleryKeyboardFlow,

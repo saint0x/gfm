@@ -113,6 +113,49 @@ fn reports_progress_dialog_pause_resume_contract_from_binary() {
 }
 
 #[test]
+fn reports_progress_dialog_from_job_progress_store() {
+    let progress = std::env::temp_dir().join(format!(
+        "gfm-ui-progress-job-contract-{}.gfmprogress",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&progress);
+
+    let seed = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("jobs-progress-snapshot")
+        .arg(&progress)
+        .output()
+        .unwrap();
+    assert!(
+        seed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&seed.stderr)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-progress-job-contract")
+        .arg(&progress)
+        .arg("2")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=progress\tpresentation=progress-sheet"));
+    assert!(stdout.contains("button\tpause\tPause\talternate\tenabled=false"));
+    assert!(stdout.contains("button\tresume\tResume\tdefault\tenabled=true"));
+    assert!(stdout.contains("button\tstop\tStop\tcancel\tenabled=true"));
+    assert!(stdout.contains(
+        "operation-progress\tlabel=index content\tstate=paused\tcompleted=128\ttotal=250\tpercent=51\tdetail=pressure:throttled"
+    ));
+
+    let _ = std::fs::remove_file(progress);
+}
+
+#[test]
 fn reports_ui_titlebar_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-titlebar-contract", "/tmp/gfm"])

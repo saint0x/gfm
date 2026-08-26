@@ -133,6 +133,116 @@ pub struct DialogContract {
     pub escape_cancels: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationProgressState {
+    Planned,
+    Running,
+    Paused,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+impl OperationProgressState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Planned => "planned",
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub const fn is_paused(self) -> bool {
+        matches!(self, Self::Paused)
+    }
+
+    pub const fn is_cancellable(self) -> bool {
+        matches!(self, Self::Planned | Self::Running | Self::Paused)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationProgressInput {
+    pub label: String,
+    pub state: OperationProgressState,
+    pub completed_units: u64,
+    pub total_units: u64,
+    pub detail: String,
+}
+
+impl OperationProgressInput {
+    pub fn new(
+        label: impl Into<String>,
+        state: OperationProgressState,
+        completed_units: u64,
+        total_units: u64,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            state,
+            completed_units: completed_units.min(total_units),
+            total_units,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn percent_complete(&self) -> u64 {
+        if self.total_units == 0 {
+            0
+        } else {
+            self.completed_units.saturating_mul(100) / self.total_units
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationProgressContract {
+    pub dialog: DialogContract,
+    pub label: String,
+    pub state: OperationProgressState,
+    pub completed_units: u64,
+    pub total_units: u64,
+    pub detail: String,
+    pub percent_complete: u64,
+}
+
+impl OperationProgressContract {
+    pub fn from_input(input: OperationProgressInput) -> Self {
+        let dialog = DialogContract::operation_progress(
+            input.state.is_paused(),
+            input.state.is_cancellable(),
+        );
+        let percent_complete = input.percent_complete();
+
+        Self {
+            dialog,
+            label: input.label,
+            state: input.state,
+            completed_units: input.completed_units,
+            total_units: input.total_units,
+            detail: input.detail,
+            percent_complete,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "{}\noperation-progress\tlabel={}\tstate={}\tcompleted={}\ttotal={}\tpercent={}\tdetail={}",
+            self.dialog.as_tsv(),
+            escape_tsv(&self.label),
+            self.state.as_str(),
+            self.completed_units,
+            self.total_units,
+            self.percent_complete,
+            escape_tsv(&self.detail),
+        )
+    }
+}
+
 impl DialogContract {
     pub fn finder_default(surface: DialogSurface) -> Self {
         match surface {
@@ -384,6 +494,16 @@ fn field(
     }
 }
 
+fn escape_tsv(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            '\t' | '\n' | '\r' => ' ',
+            other => other,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,6 +586,49 @@ mod tests {
         let contract = DialogContract::operation_progress(false, false);
 
         assert!(contract
+            .buttons
+            .iter()
+            .any(|button| button.id == "stop" && !button.enabled));
+    }
+
+    #[test]
+    fn operation_progress_contract_reflects_paused_job_progress() {
+        let contract = OperationProgressContract::from_input(OperationProgressInput::new(
+            "copy selected files",
+            OperationProgressState::Paused,
+            42,
+            100,
+            "pressure:throttled",
+        ));
+
+        assert_eq!(contract.percent_complete, 42);
+        assert!(contract
+            .dialog
+            .buttons
+            .iter()
+            .any(|button| button.id == "pause" && !button.enabled));
+        assert!(contract
+            .dialog
+            .buttons
+            .iter()
+            .any(|button| button.id == "resume" && button.enabled));
+        assert!(contract.as_tsv().contains(
+            "operation-progress\tlabel=copy selected files\tstate=paused\tcompleted=42\ttotal=100\tpercent=42\tdetail=pressure:throttled"
+        ));
+    }
+
+    #[test]
+    fn operation_progress_contract_disables_stop_for_terminal_jobs() {
+        let contract = OperationProgressContract::from_input(OperationProgressInput::new(
+            "compact content",
+            OperationProgressState::Completed,
+            7,
+            7,
+            "done",
+        ));
+
+        assert!(contract
+            .dialog
             .buttons
             .iter()
             .any(|button| button.id == "stop" && !button.enabled));

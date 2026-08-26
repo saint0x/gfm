@@ -1510,6 +1510,27 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "ui-progress-job-contract",
+        "/tmp/gfm-fozzy-jobs.gfmprogress",
+        "2"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-progress-job-contract",
+        "/tmp/gfm-fozzy-jobs.gfmprogress",
+        "2"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "jobs-payload-restore-plan",
         "/tmp/gfm-fozzy-jobs.gfmjobs",
         "/tmp/gfm-fozzy-jobs.gfmprogress",
