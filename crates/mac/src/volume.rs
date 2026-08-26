@@ -116,6 +116,7 @@ pub struct VolumeDescriptor {
     pub capacity: VolumeCapacity,
     pub commands: VolumeCommandPolicy,
     pub native_status: Option<NativeVolumeStatus>,
+    pub resource_status: Option<NativeVolumeStatus>,
     pub bsd_name: Option<String>,
     pub volume_uuid: Option<String>,
     pub media_uuid: Option<String>,
@@ -145,7 +146,7 @@ impl VolumeDescriptor {
             .as_ref()
             .and_then(|native| native.volume_name.clone())
             .unwrap_or_else(|| volume_label(&path));
-        let kind = classify_volume(&path, marker.as_deref(), native.as_ref());
+        let kind = classify_volume(&path, marker.as_deref(), native.as_ref(), resource.as_ref());
         let mount_state = if path.exists() {
             MountState::Mounted
         } else {
@@ -218,6 +219,7 @@ impl VolumeDescriptor {
             capacity,
             commands,
             native_status,
+            resource_status,
             bsd_name: native
                 .as_ref()
                 .and_then(|native| native.media_bsd_name.clone()),
@@ -249,7 +251,7 @@ impl VolumeDescriptor {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -321,7 +323,10 @@ impl VolumeDescriptor {
             self.device_vendor
                 .as_deref()
                 .map(escape_field)
-                .unwrap_or_else(|| "-".to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.resource_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-")
         )
     }
 }
@@ -594,6 +599,7 @@ fn classify_volume(
     path: &Path,
     marker: Option<&str>,
     native: Option<&gfm_mac_sys::NativeVolumeDescription>,
+    resource: Option<&NativeVolumeResourceValues>,
 ) -> VolumeKind {
     match marker {
         Some("network") | Some("network-smb") | Some("network-afp") | Some("network-nfs") => {
@@ -607,7 +613,7 @@ fn classify_volume(
         _ => {}
     }
 
-    if let Some(kind) = classify_native_volume(path, native) {
+    if let Some(kind) = classify_native_volume(path, native, resource) {
         return kind;
     }
 
@@ -630,36 +636,56 @@ fn classify_volume(
 fn classify_native_volume(
     path: &Path,
     native: Option<&NativeVolumeDescription>,
+    resource: Option<&NativeVolumeResourceValues>,
 ) -> Option<VolumeKind> {
-    let native = native.filter(|native| native.status == NativeVolumeStatus::Available)?;
     if path == Path::new("/") {
         return Some(VolumeKind::System);
     }
-    if native.volume_network == Some(true) {
+    let native = native.filter(|native| native.status == NativeVolumeStatus::Available);
+    if native.and_then(|native| native.volume_network) == Some(true) {
         return Some(VolumeKind::Network);
     }
-
-    let protocol = native
-        .device_protocol
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let media_kind = native
-        .media_kind
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let volume_kind = native
-        .volume_kind
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if protocol.contains("disk image")
-        || media_kind.contains("disk image")
-        || volume_kind.contains("disk image")
-    {
-        return Some(VolumeKind::DiskImage);
+    if let Some(native) = native {
+        let protocol = native
+            .device_protocol
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let media_kind = native
+            .media_kind
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let volume_kind = native
+            .volume_kind
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if protocol.contains("disk image")
+            || media_kind.contains("disk image")
+            || volume_kind.contains("disk image")
+        {
+            return Some(VolumeKind::DiskImage);
+        }
     }
+
+    let resource = resource.filter(|resource| resource.status == NativeVolumeStatus::Available);
+    if resource.and_then(|resource| resource.is_local) == Some(false) {
+        return Some(VolumeKind::Network);
+    }
+    if resource.and_then(|resource| resource.is_removable) == Some(true) {
+        return Some(VolumeKind::Removable);
+    }
+    if resource.and_then(|resource| resource.is_ejectable) == Some(true)
+        || resource.and_then(|resource| resource.is_internal) == Some(false)
+    {
+        return Some(VolumeKind::External);
+    }
+    if resource.and_then(|resource| resource.is_internal) == Some(true) {
+        return Some(VolumeKind::Internal);
+    }
+
+    let native = native?;
     if native.media_removable == Some(true) {
         return Some(VolumeKind::Removable);
     }
@@ -817,6 +843,10 @@ mod tests {
             descriptor.native_status,
             Some(NativeVolumeStatus::Available)
         );
+        assert_eq!(
+            descriptor.resource_status,
+            Some(NativeVolumeStatus::Available)
+        );
         assert_eq!(descriptor.read_only, !descriptor.writable);
         assert!(descriptor.stable_identity.starts_with("diskarbitration:"));
         assert_eq!(descriptor.commands.eject, VolumeCommandState::Hidden);
@@ -826,6 +856,7 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tread-only="));
         assert!(descriptor.as_tsv().contains("\tcase-sensitive="));
         assert!(descriptor.as_tsv().contains("\tlocal="));
+        assert!(descriptor.as_tsv().contains("\tresource-status=available"));
         assert!(descriptor.source.contains("url-resource=available"));
     }
 
@@ -840,15 +871,46 @@ mod tests {
         assert!(descriptor.removable);
         assert!(descriptor.ejectable);
         assert_eq!(descriptor.native_status, None);
+        assert_eq!(descriptor.resource_status, None);
         assert!(descriptor.stable_identity.starts_with("dev:"));
         assert_eq!(descriptor.commands.eject, VolumeCommandState::Enabled);
         assert!(descriptor
             .as_tsv()
             .contains("source=fixture-marker:external-removable"));
         assert_eq!(descriptor.case_sensitive, None);
+        assert!(descriptor.as_tsv().contains("\tresource-status=-"));
         assert!(!descriptor.source.contains("url-resource="));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn classify_native_volume_uses_url_resource_locality() {
+        let resource = resource_values(|values| {
+            values.is_local = Some(false);
+        });
+
+        let kind = classify_native_volume(Path::new("/Volumes/Team Share"), None, Some(&resource));
+
+        assert_eq!(kind, Some(VolumeKind::Network));
+    }
+
+    #[test]
+    fn classify_native_volume_preserves_disk_image_identity_before_ejectability() {
+        let native = native_description(|description| {
+            description.volume_kind = Some("disk image".to_string());
+        });
+        let resource = resource_values(|values| {
+            values.is_ejectable = Some(true);
+        });
+
+        let kind = classify_native_volume(
+            Path::new("/Volumes/Installer"),
+            Some(&native),
+            Some(&resource),
+        );
+
+        assert_eq!(kind, Some(VolumeKind::DiskImage));
     }
 
     #[test]
@@ -955,5 +1017,64 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn resource_values(
+        configure: impl FnOnce(&mut NativeVolumeResourceValues),
+    ) -> NativeVolumeResourceValues {
+        let mut values = NativeVolumeResourceValues {
+            status: NativeVolumeStatus::Available,
+            is_ejectable: None,
+            is_internal: None,
+            is_local: None,
+            is_read_only: None,
+            is_removable: None,
+            supports_case_preserved_names: None,
+            supports_case_sensitive_names: None,
+            reason: None,
+        };
+        configure(&mut values);
+        values
+    }
+
+    fn native_description(
+        configure: impl FnOnce(&mut NativeVolumeDescription),
+    ) -> NativeVolumeDescription {
+        let mut description = NativeVolumeDescription {
+            status: NativeVolumeStatus::Available,
+            volume_name: None,
+            volume_kind: None,
+            volume_mountable: None,
+            volume_type: None,
+            volume_uuid: None,
+            volume_path: None,
+            volume_network: None,
+            media_bsd_name: None,
+            media_bsd_major: None,
+            media_bsd_minor: None,
+            media_bsd_unit: None,
+            media_content: None,
+            media_kind: None,
+            media_leaf: None,
+            media_name: None,
+            media_path: None,
+            media_removable: None,
+            media_ejectable: None,
+            media_writable: None,
+            media_type: None,
+            media_uuid: None,
+            media_whole: None,
+            media_encrypted: None,
+            media_block_size_bytes: None,
+            media_size_bytes: None,
+            device_internal: None,
+            device_model: None,
+            device_path: None,
+            device_protocol: None,
+            device_vendor: None,
+            reason: None,
+        };
+        configure(&mut description);
+        description
     }
 }

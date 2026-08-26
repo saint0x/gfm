@@ -81,6 +81,22 @@ pub struct SidebarVolumeSpec {
     pub ejectable: bool,
 }
 
+impl SidebarVolumeSpec {
+    pub fn from_native_seed(
+        seed: impl AsRef<str>,
+        label: impl Into<String>,
+        path: impl Into<PathBuf>,
+        ejectable: bool,
+    ) -> Self {
+        Self {
+            id: stable_id("volume", seed.as_ref()),
+            label: label.into(),
+            path: path.into(),
+            ejectable,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SidebarEnvironment {
     home: PathBuf,
@@ -121,6 +137,15 @@ pub struct SidebarContract {
 impl SidebarContract {
     pub fn discover(current_path: impl AsRef<Path>) -> Self {
         Self::from_environment(current_path, SidebarEnvironment::discover())
+    }
+
+    pub fn discover_with_volumes(
+        current_path: impl AsRef<Path>,
+        volumes: Vec<SidebarVolumeSpec>,
+    ) -> Self {
+        let mut environment = SidebarEnvironment::discover();
+        environment.volumes = volumes;
+        Self::from_environment(current_path, environment)
     }
 
     pub fn discover_with_icloud_state(
@@ -597,12 +622,12 @@ fn discover_volumes() -> Vec<SidebarVolumeSpec> {
             if label.is_empty() || is_system_volume_label(&label) {
                 return None;
             }
-            Some(SidebarVolumeSpec {
-                id: stable_id("volume", &label),
+            Some(SidebarVolumeSpec::from_native_seed(
+                label.clone(),
                 label,
                 path,
-                ejectable: true,
-            })
+                true,
+            ))
         })
         .collect::<Vec<_>>();
     volumes.sort_by(|left, right| left.label.cmp(&right.label));
@@ -670,12 +695,12 @@ mod tests {
                 )),
                 icloud_state: SidebarCloudState::None,
                 icloud_progress_milli: None,
-                volumes: vec![SidebarVolumeSpec {
-                    id: "volume-work".to_string(),
-                    label: "Work".to_string(),
-                    path: PathBuf::from("/Volumes/Work"),
-                    ejectable: true,
-                }],
+                volumes: vec![SidebarVolumeSpec::from_native_seed(
+                    "work",
+                    "Work",
+                    "/Volumes/Work",
+                    true,
+                )],
             },
         );
         let ids: Vec<_> = contract.rows.iter().map(|row| row.id.as_str()).collect();
@@ -719,8 +744,20 @@ mod tests {
 
     #[test]
     fn stable_volume_ids_are_ascii_and_deterministic() {
-        assert_eq!(stable_id("volume", "Work Drive"), "volume-work-drive");
-        assert_eq!(stable_id("volume", "Media+Backup"), "volume-media-backup");
+        assert_eq!(
+            SidebarVolumeSpec::from_native_seed("Work Drive", "Work", "/Volumes/Work", true).id,
+            "volume-work-drive"
+        );
+        assert_eq!(
+            SidebarVolumeSpec::from_native_seed(
+                "diskarbitration:uuid:Media+Backup",
+                "Media",
+                "/Volumes/Media",
+                true
+            )
+            .id,
+            "volume-diskarbitration-uuid-media-backup"
+        );
     }
 
     #[test]

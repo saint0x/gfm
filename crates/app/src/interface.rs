@@ -6,6 +6,7 @@ use gfm_index::Indexer;
 use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore};
 use gfm_mac::{
     CloudCommandState, CloudStorageState, FileProviderConflictReport, FileProviderStateReport,
+    VolumeDescriptor, VolumeDiscoveryReport, VolumeKind,
 };
 use gfm_types::{FileKind, GfmError, Result};
 use gfm_ui::{
@@ -14,9 +15,10 @@ use gfm_ui::{
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
     MenuContract, OperationProgressContract, OperationProgressInput, OperationProgressState,
     ProviderConflictContract, ProviderConflictInput, SearchResultsBatch, SearchResultsContract,
-    SearchResultsOptions, SearchResultsStage, SidebarCloudState, SidebarContract, TitlebarContract,
-    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
-    VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    SearchResultsOptions, SearchResultsStage, SidebarCloudState, SidebarContract,
+    SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
+    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
+    WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -162,7 +164,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "ui-sidebar-contract" => {
             let path = default_current_path(args.next());
-            println!("{}", SidebarContract::discover(path).as_tsv());
+            println!(
+                "{}",
+                SidebarContract::discover_with_volumes(path, native_sidebar_volumes()).as_tsv()
+            );
         }
         "ui-sidebar-fileprovider-contract" => {
             let current_path = default_current_path(args.next());
@@ -360,6 +365,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn native_sidebar_volumes() -> Vec<SidebarVolumeSpec> {
+    VolumeDiscoveryReport::discover()
+        .volumes
+        .iter()
+        .filter(|volume| volume.kind != VolumeKind::System)
+        .map(sidebar_volume_spec)
+        .collect()
+}
+
+fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
+    SidebarVolumeSpec::from_native_seed(
+        &volume.stable_identity,
+        volume.label.clone(),
+        volume.path.clone(),
+        volume.ejectable,
+    )
 }
 
 fn app_launch_spec(path: Option<String>) -> AppLaunchSpec {
