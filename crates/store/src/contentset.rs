@@ -1,4 +1,5 @@
-use crate::content::{ContentMergeTier, MmapContentArchive};
+use crate::content::MmapContentArchive;
+use crate::contentmerge::ContentMergeTier;
 use crate::durable;
 use gfm_types::{ContentPositions, ContentPosting, FileId, GfmError, Result};
 use std::collections::{BTreeMap, BTreeSet};
