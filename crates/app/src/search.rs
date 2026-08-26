@@ -20,7 +20,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "search requires a root path")?;
             let query = required_string(args.next(), "search requires a query string")?;
             let snapshot = Indexer::default().build(root)?;
-            for hit in snapshot.search(&query, 50) {
+            let session = snapshot.query_session();
+            for hit in session.search(&query, 50) {
                 print_hit(&hit);
             }
         }
@@ -28,7 +29,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "search-stream requires a root path")?;
             let query = required_string(args.next(), "search-stream requires a query string")?;
             let snapshot = Indexer::default().build(root)?;
-            for batch in snapshot.stream_search(&query, 50)? {
+            let session = snapshot.query_session();
+            for batch in session.stream_search(&query, 50)? {
                 println!("batch\t{}", stream_stage(batch.stage));
                 for hit in batch.hits {
                     print_hit(&hit);
@@ -174,8 +176,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "search-index" => {
             let index_path = required_path(args.next(), "search-index requires an index path")?;
             let query = required_string(args.next(), "search-index requires a query string")?;
-            let snapshot = Indexer::default().load(index_path)?;
-            for hit in snapshot.search(&query, 50) {
+            let session = Indexer::default().load_query_session(index_path)?;
+            for hit in session.search(&query, 50) {
                 print_hit(&hit);
             }
         }

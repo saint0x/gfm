@@ -96,6 +96,7 @@ The index is compact and incremental:
 - mmap record archives with direct and sorted-batch file-ID lookup so query-time candidate hydration does not require full-record scans or per-candidate directory searches
 - mmap-backed index footprint telemetry with adaptive run/throttle/defer compaction scheduling
 - hot mutable buffers
+- reusable `IndexQuerySession` instances that keep a `LiveIndex` hot across search-as-you-type query changes instead of rebuilding name/path/token postings per keystroke
 - progressive hot/deep result streaming with stable dedupe
 - dedicated simple-query hot-pass execution for immediate name/path/metadata batches before deep fuzzy/content retrieval
 - query-intent preclassification so ordinary searches skip full-record Finder-intent scoring passes

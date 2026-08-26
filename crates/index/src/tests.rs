@@ -55,6 +55,66 @@ fn builds_saves_loads_and_searches_snapshot() {
 }
 
 #[test]
+fn query_session_reuses_loaded_index_for_repeated_queries() {
+    let root = unique_temp_dir("gfm-query-session-root");
+    let output = unique_temp_path("gfm-query-session", "gfmidx");
+    fs::create_dir_all(root.join("Design")).unwrap();
+    fs::write(root.join("Design").join("FinderParity.md"), "notes").unwrap();
+    fs::write(root.join("LatencyNotes.md"), "fast search").unwrap();
+
+    let indexer = Indexer::default();
+    let snapshot = indexer.build(&root).unwrap();
+    let records = snapshot.records.len();
+    snapshot.save(&output).unwrap();
+    let session = indexer.load_query_session(&output).unwrap();
+
+    let parity = session.search("parity", 5);
+    let latency = session.search("latency", 5);
+
+    assert_eq!(session.indexed_records(), records);
+    assert_eq!(parity.len(), 1);
+    assert_eq!(parity[0].record.name, "FinderParity.md");
+    assert_eq!(latency.len(), 1);
+    assert_eq!(latency[0].record.name, "LatencyNotes.md");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(output).unwrap();
+}
+
+#[test]
+fn snapshot_query_session_streams_without_rebuilding_per_query() {
+    let root = unique_temp_dir("gfm-query-session-stream-root");
+    fs::write(root.join("needle.md"), "metadata match").unwrap();
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let records = snapshot.records.len();
+    let session = snapshot.query_session();
+
+    let batches = session.stream_search("needle", 10).unwrap();
+
+    assert_eq!(session.indexed_records(), records);
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].stage, SearchStreamStage::Hot);
+    assert_eq!(batches[0].hits[0].record.name, "needle.md");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn query_session_honors_cancellation() {
+    let root = unique_temp_dir("gfm-query-session-cancel-root");
+    fs::write(root.join("notes.md"), "needle").unwrap();
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let session = snapshot.query_session();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = session.search_cancellable("needle", 5, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn publishes_secondary_metadata_to_mmap_archive() {
     let metadata_path = unique_temp_path("gfm-secondary-metadata", "gfmmeta");
     let record = FileRecord {

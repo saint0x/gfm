@@ -212,7 +212,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let viewport_rows = optional_u16(args.next(), "viewport-rows", 24)?;
             let scroll_row = optional_u32(args.next(), "scroll-row", 0)?;
             let snapshot = Indexer::default().build(root)?;
-            let batches = snapshot
+            let session = snapshot.query_session();
+            let batches = session
                 .stream_search(&query, 50)?
                 .into_iter()
                 .map(|batch| SearchResultsBatch::new(search_results_stage(batch.stage), batch.hits))

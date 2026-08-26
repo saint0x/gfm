@@ -103,6 +103,52 @@ pub fn fuzzy_query_keys(query: &str) -> Vec<String> {
 }
 
 #[derive(Debug, Clone)]
+pub struct IndexQuerySession {
+    live: LiveIndex,
+}
+
+impl IndexQuerySession {
+    pub fn from_records(records: Vec<FileRecord>) -> Self {
+        Self {
+            live: LiveIndex::from_records(records),
+        }
+    }
+
+    pub fn from_snapshot(snapshot: IndexSnapshot) -> Self {
+        Self::from_records(snapshot.records)
+    }
+
+    pub fn from_live(live: LiveIndex) -> Self {
+        Self { live }
+    }
+
+    pub fn indexed_records(&self) -> usize {
+        self.live.indexed_records()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.live.is_empty()
+    }
+
+    pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+        self.live.search(query, limit)
+    }
+
+    pub fn stream_search(&self, query: &str, limit: usize) -> Result<Vec<SearchStreamBatch>> {
+        self.live.stream_search(query, limit)
+    }
+
+    pub fn search_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchHit>> {
+        self.live.search_cancellable(query, limit, cancellation)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct IndexSnapshot {
     pub root: PathBuf,
     pub records: Vec<FileRecord>,
@@ -132,6 +178,10 @@ impl IndexSnapshot {
             index.insert(record);
         }
         index.stream(query, limit)
+    }
+
+    pub fn query_session(&self) -> IndexQuerySession {
+        IndexQuerySession::from_records(self.records.clone())
     }
 
     pub fn search_cancellable(
@@ -394,6 +444,10 @@ impl Indexer {
             records: read_records(path)?,
             inaccessible: Vec::new(),
         })
+    }
+
+    pub fn load_query_session(&self, path: impl AsRef<Path>) -> Result<IndexQuerySession> {
+        self.load(path).map(IndexQuerySession::from_snapshot)
     }
 
     pub fn load_live_with_content(

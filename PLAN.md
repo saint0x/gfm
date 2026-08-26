@@ -381,6 +381,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
 - Top visible results under 50 ms for warm index.
 - Progressive full result stream under 150 ms for common queries.
 - Search streams are emitted as stable hot/deep batches: hot name/path/metadata/intent hits first, then deeper content and fuzzy results without duplicate unchanged records.
+- UI search surfaces open an `IndexQuerySession` once per folder/index/search scope and reuse its hot `LiveIndex` across search-as-you-type query changes, so keystrokes do not rebuild filename/path/token postings.
 - Single-shard query and stream dispatch stays inline so the common one-local-volume path avoids per-keystroke thread fan-out overhead; multi-shard searches still fan out per volume and merge deterministically.
 - Simple single-term and multi-term searches use dedicated hot-pass execution for immediate name/path/metadata batches, with fuzzy and content retrieval admitted only in the deep pass.
 - Newly created/renamed files visible in search within 250 ms after event ingestion on local APFS volumes.
