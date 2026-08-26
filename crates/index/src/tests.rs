@@ -468,6 +468,99 @@ fn query_sidecar_loader_hydrates_only_candidate_records() {
 }
 
 #[test]
+fn query_sidecar_imports_enforce_query_level_lookup_budgets() {
+    let metadata_path = unique_temp_path("gfm-index-sidecar-budget", "gfmmeta");
+    let prefixes_path = unique_temp_path("gfm-index-sidecar-budget", "gfmprefix");
+    let substrings_path = unique_temp_path("gfm-index-sidecar-budget", "gfmsubstr");
+    let fuzzy_path = unique_temp_path("gfm-index-sidecar-budget", "gfmfuzzy");
+    let content_path = unique_temp_path("gfm-index-sidecar-budget", "gfmcontent");
+    let first = FileId::new(VolumeId(1), 1);
+    let second = FileId::new(VolumeId(1), 2);
+    let fuzzy_keys = fuzzy_query_keys("alpha");
+
+    write_metadata_postings(&metadata_path, &[]).unwrap();
+    write_prefix_postings(
+        &prefixes_path,
+        &[
+            PrefixPosting {
+                prefix: "alpha".to_string(),
+                ids: vec![first],
+            },
+            PrefixPosting {
+                prefix: "alpine".to_string(),
+                ids: vec![second],
+            },
+        ],
+    )
+    .unwrap();
+    write_substring_postings(
+        &substrings_path,
+        &[
+            SubstringPosting {
+                gram: "alp".to_string(),
+                ids: vec![first],
+            },
+            SubstringPosting {
+                gram: "lph".to_string(),
+                ids: vec![second],
+            },
+        ],
+    )
+    .unwrap();
+    write_fuzzy_postings(
+        &fuzzy_path,
+        &fuzzy_keys
+            .iter()
+            .take(2)
+            .map(|key| FuzzyPosting {
+                key: key.clone(),
+                terms: vec!["alpha".to_string(), "alpine".to_string()],
+            })
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    write_content_postings(&content_path, &[]).unwrap();
+
+    let metadata = MmapMetadataArchive::open(&metadata_path).unwrap();
+    let lookup = SearchArchiveLookup::open(&prefixes_path, &substrings_path, &fuzzy_path).unwrap();
+    let substrings = MmapSubstringArchive::open(&substrings_path).unwrap();
+    let content = MmapContentArchive::open(&content_path).unwrap();
+    let import = query_sidecar_imports(
+        &metadata,
+        &lookup,
+        &substrings,
+        &content,
+        "alpha",
+        SearchLookupBudget {
+            max_substring_grams_per_term: 1,
+            max_fuzzy_keys_per_term: 1,
+            max_fuzzy_terms_per_key: 2,
+            max_fuzzy_candidates_per_term: 1,
+            ..SearchLookupBudget::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(import.report.substring_postings, 1);
+    assert_eq!(import.report.fuzzy_postings, 1);
+    assert_eq!(
+        import
+            .fuzzy
+            .iter()
+            .map(|posting| posting.terms.len())
+            .sum::<usize>(),
+        1
+    );
+    assert_eq!(import.report.candidate_ids, 1);
+
+    fs::remove_file(metadata_path).unwrap();
+    fs::remove_file(prefixes_path).unwrap();
+    fs::remove_file(substrings_path).unwrap();
+    fs::remove_file(fuzzy_path).unwrap();
+    fs::remove_file(content_path).unwrap();
+}
+
+#[test]
 fn search_archive_lookup_caches_are_bounded() {
     let prefixes = unique_temp_path("gfm-prefix-cache-bound", "gfmprefix");
     let substrings = unique_temp_path("gfm-substring-cache-bound", "gfmsubstr");

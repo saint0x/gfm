@@ -281,6 +281,18 @@ fn sidecar_candidate_ids(import: &SidecarQueryImport) -> BTreeSet<FileId> {
     ids
 }
 
+fn bounded_substring_grams(terms: &[String], budget: SearchLookupBudget) -> Vec<String> {
+    let mut grams = BTreeSet::new();
+    for term in terms {
+        grams.extend(
+            substring_candidate_grams(term)
+                .into_iter()
+                .take(budget.max_substring_grams_per_term),
+        );
+    }
+    grams.into_iter().collect()
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LiveIndex {
     index: ShardedSearchIndex,
@@ -594,16 +606,26 @@ pub fn query_sidecar_imports(
     budget: SearchLookupBudget,
 ) -> Result<SidecarQueryImport> {
     let parsed = SearchQuery::parse(query);
+    let content_terms = parsed.content_candidate_terms();
+    let comment_terms = parsed.comment_candidate_terms();
+    let tag_terms = parsed.tag_candidate_terms();
+    let prefix_terms = parsed.prefix_candidate_terms();
+    let substring_grams = bounded_substring_grams(&content_terms, budget);
+    let fuzzy_keys = parsed
+        .fuzzy_candidate_keys()
+        .into_iter()
+        .take(budget.max_fuzzy_keys_per_term)
+        .collect::<Vec<_>>();
     let mut candidate_ids = BTreeSet::new();
 
     let mut selected_metadata = metadata.postings_for_limit(
         MetadataField::Comment,
-        parsed.comment_candidate_terms(),
+        comment_terms,
         budget.max_metadata_ids_per_term,
     )?;
     selected_metadata.extend(metadata.postings_for_limit(
         MetadataField::Tag,
-        parsed.tag_candidate_terms(),
+        tag_terms.clone(),
         budget.max_metadata_ids_per_term,
     )?);
     let metadata = selected_metadata
@@ -621,8 +643,7 @@ pub fn query_sidecar_imports(
         })
         .collect::<Vec<_>>();
 
-    let prefixes = parsed
-        .prefix_candidate_terms()
+    let prefixes = prefix_terms
         .into_iter()
         .map(|prefix| {
             let ids = lookup.prefix_ids_bounded(&prefix, budget.max_prefix_ids_per_term)?;
@@ -635,13 +656,7 @@ pub fn query_sidecar_imports(
         .collect::<Result<Vec<_>>>()?;
 
     let substrings = substrings
-        .postings_for_limit(
-            parsed
-                .content_candidate_terms()
-                .into_iter()
-                .flat_map(|term| substring_candidate_grams(&term)),
-            budget.max_substring_ids_per_gram,
-        )?
+        .postings_for_limit(substring_grams, budget.max_substring_ids_per_gram)?
         .into_iter()
         .map(|posting| {
             candidate_ids.extend(posting.ids.iter().copied());
@@ -653,12 +668,20 @@ pub fn query_sidecar_imports(
         .collect::<Vec<_>>();
 
     let mut fuzzy_prefixes = Vec::new();
-    let fuzzy = parsed
-        .fuzzy_candidate_keys()
+    let mut fuzzy_candidate_terms = BTreeSet::new();
+    let fuzzy = fuzzy_keys
         .into_iter()
         .map(|key| {
             let terms = lookup.fuzzy_terms_bounded(&key, budget.max_fuzzy_terms_per_key)?;
-            for term in &terms.terms {
+            let terms = terms
+                .terms
+                .into_iter()
+                .filter(|term| {
+                    fuzzy_candidate_terms.len() < budget.max_fuzzy_candidates_per_term
+                        && fuzzy_candidate_terms.insert(term.clone())
+                })
+                .collect::<Vec<_>>();
+            for term in &terms {
                 let ids = lookup.prefix_ids_bounded(term, budget.max_prefix_ids_per_term)?;
                 candidate_ids.extend(ids.ids.iter().copied());
                 fuzzy_prefixes.push(SearchPrefixPosting {
@@ -666,27 +689,22 @@ pub fn query_sidecar_imports(
                     ids: ids.ids,
                 });
             }
-            Ok(SearchFuzzyPosting {
-                key,
-                terms: terms.terms,
-            })
+            Ok(SearchFuzzyPosting { key, terms })
         })
         .collect::<Result<Vec<_>>>()?;
 
     let mut prefixes = prefixes;
     prefixes.extend(fuzzy_prefixes);
 
-    let content = content.postings_for_terms_limit(
-        parsed.content_candidate_terms(),
-        budget.max_content_ids_per_term,
-    )?;
+    let content =
+        content.postings_for_terms_limit(content_terms.clone(), budget.max_content_ids_per_term)?;
     for posting in &content {
         candidate_ids.extend(posting.ids.iter().copied());
         candidate_ids.extend(posting.positions.iter().map(|positions| positions.id));
     }
 
-    let has_positive_anchor = !parsed.content_candidate_terms().is_empty()
-        || !parsed.tag_candidate_terms().is_empty()
+    let has_positive_anchor = !content_terms.is_empty()
+        || !tag_terms.is_empty()
         || !metadata.is_empty()
         || !prefixes.is_empty()
         || !substrings.is_empty()
