@@ -1,6 +1,7 @@
 mod columns;
 mod content;
 mod contentmerge;
+mod contentquery;
 mod contentrecover;
 mod contentset;
 mod dictionary;
@@ -26,13 +27,13 @@ pub use contentmerge::{
     ContentMergeOutcome, ContentMergePlan, ContentMergePolicy, ContentMergeTier,
     ContentSegmentSummary,
 };
+pub use contentquery::MmapContentSet;
 pub use contentrecover::{
     content_manifest_recovery_action_name, content_manifest_recovery_reason_name,
     plan_content_manifest_recovery, recover_content_manifest, ContentArchiveHealth,
     ContentManifestRecovery, ContentManifestRecoveryAction, ContentManifestRecoveryPlan,
     ContentManifestRecoveryReason,
 };
-pub use contentset::MmapContentSet;
 pub use contentset::{
     cleanup_inactive_content_archives, content_manifest_promotion_journal_path,
     plan_content_manifest_promotion_recovery, plan_inactive_content_archive_cleanup,
