@@ -1,4 +1,4 @@
-use gfm_mac_sys::{read_spotlight_attributes, NativeSpotlightStatus};
+use gfm_mac_sys::{read_spotlight_attributes_batch, NativeSpotlightStatus};
 use gfm_types::{FileKind, FileRecord, GfmError, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -136,13 +136,31 @@ impl Default for SpotlightMetadataReader {
 
 impl SpotlightMetadataReader {
     pub fn read_path(&self, path: impl AsRef<Path>) -> Result<SpotlightSnapshot> {
-        let path = path.as_ref().to_path_buf();
+        Ok(self
+            .read_paths([path.as_ref()])?
+            .into_iter()
+            .next()
+            .expect("single-path Spotlight batch should always return one snapshot"))
+    }
+
+    pub fn read_paths<'a>(
+        &self,
+        paths: impl IntoIterator<Item = &'a Path>,
+    ) -> Result<Vec<SpotlightSnapshot>> {
+        let paths = paths.into_iter().map(Path::to_path_buf).collect::<Vec<_>>();
+        let path_refs = paths.iter().map(PathBuf::as_path).collect::<Vec<_>>();
         let keys = SPOTLIGHT_FIELDS
             .iter()
             .map(|field| field.key())
             .collect::<Vec<_>>();
-        read_spotlight_attributes(&path, &keys)
-            .map(|snapshot| native_snapshot(path, snapshot))
+        read_spotlight_attributes_batch(&path_refs, &keys)
+            .map(|snapshots| {
+                paths
+                    .into_iter()
+                    .zip(snapshots)
+                    .map(|(path, snapshot)| native_snapshot(path, snapshot))
+                    .collect()
+            })
             .map_err(|err| GfmError::Format(format!("failed to read Spotlight metadata: {err}")))
     }
 }
@@ -467,6 +485,22 @@ mod tests {
             Some(&vec!["Native.md".to_string()])
         );
         assert_eq!(snapshot.attributes.len(), 1);
+    }
+
+    #[test]
+    fn batched_reader_preserves_request_order_for_missing_paths() {
+        let first = PathBuf::from("/tmp/gfm-spotlight-missing-one");
+        let second = PathBuf::from("/tmp/gfm-spotlight-missing-two");
+
+        let snapshots = SpotlightMetadataReader::default()
+            .read_paths([first.as_path(), second.as_path()])
+            .unwrap();
+
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].path, first);
+        assert_eq!(snapshots[1].path, second);
+        assert_eq!(snapshots[0].status, SpotlightStatus::Missing);
+        assert_eq!(snapshots[1].status, SpotlightStatus::Missing);
     }
 
     fn record(name: &str) -> FileRecord {

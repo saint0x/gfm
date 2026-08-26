@@ -3,8 +3,9 @@ use core_foundation::base::{kCFAllocatorDefault, CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::date::CFDate;
 use core_foundation::number::CFNumber;
-use core_foundation::string::{CFString, CFStringRef};
+use core_foundation::string::CFString;
 use core_foundation::url::CFURL;
+use core_foundation_sys::array::CFArrayRef;
 #[cfg(test)]
 use core_foundation_sys::base::CFTypeID;
 use core_foundation_sys::base::CFTypeRef;
@@ -13,12 +14,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::ptr::NonNull;
 
-type MDItemRef = *const c_void;
-
 #[link(name = "CoreServices", kind = "framework")]
 extern "C" {
-    fn MDItemCreate(allocator: CFTypeRef, path: CFStringRef) -> MDItemRef;
-    fn MDItemCopyAttribute(item: MDItemRef, name: CFStringRef) -> CFTypeRef;
+    fn MDItemsCreateWithURLs(allocator: CFTypeRef, urls: CFArrayRef) -> CFArrayRef;
+    fn MDItemsCopyAttributes(items: CFArrayRef, names: CFArrayRef) -> CFArrayRef;
     #[cfg(test)]
     fn MDItemGetTypeID() -> CFTypeID;
 }
@@ -41,58 +40,126 @@ pub fn read_spotlight_attributes(
     path: &Path,
     keys: &[&str],
 ) -> Result<NativeSpotlightSnapshot, String> {
+    Ok(read_spotlight_attributes_batch(&[path], keys)?
+        .into_iter()
+        .next()
+        .expect("single-path batch should always return one snapshot"))
+}
+
+pub fn read_spotlight_attributes_batch(
+    paths: &[&Path],
+    keys: &[&str],
+) -> Result<Vec<NativeSpotlightSnapshot>, String> {
+    let mut snapshots = vec![unavailable("pending native Spotlight batch result"); paths.len()];
+    let mut valid_paths = Vec::new();
+    let mut urls = Vec::new();
+    for (index, path) in paths.iter().enumerate() {
+        match path_to_url(path) {
+            Ok(PathUrl::Ready(url)) => {
+                valid_paths.push(index);
+                urls.push(url);
+            }
+            Ok(PathUrl::Missing(reason)) => snapshots[index] = missing(reason),
+            Err(reason) => snapshots[index] = unavailable(reason),
+        }
+    }
+    if valid_paths.is_empty() {
+        return Ok(snapshots);
+    }
+    let item_array = create_items(&urls)?;
+    let value_array = copy_attributes(&item_array, keys)?;
+    let values = value_array.get_all_values();
+    for (local_index, snapshot_index) in valid_paths.into_iter().enumerate() {
+        snapshots[snapshot_index] = values
+            .get(local_index)
+            .and_then(|raw| cf_type_from_raw(*raw))
+            .and_then(|value| values_by_key(&value, keys))
+            .unwrap_or_else(|| unavailable("Metadata.framework did not return attributes"));
+    }
+    Ok(snapshots)
+}
+
+fn path_to_url(path: &Path) -> Result<PathUrl, String> {
     let path_string = path
         .to_str()
         .ok_or_else(|| format!("path is not valid UTF-8: {}", path.display()))?;
     if !path.exists() {
-        return Ok(NativeSpotlightSnapshot {
-            status: NativeSpotlightStatus::Missing,
-            attributes: BTreeMap::new(),
-            reason: Some(format!("path does not exist: {}", path.display())),
-        });
-    }
-    let item = create_item(path, path_string)?;
-    let attributes = keys
-        .iter()
-        .filter_map(|key| {
-            copy_attribute(&item, key).and_then(|value| {
-                let values = collect_values(&value);
-                (!values.is_empty()).then(|| ((*key).to_string(), values))
-            })
-        })
-        .collect();
-    Ok(NativeSpotlightSnapshot {
-        status: NativeSpotlightStatus::Available,
-        attributes,
-        reason: None,
-    })
-}
-
-fn create_item(path: &Path, path_string: &str) -> Result<MDItem, String> {
-    let cf_path = CFString::new(path_string);
-    let raw = unsafe { MDItemCreate(kCFAllocatorDefault, cf_path.as_concrete_TypeRef()) };
-    if let Some(raw) = NonNull::new(raw as *mut c_void) {
-        return Ok(MDItem(raw.as_ptr()));
+        return Ok(PathUrl::Missing(format!(
+            "path does not exist: {}",
+            path.display()
+        )));
     }
     let url = CFURL::from_path(path, path.is_dir())
         .ok_or_else(|| format!("invalid path URL: {}", path.display()))?;
-    let fallback = CFString::new(&url.get_string().to_string());
-    let raw = unsafe { MDItemCreate(kCFAllocatorDefault, fallback.as_concrete_TypeRef()) };
-    NonNull::new(raw as *mut c_void)
-        .map(|raw| MDItem(raw.as_ptr()))
-        .ok_or_else(|| {
-            format!(
-                "Metadata.framework did not return an item for {}",
-                path.display()
-            )
-        })
+    let _ = path_string;
+    Ok(PathUrl::Ready(url))
 }
 
-fn copy_attribute(item: &MDItem, key: &str) -> Option<CFType> {
-    let key = CFString::new(key);
-    let raw = unsafe { MDItemCopyAttribute(item.0, key.as_concrete_TypeRef()) };
+fn create_items(urls: &[CFURL]) -> Result<CFArray, String> {
+    let urls = CFArray::from_CFTypes(urls).into_untyped();
+    let raw = unsafe { MDItemsCreateWithURLs(kCFAllocatorDefault, urls.as_concrete_TypeRef()) };
     NonNull::new(raw as *mut c_void)
-        .map(|raw| unsafe { CFType::wrap_under_create_rule(raw.as_ptr() as CFTypeRef) })
+        .map(|raw| unsafe { CFArray::wrap_under_create_rule(raw.as_ptr() as CFArrayRef) })
+        .ok_or_else(|| "Metadata.framework did not return a batched item array".to_string())
+}
+
+fn copy_attributes(item_array: &CFArray, keys: &[&str]) -> Result<CFArray, String> {
+    let keys = keys
+        .iter()
+        .map(|key| CFString::new(key))
+        .collect::<Vec<_>>();
+    let keys = CFArray::from_CFTypes(&keys).into_untyped();
+    let raw = unsafe {
+        MDItemsCopyAttributes(item_array.as_concrete_TypeRef(), keys.as_concrete_TypeRef())
+    };
+    NonNull::new(raw as *mut c_void)
+        .map(|raw| unsafe { CFArray::wrap_under_create_rule(raw.as_ptr() as CFArrayRef) })
+        .ok_or_else(|| "Metadata.framework did not return batched attributes".to_string())
+}
+
+fn values_by_key(value: &CFType, keys: &[&str]) -> Option<NativeSpotlightSnapshot> {
+    let values = value.downcast::<CFArray>()?;
+    let attributes = values
+        .get_all_values()
+        .into_iter()
+        .zip(keys.iter().copied())
+        .filter_map(|(raw, key)| {
+            cf_type_from_raw(raw).and_then(|value| {
+                let values = collect_values(&value);
+                (!values.is_empty()).then(|| (key.to_string(), values))
+            })
+        })
+        .collect();
+    Some(available(attributes))
+}
+
+fn available(attributes: BTreeMap<String, Vec<String>>) -> NativeSpotlightSnapshot {
+    NativeSpotlightSnapshot {
+        status: NativeSpotlightStatus::Available,
+        attributes,
+        reason: None,
+    }
+}
+
+fn missing(reason: impl Into<String>) -> NativeSpotlightSnapshot {
+    NativeSpotlightSnapshot {
+        status: NativeSpotlightStatus::Missing,
+        attributes: BTreeMap::new(),
+        reason: Some(reason.into()),
+    }
+}
+
+fn unavailable(reason: impl Into<String>) -> NativeSpotlightSnapshot {
+    NativeSpotlightSnapshot {
+        status: NativeSpotlightStatus::Unavailable,
+        attributes: BTreeMap::new(),
+        reason: Some(reason.into()),
+    }
+}
+
+fn cf_type_from_raw(raw: *const c_void) -> Option<CFType> {
+    NonNull::new(raw as *mut c_void)
+        .map(|raw| unsafe { CFType::wrap_under_get_rule(raw.as_ptr() as CFTypeRef) })
 }
 
 fn collect_values(value: &CFType) -> Vec<String> {
@@ -133,14 +200,9 @@ fn number_value(number: &CFNumber) -> Option<String> {
         .or_else(|| number.to_f64().map(|value| value.to_string()))
 }
 
-struct MDItem(MDItemRef);
-
-impl Drop for MDItem {
-    fn drop(&mut self) {
-        unsafe {
-            core_foundation::base::CFRelease(self.0 as CFTypeRef);
-        }
-    }
+enum PathUrl {
+    Ready(CFURL),
+    Missing(String),
 }
 
 #[cfg(test)]
@@ -181,5 +243,38 @@ mod tests {
     #[test]
     fn mditem_type_is_available_on_macos() {
         assert_ne!(unsafe { MDItemGetTypeID() }, 0);
+    }
+
+    #[test]
+    fn batch_reader_preserves_order_and_missing_entries() {
+        let first = std::env::temp_dir().join(format!(
+            "gfm-mac-sys-spotlight-missing-a-{}",
+            std::process::id()
+        ));
+        let second = std::env::temp_dir().join(format!(
+            "gfm-mac-sys-spotlight-missing-b-{}",
+            std::process::id()
+        ));
+
+        let snapshots = read_spotlight_attributes_batch(
+            &[first.as_path(), second.as_path()],
+            &["kMDItemDisplayName", "kMDItemContentType"],
+        )
+        .unwrap();
+
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].status, NativeSpotlightStatus::Missing);
+        assert_eq!(snapshots[1].status, NativeSpotlightStatus::Missing);
+        assert_ne!(snapshots[0].reason, snapshots[1].reason);
+        assert!(snapshots[0]
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("path does not exist"));
+        assert!(snapshots[1]
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("path does not exist"));
     }
 }
