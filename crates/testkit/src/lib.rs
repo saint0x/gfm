@@ -7,10 +7,11 @@ mod pixel;
 
 pub use gates::{
     evaluate_regression_gate, run_large_sidecar_gate, run_regression_gate,
-    run_search_typing_benchmark, LargeSidecarGateOptions, LargeSidecarGateReport,
-    LargeSidecarGateViolation, LargeSidecarThresholds, RegressionGateOptions, RegressionGateReport,
-    RegressionGateRun, RegressionGateViolation, RegressionInputs, SearchTypingBenchmarkOptions,
-    SearchTypingBenchmarkReport, SearchTypingBenchmarkViolation,
+    run_search_typing_benchmark, run_search_typing_session_benchmark, LargeSidecarGateOptions,
+    LargeSidecarGateReport, LargeSidecarGateViolation, LargeSidecarThresholds,
+    RegressionGateOptions, RegressionGateReport, RegressionGateRun, RegressionGateViolation,
+    RegressionInputs, SearchTypingBenchmarkOptions, SearchTypingBenchmarkReport,
+    SearchTypingBenchmarkViolation, SearchTypingSessionBenchmarkReport,
 };
 pub use macrobench::{
     materialize_macrobench_fixture, materialize_macrobench_fixture_report, run_macrobench,

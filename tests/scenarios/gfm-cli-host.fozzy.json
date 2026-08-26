@@ -2694,6 +2694,31 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "search-typing-session-benchmark",
+        "tmp/gfm-fozzy-search-typing-session",
+        "256",
+        "2",
+        "PackageProject00000006"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-typing-session-benchmark",
+        "tmp/gfm-fozzy-search-typing-session",
+        "256",
+        "2",
+        "PackageProject00000006"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "release-policy"
       ],
       "exit_code": 0,

@@ -3,10 +3,11 @@ use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_macrobench_fixture_report,
     materialize_parity_fixture, read_mask_file, run_large_sidecar_gate, run_macrobench,
     run_parity_gate_manifest, run_regression_gate, run_search_typing_benchmark,
-    write_parity_review_bundle_manifest, ColorProfile, DisplayScale, LargeSidecarGateOptions,
-    MacOsParityProfile, MacrobenchOptions, MacrobenchScale, MacrobenchStage, ParityAppearance,
-    ParityFixtureOptions, ParityFixtureScale, ParitySurface, PixelDiffOptions, PixelDriftThreshold,
-    PixelSize, RegressionGateOptions, SearchTypingBenchmarkOptions,
+    run_search_typing_session_benchmark, write_parity_review_bundle_manifest, ColorProfile,
+    DisplayScale, LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions, MacrobenchScale,
+    MacrobenchStage, ParityAppearance, ParityFixtureOptions, ParityFixtureScale, ParitySurface,
+    PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
+    SearchTypingBenchmarkOptions,
 };
 use gfm_types::{GfmError, Result};
 use std::path::PathBuf;
@@ -381,6 +382,66 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             if !report.passed {
                 return Err(GfmError::Format(
                     "search typing benchmark gate failed".to_string(),
+                ));
+            }
+        }
+        "search-typing-session-benchmark" => {
+            let workspace = required_path(
+                args.next(),
+                "search-typing-session-benchmark requires a workspace path",
+            )?;
+            let records = parse_usize_arg(
+                args.next(),
+                "search-typing-session-benchmark requires a synthetic record count",
+            )?;
+            let mut options = SearchTypingBenchmarkOptions::new(workspace, records);
+            if let Some(repetitions) = args.next() {
+                options.repetitions = repetitions.parse().map_err(|_| {
+                    GfmError::Format(format!(
+                        "search-typing-session-benchmark repetitions must be an unsigned integer, got `{repetitions}`"
+                    ))
+                })?;
+            }
+            if let Some(query) = args.next() {
+                options.query = query;
+            }
+            let report = run_search_typing_session_benchmark(&options)?;
+            println!(
+                "search-typing-session-benchmark\tfixture={}\thistory={}\trecords={}\tindexed-records={}\tindexed-prefixes={}\tindexed-substring-grams={}\tindexed-fuzzy-keys={}\trepetitions={}\tqueries={}\tsamples={}\thits={}\tp50-ns={}\tp95-ns={}\tp99-ns={}\tmax-ns={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tcontent-cache-hits={}\tcontent-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}\tviolations={}\tpassed={}",
+                report.fixture_root.display(),
+                report.history_path.display(),
+                report.records,
+                report.indexed_records,
+                report.indexed_prefixes,
+                report.indexed_substring_grams,
+                report.indexed_fuzzy_keys,
+                report.repetitions,
+                report.queries.len(),
+                report.samples,
+                report.hits,
+                report.p50.as_nanos(),
+                report.p95.as_nanos(),
+                report.p99.as_nanos(),
+                report.max.as_nanos(),
+                report.lookup.prefix_candidate_ids,
+                report.lookup.substring_candidate_ids,
+                report.lookup.fuzzy_verified_candidates,
+                report.lookup.prefix_cache_hits,
+                report.lookup.substring_cache_hits,
+                report.lookup.fuzzy_cache_hits,
+                report.content_cache_hits,
+                report.content_cache_misses,
+                report.record_cache_hits,
+                report.record_cache_misses,
+                report.violations.len(),
+                report.passed
+            );
+            for violation in &report.violations {
+                eprintln!("search-typing-session-violation\t{violation:?}");
+            }
+            if !report.passed {
+                return Err(GfmError::Format(
+                    "search typing session benchmark gate failed".to_string(),
                 ));
             }
         }

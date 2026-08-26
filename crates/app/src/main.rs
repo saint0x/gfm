@@ -531,6 +531,7 @@ fn print_usage() {
   gfm regression-gate <workspace> [smoke|standard]
   gfm large-sidecar-gate <workspace> <synthetic-records>
   gfm search-typing-benchmark <workspace> <synthetic-records> [repetitions] [query]
+  gfm search-typing-session-benchmark <workspace> <synthetic-records> [repetitions] [query]
   gfm release-policy
   gfm release-toolchain
   gfm release-validate <GFM.app> [--allow-unsigned] [--skip-notarization] [--skip-gatekeeper]

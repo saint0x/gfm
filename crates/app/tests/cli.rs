@@ -171,6 +171,43 @@ fn search_typing_benchmark_reports_hot_path_latency_from_binary() {
 }
 
 #[test]
+fn search_typing_session_benchmark_reports_cache_reuse_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-typing-session-benchmark");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-typing-session-benchmark",
+            root.to_str().unwrap(),
+            "256",
+            "3",
+            "PackageProject00000006",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.starts_with("search-typing-session-benchmark\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\trecords=256\t"), "{stdout}");
+    assert!(stdout.contains("\tindexed-records=256\t"), "{stdout}");
+    assert!(stdout.contains("\trepetitions=3\t"), "{stdout}");
+    assert!(stdout.contains("\tprefix-cache-hits="), "{stdout}");
+    assert!(stdout.contains("\tcontent-cache-hits="), "{stdout}");
+    assert!(stdout.contains("\trecord-cache-hits="), "{stdout}");
+    assert!(stdout.contains("\tviolations=0\tpassed=true"), "{stdout}");
+    assert!(root.join("gfm-search-typing-session-history.tsv").exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn inspects_archive_schema_from_binary() {
     let root = unique_temp_dir("gfm-cli-archive-schema-root");
     let index = unique_temp_path("gfm-cli-archive-schema", "gfmidx");

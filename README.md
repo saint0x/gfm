@@ -343,6 +343,7 @@ cargo run -p gfm -- parity-profile 25A354 dark 2x display-p3
 cargo run -p gfm -- regression-gate /tmp/gfm-bench smoke
 cargo run -p gfm -- large-sidecar-gate /tmp/gfm-bench 1000000
 cargo run -p gfm -- search-typing-benchmark /tmp/gfm-bench 1000000 5 packageproject00000006
+cargo run -p gfm -- search-typing-session-benchmark /tmp/gfm-bench 1000000 5 packageproject00000006
 cargo run -p gfm -- diagnostics-index-recovery-plan /tmp/root records.gfmidx state.gfmstate quarantine
 cargo run -p gfm -- diagnostics-index-recover /tmp/root records.gfmidx state.gfmstate quarantine
 cargo run -p gfm -- diagnostics-index-recover-adaptive /tmp/root records.gfmidx state.gfmstate saturated nominal ac idle quarantine

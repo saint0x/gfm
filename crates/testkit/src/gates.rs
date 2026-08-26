@@ -3,10 +3,13 @@ use crate::{
 };
 use gfm_index::{
     Indexer, LiveIndex, SearchArchiveLookup, SearchLookupBudget, SearchLookupTelemetry,
+    SidecarIndexQuerySession,
 };
 use gfm_store::{
-    fuzzy_postings_from_records, prefix_postings_from_records, substring_postings_from_records,
-    write_fuzzy_postings, write_prefix_postings, write_substring_postings,
+    fuzzy_postings_from_records, metadata_postings_from_records, prefix_postings_from_records,
+    substring_postings_from_records, write_content_postings, write_fuzzy_postings,
+    write_metadata_postings, write_prefix_postings, write_record_columns, write_records,
+    write_substring_postings,
 };
 use gfm_telemetry::{BudgetViolation, FrameTimingSummary, ResourceSummary};
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
@@ -246,6 +249,32 @@ pub struct SearchTypingBenchmarkReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchTypingSessionBenchmarkReport {
+    pub fixture_root: PathBuf,
+    pub history_path: PathBuf,
+    pub records: usize,
+    pub indexed_records: usize,
+    pub indexed_prefixes: usize,
+    pub indexed_substring_grams: usize,
+    pub indexed_fuzzy_keys: usize,
+    pub repetitions: usize,
+    pub queries: Vec<String>,
+    pub samples: usize,
+    pub hits: usize,
+    pub p50: Duration,
+    pub p95: Duration,
+    pub p99: Duration,
+    pub max: Duration,
+    pub lookup: SearchLookupTelemetry,
+    pub content_cache_hits: usize,
+    pub content_cache_misses: usize,
+    pub record_cache_hits: usize,
+    pub record_cache_misses: usize,
+    pub violations: Vec<SearchTypingBenchmarkViolation>,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchTypingBenchmarkViolation {
     P95LatencyExceeded {
         observed: Duration,
@@ -257,6 +286,9 @@ pub enum SearchTypingBenchmarkViolation {
         fuzzy_terms_with_truncated_keys: usize,
         fuzzy_keys_with_truncated_terms: usize,
         fuzzy_candidate_terms: usize,
+    },
+    SessionCacheNotReused {
+        cache: &'static str,
     },
 }
 
@@ -496,6 +528,150 @@ pub fn run_search_typing_benchmark(
     })
 }
 
+pub fn run_search_typing_session_benchmark(
+    options: &SearchTypingBenchmarkOptions,
+) -> Result<SearchTypingSessionBenchmarkReport> {
+    fs::create_dir_all(&options.workspace).map_err(|err| GfmError::io(&options.workspace, err))?;
+    let fixture_root = options
+        .workspace
+        .join("gfm-search-typing-session-benchmark");
+    if fixture_root.exists() {
+        fs::remove_dir_all(&fixture_root).map_err(|err| GfmError::io(&fixture_root, err))?;
+    }
+    fs::create_dir_all(&fixture_root).map_err(|err| GfmError::io(&fixture_root, err))?;
+
+    let records = realistic_large_records(options.records);
+    let records_path = fixture_root.join("records.gfmidx");
+    let columns_path = fixture_root.join("records.gfmcols");
+    let metadata_path = fixture_root.join("records.gfmmeta");
+    let prefix_path = fixture_root.join("records.gfmprefix");
+    let substring_path = fixture_root.join("records.gfmsubstr");
+    let fuzzy_path = fixture_root.join("records.gfmfuzzy");
+    let content_path = fixture_root.join("records.gfmcontent");
+    write_records(&records_path, &records)?;
+    write_record_columns(&columns_path, &records)?;
+    write_metadata_postings(&metadata_path, &metadata_postings_from_records(&records))?;
+    write_prefix_postings(&prefix_path, &prefix_postings_from_records(&records))?;
+    write_substring_postings(&substring_path, &substring_postings_from_records(&records))?;
+    write_fuzzy_postings(&fuzzy_path, &fuzzy_postings_from_records(&records))?;
+    write_content_postings(&content_path, &[])?;
+
+    let session = SidecarIndexQuerySession::open(
+        &records_path,
+        &columns_path,
+        &metadata_path,
+        &prefix_path,
+        &substring_path,
+        &fuzzy_path,
+        &content_path,
+    )?;
+    let queries = incremental_queries(
+        &options.query,
+        bounded_typing_start_chars(&options.query, options.budget.min_archive_prefix_chars),
+    );
+    if queries.is_empty() {
+        return Err(GfmError::Format(
+            "search typing session benchmark query must contain enough non-whitespace characters"
+                .to_string(),
+        ));
+    }
+
+    for query in &queries {
+        session.search_with_budget(query, options.limit, options.budget)?;
+    }
+
+    let repetitions = options.repetitions.max(1);
+    let mut durations = Vec::with_capacity(repetitions.saturating_mul(queries.len()));
+    let mut lookup_telemetry = SearchLookupTelemetry::default();
+    let mut hits = 0usize;
+    let mut content_cache_hits = 0usize;
+    let mut content_cache_misses = 0usize;
+    let mut record_cache_hits = 0usize;
+    let mut record_cache_misses = 0usize;
+    for _ in 0..repetitions {
+        for query in &queries {
+            let lookup_before = session.lookup_telemetry();
+            let started = Instant::now();
+            let report = session.search_with_budget(query, options.limit, options.budget)?;
+            durations.push(started.elapsed());
+            let lookup_after = session.lookup_telemetry();
+            lookup_telemetry.merge(&report.search.lookup);
+            lookup_telemetry.merge_cache_delta(&lookup_before, &lookup_after);
+            hits += report.search.hits.len();
+            content_cache_hits += report.content_cache_hits;
+            content_cache_misses += report.content_cache_misses;
+            record_cache_hits += report.record_cache_hits;
+            record_cache_misses += report.record_cache_misses;
+        }
+    }
+
+    durations.sort_unstable();
+    let p50 = percentile_duration(&durations, 50);
+    let p95 = percentile_duration(&durations, 95);
+    let p99 = percentile_duration(&durations, 99);
+    let max = durations.last().copied().unwrap_or_default();
+    let violations = evaluate_search_typing_session_benchmark(
+        p95,
+        &lookup_telemetry,
+        content_cache_hits,
+        content_cache_misses,
+        record_cache_hits,
+        record_cache_misses,
+        options.max_p95_latency,
+    );
+    let passed = violations.is_empty();
+    let history_path = options
+        .workspace
+        .join("gfm-search-typing-session-history.tsv");
+    append_search_typing_session_history(SearchTypingSessionHistoryRow {
+        path: &history_path,
+        options,
+        indexed_records: session.indexed_records(),
+        indexed_prefixes: session.indexed_prefixes(),
+        indexed_substring_grams: session.indexed_substring_grams(),
+        indexed_fuzzy_keys: session.indexed_fuzzy_keys(),
+        query_count: queries.len(),
+        samples: durations.len(),
+        hits,
+        p50,
+        p95,
+        p99,
+        max,
+        telemetry: &lookup_telemetry,
+        content_cache_hits,
+        content_cache_misses,
+        record_cache_hits,
+        record_cache_misses,
+        violations: violations.len(),
+        passed,
+    })?;
+
+    Ok(SearchTypingSessionBenchmarkReport {
+        fixture_root,
+        history_path,
+        records: options.records,
+        indexed_records: session.indexed_records(),
+        indexed_prefixes: session.indexed_prefixes(),
+        indexed_substring_grams: session.indexed_substring_grams(),
+        indexed_fuzzy_keys: session.indexed_fuzzy_keys(),
+        repetitions,
+        queries,
+        samples: durations.len(),
+        hits,
+        p50,
+        p95,
+        p99,
+        max,
+        lookup: lookup_telemetry,
+        content_cache_hits,
+        content_cache_misses,
+        record_cache_hits,
+        record_cache_misses,
+        violations,
+        passed,
+    })
+}
+
 pub fn run_regression_gate(
     macrobench_options: &MacrobenchOptions,
     gate_options: RegressionGateOptions,
@@ -654,6 +830,37 @@ fn evaluate_search_typing_benchmark(
     violations
 }
 
+fn evaluate_search_typing_session_benchmark(
+    p95: Duration,
+    telemetry: &SearchLookupTelemetry,
+    content_cache_hits: usize,
+    _content_cache_misses: usize,
+    record_cache_hits: usize,
+    _record_cache_misses: usize,
+    max_p95_latency: Duration,
+) -> Vec<SearchTypingBenchmarkViolation> {
+    let mut violations = evaluate_search_typing_benchmark(p95, telemetry, max_p95_latency);
+    if telemetry.prefix_cache_hits == 0
+        && telemetry.substring_cache_hits == 0
+        && telemetry.fuzzy_cache_hits == 0
+    {
+        violations.push(SearchTypingBenchmarkViolation::SessionCacheNotReused {
+            cache: "sidecar-lookup",
+        });
+    }
+    if content_cache_hits == 0 {
+        violations.push(SearchTypingBenchmarkViolation::SessionCacheNotReused {
+            cache: "content-posting",
+        });
+    }
+    if record_cache_hits == 0 {
+        violations.push(SearchTypingBenchmarkViolation::SessionCacheNotReused {
+            cache: "record-hydration",
+        });
+    }
+    violations
+}
+
 fn incremental_queries(query: &str, min_chars: usize) -> Vec<String> {
     let normalized = query.trim();
     normalized
@@ -706,6 +913,29 @@ struct SearchTypingHistoryRow<'a> {
     passed: bool,
 }
 
+struct SearchTypingSessionHistoryRow<'a> {
+    path: &'a PathBuf,
+    options: &'a SearchTypingBenchmarkOptions,
+    indexed_records: usize,
+    indexed_prefixes: usize,
+    indexed_substring_grams: usize,
+    indexed_fuzzy_keys: usize,
+    query_count: usize,
+    samples: usize,
+    hits: usize,
+    p50: Duration,
+    p95: Duration,
+    p99: Duration,
+    max: Duration,
+    telemetry: &'a SearchLookupTelemetry,
+    content_cache_hits: usize,
+    content_cache_misses: usize,
+    record_cache_hits: usize,
+    record_cache_misses: usize,
+    violations: usize,
+    passed: bool,
+}
+
 fn append_search_typing_history(row: SearchTypingHistoryRow<'_>) -> Result<()> {
     let existed = row.path.exists();
     let run = if existed {
@@ -751,6 +981,69 @@ fn append_search_typing_history(row: SearchTypingHistoryRow<'_>) -> Result<()> {
         row.telemetry.prefix_cache_hits,
         row.telemetry.substring_cache_hits,
         row.telemetry.fuzzy_cache_hits,
+        row.telemetry.prefix_truncated_terms,
+        row.telemetry.substring_term_truncated_grams + row.telemetry.substring_truncated_grams,
+        row.telemetry.fuzzy_term_truncated_keys
+            + row.telemetry.fuzzy_key_truncated_terms
+            + row.telemetry.fuzzy_candidate_truncated_terms,
+        row.violations,
+        row.passed,
+    )
+    .map_err(|err| GfmError::io(row.path, err))
+}
+
+fn append_search_typing_session_history(row: SearchTypingSessionHistoryRow<'_>) -> Result<()> {
+    let existed = row.path.exists();
+    let run = if existed {
+        fs::read_to_string(row.path)
+            .map_err(|err| GfmError::io(row.path, err))?
+            .lines()
+            .filter(|line| line.starts_with("search-typing-session-history\t"))
+            .count()
+            + 1
+    } else {
+        1
+    };
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(row.path)
+        .map_err(|err| GfmError::io(row.path, err))?;
+    if !existed {
+        writeln!(
+            file,
+            "search-typing-session-thresholds\tmax-p95-ns={}",
+            duration_ns(row.options.max_p95_latency)
+        )
+        .map_err(|err| GfmError::io(row.path, err))?;
+    }
+    writeln!(
+        file,
+        "search-typing-session-history\trun={run}\trecords={}\tindexed-records={}\tindexed-prefixes={}\tindexed-substring-grams={}\tindexed-fuzzy-keys={}\trepetitions={}\tqueries={}\tsamples={}\thits={}\tlimit={}\tp50-ns={}\tp95-ns={}\tp99-ns={}\tmax-ns={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tcontent-cache-hits={}\tcontent-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}\tprefix-truncated={}\tsubstring-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
+        row.options.records,
+        row.indexed_records,
+        row.indexed_prefixes,
+        row.indexed_substring_grams,
+        row.indexed_fuzzy_keys,
+        row.options.repetitions.max(1),
+        row.query_count,
+        row.samples,
+        row.hits,
+        row.options.limit,
+        duration_ns(row.p50),
+        duration_ns(row.p95),
+        duration_ns(row.p99),
+        duration_ns(row.max),
+        row.telemetry.prefix_candidate_ids,
+        row.telemetry.substring_candidate_ids,
+        row.telemetry.fuzzy_verified_candidates,
+        row.telemetry.prefix_cache_hits,
+        row.telemetry.substring_cache_hits,
+        row.telemetry.fuzzy_cache_hits,
+        row.content_cache_hits,
+        row.content_cache_misses,
+        row.record_cache_hits,
+        row.record_cache_misses,
         row.telemetry.prefix_truncated_terms,
         row.telemetry.substring_term_truncated_grams + row.telemetry.substring_truncated_grams,
         row.telemetry.fuzzy_term_truncated_keys
@@ -1433,6 +1726,58 @@ mod tests {
     }
 
     #[test]
+    fn search_typing_session_benchmark_records_session_cache_reuse() {
+        let root = unique_temp_dir("gfm-search-typing-session-benchmark");
+        let mut options = SearchTypingBenchmarkOptions::new(&root, 512);
+        options.repetitions = 3;
+        options.budget = SearchLookupBudget {
+            max_prefix_ids_per_term: 100_000,
+            min_archive_prefix_chars: 2,
+            max_substring_grams_per_term: 64,
+            max_substring_ids_per_gram: 100_000,
+            max_fuzzy_keys_per_term: 100_000,
+            max_fuzzy_terms_per_key: 100_000,
+            max_fuzzy_candidates_per_term: 100_000,
+            max_metadata_ids_per_term: 100_000,
+            max_content_ids_per_term: 100_000,
+        };
+        options.max_p95_latency = Duration::from_secs(60);
+
+        let report = run_search_typing_session_benchmark(&options).unwrap();
+
+        assert_eq!(report.records, 512);
+        assert_eq!(report.indexed_records, 512);
+        assert_eq!(report.repetitions, 3);
+        assert!(report.queries.len() >= 3);
+        assert_eq!(report.samples, report.queries.len() * report.repetitions);
+        assert!(report.indexed_prefixes > 0);
+        assert!(report.indexed_substring_grams > 0);
+        assert!(report.indexed_fuzzy_keys > 0);
+        assert!(report.lookup.prefix_cache_hits > 0);
+        assert!(report.content_cache_hits > 0);
+        assert!(report.record_cache_hits > 0);
+        assert!(report.p95 >= report.p50);
+        assert!(report.p99 >= report.p95);
+        assert!(report.max >= report.p99);
+        assert!(report.passed);
+        assert!(report.violations.is_empty());
+        assert!(report.fixture_root.join("records.gfmidx").exists());
+        assert!(report.fixture_root.join("records.gfmcols").exists());
+        assert!(report.fixture_root.join("records.gfmmeta").exists());
+        assert!(report.fixture_root.join("records.gfmprefix").exists());
+        assert!(report.fixture_root.join("records.gfmsubstr").exists());
+        assert!(report.fixture_root.join("records.gfmfuzzy").exists());
+        assert!(report.fixture_root.join("records.gfmcontent").exists());
+        let history = fs::read_to_string(&report.history_path).unwrap();
+        assert!(history.contains("search-typing-session-thresholds\tmax-p95-ns="));
+        assert!(history.contains("search-typing-session-history\trun=1"));
+        assert!(history.contains("\tcontent-cache-hits="));
+        assert!(history.contains("\trecord-cache-hits="));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn search_typing_benchmark_flags_latency_budget_drift() {
         let violations = evaluate_search_typing_benchmark(
             Duration::from_millis(2),
@@ -1446,6 +1791,34 @@ mod tests {
                 observed: Duration::from_millis(2),
                 budget: Duration::from_millis(1),
             }]
+        );
+    }
+
+    #[test]
+    fn search_typing_session_benchmark_flags_missing_cache_reuse() {
+        let violations = evaluate_search_typing_session_benchmark(
+            Duration::from_millis(1),
+            &SearchLookupTelemetry::default(),
+            0,
+            4,
+            0,
+            2,
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(
+            violations,
+            vec![
+                SearchTypingBenchmarkViolation::SessionCacheNotReused {
+                    cache: "sidecar-lookup",
+                },
+                SearchTypingBenchmarkViolation::SessionCacheNotReused {
+                    cache: "content-posting",
+                },
+                SearchTypingBenchmarkViolation::SessionCacheNotReused {
+                    cache: "record-hydration",
+                },
+            ]
         );
     }
 
