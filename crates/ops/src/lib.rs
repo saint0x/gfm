@@ -1,6 +1,7 @@
 mod access;
 mod conflict;
 mod control;
+mod journal;
 mod progress;
 mod recovery;
 mod volume;
@@ -14,6 +15,8 @@ pub use conflict::{
     ConflictPolicy, OperationBatchOutcome, OperationBatchReport, OperationConflictPlan,
 };
 pub use control::{OperationCancellation, OperationPause};
+use journal::{now_nanos, operation_status_from_error};
+pub use journal::{JournalEntry, OperationStatus};
 use progress::{item_bytes, ProgressTracker};
 pub use progress::{
     OperationProgress, OperationProgressEvent, OperationProgressPhase, OperationThroughputClass,
@@ -32,7 +35,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operation {
@@ -82,16 +84,6 @@ impl Operation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OperationStatus {
-    Started,
-    Completed,
-    Skipped,
-    Paused,
-    Cancelled,
-    Failed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyMethod {
     ApfsClone,
     ByteCopy,
@@ -109,15 +101,6 @@ pub enum VerificationPolicy {
     None,
     Size,
     Bytes,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JournalEntry {
-    pub id: u128,
-    pub status: OperationStatus,
-    pub operation: Operation,
-    pub message: Option<String>,
-    pub timestamp_nanos: u128,
 }
 
 #[derive(Debug, Clone)]
@@ -389,88 +372,6 @@ impl Operator {
 
     fn append(&self, entry: JournalEntry) -> Result<()> {
         append_journal(&self.context.journal_path, &entry)
-    }
-}
-
-fn operation_status_from_error(err: &GfmError) -> OperationStatus {
-    if matches!(err, GfmError::Paused) {
-        OperationStatus::Paused
-    } else if matches!(err, GfmError::Cancelled) {
-        OperationStatus::Cancelled
-    } else {
-        OperationStatus::Failed
-    }
-}
-
-impl JournalEntry {
-    fn started(id: u128, operation: Operation) -> Self {
-        Self {
-            id,
-            status: OperationStatus::Started,
-            operation,
-            message: None,
-            timestamp_nanos: now_nanos(),
-        }
-    }
-
-    fn completed(id: u128, operation: Operation) -> Self {
-        Self {
-            id,
-            status: OperationStatus::Completed,
-            operation,
-            message: None,
-            timestamp_nanos: now_nanos(),
-        }
-    }
-
-    fn skipped(id: u128, operation: Operation) -> Self {
-        Self {
-            id,
-            status: OperationStatus::Skipped,
-            operation,
-            message: Some("operation skipped by conflict policy".to_string()),
-            timestamp_nanos: now_nanos(),
-        }
-    }
-
-    fn paused(id: u128, operation: Operation) -> Self {
-        Self {
-            id,
-            status: OperationStatus::Paused,
-            operation,
-            message: None,
-            timestamp_nanos: now_nanos(),
-        }
-    }
-
-    fn cancelled(id: u128, operation: Operation) -> Self {
-        Self {
-            id,
-            status: OperationStatus::Cancelled,
-            operation,
-            message: None,
-            timestamp_nanos: now_nanos(),
-        }
-    }
-
-    fn failed(id: u128, operation: Operation, message: String) -> Self {
-        Self {
-            id,
-            status: OperationStatus::Failed,
-            operation,
-            message: Some(message),
-            timestamp_nanos: now_nanos(),
-        }
-    }
-
-    fn from_error(id: u128, operation: Operation, err: &GfmError) -> Self {
-        if matches!(err, GfmError::Paused) {
-            Self::paused(id, operation)
-        } else if matches!(err, GfmError::Cancelled) {
-            Self::cancelled(id, operation)
-        } else {
-            Self::failed(id, operation, err.to_string())
-        }
     }
 }
 
@@ -2455,13 +2356,6 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn now_nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3211,7 +3105,7 @@ mod tests {
     #[test]
     fn copy_preserves_birthtime_when_host_supports_it() {
         use std::os::darwin::fs::FileTimesExt;
-        use std::time::Duration;
+        use std::time::{Duration, UNIX_EPOCH};
 
         let root = unique_temp_dir("gfm-ops-birthtime");
         let journal = root.join("journal.log");
