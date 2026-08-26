@@ -149,6 +149,7 @@ pub struct NativeFileProviderIdentity {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeFileProviderIdentityStatus {
+    NotQueried,
     Available,
     NoProviderForPath,
     Missing,
@@ -161,6 +162,7 @@ pub enum NativeFileProviderIdentityStatus {
 impl NativeFileProviderIdentityStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::NotQueried => "not-queried",
             Self::Available => "available",
             Self::NoProviderForPath => "no-provider-for-path",
             Self::Missing => "missing",

@@ -260,7 +260,7 @@ impl FileProviderDomainReport {
         if !path.exists() && !is_evicted_placeholder_path(&path) {
             return Err(GfmError::io(&path, "path does not exist"));
         }
-        let hints = CloudHints::read(&path);
+        let hints = CloudHints::read_with_identity(&path);
         Ok(Self::from_hints_and_domains(
             path,
             hints,
@@ -750,6 +750,15 @@ impl FileProviderStateReport {
 
     pub fn from_path(path: PathBuf) -> Self {
         let hints = CloudHints::read(&path);
+        Self::from_hints(path, hints)
+    }
+
+    pub fn from_path_with_native_identity(path: PathBuf) -> Self {
+        let hints = CloudHints::read_with_identity(&path);
+        Self::from_hints(path, hints)
+    }
+
+    fn from_hints(path: PathBuf, hints: CloudHints) -> Self {
         let domain = domain_for_path(&path, &hints);
         let storage_state = storage_state_for_path(&path, domain, &hints);
         let progress = progress_for_state(storage_state, &hints);
@@ -823,8 +832,19 @@ struct CloudHints {
 
 impl CloudHints {
     fn read(path: &Path) -> Self {
+        Self::read_with_optional_identity(path, None)
+    }
+
+    fn read_with_identity(path: &Path) -> Self {
+        Self::read_with_optional_identity(path, Some(copy_fileprovider_identity(path)))
+    }
+
+    fn read_with_optional_identity(
+        path: &Path,
+        native_identity: Option<NativeFileProviderIdentity>,
+    ) -> Self {
         let native = copy_fileprovider_resource_values(path);
-        let native_identity = copy_fileprovider_identity(path);
+        let native_identity = native_identity.unwrap_or_else(identity_not_queried);
         let mut xattrs = Vec::new();
         let mut provider_identifier = None;
         let mut sources = Vec::new();
@@ -885,6 +905,15 @@ impl CloudHints {
     }
 }
 
+fn identity_not_queried() -> NativeFileProviderIdentity {
+    NativeFileProviderIdentity {
+        status: NativeFileProviderIdentityStatus::NotQueried,
+        item_identifier: None,
+        domain_identifier: None,
+        reason: Some("nsfileprovidermanager-identity-not-queried-on-hot-path".to_string()),
+    }
+}
+
 fn domain_for_path(path: &Path, hints: &CloudHints) -> FileProviderDomain {
     if hints
         .native_identity
@@ -919,7 +948,8 @@ fn is_icloud_domain_identifier(identifier: &str) -> bool {
     let identifier = identifier.to_ascii_lowercase();
     identifier.contains("icloud")
         || identifier.contains("clouddocs")
-        || identifier.contains("com.apple")
+        || identifier.contains("cloudkit")
+        || identifier.contains("ubiquit")
 }
 
 fn storage_state_for_path(
@@ -955,6 +985,11 @@ fn storage_state_for_path(
         CloudStorageState::Uploading
     } else if name.contains("waiting") || attr_blob.contains("waiting") {
         CloudStorageState::Waiting
+    } else if domain == FileProviderDomain::FileProvider
+        && hints.native_identity.status == NativeFileProviderIdentityStatus::Available
+        && !native_has_fileprovider_values(&hints.native)
+    {
+        CloudStorageState::Unknown
     } else if path.exists() {
         CloudStorageState::Downloaded
     } else {
@@ -1283,6 +1318,28 @@ mod tests {
     }
 
     #[test]
+    fn state_read_does_not_query_native_manager_identity_on_hot_path() {
+        let root = unique_temp_dir();
+        let path = root.join("Downloaded.icloud.md");
+        fs::write(&path, "downloaded").unwrap();
+
+        let hints = CloudHints::read(&path);
+        let report = FileProviderStateReport::read_path(&path).unwrap();
+
+        assert_eq!(
+            hints.native_identity.status,
+            NativeFileProviderIdentityStatus::NotQueried
+        );
+        assert!(!report
+            .source
+            .split('+')
+            .any(|source| source == "nsfileprovidermanager"));
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn domain_report_does_not_claim_local_files_are_provider_backed() {
         let root = unique_temp_dir();
         let path = root.join("Local.md");
@@ -1392,6 +1449,43 @@ mod tests {
         assert!(tsv.contains(
             "domain\tkind=fileprovider\tidentifier=com.example.drive.account\tdisplay-name=Example Drive"
         ));
+    }
+
+    #[test]
+    fn icloud_domain_classifier_requires_cloud_specific_identity() {
+        assert!(is_icloud_domain_identifier("com.apple.CloudDocs"));
+        assert!(is_icloud_domain_identifier("TEAMID.com.vendor.ubiquity"));
+        assert!(!is_icloud_domain_identifier("com.apple.finder.sync"));
+        assert!(!is_icloud_domain_identifier("com.example.drive.account"));
+    }
+
+    #[test]
+    fn provider_identity_without_materialization_evidence_is_unknown() {
+        let root = unique_temp_dir();
+        let path = root.join("ProviderItem.txt");
+        fs::write(&path, "provider").unwrap();
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::Available,
+                item_identifier: Some("item-456".to_string()),
+                domain_identifier: Some("com.example.drive.account".to_string()),
+                reason: None,
+            },
+            xattrs: Vec::new(),
+            provider_identifier: Some("com.example.drive.account".to_string()),
+            source: "nsfileprovidermanager".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+        let progress = progress_for_state(state, &hints);
+
+        assert_eq!(domain, FileProviderDomain::FileProvider);
+        assert_eq!(state, CloudStorageState::Unknown);
+        assert_eq!(progress.reason.as_deref(), Some("unknown-provider-state"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
