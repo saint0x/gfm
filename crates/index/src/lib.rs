@@ -1288,15 +1288,13 @@ impl LiveIndex {
             }
         } else {
             let candidate_ids = sidecar_candidate_ids(&import);
-            for id in candidate_ids {
-                let Some(record) = records.find(id)? else {
-                    missing += 1;
-                    continue;
-                };
+            let batch = records.records_for_sorted_ids(candidate_ids)?;
+            missing = batch.missing;
+            loaded = batch.records.len();
+            for record in batch.records {
                 if insert_mmap_record_with_columns(&mut live, columns, record)? {
                     applied += 1;
                 }
-                loaded += 1;
             }
         }
 
@@ -1336,13 +1334,11 @@ impl LiveIndex {
                 loaded += 1;
             }
         } else {
-            for id in &candidate_ids {
-                let Some(record) = records.find(*id)? else {
-                    missing += 1;
-                    continue;
-                };
+            let batch = records.records_for_sorted_ids(candidate_ids.iter().copied())?;
+            missing = batch.missing;
+            loaded = batch.records.len();
+            for record in batch.records {
                 live.index.insert(record);
-                loaded += 1;
             }
         }
 

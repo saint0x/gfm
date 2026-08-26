@@ -185,6 +185,12 @@ struct RecordDirectoryEntry {
     index: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MmapRecordBatch {
+    pub records: Vec<FileRecord>,
+    pub missing: usize,
+}
+
 impl MmapRecordArchive {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -284,9 +290,55 @@ impl MmapRecordArchive {
         self.record(entry.index).map(Some)
     }
 
+    pub fn records_for_sorted_ids<I>(&self, ids: I) -> Result<MmapRecordBatch>
+    where
+        I: IntoIterator<Item = FileId>,
+    {
+        let mut records = Vec::new();
+        let mut missing = 0usize;
+        let mut directory_index = 0usize;
+        let mut previous = None;
+
+        for id in ids {
+            let key = record_id_key(id);
+            if let Some(previous_key) = previous {
+                if key < previous_key {
+                    return Err(GfmError::Format(format!(
+                        "{} batch record lookup ids must be sorted",
+                        self.path.display()
+                    )));
+                }
+                if key == previous_key {
+                    continue;
+                }
+            }
+            previous = Some(key);
+
+            while let Some(entry) = self.directory.get(directory_index) {
+                if record_id_key(entry.id) >= key {
+                    break;
+                }
+                directory_index += 1;
+            }
+
+            match self.directory.get(directory_index) {
+                Some(entry) if record_id_key(entry.id) == key => {
+                    records.push(self.record(entry.index)?);
+                }
+                _ => missing += 1,
+            }
+        }
+
+        Ok(MmapRecordBatch { records, missing })
+    }
+
     pub fn records(&self) -> Result<Vec<FileRecord>> {
         (0..self.len()).map(|index| self.record(index)).collect()
     }
+}
+
+fn record_id_key(id: FileId) -> (VolumeId, u64) {
+    (id.volume, id.node)
 }
 
 fn record_version(header: &str, path: &Path) -> Result<StoreVersion> {
@@ -758,6 +810,89 @@ mod tests {
             Some(records[2].clone())
         );
         assert_eq!(archive.find(FileId::new(VolumeId(6), 1)).unwrap(), None);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_record_archive_batch_hydrates_sorted_ids_in_one_directory_pass() {
+        let path = temp_path("gfm-store-mmap-batch-find", "idx");
+        let records = vec![
+            FileRecord {
+                id: FileId::new(VolumeId(4), 40),
+                parent: Some(FileId::new(VolumeId(4), 1)),
+                path: PathBuf::from("/tmp/a/zeta.txt"),
+                name: "zeta.txt".to_string(),
+                kind: FileKind::File,
+                len: 40,
+                mode: 0o100644,
+                owner: 501,
+                group: 20,
+                xattrs_digest: 0,
+                created: None,
+                modified: None,
+                changed: None,
+                hidden: false,
+                tags: Vec::new(),
+                finder_comment: None,
+            },
+            FileRecord {
+                id: FileId::new(VolumeId(4), 10),
+                parent: Some(FileId::new(VolumeId(4), 1)),
+                path: PathBuf::from("/tmp/a/alpha.txt"),
+                name: "alpha.txt".to_string(),
+                kind: FileKind::File,
+                len: 10,
+                mode: 0o100644,
+                owner: 501,
+                group: 20,
+                xattrs_digest: 0,
+                created: None,
+                modified: None,
+                changed: None,
+                hidden: false,
+                tags: Vec::new(),
+                finder_comment: None,
+            },
+            FileRecord {
+                id: FileId::new(VolumeId(5), 1),
+                parent: None,
+                path: PathBuf::from("/Volumes/other/root.txt"),
+                name: "root.txt".to_string(),
+                kind: FileKind::File,
+                len: 1,
+                mode: 0o100644,
+                owner: 501,
+                group: 20,
+                xattrs_digest: 0,
+                created: None,
+                modified: None,
+                changed: None,
+                hidden: false,
+                tags: Vec::new(),
+                finder_comment: None,
+            },
+        ];
+        write_records(&path, &records).unwrap();
+        let archive = MmapRecordArchive::open(&path).unwrap();
+
+        let batch = archive
+            .records_for_sorted_ids([
+                FileId::new(VolumeId(4), 10),
+                FileId::new(VolumeId(4), 10),
+                FileId::new(VolumeId(4), 40),
+                FileId::new(VolumeId(4), 999),
+                FileId::new(VolumeId(5), 1),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            batch.records,
+            vec![records[1].clone(), records[0].clone(), records[2].clone()]
+        );
+        assert_eq!(batch.missing, 1);
+        assert!(archive
+            .records_for_sorted_ids([FileId::new(VolumeId(4), 40), FileId::new(VolumeId(4), 10),])
+            .is_err());
         std::fs::remove_file(path).unwrap();
     }
 

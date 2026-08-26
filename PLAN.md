@@ -468,7 +468,8 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - this lets background compaction publish new tier files while retained archives remain searchable.
 - Query-time record hydration:
   - mmap record archives keep a lightweight file-ID directory built from numeric record headers so search can hydrate exact candidate records by stable ID without parsing every full record in the archive;
-  - the file-ID directory is independent of archive row order, preserving append/rebuild flexibility while making candidate resolution logarithmic before the single matching row is parsed.
+  - the file-ID directory is independent of archive row order, preserving append/rebuild flexibility while making direct single-ID resolution logarithmic before the single matching row is parsed;
+  - sorted query candidate batches hydrate through one ordered pass over the mmap file-ID directory, deduplicate repeated candidate IDs, report stale missing IDs, and reject unsorted callers so hot sidecar/content search does not perform one directory search per candidate.
 - Query-time prefix, substring, and fuzzy archive lookup:
   - prefix, name-substring trigram, and delete-key fuzzy sidecars expose a store-agnostic lookup contract to the search engine;
   - live hot records keep in-memory prefix/substring/fuzzy maps while immutable sidecars answer query candidates directly from mmap archives;

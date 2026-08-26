@@ -92,7 +92,7 @@ The index is compact and incremental:
 - tombstones for deletion and replacement
 - background compaction
 - mmap immutable readers
-- mmap record archives with direct file-ID lookup so query-time candidate hydration does not require full-record scans
+- mmap record archives with direct and sorted-batch file-ID lookup so query-time candidate hydration does not require full-record scans or per-candidate directory searches
 - mmap-backed index footprint telemetry with adaptive run/throttle/defer compaction scheduling
 - hot mutable buffers
 - progressive hot/deep result streaming with stable dedupe
@@ -101,8 +101,8 @@ The index is compact and incremental:
 - indexed positive `name:`, `path:`, `ext:`, `tag:`, and `kind:` filter candidates for boolean `AND`/`OR` expressions, with final expression matching kept as the correctness authority
 - name substring n-gram candidates and delete-key fuzzy candidate indexes for infix and typo-tolerant matches without full-record scans; sub-trigram substring probes are cut off instead of expanding to all records, leaving exact and prefix indexes as the bounded short-query path
 - archive-backed prefix, substring, and fuzzy lookup with explicit candidate budgets, query-level substring gram and fuzzy key/term caps, adaptive prefix cutoffs, lookup cache telemetry, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
-- default sidecar-backed search imports only bounded query-matching metadata, prefix, substring, fuzzy-term, and content postings before ranking, then hydrates only matching record IDs from the mmap archive unless correctness requires a full-record universe
-- budgeted query-scoped content archive, archive-set, and manifest loading that decodes bounded compressed ID and positional prefixes per term, hydrates only matching mmap record rows by file ID, and falls back to full-record hydration only when content postings provide no candidate anchor
+- default sidecar-backed search imports only bounded query-matching metadata, prefix, substring, fuzzy-term, and content postings before ranking, then hydrates matching record IDs through one sorted mmap record-directory pass unless correctness requires a full-record universe
+- budgeted query-scoped content archive, archive-set, and manifest loading that decodes bounded compressed ID and positional prefixes per term, hydrates only matching mmap record rows through sorted batch file-ID lookup, and falls back to full-record hydration only when content postings provide no candidate anchor
 - cached score/name/path/id sort keys during bounded top-k ranking so deterministic ordering does not repeatedly allocate while results are merged
 - direct content-posting scoring for normal content-term queries without temporary ID-set materialization
 - exact phrase and `near:N:alpha,beta` positional content retrieval, with phrase and proximity candidates anchored on the rarest posting lists instead of full-record scans or temporary full-term ID sets
