@@ -2,6 +2,7 @@ mod access;
 mod conflict;
 mod control;
 mod progress;
+mod recovery;
 mod volume;
 
 use access::destination_probe_path;
@@ -18,6 +19,8 @@ pub use progress::{
     OperationProgress, OperationProgressEvent, OperationProgressPhase, OperationThroughputClass,
     OperationThroughputSnapshot,
 };
+use recovery::recoverable_operations;
+pub use recovery::{OperationRecoveryOutcome, OperationRecoveryPolicy, OperationRecoveryReport};
 pub use volume::{OperationVolumeClass, OperationVolumeCopyPolicy};
 #[cfg(test)]
 use volume::{COPY_BUFFER_BYTES, SLOW_COPY_BUFFER_BYTES};
@@ -115,34 +118,6 @@ pub struct JournalEntry {
     pub operation: Operation,
     pub message: Option<String>,
     pub timestamp_nanos: u128,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OperationRecoveryReport {
-    pub outcomes: Vec<OperationRecoveryOutcome>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OperationRecoveryPolicy {
-    pub retry_failed: bool,
-    pub max_attempts: usize,
-}
-
-impl Default for OperationRecoveryPolicy {
-    fn default() -> Self {
-        Self {
-            retry_failed: false,
-            max_attempts: 1,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OperationRecoveryOutcome {
-    pub id: u128,
-    pub status: OperationStatus,
-    pub operation: Operation,
-    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -425,98 +400,6 @@ fn operation_status_from_error(err: &GfmError) -> OperationStatus {
     } else {
         OperationStatus::Failed
     }
-}
-
-#[derive(Debug, Clone)]
-struct OperationRecoveryState {
-    id: u128,
-    operation: Operation,
-    last_status: OperationStatus,
-    started_count: usize,
-    message: Option<String>,
-    timestamp_nanos: u128,
-}
-
-#[derive(Debug, Clone)]
-struct OperationRecoveryPlan {
-    entry: JournalEntry,
-    append_started: bool,
-}
-
-fn recoverable_operations(
-    entries: Vec<JournalEntry>,
-    policy: OperationRecoveryPolicy,
-) -> Vec<OperationRecoveryPlan> {
-    let mut states: Vec<OperationRecoveryState> = Vec::new();
-    for entry in entries {
-        if let Some(state) = states.iter_mut().find(|state| state.id == entry.id) {
-            let status = entry.status;
-            state.operation = entry.operation;
-            state.last_status = status;
-            state.message = entry.message;
-            if status == OperationStatus::Started {
-                state.started_count += 1;
-            }
-            state.timestamp_nanos = entry.timestamp_nanos;
-        } else {
-            let started_count = usize::from(entry.status == OperationStatus::Started);
-            states.push(OperationRecoveryState {
-                id: entry.id,
-                operation: entry.operation,
-                last_status: entry.status,
-                started_count,
-                message: entry.message,
-                timestamp_nanos: entry.timestamp_nanos,
-            });
-        }
-    }
-    states.sort_by_key(|state| (state.timestamp_nanos, state.id));
-    states
-        .into_iter()
-        .filter_map(|state| {
-            let failed_retryable = policy.retry_failed
-                && state.last_status == OperationStatus::Failed
-                && state.started_count < policy.max_attempts.max(1)
-                && retryable_failure_message(state.message.as_deref());
-            let append_started = if state.last_status == OperationStatus::Started {
-                false
-            } else if state.last_status == OperationStatus::Paused || failed_retryable {
-                true
-            } else {
-                return None;
-            };
-            Some(OperationRecoveryPlan {
-                entry: JournalEntry {
-                    id: state.id,
-                    status: state.last_status,
-                    operation: state.operation,
-                    message: state.message,
-                    timestamp_nanos: state.timestamp_nanos,
-                },
-                append_started,
-            })
-        })
-        .collect()
-}
-
-fn retryable_failure_message(message: Option<&str>) -> bool {
-    let Some(message) = message else {
-        return false;
-    };
-    let message = message.to_ascii_lowercase();
-    [
-        "source does not exist",
-        "no such file",
-        "resource temporarily unavailable",
-        "operation timed out",
-        "network is down",
-        "network is unreachable",
-        "device not configured",
-        "stale file handle",
-        "interrupted system call",
-    ]
-    .iter()
-    .any(|needle| message.contains(needle))
 }
 
 impl JournalEntry {
