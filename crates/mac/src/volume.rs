@@ -1,6 +1,6 @@
 use gfm_mac_sys::{
-    NativeVolumeDescription, NativeVolumeOperation, NativeVolumeOperationStatus,
-    NativeVolumeResourceValues, NativeVolumeStatus,
+    NativeVolumeDescription, NativeVolumeMountTableEntry, NativeVolumeOperation,
+    NativeVolumeOperationStatus, NativeVolumeResourceValues, NativeVolumeStatus,
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::fs;
@@ -117,6 +117,12 @@ pub struct VolumeDescriptor {
     pub commands: VolumeCommandPolicy,
     pub native_status: Option<NativeVolumeStatus>,
     pub resource_status: Option<NativeVolumeStatus>,
+    pub mount_table_status: Option<NativeVolumeStatus>,
+    pub mount_from: Option<String>,
+    pub mount_filesystem: Option<String>,
+    pub mount_flags: Option<u32>,
+    pub mount_read_only: Option<bool>,
+    pub mount_local: Option<bool>,
     pub bsd_name: Option<String>,
     pub volume_uuid: Option<String>,
     pub media_uuid: Option<String>,
@@ -140,8 +146,12 @@ impl VolumeDescriptor {
         let resource = marker
             .is_none()
             .then(|| gfm_mac_sys::copy_volume_resource_values(&path));
+        let mount_table = marker
+            .is_none()
+            .then(|| gfm_mac_sys::copy_volume_mount_table_entry(&path));
         let native_status = native.as_ref().map(|native| native.status);
         let resource_status = resource.as_ref().map(|resource| resource.status);
+        let mount_table_status = mount_table.as_ref().map(|mount_table| mount_table.status);
         let label = native
             .as_ref()
             .and_then(|native| native.volume_name.clone())
@@ -162,7 +172,10 @@ impl VolumeDescriptor {
                     VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage
                 )
             });
-        let local = resource.as_ref().and_then(|resource| resource.is_local);
+        let local = mount_table
+            .as_ref()
+            .and_then(|mount_table| mount_table.is_local)
+            .or_else(|| resource.as_ref().and_then(|resource| resource.is_local));
         let network = local
             .map(|local| !local)
             .or_else(|| native.as_ref().and_then(|native| native.volume_network))
@@ -172,14 +185,20 @@ impl VolumeDescriptor {
             .and_then(|resource| resource.is_ejectable)
             .or_else(|| native.as_ref().and_then(|native| native.media_ejectable))
             .unwrap_or(removable || network);
-        let writable = resource
+        let writable = mount_table
             .as_ref()
-            .and_then(|resource| resource.is_read_only.map(|read_only| !read_only))
+            .and_then(|mount_table| mount_table.is_read_only.map(|read_only| !read_only))
+            .or_else(|| {
+                resource
+                    .as_ref()
+                    .and_then(|resource| resource.is_read_only.map(|read_only| !read_only))
+            })
             .or_else(|| native.as_ref().and_then(|native| native.media_writable))
             .unwrap_or_else(|| !metadata.permissions().readonly());
-        let read_only = resource
+        let read_only = mount_table
             .as_ref()
-            .and_then(|resource| resource.is_read_only)
+            .and_then(|mount_table| mount_table.is_read_only)
+            .or_else(|| resource.as_ref().and_then(|resource| resource.is_read_only))
             .unwrap_or(!writable);
         let case_sensitive = resource
             .as_ref()
@@ -194,7 +213,7 @@ impl VolumeDescriptor {
         let mountable = native.as_ref().and_then(|native| native.volume_mountable);
         let capacity = VolumeCapacity::read(&path);
         let commands = command_policy(kind, mount_state, ejectable);
-        let stable_identity = stable_identity(id, &path, native.as_ref());
+        let stable_identity = stable_identity(id, &path, native.as_ref(), mount_table.as_ref());
         let source = marker
             .map(|marker| format!("fixture-marker:{marker}"))
             .unwrap_or_else(|| volume_source(native.as_ref()));
@@ -220,6 +239,22 @@ impl VolumeDescriptor {
             commands,
             native_status,
             resource_status,
+            mount_table_status,
+            mount_from: mount_table
+                .as_ref()
+                .and_then(|mount_table| mount_table.mounted_from.clone()),
+            mount_filesystem: mount_table
+                .as_ref()
+                .and_then(|mount_table| mount_table.filesystem_type.clone()),
+            mount_flags: mount_table
+                .as_ref()
+                .and_then(|mount_table| mount_table.flags),
+            mount_read_only: mount_table
+                .as_ref()
+                .and_then(|mount_table| mount_table.is_read_only),
+            mount_local: mount_table
+                .as_ref()
+                .and_then(|mount_table| mount_table.is_local),
             bsd_name: native
                 .as_ref()
                 .and_then(|native| native.media_bsd_name.clone()),
@@ -227,12 +262,17 @@ impl VolumeDescriptor {
                 .as_ref()
                 .and_then(|native| native.volume_uuid.clone()),
             media_uuid: native.as_ref().and_then(|native| native.media_uuid.clone()),
-            filesystem: native.as_ref().and_then(|native| {
-                native
-                    .volume_kind
-                    .clone()
-                    .or_else(|| native.volume_type.clone())
-            }),
+            filesystem: mount_table
+                .as_ref()
+                .and_then(|mount_table| mount_table.filesystem_type.clone())
+                .or_else(|| {
+                    native.as_ref().and_then(|native| {
+                        native
+                            .volume_kind
+                            .clone()
+                            .or_else(|| native.volume_type.clone())
+                    })
+                }),
             media_content: native
                 .as_ref()
                 .and_then(|native| native.media_content.clone()),
@@ -245,13 +285,19 @@ impl VolumeDescriptor {
             device_vendor: native
                 .as_ref()
                 .and_then(|native| native.device_vendor.clone()),
-            source: enrich_volume_source(source, resource_status, resource.as_ref()),
+            source: enrich_volume_source(
+                source,
+                resource_status,
+                resource.as_ref(),
+                mount_table_status,
+                mount_table.as_ref(),
+            ),
         })
     }
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -326,7 +372,27 @@ impl VolumeDescriptor {
                 .unwrap_or_else(|| "-".to_string()),
             self.resource_status
                 .map(NativeVolumeStatus::as_str)
-                .unwrap_or("-")
+                .unwrap_or("-"),
+            self.mount_table_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            self.mount_from
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.mount_filesystem
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.mount_flags
+                .map(|flags| flags.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.mount_read_only
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.mount_local
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string())
         )
     }
 }
@@ -338,14 +404,9 @@ pub struct VolumeDiscoveryReport {
 
 impl VolumeDiscoveryReport {
     pub fn discover() -> Self {
-        let mut paths = vec![PathBuf::from("/")];
-        if let Ok(entries) = fs::read_dir("/Volumes") {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    paths.push(path);
-                }
-            }
+        let mut paths = mounted_volume_paths();
+        if paths.is_empty() {
+            paths = fallback_volume_paths();
         }
         Self::from_paths(paths)
     }
@@ -727,19 +788,35 @@ fn enrich_volume_source(
     source: String,
     resource_status: Option<NativeVolumeStatus>,
     resource: Option<&NativeVolumeResourceValues>,
+    mount_table_status: Option<NativeVolumeStatus>,
+    mount_table: Option<&NativeVolumeMountTableEntry>,
 ) -> String {
-    let Some(status) = resource_status else {
-        return source;
-    };
-    let mut source = format!("{source};url-resource={}", status.as_str());
+    let mut source = source;
+    if let Some(status) = resource_status {
+        source.push_str(";url-resource=");
+        source.push_str(status.as_str());
+    }
     if let Some(reason) = resource.and_then(|resource| resource.reason.as_deref()) {
+        source.push(':');
+        source.push_str(&escape_field(reason));
+    }
+    if let Some(status) = mount_table_status {
+        source.push_str(";mount-table=");
+        source.push_str(status.as_str());
+    }
+    if let Some(reason) = mount_table.and_then(|mount_table| mount_table.reason.as_deref()) {
         source.push(':');
         source.push_str(&escape_field(reason));
     }
     source
 }
 
-fn stable_identity(id: VolumeId, path: &Path, native: Option<&NativeVolumeDescription>) -> String {
+fn stable_identity(
+    id: VolumeId,
+    path: &Path,
+    native: Option<&NativeVolumeDescription>,
+    mount_table: Option<&NativeVolumeMountTableEntry>,
+) -> String {
     if let Some(native) = native.filter(|native| native.status == NativeVolumeStatus::Available) {
         if let Some(uuid) = native
             .volume_uuid
@@ -752,7 +829,54 @@ fn stable_identity(id: VolumeId, path: &Path, native: Option<&NativeVolumeDescri
             return format!("diskarbitration:bsd:{}", escape_field(bsd_name));
         }
     }
+    if let Some(mount_table) =
+        mount_table.filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
+    {
+        if let (Some(mounted_from), Some(mount_point)) = (
+            mount_table.mounted_from.as_deref(),
+            mount_table.mount_point.as_deref(),
+        ) {
+            return format!(
+                "mount-table:{}:{}",
+                escape_field(mounted_from),
+                escape_field(&mount_point.display().to_string())
+            );
+        }
+    }
     format!("dev:{}:{}", id.0, escape_field(&path.display().to_string()))
+}
+
+fn mounted_volume_paths() -> Vec<PathBuf> {
+    let table = gfm_mac_sys::copy_volume_mount_table();
+    if table.status != NativeVolumeStatus::Available {
+        return Vec::new();
+    }
+    let mut paths = table
+        .entries
+        .into_iter()
+        .filter_map(|entry| entry.mount_point)
+        .filter(|path| finder_visible_mount_path(path))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn fallback_volume_paths() -> Vec<PathBuf> {
+    let mut paths = vec![PathBuf::from("/")];
+    if let Ok(entries) = fs::read_dir("/Volumes") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                paths.push(path);
+            }
+        }
+    }
+    paths
+}
+
+fn finder_visible_mount_path(path: &Path) -> bool {
+    path == Path::new("/") || path.starts_with("/Volumes")
 }
 
 fn command_policy(
@@ -847,6 +971,10 @@ mod tests {
             descriptor.resource_status,
             Some(NativeVolumeStatus::Available)
         );
+        assert_eq!(
+            descriptor.mount_table_status,
+            Some(NativeVolumeStatus::Available)
+        );
         assert_eq!(descriptor.read_only, !descriptor.writable);
         assert!(descriptor.stable_identity.starts_with("diskarbitration:"));
         assert_eq!(descriptor.commands.eject, VolumeCommandState::Hidden);
@@ -857,6 +985,8 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tcase-sensitive="));
         assert!(descriptor.as_tsv().contains("\tlocal="));
         assert!(descriptor.as_tsv().contains("\tresource-status=available"));
+        assert!(descriptor.as_tsv().contains("\tmount-status=available\t"));
+        assert!(descriptor.source.contains("mount-table=available"));
         assert!(descriptor.source.contains("url-resource=available"));
     }
 
@@ -872,6 +1002,7 @@ mod tests {
         assert!(descriptor.ejectable);
         assert_eq!(descriptor.native_status, None);
         assert_eq!(descriptor.resource_status, None);
+        assert_eq!(descriptor.mount_table_status, None);
         assert!(descriptor.stable_identity.starts_with("dev:"));
         assert_eq!(descriptor.commands.eject, VolumeCommandState::Enabled);
         assert!(descriptor
@@ -879,7 +1010,9 @@ mod tests {
             .contains("source=fixture-marker:external-removable"));
         assert_eq!(descriptor.case_sensitive, None);
         assert!(descriptor.as_tsv().contains("\tresource-status=-"));
+        assert!(descriptor.as_tsv().contains("\tmount-status=-\t"));
         assert!(!descriptor.source.contains("url-resource="));
+        assert!(!descriptor.source.contains("mount-table="));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -992,6 +1125,14 @@ mod tests {
 
         fs::remove_dir_all(first).unwrap();
         fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
+    fn mounted_volume_paths_include_system_root_from_mount_table() {
+        let paths = mounted_volume_paths();
+
+        assert!(paths.iter().any(|path| path == Path::new("/")));
+        assert!(paths.iter().all(|path| finder_visible_mount_path(path)));
     }
 
     #[test]

@@ -9,7 +9,9 @@ use core_foundation_sys::dictionary::{CFDictionaryGetValueIfPresent, CFDictionar
 use core_foundation_sys::string::CFStringRef;
 use core_foundation_sys::url::CFURLRef;
 use core_foundation_sys::uuid::{CFUUIDCreateString, CFUUIDRef};
-use libc::c_void;
+use libc::{c_void, statfs, MNT_LOCAL, MNT_NOWAIT, MNT_RDONLY};
+use std::ffi::{CStr, CString};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
@@ -141,6 +143,25 @@ pub struct NativeVolumeResourceValues {
     pub is_removable: Option<bool>,
     pub supports_case_preserved_names: Option<bool>,
     pub supports_case_sensitive_names: Option<bool>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeVolumeMountTableEntry {
+    pub status: NativeVolumeStatus,
+    pub mount_point: Option<PathBuf>,
+    pub mounted_from: Option<String>,
+    pub filesystem_type: Option<String>,
+    pub flags: Option<u32>,
+    pub is_read_only: Option<bool>,
+    pub is_local: Option<bool>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeVolumeMountTable {
+    pub status: NativeVolumeStatus,
+    pub entries: Vec<NativeVolumeMountTableEntry>,
     pub reason: Option<String>,
 }
 
@@ -357,6 +378,56 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
     }
 }
 
+pub fn copy_volume_mount_table_entry(path: &Path) -> NativeVolumeMountTableEntry {
+    if !path.exists() {
+        return unavailable_mount_table_entry(
+            NativeVolumeStatus::Missing,
+            format!("volume path does not exist: {}", path.display()),
+        );
+    }
+    let display_path = path.display().to_string();
+    let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
+        return unavailable_mount_table_entry(
+            NativeVolumeStatus::Unavailable,
+            format!("volume path contains an interior NUL: {display_path}"),
+        );
+    };
+    let mut info = std::mem::MaybeUninit::<statfs>::uninit();
+    let copied = unsafe { libc::statfs(c_path.as_ptr(), info.as_mut_ptr()) };
+    if copied != 0 {
+        let error = std::io::Error::last_os_error();
+        return unavailable_mount_table_entry(
+            NativeVolumeStatus::Unavailable,
+            format!("statfs failed for {display_path}: {error}"),
+        );
+    }
+    native_mount_table_entry(unsafe { info.assume_init() })
+}
+
+pub fn copy_volume_mount_table() -> NativeVolumeMountTable {
+    let mut mounts = ptr::null_mut::<statfs>();
+    let count = unsafe { libc::getmntinfo(&mut mounts, MNT_NOWAIT) };
+    if count <= 0 || mounts.is_null() {
+        let error = std::io::Error::last_os_error();
+        return NativeVolumeMountTable {
+            status: NativeVolumeStatus::Unavailable,
+            entries: Vec::new(),
+            reason: Some(format!("getmntinfo failed: {error}")),
+        };
+    }
+
+    let entries = unsafe { std::slice::from_raw_parts(mounts, count as usize) }
+        .iter()
+        .copied()
+        .map(native_mount_table_entry)
+        .collect();
+    NativeVolumeMountTable {
+        status: NativeVolumeStatus::Available,
+        entries,
+        reason: None,
+    }
+}
+
 fn create_disk_for_volume_path(path: &Path) -> Option<(DASessionRef, DADiskRef)> {
     if !path.exists() {
         return None;
@@ -448,6 +519,30 @@ fn copy_resource_value(url: CFURLRef, key: CFStringRef) -> Option<CFType> {
     }
 }
 
+fn c_char_array_to_string(buffer: &[libc::c_char]) -> Option<String> {
+    if buffer.first().copied().unwrap_or_default() == 0 {
+        return None;
+    }
+    let value = unsafe { CStr::from_ptr(buffer.as_ptr()) }
+        .to_string_lossy()
+        .into_owned();
+    (!value.is_empty()).then_some(value)
+}
+
+fn native_mount_table_entry(info: statfs) -> NativeVolumeMountTableEntry {
+    let flags = info.f_flags;
+    NativeVolumeMountTableEntry {
+        status: NativeVolumeStatus::Available,
+        mount_point: c_char_array_to_string(&info.f_mntonname).map(PathBuf::from),
+        mounted_from: c_char_array_to_string(&info.f_mntfromname),
+        filesystem_type: c_char_array_to_string(&info.f_fstypename),
+        flags: Some(flags),
+        is_read_only: Some((flags & MNT_RDONLY as u32) != 0),
+        is_local: Some((flags & MNT_LOCAL as u32) != 0),
+        reason: None,
+    }
+}
+
 fn value_for_key(
     description: &CFDictionary<*const c_void, *const c_void>,
     key: CFStringRef,
@@ -528,6 +623,22 @@ fn unavailable_resource_values(
     }
 }
 
+fn unavailable_mount_table_entry(
+    status: NativeVolumeStatus,
+    reason: impl Into<String>,
+) -> NativeVolumeMountTableEntry {
+    NativeVolumeMountTableEntry {
+        status,
+        mount_point: None,
+        mounted_from: None,
+        filesystem_type: None,
+        flags: None,
+        is_read_only: None,
+        is_local: None,
+        reason: Some(reason.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,6 +672,28 @@ mod tests {
 
         assert_eq!(values.status, NativeVolumeStatus::Available);
         assert!(values.is_local.is_some() || values.is_read_only.is_some());
+    }
+
+    #[test]
+    fn resolves_root_mount_table_entry() {
+        let entry = copy_volume_mount_table_entry(Path::new("/"));
+
+        assert_eq!(entry.status, NativeVolumeStatus::Available);
+        assert!(entry.mount_point.is_some());
+        assert!(entry.filesystem_type.is_some());
+        assert!(entry.flags.is_some());
+    }
+
+    #[test]
+    fn resolves_current_mount_table_snapshot() {
+        let table = copy_volume_mount_table();
+
+        assert_eq!(table.status, NativeVolumeStatus::Available);
+        assert!(table.entries.iter().any(|entry| {
+            entry.mount_point.as_deref() == Some(Path::new("/"))
+                && entry.filesystem_type.is_some()
+                && entry.flags.is_some()
+        }));
     }
 
     #[test]
