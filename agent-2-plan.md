@@ -540,9 +540,8 @@ If a feature is better than Finder, it must not disturb default parity. Put powe
 
 These are good first slices because they are valuable, testable, and unlikely to collide with Agent 1:
 
-1. Wire one GPUI progress/operation surface to real job progress state.
-2. Extend the pixel parity manifest and bundle writer without touching GPUI runtime paths.
-3. Add a deterministic fixture generator for one Finder view state.
+1. Extend the pixel parity manifest and bundle writer without touching GPUI runtime paths.
+2. Add a deterministic fixture generator for one Finder view state.
 
 ## What Not To Do
 
