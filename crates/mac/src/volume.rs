@@ -111,25 +111,42 @@ impl VolumeDescriptor {
         let path = path.as_ref().to_path_buf();
         let metadata = fs::metadata(&path).map_err(|err| GfmError::io(&path, err))?;
         let id = volume_id(&metadata);
-        let label = volume_label(&path);
         let marker = marker_kind(&path);
-        let kind = classify_volume(&path, marker.as_deref());
+        let native = marker
+            .is_none()
+            .then(|| gfm_mac_sys::copy_volume_description_for_path(&path));
+        let label = native
+            .as_ref()
+            .and_then(|native| native.volume_name.clone())
+            .unwrap_or_else(|| volume_label(&path));
+        let kind = classify_volume(&path, marker.as_deref(), native.as_ref());
         let mount_state = if path.exists() {
             MountState::Mounted
         } else {
             MountState::Stale
         };
-        let removable = matches!(
-            kind,
-            VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage
-        );
-        let network = kind == VolumeKind::Network;
-        let ejectable = removable || network;
+        let removable = native
+            .as_ref()
+            .and_then(|native| native.media_removable)
+            .unwrap_or({
+                matches!(
+                    kind,
+                    VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage
+                )
+            });
+        let network = native
+            .as_ref()
+            .and_then(|native| native.volume_network)
+            .unwrap_or(kind == VolumeKind::Network);
+        let ejectable = native
+            .as_ref()
+            .and_then(|native| native.media_ejectable)
+            .unwrap_or(removable || network);
         let capacity = VolumeCapacity::read(&path);
         let commands = command_policy(kind, mount_state, ejectable);
         let source = marker
             .map(|marker| format!("fixture-marker:{marker}"))
-            .unwrap_or_else(|| "filesystem".to_string());
+            .unwrap_or_else(|| volume_source(native.as_ref()));
 
         Ok(Self {
             id,
@@ -213,7 +230,11 @@ impl VolumeDiscoveryReport {
     }
 }
 
-fn classify_volume(path: &Path, marker: Option<&str>) -> VolumeKind {
+fn classify_volume(
+    path: &Path,
+    marker: Option<&str>,
+    native: Option<&gfm_mac_sys::NativeVolumeDescription>,
+) -> VolumeKind {
     match marker {
         Some("network") | Some("network-smb") | Some("network-afp") | Some("network-nfs") => {
             return VolumeKind::Network;
@@ -224,6 +245,10 @@ fn classify_volume(path: &Path, marker: Option<&str>) -> VolumeKind {
         Some("system") => return VolumeKind::System,
         Some("internal") => return VolumeKind::Internal,
         _ => {}
+    }
+
+    if let Some(kind) = classify_native_volume(path, native) {
+        return kind;
     }
 
     let label = volume_label(path).to_ascii_lowercase();
@@ -239,6 +264,81 @@ fn classify_volume(path: &Path, marker: Option<&str>) -> VolumeKind {
         VolumeKind::External
     } else {
         VolumeKind::Internal
+    }
+}
+
+fn classify_native_volume(
+    path: &Path,
+    native: Option<&gfm_mac_sys::NativeVolumeDescription>,
+) -> Option<VolumeKind> {
+    let native =
+        native.filter(|native| native.status == gfm_mac_sys::NativeVolumeStatus::Available)?;
+    if path == Path::new("/") {
+        return Some(VolumeKind::System);
+    }
+    if native.volume_network == Some(true) {
+        return Some(VolumeKind::Network);
+    }
+
+    let protocol = native
+        .device_protocol
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let media_kind = native
+        .media_kind
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let volume_kind = native
+        .volume_kind
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if protocol.contains("disk image")
+        || media_kind.contains("disk image")
+        || volume_kind.contains("disk image")
+    {
+        return Some(VolumeKind::DiskImage);
+    }
+    if native.media_removable == Some(true) {
+        return Some(VolumeKind::Removable);
+    }
+    if native.device_internal == Some(false) || native.media_ejectable == Some(true) {
+        return Some(VolumeKind::External);
+    }
+    if native.device_internal == Some(true) {
+        return Some(VolumeKind::Internal);
+    }
+    None
+}
+
+fn volume_source(native: Option<&gfm_mac_sys::NativeVolumeDescription>) -> String {
+    match native {
+        Some(native) if native.status == gfm_mac_sys::NativeVolumeStatus::Available => {
+            let mut fields = vec!["diskarbitration".to_string()];
+            if let Some(name) = native.media_bsd_name.as_deref() {
+                fields.push(format!("bsd={}", escape_field(name)));
+            }
+            if let Some(protocol) = native.device_protocol.as_deref() {
+                fields.push(format!("protocol={}", escape_field(protocol)));
+            }
+            fields.join(";")
+        }
+        Some(native) => format!(
+            "filesystem;diskarbitration-{}:{}",
+            match native.status {
+                gfm_mac_sys::NativeVolumeStatus::Available => "available",
+                gfm_mac_sys::NativeVolumeStatus::Missing => "missing",
+                gfm_mac_sys::NativeVolumeStatus::Unavailable => "unavailable",
+            },
+            native
+                .reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "no-reason".to_string())
+        ),
+        None => "filesystem".to_string(),
     }
 }
 
