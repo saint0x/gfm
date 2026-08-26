@@ -30,7 +30,9 @@ pub use security::{
 };
 pub use spotlight::{
     parse_spotlight_fixture, SpotlightField, SpotlightFieldDecision, SpotlightFieldReconciliation,
-    SpotlightMetadataReader, SpotlightReconciliationReport, SpotlightSnapshot, SpotlightStatus,
+    SpotlightIndexHealth, SpotlightIngestionAction, SpotlightIngestionDecision,
+    SpotlightIngestionPlan, SpotlightIngestionPolicy, SpotlightMetadataReader,
+    SpotlightReconciliationReport, SpotlightSnapshot, SpotlightStatus,
 };
 pub use volume::{
     MountState, VolumeCapacity, VolumeCommandPolicy, VolumeCommandState, VolumeDescriptor,

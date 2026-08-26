@@ -1,5 +1,5 @@
 use gfm_mac_sys::{read_spotlight_attributes_batch, NativeSpotlightStatus};
-use gfm_types::{FileKind, FileRecord, GfmError, Result};
+use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -269,6 +269,182 @@ impl SpotlightReconciliationReport {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpotlightIndexHealth {
+    Healthy,
+    Degraded,
+    Unavailable,
+}
+
+impl SpotlightIndexHealth {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Degraded => "degraded",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpotlightIngestionAction {
+    Publish,
+    QuarantineStale,
+    DeferVolumeThrottle,
+    SkipUnavailable,
+}
+
+impl SpotlightIngestionAction {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Publish => "publish",
+            Self::QuarantineStale => "quarantine-stale",
+            Self::DeferVolumeThrottle => "defer-volume-throttle",
+            Self::SkipUnavailable => "skip-unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpotlightIngestionPolicy {
+    pub max_unavailable_fraction_bps: u32,
+    pub max_missing_fraction_bps: u32,
+    pub max_records_per_volume: usize,
+    pub stale_conflict_fields: Vec<SpotlightField>,
+}
+
+impl Default for SpotlightIngestionPolicy {
+    fn default() -> Self {
+        Self {
+            max_unavailable_fraction_bps: 1_000,
+            max_missing_fraction_bps: 2_500,
+            max_records_per_volume: 512,
+            stale_conflict_fields: vec![SpotlightField::DisplayName],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpotlightIngestionDecision {
+    pub id: FileId,
+    pub volume: VolumeId,
+    pub path: PathBuf,
+    pub action: SpotlightIngestionAction,
+    pub reason: String,
+    pub publishable_attributes: BTreeMap<SpotlightField, Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpotlightIngestionPlan {
+    pub health: SpotlightIndexHealth,
+    pub total: usize,
+    pub publishable: usize,
+    pub quarantined: usize,
+    pub deferred: usize,
+    pub unavailable: usize,
+    pub decisions: Vec<SpotlightIngestionDecision>,
+}
+
+impl SpotlightIngestionPlan {
+    pub fn from_records(
+        records: &[FileRecord],
+        snapshots: &[SpotlightSnapshot],
+        policy: &SpotlightIngestionPolicy,
+    ) -> Self {
+        let total = records.len().min(snapshots.len());
+        let health = spotlight_index_health(&snapshots[..total], policy);
+        let mut volume_counts = BTreeMap::<VolumeId, usize>::new();
+        let mut decisions = Vec::with_capacity(total);
+        let mut publishable = 0;
+        let mut quarantined = 0;
+        let mut deferred = 0;
+        let mut unavailable = 0;
+
+        for (record, snapshot) in records.iter().zip(snapshots).take(total) {
+            let decision = if health == SpotlightIndexHealth::Unavailable
+                || snapshot.status != SpotlightStatus::Available
+            {
+                unavailable += 1;
+                ingestion_decision(
+                    record,
+                    SpotlightIngestionAction::SkipUnavailable,
+                    snapshot
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| "Spotlight snapshot is unavailable".to_string()),
+                    BTreeMap::new(),
+                )
+            } else if stale_snapshot(record, snapshot, &policy.stale_conflict_fields) {
+                quarantined += 1;
+                ingestion_decision(
+                    record,
+                    SpotlightIngestionAction::QuarantineStale,
+                    "Spotlight snapshot conflicts with primary filesystem identity".to_string(),
+                    BTreeMap::new(),
+                )
+            } else {
+                let count = volume_counts.entry(record.id.volume).or_default();
+                if *count >= policy.max_records_per_volume {
+                    deferred += 1;
+                    ingestion_decision(
+                        record,
+                        SpotlightIngestionAction::DeferVolumeThrottle,
+                        format!(
+                            "volume {} exceeded Spotlight metadata budget of {} records",
+                            record.id.volume.0, policy.max_records_per_volume
+                        ),
+                        BTreeMap::new(),
+                    )
+                } else {
+                    *count += 1;
+                    publishable += 1;
+                    ingestion_decision(
+                        record,
+                        SpotlightIngestionAction::Publish,
+                        "Spotlight metadata accepted for secondary index publication".to_string(),
+                        snapshot.attributes.clone(),
+                    )
+                }
+            };
+            decisions.push(decision);
+        }
+
+        Self {
+            health,
+            total,
+            publishable,
+            quarantined,
+            deferred,
+            unavailable,
+            decisions,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let mut lines = vec![format!(
+            "spotlight-ingestion-plan\thealth={}\ttotal={}\tpublishable={}\tquarantined={}\tdeferred={}\tunavailable={}",
+            self.health.as_str(),
+            self.total,
+            self.publishable,
+            self.quarantined,
+            self.deferred,
+            self.unavailable,
+        )];
+        lines.extend(self.decisions.iter().map(|decision| {
+            format!(
+                "decision\t{}:{}\t{}\taction={}\treason={}\tattributes={}",
+                decision.id.volume.0,
+                decision.id.node,
+                decision.path.display(),
+                decision.action.as_str(),
+                escape_field(&decision.reason),
+                decision.publishable_attributes.len(),
+            )
+        }));
+        lines.join("\n")
+    }
+}
+
 pub fn parse_spotlight_fixture(path: impl Into<PathBuf>, text: &str) -> Result<SpotlightSnapshot> {
     let path = path.into();
     let mut attributes: BTreeMap<SpotlightField, Vec<String>> = BTreeMap::new();
@@ -289,6 +465,68 @@ pub fn parse_spotlight_fixture(path: impl Into<PathBuf>, text: &str) -> Result<S
         attributes.insert(field, split_fixture_values(value));
     }
     Ok(SpotlightSnapshot::available(path, attributes))
+}
+
+fn spotlight_index_health(
+    snapshots: &[SpotlightSnapshot],
+    policy: &SpotlightIngestionPolicy,
+) -> SpotlightIndexHealth {
+    if snapshots.is_empty() {
+        return SpotlightIndexHealth::Healthy;
+    }
+    let unavailable = snapshots
+        .iter()
+        .filter(|snapshot| snapshot.status == SpotlightStatus::Unavailable)
+        .count();
+    let missing = snapshots
+        .iter()
+        .filter(|snapshot| snapshot.status == SpotlightStatus::Missing)
+        .count();
+    if unavailable == snapshots.len() {
+        return SpotlightIndexHealth::Unavailable;
+    }
+    if fraction_bps(unavailable, snapshots.len()) > policy.max_unavailable_fraction_bps
+        || fraction_bps(missing, snapshots.len()) > policy.max_missing_fraction_bps
+    {
+        SpotlightIndexHealth::Degraded
+    } else {
+        SpotlightIndexHealth::Healthy
+    }
+}
+
+fn fraction_bps(count: usize, total: usize) -> u32 {
+    ((count.saturating_mul(10_000)) / total.max(1)) as u32
+}
+
+fn stale_snapshot(
+    record: &FileRecord,
+    snapshot: &SpotlightSnapshot,
+    stale_fields: &[SpotlightField],
+) -> bool {
+    if snapshot.path != record.path {
+        return true;
+    }
+    let report = SpotlightReconciliationReport::reconcile(record.clone(), snapshot.clone());
+    report.fields.iter().any(|field| {
+        stale_fields.contains(&field.field)
+            && field.decision == SpotlightFieldDecision::ConflictPrimaryWins
+    })
+}
+
+fn ingestion_decision(
+    record: &FileRecord,
+    action: SpotlightIngestionAction,
+    reason: String,
+    publishable_attributes: BTreeMap<SpotlightField, Vec<String>>,
+) -> SpotlightIngestionDecision {
+    SpotlightIngestionDecision {
+        id: record.id,
+        volume: record.id.volume,
+        path: record.path.clone(),
+        action,
+        reason,
+        publishable_attributes,
+    }
 }
 
 fn native_snapshot(
@@ -411,7 +649,6 @@ fn escape_field(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gfm_types::{FileId, VolumeId};
 
     #[test]
     fn reconciles_spotlight_enrichment_without_primary_dependency() {
@@ -501,6 +738,116 @@ mod tests {
         assert_eq!(snapshots[1].path, second);
         assert_eq!(snapshots[0].status, SpotlightStatus::Missing);
         assert_eq!(snapshots[1].status, SpotlightStatus::Missing);
+    }
+
+    #[test]
+    fn ingestion_plan_publishes_healthy_spotlight_metadata() {
+        let records = vec![record("Report.md")];
+        let snapshot = parse_spotlight_fixture(
+            &records[0].path,
+            "kMDItemDisplayName\tReport.md\nkMDItemFinderComment\tclient handoff\n",
+        )
+        .unwrap();
+
+        let plan = SpotlightIngestionPlan::from_records(
+            &records,
+            &[snapshot],
+            &SpotlightIngestionPolicy::default(),
+        );
+
+        assert_eq!(plan.health, SpotlightIndexHealth::Healthy);
+        assert_eq!(plan.publishable, 1);
+        assert_eq!(plan.decisions[0].action, SpotlightIngestionAction::Publish);
+        assert_eq!(
+            plan.decisions[0]
+                .publishable_attributes
+                .get(&SpotlightField::FinderComment),
+            Some(&vec!["client handoff".to_string()])
+        );
+    }
+
+    #[test]
+    fn ingestion_plan_quarantines_stale_identity_conflicts() {
+        let records = vec![record("Primary.md")];
+        let snapshot =
+            parse_spotlight_fixture(&records[0].path, "kMDItemDisplayName\tStale.md\n").unwrap();
+
+        let plan = SpotlightIngestionPlan::from_records(
+            &records,
+            &[snapshot],
+            &SpotlightIngestionPolicy::default(),
+        );
+
+        assert_eq!(plan.quarantined, 1);
+        assert_eq!(
+            plan.decisions[0].action,
+            SpotlightIngestionAction::QuarantineStale
+        );
+        assert!(plan.decisions[0].publishable_attributes.is_empty());
+    }
+
+    #[test]
+    fn ingestion_plan_defers_records_after_per_volume_budget() {
+        let mut first = record("One.md");
+        let mut second = record("Two.md");
+        first.id = FileId::new(VolumeId(7), 1);
+        second.id = FileId::new(VolumeId(7), 2);
+        let first_snapshot =
+            parse_spotlight_fixture(&first.path, "kMDItemDisplayName\tOne.md\n").unwrap();
+        let second_snapshot =
+            parse_spotlight_fixture(&second.path, "kMDItemDisplayName\tTwo.md\n").unwrap();
+        let policy = SpotlightIngestionPolicy {
+            max_records_per_volume: 1,
+            ..SpotlightIngestionPolicy::default()
+        };
+
+        let plan = SpotlightIngestionPlan::from_records(
+            &[first, second],
+            &[first_snapshot, second_snapshot],
+            &policy,
+        );
+
+        assert_eq!(plan.publishable, 1);
+        assert_eq!(plan.deferred, 1);
+        assert_eq!(
+            plan.decisions[1].action,
+            SpotlightIngestionAction::DeferVolumeThrottle
+        );
+    }
+
+    #[test]
+    fn ingestion_plan_reports_degraded_and_unavailable_health() {
+        let records = vec![record("One.md"), record("Two.md")];
+        let snapshots = vec![
+            SpotlightSnapshot::unavailable(&records[0].path, "metadata server unavailable"),
+            SpotlightSnapshot::available(&records[1].path, BTreeMap::new()),
+        ];
+        let degraded_policy = SpotlightIngestionPolicy {
+            max_unavailable_fraction_bps: 4_999,
+            ..SpotlightIngestionPolicy::default()
+        };
+
+        let degraded = SpotlightIngestionPlan::from_records(&records, &snapshots, &degraded_policy);
+
+        assert_eq!(degraded.health, SpotlightIndexHealth::Degraded);
+        assert_eq!(degraded.unavailable, 1);
+
+        let unavailable_snapshots = vec![
+            SpotlightSnapshot::unavailable(&records[0].path, "metadata server unavailable"),
+            SpotlightSnapshot::unavailable(&records[1].path, "metadata server unavailable"),
+        ];
+        let unavailable = SpotlightIngestionPlan::from_records(
+            &records,
+            &unavailable_snapshots,
+            &SpotlightIngestionPolicy::default(),
+        );
+
+        assert_eq!(unavailable.health, SpotlightIndexHealth::Unavailable);
+        assert_eq!(unavailable.unavailable, 2);
+        assert!(unavailable
+            .decisions
+            .iter()
+            .all(|decision| decision.action == SpotlightIngestionAction::SkipUnavailable));
     }
 
     fn record(name: &str) -> FileRecord {
