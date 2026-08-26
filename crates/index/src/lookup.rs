@@ -206,9 +206,12 @@ impl SidecarIndexQuerySession {
             &self.lookup,
             &self.substrings,
             &parsed,
-            content_terms,
-            content_postings,
+            SidecarContentImport {
+                terms: content_terms,
+                postings: content_postings,
+            },
             budget,
+            cancellation,
         )?;
         cancellation.check()?;
         let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
@@ -544,10 +547,11 @@ impl SearchArchiveLookup {
         Ok((prefixes, substrings, fuzzy))
     }
 
-    fn prefix_postings_bounded<I, S>(
+    fn prefix_postings_bounded_cancellable<I, S>(
         &self,
         prefixes: I,
         limit: usize,
+        cancellation: &Cancellation,
     ) -> Result<Vec<SearchPrefixPosting>>
     where
         I: IntoIterator<Item = S>,
@@ -559,6 +563,7 @@ impl SearchArchiveLookup {
 
         let mut selected = BTreeSet::new();
         for prefix in prefixes {
+            cancellation.check()?;
             let prefix = prefix.as_ref();
             if !prefix.is_empty() {
                 selected.insert(prefix.to_string());
@@ -570,6 +575,7 @@ impl SearchArchiveLookup {
         {
             let cache = self.prefix_cache_lock();
             for prefix in &selected {
+                cancellation.check()?;
                 self.prefix_requests.fetch_add(1, Ordering::Relaxed);
                 if let Some(mut ids) = cache.get(prefix) {
                     self.prefix_hits.fetch_add(1, Ordering::Relaxed);
@@ -585,6 +591,7 @@ impl SearchArchiveLookup {
             }
         }
 
+        cancellation.check()?;
         let loaded = self
             .prefixes
             .postings_for_sorted_prefixes_limit(&misses, limit)?
@@ -599,6 +606,7 @@ impl SearchArchiveLookup {
 
         let mut cache = self.prefix_cache_lock();
         for prefix in misses {
+            cancellation.check()?;
             let (ids, truncated) = loaded
                 .get(&prefix)
                 .cloned()
@@ -613,10 +621,24 @@ impl SearchArchiveLookup {
         Ok(postings)
     }
 
+    #[cfg(test)]
     pub(crate) fn fuzzy_postings_bounded<I, S>(
         &self,
         keys: I,
         limit: usize,
+    ) -> Result<Vec<SearchFuzzyPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.fuzzy_postings_bounded_cancellable(keys, limit, &Cancellation::default())
+    }
+
+    pub(crate) fn fuzzy_postings_bounded_cancellable<I, S>(
+        &self,
+        keys: I,
+        limit: usize,
+        cancellation: &Cancellation,
     ) -> Result<Vec<SearchFuzzyPosting>>
     where
         I: IntoIterator<Item = S>,
@@ -628,6 +650,7 @@ impl SearchArchiveLookup {
 
         let mut selected = BTreeSet::new();
         for key in keys {
+            cancellation.check()?;
             let key = key.as_ref();
             if !key.is_empty() {
                 selected.insert(key.to_string());
@@ -639,6 +662,7 @@ impl SearchArchiveLookup {
         {
             let cache = self.fuzzy_cache_lock();
             for key in &selected {
+                cancellation.check()?;
                 self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
                 if let Some(mut terms) = cache.get(key) {
                     self.fuzzy_hits.fetch_add(1, Ordering::Relaxed);
@@ -654,6 +678,7 @@ impl SearchArchiveLookup {
             }
         }
 
+        cancellation.check()?;
         let loaded = self
             .fuzzy
             .postings_for_sorted_keys_limit(&misses, limit)?
@@ -668,6 +693,7 @@ impl SearchArchiveLookup {
 
         let mut cache = self.fuzzy_cache_lock();
         for key in misses {
+            cancellation.check()?;
             let (terms, truncated) = loaded
                 .get(&key)
                 .cloned()
@@ -840,10 +866,48 @@ pub fn query_sidecar_imports(
         lookup,
         substrings,
         &parsed,
-        content_terms,
-        content,
+        SidecarContentImport {
+            terms: content_terms,
+            postings: content,
+        },
         budget,
+        &Cancellation::default(),
     )
+}
+
+pub fn query_sidecar_imports_cancellable(
+    metadata: &MmapMetadataArchive,
+    lookup: &SearchArchiveLookup,
+    substrings: &MmapSubstringArchive,
+    content: &MmapContentArchive,
+    query: &str,
+    budget: SearchLookupBudget,
+    cancellation: &Cancellation,
+) -> Result<SidecarQueryImport> {
+    cancellation.check()?;
+    let parsed = gfm_search::SearchQuery::parse(query);
+    cancellation.check()?;
+    let content_terms = parsed.content_candidate_terms();
+    let content =
+        content.postings_for_terms_limit(content_terms.clone(), budget.max_content_ids_per_term)?;
+    cancellation.check()?;
+    query_sidecar_imports_with_content_postings(
+        metadata,
+        lookup,
+        substrings,
+        &parsed,
+        SidecarContentImport {
+            terms: content_terms,
+            postings: content,
+        },
+        budget,
+        cancellation,
+    )
+}
+
+struct SidecarContentImport {
+    terms: Vec<String>,
+    postings: Vec<ContentPosting>,
 }
 
 fn query_sidecar_imports_with_content_postings(
@@ -851,14 +915,15 @@ fn query_sidecar_imports_with_content_postings(
     lookup: &SearchArchiveLookup,
     substrings: &MmapSubstringArchive,
     parsed: &gfm_search::SearchQuery,
-    content_terms: Vec<String>,
-    content: Vec<ContentPosting>,
+    content: SidecarContentImport,
     budget: SearchLookupBudget,
+    cancellation: &Cancellation,
 ) -> Result<SidecarQueryImport> {
+    cancellation.check()?;
     let comment_terms = parsed.comment_candidate_terms();
     let tag_terms = parsed.tag_candidate_terms();
     let prefix_terms = parsed.prefix_candidate_terms();
-    let substring_grams = bounded_substring_grams(&content_terms, budget);
+    let substring_grams = bounded_substring_grams(&content.terms, budget);
     let fuzzy_keys = parsed
         .fuzzy_candidate_keys()
         .into_iter()
@@ -866,11 +931,13 @@ fn query_sidecar_imports_with_content_postings(
         .collect::<Vec<_>>();
     let mut candidate_ids = BTreeSet::new();
 
+    cancellation.check()?;
     let mut selected_metadata = metadata.postings_for_limit(
         MetadataField::Comment,
         comment_terms,
         budget.max_metadata_ids_per_term,
     )?;
+    cancellation.check()?;
     selected_metadata.extend(metadata.postings_for_limit(
         MetadataField::Tag,
         tag_terms.clone(),
@@ -891,6 +958,7 @@ fn query_sidecar_imports_with_content_postings(
         })
         .collect::<Vec<_>>();
 
+    cancellation.check()?;
     let substrings = substrings
         .postings_for_limit(substring_grams, budget.max_substring_ids_per_gram)?
         .into_iter()
@@ -905,8 +973,13 @@ fn query_sidecar_imports_with_content_postings(
 
     let mut prefix_candidates = prefix_terms.clone();
     let mut fuzzy_candidate_terms = BTreeSet::new();
+    cancellation.check()?;
     let fuzzy = lookup
-        .fuzzy_postings_bounded(fuzzy_keys, budget.max_fuzzy_terms_per_key)?
+        .fuzzy_postings_bounded_cancellable(
+            fuzzy_keys,
+            budget.max_fuzzy_terms_per_key,
+            cancellation,
+        )?
         .into_iter()
         .map(|posting| {
             let terms = posting
@@ -927,24 +1000,30 @@ fn query_sidecar_imports_with_content_postings(
         })
         .collect::<Vec<_>>();
 
-    let prefixes =
-        lookup.prefix_postings_bounded(prefix_candidates, budget.max_prefix_ids_per_term)?;
+    cancellation.check()?;
+    let prefixes = lookup.prefix_postings_bounded_cancellable(
+        prefix_candidates,
+        budget.max_prefix_ids_per_term,
+        cancellation,
+    )?;
     for posting in &prefixes {
+        cancellation.check()?;
         candidate_ids.extend(posting.ids.iter().copied());
     }
 
-    for posting in &content {
+    for posting in &content.postings {
+        cancellation.check()?;
         candidate_ids.extend(posting.ids.iter().copied());
         candidate_ids.extend(posting.positions.iter().map(|positions| positions.id));
     }
 
-    let has_positive_anchor = !content_terms.is_empty()
+    let has_positive_anchor = !content.terms.is_empty()
         || !tag_terms.is_empty()
         || !metadata.is_empty()
         || !prefixes.is_empty()
         || !substrings.is_empty()
         || !fuzzy.is_empty()
-        || !content.is_empty();
+        || !content.postings.is_empty();
     let has_any_query = !parsed.terms.is_empty()
         || !parsed.excluded_terms.is_empty()
         || !parsed.phrases.is_empty()
@@ -959,7 +1038,7 @@ fn query_sidecar_imports_with_content_postings(
             prefix_postings: prefixes.len(),
             substring_postings: substrings.len(),
             fuzzy_postings: fuzzy.len(),
-            content_postings: content.len(),
+            content_postings: content.postings.len(),
             candidate_ids: candidate_ids.len(),
             requires_full_record_hydration,
         },
@@ -967,7 +1046,7 @@ fn query_sidecar_imports_with_content_postings(
         prefixes,
         substrings,
         fuzzy,
-        content,
+        content: content.postings,
     })
 }
 
@@ -1064,6 +1143,31 @@ mod tests {
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert_eq!(session.content_cache_telemetry(), (0, 0));
         assert_eq!(session.record_cache_telemetry(), (0, 0));
+    }
+
+    #[test]
+    fn query_sidecar_import_honors_pre_cancelled_queries_without_lookup_work() {
+        let fixture = SidecarFixture::new("pre-cancelled-import");
+        let session = fixture.session();
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = query_sidecar_imports_cancellable(
+            &session.metadata,
+            &session.lookup,
+            &session.substrings,
+            &session.content,
+            "finderlatency",
+            SearchLookupBudget::default(),
+            &cancellation,
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(
+            session.lookup.cache_telemetry(),
+            SearchLookupTelemetry::default()
+        );
+        assert_eq!(session.lookup.cache_entry_counts().unwrap(), (0, 0, 0));
     }
 
     #[test]

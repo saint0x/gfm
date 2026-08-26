@@ -61,9 +61,9 @@ pub use footprint::{
 };
 pub use live::{LiveIndex, UpdateOutcome};
 pub use lookup::{
-    query_sidecar_imports, ContentQueryLoadReport, SearchArchiveLookup, SidecarIndexQuerySession,
-    SidecarQueryImport, SidecarQueryImportReport, SidecarQuerySessionReport,
-    SidecarRecordHydrationReport,
+    query_sidecar_imports, query_sidecar_imports_cancellable, ContentQueryLoadReport,
+    SearchArchiveLookup, SidecarIndexQuerySession, SidecarQueryImport, SidecarQueryImportReport,
+    SidecarQuerySessionReport, SidecarRecordHydrationReport,
 };
 pub use metadata::{
     diff_metadata, publish_secondary_metadata, MetadataUpdateReport,
