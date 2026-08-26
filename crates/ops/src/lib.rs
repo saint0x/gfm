@@ -1,5 +1,6 @@
 mod access;
 mod progress;
+mod volume;
 
 use access::destination_probe_path;
 pub use access::{
@@ -11,6 +12,9 @@ pub use progress::{
     OperationProgress, OperationProgressEvent, OperationProgressPhase, OperationThroughputClass,
     OperationThroughputSnapshot,
 };
+pub use volume::{OperationVolumeClass, OperationVolumeCopyPolicy};
+#[cfg(test)]
+use volume::{COPY_BUFFER_BYTES, SLOW_COPY_BUFFER_BYTES};
 
 use gfm_fs::PackagePolicy;
 use gfm_types::{FileKind, GfmError, Result};
@@ -93,75 +97,6 @@ pub enum OperationStatus {
 pub enum CopyMethod {
     ApfsClone,
     ByteCopy,
-}
-
-const COPY_BUFFER_BYTES: usize = 256 * 1024;
-const EXTERNAL_COPY_BUFFER_BYTES: usize = 128 * 1024;
-const SLOW_COPY_BUFFER_BYTES: usize = 64 * 1024;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OperationVolumeClass {
-    Local,
-    External,
-    Network,
-    Slow,
-}
-
-impl OperationVolumeClass {
-    const fn copy_buffer_bytes(self) -> usize {
-        match self {
-            Self::Local => COPY_BUFFER_BYTES,
-            Self::External => EXTERNAL_COPY_BUFFER_BYTES,
-            Self::Network | Self::Slow => SLOW_COPY_BUFFER_BYTES,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OperationVolumeCopyPolicy {
-    default_class: OperationVolumeClass,
-    root_classes: BTreeMap<PathBuf, OperationVolumeClass>,
-}
-
-impl Default for OperationVolumeCopyPolicy {
-    fn default() -> Self {
-        Self {
-            default_class: OperationVolumeClass::Local,
-            root_classes: BTreeMap::new(),
-        }
-    }
-}
-
-impl OperationVolumeCopyPolicy {
-    pub fn new(default_class: OperationVolumeClass) -> Self {
-        Self {
-            default_class,
-            root_classes: BTreeMap::new(),
-        }
-    }
-
-    pub fn with_root(mut self, root: impl Into<PathBuf>, class: OperationVolumeClass) -> Self {
-        self.root_classes.insert(root.into(), class);
-        self
-    }
-
-    pub fn class_for_path(&self, path: &Path) -> OperationVolumeClass {
-        self.root_classes
-            .iter()
-            .filter(|(root, _)| path.starts_with(root))
-            .max_by_key(|(root, _)| root.components().count())
-            .map(|(_, class)| *class)
-            .unwrap_or(self.default_class)
-    }
-
-    pub fn copy_buffer_bytes_for_paths(&self, from: &Path, to: &Path) -> usize {
-        let source = self.class_for_path(from);
-        let destination = self.class_for_path(to);
-        source
-            .copy_buffer_bytes()
-            .min(destination.copy_buffer_bytes())
-            .max(1)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
