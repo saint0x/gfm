@@ -10,8 +10,9 @@ pub use bookmark::{
     NativeBookmarkStatus, NativeSecurityScopedAccess,
 };
 pub use fileprovider::{
-    copy_fileprovider_resource_values, NativeFileProviderResourceValues, NativeFileProviderStatus,
-    NativeUbiquitousDownloadingStatus,
+    copy_fileprovider_resource_values, evict_ubiquitous_item, start_downloading_ubiquitous_item,
+    NativeFileProviderOperationResult, NativeFileProviderOperationStatus,
+    NativeFileProviderResourceValues, NativeFileProviderStatus, NativeUbiquitousDownloadingStatus,
 };
 pub use finder::{copy_kind_string_for_path, NativeFinderKind, NativeFinderKindStatus};
 pub use spotlight::{

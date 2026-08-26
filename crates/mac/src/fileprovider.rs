@@ -1,5 +1,6 @@
 use gfm_mac_sys::{
-    copy_fileprovider_resource_values, NativeFileProviderResourceValues,
+    copy_fileprovider_resource_values, evict_ubiquitous_item, start_downloading_ubiquitous_item,
+    NativeFileProviderOperationStatus, NativeFileProviderResourceValues,
     NativeUbiquitousDownloadingStatus,
 };
 use gfm_types::{GfmError, Result};
@@ -127,6 +128,147 @@ pub struct FileProviderStateReport {
     pub source: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileProviderOperation {
+    Download,
+    Evict,
+}
+
+impl FileProviderOperation {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Download => "download",
+            Self::Evict => "evict",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "download" => Ok(Self::Download),
+            "evict" => Ok(Self::Evict),
+            other => Err(GfmError::Format(format!(
+                "unsupported fileprovider operation `{other}`"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileProviderOperationDisposition {
+    Completed,
+    Refused,
+    Failed,
+}
+
+impl FileProviderOperationDisposition {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Refused => "refused",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderOperationReport {
+    pub path: PathBuf,
+    pub operation: FileProviderOperation,
+    pub disposition: FileProviderOperationDisposition,
+    pub before: FileProviderStateReport,
+    pub after: Option<FileProviderStateReport>,
+    pub reason: Option<String>,
+}
+
+impl FileProviderOperationReport {
+    pub fn execute(path: impl AsRef<Path>, operation: FileProviderOperation) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let before = FileProviderStateReport::read_path(&path)?;
+        let command = match operation {
+            FileProviderOperation::Download => before.commands.download,
+            FileProviderOperation::Evict => before.commands.evict,
+        };
+        if command != CloudCommandState::Enabled {
+            return Ok(Self::refused(
+                path,
+                operation,
+                before,
+                "operation-disabled-for-current-state",
+            ));
+        }
+        if before.domain == FileProviderDomain::Local || !before.source_contains_native_resource() {
+            return Ok(Self::refused(
+                path,
+                operation,
+                before,
+                "not-native-provider-backed",
+            ));
+        }
+
+        let result = match operation {
+            FileProviderOperation::Download => start_downloading_ubiquitous_item(&path),
+            FileProviderOperation::Evict => evict_ubiquitous_item(&path),
+        };
+        match result.status {
+            NativeFileProviderOperationStatus::Completed => {
+                let after = FileProviderStateReport::read_path(&path).ok();
+                Ok(Self {
+                    path,
+                    operation,
+                    disposition: FileProviderOperationDisposition::Completed,
+                    before,
+                    after,
+                    reason: None,
+                })
+            }
+            NativeFileProviderOperationStatus::Missing
+            | NativeFileProviderOperationStatus::UnsupportedPath
+            | NativeFileProviderOperationStatus::Failed => Ok(Self {
+                path,
+                operation,
+                disposition: FileProviderOperationDisposition::Failed,
+                before,
+                after: None,
+                reason: result.reason,
+            }),
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "fileprovider-operation\t{}\toperation={}\tdisposition={}\tbefore-state={}\tafter-state={}\treason={}",
+            self.path.display(),
+            self.operation.as_str(),
+            self.disposition.as_str(),
+            self.before.storage_state.as_str(),
+            self.after
+                .as_ref()
+                .map(|report| report.storage_state.as_str())
+                .unwrap_or("-"),
+            self.reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+        )
+    }
+
+    fn refused(
+        path: PathBuf,
+        operation: FileProviderOperation,
+        before: FileProviderStateReport,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            path,
+            operation,
+            disposition: FileProviderOperationDisposition::Refused,
+            before,
+            after: None,
+            reason: Some(reason.into()),
+        }
+    }
+}
+
 impl FileProviderStateReport {
     pub fn read_path(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
@@ -188,6 +330,12 @@ impl FileProviderStateReport {
                 .map(escape_field)
                 .unwrap_or_else(|| "-".to_string()),
         )
+    }
+
+    fn source_contains_native_resource(&self) -> bool {
+        self.source
+            .split('+')
+            .any(|source| source == "native-url-resource")
     }
 }
 
@@ -523,6 +671,59 @@ mod tests {
         assert!(report.badges.is_empty());
         assert_eq!(report.commands.download, CloudCommandState::Hidden);
         assert_eq!(report.commands.evict, CloudCommandState::Hidden);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operations_refuse_fixture_only_provider_items() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Evicted.icloud-placeholder");
+        let downloaded = root.join("Downloaded.icloud.md");
+        fs::write(&evicted, "placeholder").unwrap();
+        fs::write(&downloaded, "downloaded").unwrap();
+
+        let download =
+            FileProviderOperationReport::execute(&evicted, FileProviderOperation::Download)
+                .unwrap();
+        assert_eq!(
+            download.disposition,
+            FileProviderOperationDisposition::Refused
+        );
+        assert_eq!(
+            download.reason.as_deref(),
+            Some("not-native-provider-backed")
+        );
+        assert_eq!(download.before.storage_state, CloudStorageState::Evicted);
+
+        let evict = FileProviderOperationReport::execute(&downloaded, FileProviderOperation::Evict)
+            .unwrap();
+        assert_eq!(evict.disposition, FileProviderOperationDisposition::Refused);
+        assert_eq!(evict.reason.as_deref(), Some("not-native-provider-backed"));
+        assert_eq!(evict.before.storage_state, CloudStorageState::Downloaded);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operations_refuse_disabled_state_before_native_call() {
+        let root = unique_temp_dir();
+        let downloading = root.join("Downloading.icloud-downloading.md");
+        fs::write(&downloading, "downloading").unwrap();
+
+        let report =
+            FileProviderOperationReport::execute(&downloading, FileProviderOperation::Download)
+                .unwrap();
+
+        assert_eq!(
+            report.disposition,
+            FileProviderOperationDisposition::Refused
+        );
+        assert_eq!(
+            report.reason.as_deref(),
+            Some("operation-disabled-for-current-state")
+        );
+        assert_eq!(report.before.storage_state, CloudStorageState::Downloading);
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -417,6 +417,52 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
 }
 
 #[test]
+fn refuses_fileprovider_operations_without_native_provider_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-fileprovider-op-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let evicted = root.join("Remote.icloud-placeholder");
+    let downloaded = root.join("Downloaded.icloud.md");
+    std::fs::write(&evicted, "placeholder").unwrap();
+    std::fs::write(&downloaded, "downloaded").unwrap();
+
+    let download_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-operation")
+        .arg("download")
+        .arg(&evicted)
+        .output()
+        .unwrap();
+    assert!(
+        download_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&download_output.stderr)
+    );
+    let download_stdout = String::from_utf8(download_output.stdout).unwrap();
+    assert!(download_stdout.starts_with("fileprovider-operation\t"));
+    assert!(download_stdout.contains("\toperation=download\tdisposition=refused\t"));
+    assert!(download_stdout.contains("\tbefore-state=evicted\tafter-state=-\t"));
+    assert!(download_stdout.ends_with("reason=not-native-provider-backed\n"));
+
+    let evict_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-operation")
+        .arg("evict")
+        .arg(&downloaded)
+        .output()
+        .unwrap();
+    assert!(
+        evict_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&evict_output.stderr)
+    );
+    let evict_stdout = String::from_utf8(evict_output.stdout).unwrap();
+    assert!(evict_stdout.contains("\toperation=evict\tdisposition=refused\t"));
+    assert!(evict_stdout.contains("\tbefore-state=downloaded\tafter-state=-\t"));
+    assert!(evict_stdout.ends_with("reason=not-native-provider-backed\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_discovery_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-volumes-{}", std::process::id()));
     let external = root.join("Work Drive");

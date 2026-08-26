@@ -509,6 +509,7 @@ fn print_usage() {
   gfm native-icon <path>
   gfm native-icon-bridge <path>
   gfm fileprovider-state <path>
+  gfm fileprovider-operation <download|evict> <path>
   gfm volume-discovery [paths...]
   gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]
   gfm spotlight-reconcile <path> [spotlight-fixture.tsv]

@@ -6,8 +6,9 @@ use gfm_fs::record_for_path;
 use gfm_index::{parse_volume_indexing_policy, VolumeIndexPolicy};
 use gfm_jobs::{Cancellation, Priority, SchedulingAction};
 use gfm_mac::{
-    current_host_profile, parse_spotlight_fixture, AccessIntent, FileProviderStateReport,
-    MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
+    current_host_profile, parse_spotlight_fixture, AccessIntent, FileProviderOperation,
+    FileProviderOperationReport, FileProviderStateReport, MacBridgeContract,
+    NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
     SpotlightMetadataReader, SpotlightReconciliationReport, VolumeDiscoveryReport,
 };
 use gfm_preview::{
@@ -53,6 +54,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "fileprovider-state" => {
             let path = required_path(args.next(), "fileprovider-state requires a path")?;
             println!("{}", FileProviderStateReport::read_path(path)?.as_tsv());
+        }
+        "fileprovider-operation" => {
+            let operation = FileProviderOperation::parse(&required_string(
+                args.next(),
+                "fileprovider-operation requires an operation",
+            )?)?;
+            let path = required_path(args.next(), "fileprovider-operation requires a path")?;
+            println!(
+                "{}",
+                FileProviderOperationReport::execute(path, operation)?.as_tsv()
+            );
         }
         "volume-discovery" => {
             let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
