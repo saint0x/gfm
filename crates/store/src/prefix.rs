@@ -1,10 +1,11 @@
 use crate::durable;
 use crate::ids::{
     read_blocked_file_id_block_from_slice, read_blocked_file_ids,
-    read_blocked_file_ids_limited_from_slice, write_blocked_file_ids,
+    read_blocked_file_ids_for_volume_limited_from_slice, read_blocked_file_ids_limited_from_slice,
+    write_blocked_file_ids,
 };
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
-use gfm_types::{FileId, FileRecord, GfmError, Result};
+use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -159,6 +160,41 @@ impl MmapPrefixArchive {
         };
         let posting = self.limited_posting_for_entry(entry, limit)?;
         Ok((posting.posting.ids, posting.truncated))
+    }
+
+    pub fn ids_for_volume_limit(
+        &self,
+        prefix: &str,
+        volume: VolumeId,
+        limit: usize,
+    ) -> Result<(Vec<FileId>, bool)> {
+        let prefix = normalize(prefix);
+        if prefix.is_empty() || limit == 0 {
+            return Ok((Vec::new(), false));
+        }
+        let Some(entry) = self
+            .directory
+            .binary_search_by(|entry| entry.prefix.as_str().cmp(prefix.as_str()))
+            .ok()
+            .map(|index| &self.directory[index])
+        else {
+            return Ok((Vec::new(), false));
+        };
+        let bytes = self.posting_bytes(entry)?;
+        let mut cursor = Cursor::new(bytes);
+        let posting_prefix = read_prefix_posting_header(&mut cursor, &self.path)?;
+        if posting_prefix != entry.prefix {
+            return Err(prefix_format_error(
+                &self.path,
+                "prefix directory points at the wrong posting",
+            ));
+        }
+        let ids_start = usize::try_from(cursor.position())
+            .map_err(|_| prefix_format_error(&self.path, "prefix id offset overflow"))?;
+        let ids_bytes = bytes
+            .get(ids_start..)
+            .ok_or_else(|| prefix_format_error(&self.path, "prefix ids out of bounds"))?;
+        read_blocked_file_ids_for_volume_limited_from_slice(ids_bytes, volume, limit, &self.path)
     }
 
     pub fn postings_for_sorted_prefixes_limit<I, S>(
@@ -586,6 +622,76 @@ mod tests {
         assert_eq!(limited[128], FileId::new(VolumeId(5), 10_128));
         assert!(!all_truncated);
         assert_eq!(all_limited, posting.ids);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_prefix_archive_limits_ids_by_volume_without_global_hydration() {
+        let path = temp_path("gfm-prefix-volume-limit", "gfmprefix");
+        let posting = PrefixPosting {
+            prefix: "pro".to_string(),
+            ids: (0..192)
+                .map(|node| FileId::new(VolumeId(1), 1_000 + node))
+                .chain((0..192).map(|node| FileId::new(VolumeId(2), 2_000 + node)))
+                .chain((0..32).map(|node| FileId::new(VolumeId(3), 3_000 + node)))
+                .collect(),
+        };
+
+        write_prefix_postings(&path, std::slice::from_ref(&posting)).unwrap();
+        let archive = MmapPrefixArchive::open(&path).unwrap();
+        let (volume_two, truncated) = archive
+            .ids_for_volume_limit("pro", VolumeId(2), 130)
+            .unwrap();
+        let (missing, missing_truncated) = archive
+            .ids_for_volume_limit("pro", VolumeId(9), 130)
+            .unwrap();
+
+        assert!(truncated);
+        assert_eq!(volume_two.len(), 130);
+        assert_eq!(volume_two[0], FileId::new(VolumeId(2), 2_000));
+        assert_eq!(volume_two[129], FileId::new(VolumeId(2), 2_129));
+        assert!(missing.is_empty());
+        assert!(!missing_truncated);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_prefix_archive_reads_limited_ids_for_one_volume() {
+        let path = temp_path("gfm-prefix-volume-blocked", "gfmprefix");
+        let posting = PrefixPosting {
+            prefix: "pro".to_string(),
+            ids: (0..140)
+                .map(|node| FileId::new(VolumeId(1), 1_000 + node))
+                .chain((0..140).map(|node| FileId::new(VolumeId(2), 2_000 + node)))
+                .chain((0..5).map(|node| FileId::new(VolumeId(3), 3_000 + node)))
+                .collect(),
+        };
+
+        write_prefix_postings(&path, std::slice::from_ref(&posting)).unwrap();
+        let archive = MmapPrefixArchive::open(&path).unwrap();
+        let (volume_two, volume_two_truncated) = archive
+            .ids_for_volume_limit("PRO", VolumeId(2), 129)
+            .unwrap();
+        let (volume_three, volume_three_truncated) = archive
+            .ids_for_volume_limit("pro", VolumeId(3), 129)
+            .unwrap();
+        let (missing, missing_truncated) = archive
+            .ids_for_volume_limit("pro", VolumeId(9), 129)
+            .unwrap();
+
+        assert_eq!(volume_two.len(), 129);
+        assert_eq!(volume_two[0], FileId::new(VolumeId(2), 2_000));
+        assert_eq!(volume_two[128], FileId::new(VolumeId(2), 2_128));
+        assert!(volume_two_truncated);
+        assert_eq!(
+            volume_three,
+            (0..5)
+                .map(|node| FileId::new(VolumeId(3), 3_000 + node))
+                .collect::<Vec<_>>()
+        );
+        assert!(!volume_three_truncated);
+        assert!(missing.is_empty());
+        assert!(!missing_truncated);
         std::fs::remove_file(path).unwrap();
     }
 

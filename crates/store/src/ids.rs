@@ -127,6 +127,74 @@ pub(crate) fn read_blocked_file_ids_limited_from_slice(
     read_blocked_file_ids_limited_report_from_slice(bytes, limit, path).map(|report| report.ids)
 }
 
+pub(crate) fn read_blocked_file_ids_for_volume_limited_from_slice(
+    bytes: &[u8],
+    volume: VolumeId,
+    limit: usize,
+    path: &Path,
+) -> Result<(Vec<FileId>, bool)> {
+    let mut reader = Cursor::new(bytes);
+    let _count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+    let (_block_size, blocks) = read_blocked_header(&mut reader, path)?;
+    let payload_start = usize::try_from(reader.position())
+        .map_err(|_| id_format_error(path, "id block payload offset overflow"))?;
+    let payload_len = block_payload_len(&blocks, path)?;
+    let encoded_len = payload_start
+        .checked_add(payload_len)
+        .ok_or_else(|| id_format_error(path, "id block range overflow"))?;
+    if bytes.get(..encoded_len).is_none() {
+        return Err(id_format_error(path, "id block out of bounds"));
+    }
+    if limit == 0 {
+        return Ok((Vec::new(), false));
+    }
+
+    let mut payload_offset = 0usize;
+    let mut ids = Vec::with_capacity(limit.min(DEFAULT_ID_BLOCK_SIZE));
+    for (index, block) in blocks.iter().enumerate() {
+        let len = usize::try_from(block.len)
+            .map_err(|_| id_format_error(path, "id block length overflow"))?;
+        let start = payload_start
+            .checked_add(payload_offset)
+            .ok_or_else(|| id_format_error(path, "id block range overflow"))?;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| id_format_error(path, "id block range overflow"))?;
+
+        let next_first = blocks.get(index + 1).map(|next| next.first);
+        if block.first.volume > volume {
+            break;
+        }
+        if next_first.is_some_and(|next| next.volume < volume) {
+            payload_offset = payload_offset
+                .checked_add(len)
+                .ok_or_else(|| id_format_error(path, "id block range overflow"))?;
+            continue;
+        }
+
+        let block_bytes = bytes
+            .get(start..end)
+            .ok_or_else(|| id_format_error(path, "id block out of bounds"))?;
+        for id in read_encoded_file_ids(Cursor::new(block_bytes), block, path)? {
+            if id.volume < volume {
+                continue;
+            }
+            if id.volume > volume {
+                return Ok((ids, false));
+            }
+            ids.push(id);
+            if ids.len() > limit {
+                ids.truncate(limit);
+                return Ok((ids, true));
+            }
+        }
+        payload_offset = payload_offset
+            .checked_add(len)
+            .ok_or_else(|| id_format_error(path, "id block range overflow"))?;
+    }
+    Ok((ids, false))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BlockedFileIdsLimitedReport {
     pub ids: Vec<FileId>,

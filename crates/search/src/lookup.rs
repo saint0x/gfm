@@ -160,6 +160,30 @@ pub trait SearchLookup: Sync {
             .collect())
     }
 
+    fn prefix_ids_for_volume_bounded(
+        &self,
+        prefix: &str,
+        volume: VolumeId,
+        limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        let mut ids = self.prefix_ids_for_volume(prefix, volume)?;
+        let truncated = ids.len() > limit;
+        ids.truncate(limit);
+        Ok(SearchLookupIds::new(ids, truncated))
+    }
+
+    fn substring_ids_for_volume_bounded(
+        &self,
+        gram: &str,
+        volume: VolumeId,
+        limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        let mut ids = self.substring_ids_for_volume(gram, volume)?;
+        let truncated = ids.len() > limit;
+        ids.truncate(limit);
+        Ok(SearchLookupIds::new(ids, truncated))
+    }
+
     fn prefix_ids_bounded(&self, prefix: &str, limit: usize) -> gfm_types::Result<SearchLookupIds> {
         let mut ids = self.prefix_ids(prefix)?;
         let truncated = ids.len() > limit;

@@ -1,10 +1,11 @@
 use crate::durable;
 use crate::ids::{
     read_blocked_file_id_block_from_slice, read_blocked_file_ids,
-    read_blocked_file_ids_limited_from_slice, write_blocked_file_ids,
+    read_blocked_file_ids_for_volume_limited_from_slice, read_blocked_file_ids_limited_from_slice,
+    write_blocked_file_ids,
 };
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
-use gfm_types::{FileId, FileRecord, GfmError, Result};
+use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -160,6 +161,41 @@ impl MmapSubstringArchive {
         };
         let posting = self.limited_posting_for_entry(entry, limit)?;
         Ok((posting.posting.ids, posting.truncated))
+    }
+
+    pub fn ids_for_volume_limit(
+        &self,
+        gram: &str,
+        volume: VolumeId,
+        limit: usize,
+    ) -> Result<(Vec<FileId>, bool)> {
+        let gram = normalize(gram);
+        if !is_substring_gram(&gram) || limit == 0 {
+            return Ok((Vec::new(), false));
+        }
+        let Some(entry) = self
+            .directory
+            .binary_search_by(|entry| entry.gram.as_str().cmp(gram.as_str()))
+            .ok()
+            .map(|index| &self.directory[index])
+        else {
+            return Ok((Vec::new(), false));
+        };
+        let bytes = self.posting_bytes(entry)?;
+        let mut cursor = Cursor::new(bytes);
+        let posting_gram = read_substring_posting_header(&mut cursor, &self.path)?;
+        if posting_gram != entry.gram {
+            return Err(substring_format_error(
+                &self.path,
+                "substring directory points at the wrong posting",
+            ));
+        }
+        let ids_start = usize::try_from(cursor.position())
+            .map_err(|_| substring_format_error(&self.path, "substring id offset overflow"))?;
+        let ids_bytes = bytes
+            .get(ids_start..)
+            .ok_or_else(|| substring_format_error(&self.path, "substring ids out of bounds"))?;
+        read_blocked_file_ids_for_volume_limited_from_slice(ids_bytes, volume, limit, &self.path)
     }
 
     pub fn postings_for_sorted_grams_limit<I, S>(
@@ -645,6 +681,76 @@ mod tests {
         assert_eq!(limited[128], FileId::new(VolumeId(5), 10_128));
         assert!(!all_truncated);
         assert_eq!(all_limited, posting.ids);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_substring_archive_limits_ids_by_volume_without_global_hydration() {
+        let path = temp_path("gfm-substring-volume-limit", "gfmsubstr");
+        let posting = SubstringPosting {
+            gram: "por".to_string(),
+            ids: (0..192)
+                .map(|node| FileId::new(VolumeId(1), 1_000 + node))
+                .chain((0..192).map(|node| FileId::new(VolumeId(2), 2_000 + node)))
+                .chain((0..32).map(|node| FileId::new(VolumeId(3), 3_000 + node)))
+                .collect(),
+        };
+
+        write_substring_postings(&path, std::slice::from_ref(&posting)).unwrap();
+        let archive = MmapSubstringArchive::open(&path).unwrap();
+        let (volume_two, truncated) = archive
+            .ids_for_volume_limit("POR", VolumeId(2), 130)
+            .unwrap();
+        let (missing, missing_truncated) = archive
+            .ids_for_volume_limit("por", VolumeId(9), 130)
+            .unwrap();
+
+        assert!(truncated);
+        assert_eq!(volume_two.len(), 130);
+        assert_eq!(volume_two[0], FileId::new(VolumeId(2), 2_000));
+        assert_eq!(volume_two[129], FileId::new(VolumeId(2), 2_129));
+        assert!(missing.is_empty());
+        assert!(!missing_truncated);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_substring_archive_reads_limited_ids_for_one_volume() {
+        let path = temp_path("gfm-substring-volume-blocked", "gfmsubstr");
+        let posting = SubstringPosting {
+            gram: "por".to_string(),
+            ids: (0..140)
+                .map(|node| FileId::new(VolumeId(1), 1_000 + node))
+                .chain((0..140).map(|node| FileId::new(VolumeId(2), 2_000 + node)))
+                .chain((0..5).map(|node| FileId::new(VolumeId(3), 3_000 + node)))
+                .collect(),
+        };
+
+        write_substring_postings(&path, std::slice::from_ref(&posting)).unwrap();
+        let archive = MmapSubstringArchive::open(&path).unwrap();
+        let (volume_two, volume_two_truncated) = archive
+            .ids_for_volume_limit("POR", VolumeId(2), 129)
+            .unwrap();
+        let (volume_three, volume_three_truncated) = archive
+            .ids_for_volume_limit("por", VolumeId(3), 129)
+            .unwrap();
+        let (missing, missing_truncated) = archive
+            .ids_for_volume_limit("por", VolumeId(9), 129)
+            .unwrap();
+
+        assert_eq!(volume_two.len(), 129);
+        assert_eq!(volume_two[0], FileId::new(VolumeId(2), 2_000));
+        assert_eq!(volume_two[128], FileId::new(VolumeId(2), 2_128));
+        assert!(volume_two_truncated);
+        assert_eq!(
+            volume_three,
+            (0..5)
+                .map(|node| FileId::new(VolumeId(3), 3_000 + node))
+                .collect::<Vec<_>>()
+        );
+        assert!(!volume_three_truncated);
+        assert!(missing.is_empty());
+        assert!(!missing_truncated);
         std::fs::remove_file(path).unwrap();
     }
 

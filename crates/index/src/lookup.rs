@@ -9,7 +9,7 @@ use gfm_store::{
     MetadataField, MmapContentArchive, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
     MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
-use gfm_types::{ContentPosting, FileId, FileRecord, Result};
+use gfm_types::{ContentPosting, FileId, FileRecord, Result, VolumeId};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{
@@ -763,6 +763,40 @@ impl SearchLookup for SearchArchiveLookup {
         Ok(SearchLookupIds::new(ids, truncated))
     }
 
+    fn prefix_ids_for_volume(&self, prefix: &str, volume: VolumeId) -> Result<Vec<FileId>> {
+        self.prefix_requests.fetch_add(1, Ordering::Relaxed);
+        self.prefix_misses.fetch_add(1, Ordering::Relaxed);
+        let (ids, _) = self
+            .prefixes
+            .ids_for_volume_limit(prefix, volume, usize::MAX)?;
+        Ok(ids)
+    }
+
+    fn prefix_ids_for_volume_bounded(
+        &self,
+        prefix: &str,
+        volume: VolumeId,
+        limit: usize,
+    ) -> Result<SearchLookupIds> {
+        self.prefix_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupIds::new(Vec::new(), false));
+        }
+        let cache_key = volume_cache_key(prefix, volume);
+        if let Some(mut ids) = self.prefix_cache_lock().get(&cache_key) {
+            self.prefix_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = ids.len() > limit;
+            ids.truncate(limit);
+            return Ok(SearchLookupIds::new(ids, truncated));
+        }
+        self.prefix_misses.fetch_add(1, Ordering::Relaxed);
+        let (ids, truncated) = self.prefixes.ids_for_volume_limit(prefix, volume, limit)?;
+        if !truncated {
+            self.prefix_cache_lock().insert(cache_key, ids.clone());
+        }
+        Ok(SearchLookupIds::new(ids, truncated))
+    }
+
     fn substring_ids(&self, gram: &str) -> Result<Vec<FileId>> {
         self.substring_requests.fetch_add(1, Ordering::Relaxed);
         if let Some(ids) = self.substring_cache_lock().get(gram) {
@@ -794,6 +828,40 @@ impl SearchLookup for SearchArchiveLookup {
         if !truncated {
             self.substring_cache_lock()
                 .insert(gram.to_string(), ids.clone());
+        }
+        Ok(SearchLookupIds::new(ids, truncated))
+    }
+
+    fn substring_ids_for_volume(&self, gram: &str, volume: VolumeId) -> Result<Vec<FileId>> {
+        self.substring_requests.fetch_add(1, Ordering::Relaxed);
+        self.substring_misses.fetch_add(1, Ordering::Relaxed);
+        let (ids, _) = self
+            .substrings
+            .ids_for_volume_limit(gram, volume, usize::MAX)?;
+        Ok(ids)
+    }
+
+    fn substring_ids_for_volume_bounded(
+        &self,
+        gram: &str,
+        volume: VolumeId,
+        limit: usize,
+    ) -> Result<SearchLookupIds> {
+        self.substring_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupIds::new(Vec::new(), false));
+        }
+        let cache_key = volume_cache_key(gram, volume);
+        if let Some(mut ids) = self.substring_cache_lock().get(&cache_key) {
+            self.substring_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = ids.len() > limit;
+            ids.truncate(limit);
+            return Ok(SearchLookupIds::new(ids, truncated));
+        }
+        self.substring_misses.fetch_add(1, Ordering::Relaxed);
+        let (ids, truncated) = self.substrings.ids_for_volume_limit(gram, volume, limit)?;
+        if !truncated {
+            self.substring_cache_lock().insert(cache_key, ids.clone());
         }
         Ok(SearchLookupIds::new(ids, truncated))
     }
@@ -847,6 +915,10 @@ impl SearchLookup for SearchArchiveLookup {
             ..SearchLookupTelemetry::default()
         }
     }
+}
+
+fn volume_cache_key(term: &str, volume: VolumeId) -> String {
+    format!("volume={}:{}", volume.0, term)
 }
 
 pub fn query_sidecar_imports(

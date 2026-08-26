@@ -1114,6 +1114,58 @@ fn search_archive_bounded_lookup_does_not_cache_partial_results() {
 }
 
 #[test]
+fn search_archive_lookup_reads_volume_scoped_prefix_and_substring_ids() {
+    let prefixes = unique_temp_path("gfm-prefix-volume-lookup", "gfmprefix");
+    let substrings = unique_temp_path("gfm-substring-volume-lookup", "gfmsubstr");
+    let fuzzy = unique_temp_path("gfm-fuzzy-volume-lookup", "gfmfuzzy");
+    let prefix_ids: Vec<_> = (0..140)
+        .map(|node| FileId::new(VolumeId(1), 10_000 + node))
+        .chain((0..140).map(|node| FileId::new(VolumeId(2), 20_000 + node)))
+        .collect();
+    let substring_ids: Vec<_> = (0..140)
+        .map(|node| FileId::new(VolumeId(1), 30_000 + node))
+        .chain((0..140).map(|node| FileId::new(VolumeId(2), 40_000 + node)))
+        .collect();
+    write_prefix_postings(
+        &prefixes,
+        &[PrefixPosting {
+            prefix: "pro".to_string(),
+            ids: prefix_ids,
+        }],
+    )
+    .unwrap();
+    write_substring_postings(
+        &substrings,
+        &[SubstringPosting {
+            gram: "por".to_string(),
+            ids: substring_ids,
+        }],
+    )
+    .unwrap();
+    write_fuzzy_postings(&fuzzy, &[]).unwrap();
+
+    let lookup = SearchArchiveLookup::open(&prefixes, &substrings, &fuzzy).unwrap();
+    let prefix = lookup
+        .prefix_ids_for_volume_bounded("PRO", VolumeId(2), 129)
+        .unwrap();
+    let substring = lookup
+        .substring_ids_for_volume_bounded("POR", VolumeId(2), 129)
+        .unwrap();
+
+    assert_eq!(prefix.ids.len(), 129);
+    assert_eq!(prefix.ids[0], FileId::new(VolumeId(2), 20_000));
+    assert!(prefix.truncated);
+    assert_eq!(substring.ids.len(), 129);
+    assert_eq!(substring.ids[0], FileId::new(VolumeId(2), 40_000));
+    assert!(substring.truncated);
+    assert_eq!(lookup.cache_entry_counts().unwrap(), (0, 0, 0));
+
+    fs::remove_file(prefixes).unwrap();
+    fs::remove_file(substrings).unwrap();
+    fs::remove_file(fuzzy).unwrap();
+}
+
+#[test]
 fn live_index_applies_create_modify_and_remove_events() {
     let root = unique_temp_dir("gfm-live-root");
     let target = root.join("Needle.txt");
