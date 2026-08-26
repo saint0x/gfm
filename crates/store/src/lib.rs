@@ -260,6 +260,12 @@ impl MmapRecordArchive {
         has_record_checksum_footer(&self.mmap)
     }
 
+    pub fn contains_volume(&self, volume: VolumeId) -> bool {
+        self.directory
+            .binary_search_by_key(&volume, |entry| entry.id.volume)
+            .is_ok()
+    }
+
     pub fn record(&self, index: usize) -> Result<FileRecord> {
         let range = self.records.get(index).ok_or_else(|| {
             GfmError::Format(format!(

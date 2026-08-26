@@ -32,9 +32,10 @@ pub use context::{
     ContextItemKind, ContextMenuContract, ContextMenuInput, ContextMenuItemSpec, ContextSurface,
 };
 pub use dialog::{
-    DialogButtonRole, DialogButtonSpec, DialogContract, DialogFieldKind, DialogFieldSpec,
-    DialogPresentation, DialogSurface, OperationProgressContract, OperationProgressInput,
-    OperationProgressState, ProviderConflictContract, ProviderConflictInput,
+    render as render_dialog, DialogButtonRole, DialogButtonSpec, DialogContract, DialogFieldKind,
+    DialogFieldSpec, DialogPresentation, DialogSurface, OperationProgressContract,
+    OperationProgressInput, OperationProgressState, ProviderConflictContract,
+    ProviderConflictInput,
 };
 pub use gallery::{
     render as render_gallery_view, GalleryFilmstripItemSpec, GalleryKeyboardFlow,
@@ -87,6 +88,7 @@ pub struct AppLaunchSpec {
     pub transparent_titlebar: bool,
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
+    pub permission_dialog: Option<DialogContract>,
 }
 
 impl AppLaunchSpec {
@@ -119,8 +121,25 @@ impl AppLaunchSpec {
                 "native app tabbing identifier must not be empty".to_string(),
             ));
         }
+        if let Some(dialog) = &self.permission_dialog {
+            if dialog.surface != DialogSurface::Permission {
+                return Err(GfmError::Format(
+                    "native app permission dialog must use the permission surface".to_string(),
+                ));
+            }
+            if dialog.presentation != DialogPresentation::WindowSheet {
+                return Err(GfmError::Format(
+                    "native app permission dialog must be a window sheet".to_string(),
+                ));
+            }
+        }
         titlebar::TitlebarContract::from_spec(self)?;
         Ok(())
+    }
+
+    pub fn with_permission_dialog(mut self, dialog: DialogContract) -> Self {
+        self.permission_dialog = Some(dialog);
+        self
     }
 }
 
@@ -136,6 +155,7 @@ impl Default for AppLaunchSpec {
             transparent_titlebar: true,
             activate_on_launch: true,
             tabbing_identifier: "gfm-main-window".to_string(),
+            permission_dialog: None,
         }
     }
 }
@@ -151,6 +171,7 @@ pub struct WindowLifecycleContract {
     pub transparent_titlebar: bool,
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
+    pub permission_dialog: Option<DialogSurface>,
 }
 
 impl WindowLifecycleContract {
@@ -166,12 +187,13 @@ impl WindowLifecycleContract {
             transparent_titlebar: spec.transparent_titlebar,
             activate_on_launch: spec.activate_on_launch,
             tabbing_identifier: spec.tabbing_identifier.clone(),
+            permission_dialog: spec.permission_dialog.as_ref().map(|dialog| dialog.surface),
         })
     }
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "window\t{}\t{}\t{}x{}\tmin={}x{}\ttransparent-titlebar={}\tactivate={}\ttabs={}",
+            "window\t{}\t{}\t{}x{}\tmin={}x{}\ttransparent-titlebar={}\tactivate={}\ttabs={}\tpermission-dialog={}",
             self.title,
             self.initial_path.display(),
             self.width,
@@ -180,7 +202,10 @@ impl WindowLifecycleContract {
             self.min_height,
             self.transparent_titlebar,
             self.activate_on_launch,
-            self.tabbing_identifier
+            self.tabbing_identifier,
+            self.permission_dialog
+                .map(DialogSurface::as_str)
+                .unwrap_or("none")
         )
     }
 }
@@ -214,6 +239,7 @@ fn open_main_window(
             session_writer: WindowSessionWriter::new(session_store),
             sidebar: sidebar::SidebarContract::discover(&spec.initial_path),
             icon_view: IconViewContract::from_records(&[], IconViewOptions::default()),
+            permission_dialog: spec.permission_dialog,
             initial_path: spec.initial_path,
         })
     })?;
@@ -278,6 +304,7 @@ struct RootView {
     session_writer: WindowSessionWriter,
     sidebar: SidebarContract,
     icon_view: IconViewContract,
+    permission_dialog: Option<DialogContract>,
     initial_path: PathBuf,
 }
 
@@ -289,7 +316,7 @@ impl Render for RootView {
             }));
         }
 
-        div()
+        let mut root = div()
             .size_full()
             .flex()
             .flex_col()
@@ -303,7 +330,11 @@ impl Render for RootView {
                     .w_full()
                     .child(sidebar::render(&self.sidebar))
                     .child(div().flex_1().h_full().child(icon::render(&self.icon_view))),
-            )
+            );
+        if let Some(dialog) = &self.permission_dialog {
+            root = root.child(dialog::render(dialog));
+        }
+        root
     }
 }
 
@@ -321,6 +352,7 @@ mod tests {
         assert_eq!(contract.height, DEFAULT_HEIGHT);
         assert!(contract.transparent_titlebar);
         assert_eq!(contract.tabbing_identifier, "gfm-main-window");
+        assert_eq!(contract.permission_dialog, None);
     }
 
     #[test]
@@ -341,7 +373,19 @@ mod tests {
 
         assert_eq!(
             contract.as_tsv(),
-            "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window"
+            "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tpermission-dialog=none"
         );
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_permission_sheet() {
+        let spec = AppLaunchSpec::new("/tmp/gfm")
+            .with_permission_dialog(DialogContract::finder_default(DialogSurface::Permission));
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert_eq!(contract.permission_dialog, Some(DialogSurface::Permission));
+        assert!(contract
+            .as_tsv()
+            .ends_with("\tpermission-dialog=permission"));
     }
 }

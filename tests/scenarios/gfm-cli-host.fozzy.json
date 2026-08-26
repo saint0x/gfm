@@ -1381,6 +1381,41 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "search-index-sidecars-volume-scope",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "-",
+        "tag:Important"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-index-sidecars-volume-scope",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "-",
+        "tag:Important"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "search-index-sidecars-budget",
         "tmp/gfm-fozzy-metadata-records.gfmidx",
         "/tmp/gfm-fozzy-columns.gfmcols",
@@ -1421,6 +1456,41 @@
         "1",
         "1",
         "tag"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-index-sidecars-volume-scope",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "99",
+        "tag:Important"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-index-sidecars-volume-scope",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "99",
+        "tag:Important"
       ],
       "expect_exit": 0
     },

@@ -370,11 +370,20 @@ impl SidecarIndexQuerySession {
         scope: &SearchVolumeScope,
         cancellation: &Cancellation,
     ) -> Result<Vec<ContentPosting>> {
-        if scope_excludes_all(scope) {
+        if scope_excludes_all(scope) || !self.records_contains_scope(scope) {
             return Ok(Vec::new());
         }
         let postings = self.content_postings_for_terms(terms, limit_per_term, cancellation)?;
         Ok(scope_content_postings(postings, scope))
+    }
+
+    fn records_contains_scope(&self, scope: &SearchVolumeScope) -> bool {
+        match scope {
+            SearchVolumeScope::All => !self.records.is_empty(),
+            SearchVolumeScope::Only(volumes) => volumes
+                .iter()
+                .any(|volume| self.records.contains_volume(*volume)),
+        }
     }
 
     fn live_from_import(

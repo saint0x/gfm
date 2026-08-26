@@ -15,7 +15,7 @@ fn reports_ui_lifecycle_contract_from_binary() {
 
     assert_eq!(
         stdout.trim(),
-        "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window"
+        "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tpermission-dialog=permission"
     );
 }
 

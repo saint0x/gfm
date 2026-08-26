@@ -4,14 +4,14 @@ use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, 
 use gfm_content::Extractor;
 use gfm_index::{
     Indexer, LiveIndex, SearchLookupBudget, SearchRecordColumns, SearchStreamStage,
-    SidecarIndexQuerySession, SidecarQuerySessionReport,
+    SearchVolumeScope, SidecarIndexQuerySession, SidecarQuerySessionReport,
 };
 use gfm_store::{
     ContentArchive, MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary,
     MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
     MmapSubstringArchive,
 };
-use gfm_types::{FileKind, Result, SearchHit};
+use gfm_types::{FileKind, GfmError, Result, SearchHit, VolumeId};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -507,6 +507,53 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
+        "search-index-sidecars-volume-scope" => {
+            let records = required_path(
+                args.next(),
+                "search-index-sidecars-volume-scope requires a records path",
+            )?;
+            let columns = required_path(
+                args.next(),
+                "search-index-sidecars-volume-scope requires a columns path",
+            )?;
+            let metadata = required_path(
+                args.next(),
+                "search-index-sidecars-volume-scope requires a metadata path",
+            )?;
+            let prefixes = required_path(
+                args.next(),
+                "search-index-sidecars-volume-scope requires a prefixes path",
+            )?;
+            let substrings = required_path(
+                args.next(),
+                "search-index-sidecars-volume-scope requires a substrings path",
+            )?;
+            let fuzzy = required_path(
+                args.next(),
+                "search-index-sidecars-volume-scope requires a fuzzy path",
+            )?;
+            let content = required_path(
+                args.next(),
+                "search-index-sidecars-volume-scope requires a content path",
+            )?;
+            let scope = parse_volume_scope(&required_string(
+                args.next(),
+                "search-index-sidecars-volume-scope requires admitted volume ids or `-`",
+            )?)?;
+            let query = required_string(
+                args.next(),
+                "search-index-sidecars-volume-scope requires a query string",
+            )?;
+            let session = SidecarIndexQuerySession::open(
+                records, columns, metadata, prefixes, substrings, fuzzy, content,
+            )?;
+            let budget = SearchLookupBudget::default();
+            let report = session.search_with_volume_scope(&query, 50, &scope)?;
+            print_sidecar_session_report("sidecar-volume-scope", &session, &report, budget);
+            for hit in report.search.hits {
+                print_hit(&hit);
+            }
+        }
         "content-ids" => {
             let content = required_path(args.next(), "content-ids requires a content path")?;
             let term = required_string(args.next(), "content-ids requires a term")?;
@@ -709,6 +756,23 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
 fn parse_metadata_field(value: &str, name: &str) -> Result<MetadataField> {
     MetadataField::parse(value)
         .ok_or_else(|| gfm_types::GfmError::Format(format!("invalid {name}: {value}")))
+}
+
+fn parse_volume_scope(value: &str) -> Result<SearchVolumeScope> {
+    if value == "-" || value.trim().is_empty() {
+        return Ok(SearchVolumeScope::only([]));
+    }
+    let volumes = value
+        .split(',')
+        .map(|part| {
+            let part = part.trim();
+            let raw = part.parse::<u64>().map_err(|_| {
+                GfmError::Format(format!("volume scope id `{part}` must be unsigned"))
+            })?;
+            Ok(VolumeId(raw))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(SearchVolumeScope::only(volumes))
 }
 
 fn print_file_ids(ids: Vec<gfm_types::FileId>) {

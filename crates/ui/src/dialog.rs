@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+use gpui::{div, prelude::*, px, rgb, IntoElement, Styled};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogSurface {
     Alert,
@@ -409,6 +411,90 @@ impl DialogContract {
         }));
         lines.join("\n")
     }
+}
+
+pub fn render(contract: &DialogContract) -> impl IntoElement {
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_start()
+        .justify_center()
+        .pt(px(58.0))
+        .bg(rgb(0x111113))
+        .child(
+            div()
+                .id("permission-sheet")
+                .w(px(420.0))
+                .p(px(18.0))
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(rgb(0x5f6368))
+                .bg(rgb(0x2d2d30))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.0))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.0))
+                                .child(
+                                    div()
+                                        .w(px(28.0))
+                                        .h(px(28.0))
+                                        .rounded(px(6.0))
+                                        .bg(rgb(0x4f8cff)),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(16.0))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(rgb(0xf2f2f2))
+                                        .child(contract.title),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(13.0))
+                                .line_height(px(18.0))
+                                .text_color(rgb(0xd4d4d4))
+                                .child(contract.message),
+                        )
+                        .child(render_buttons(contract)),
+                ),
+        )
+}
+
+fn render_buttons(contract: &DialogContract) -> impl IntoElement {
+    let mut row = div().flex().justify_end().gap(px(8.0));
+    for button in &contract.buttons {
+        let bg = if button.role == DialogButtonRole::Default {
+            rgb(0x0a84ff)
+        } else {
+            rgb(0x3a3a3c)
+        };
+        row = row.child(
+            div()
+                .px(px(12.0))
+                .h(px(28.0))
+                .rounded(px(6.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(if button.enabled { bg } else { rgb(0x2a2a2c) })
+                .text_size(px(12.0))
+                .text_color(if button.enabled {
+                    rgb(0xffffff)
+                } else {
+                    rgb(0x8a8a8d)
+                })
+                .child(button.title),
+        );
+    }
+    row
 }
 
 fn alert_contract() -> DialogContract {

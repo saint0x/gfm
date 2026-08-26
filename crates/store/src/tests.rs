@@ -161,6 +161,9 @@ fn mmap_record_archive_finds_records_when_rows_are_not_id_sorted() {
         Some(records[2].clone())
     );
     assert_eq!(archive.find(FileId::new(VolumeId(6), 1)).unwrap(), None);
+    assert!(archive.contains_volume(VolumeId(4)));
+    assert!(archive.contains_volume(VolumeId(5)));
+    assert!(!archive.contains_volume(VolumeId(6)));
     std::fs::remove_file(path).unwrap();
 }
 

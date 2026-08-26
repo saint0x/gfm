@@ -2067,6 +2067,73 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_session_stderr.contains("\trecord-cache-misses=0"),
         "{sidecar_session_stderr}"
     );
+    let sidecar_scoped_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-index-sidecars-volume-scope",
+            index.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+            substrings.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "1",
+            "other",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        sidecar_scoped_search.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sidecar_scoped_search.stderr)
+    );
+    let sidecar_scoped_stdout = String::from_utf8(sidecar_scoped_search.stdout).unwrap();
+    assert!(sidecar_scoped_stdout.is_empty(), "{sidecar_scoped_stdout}");
+    let sidecar_scoped_stderr = String::from_utf8(sidecar_scoped_search.stderr).unwrap();
+    assert!(
+        sidecar_scoped_stderr.contains("sidecar-volume-scope")
+            && sidecar_scoped_stderr.contains("\trecords-loaded=0")
+            && sidecar_scoped_stderr.contains("\tcandidate-ids=0")
+            && sidecar_scoped_stderr.contains("\tfull-hydration=false")
+            && sidecar_scoped_stderr.contains("\tcontent-cache-misses=1")
+            && sidecar_scoped_stderr.contains("\trecord-cache-misses=0"),
+        "{sidecar_scoped_stderr}"
+    );
+    let sidecar_empty_scope = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-index-sidecars-volume-scope",
+            index.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+            substrings.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "-",
+            "bodymarker",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        sidecar_empty_scope.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sidecar_empty_scope.stderr)
+    );
+    let sidecar_empty_scope_stdout = String::from_utf8(sidecar_empty_scope.stdout).unwrap();
+    assert!(
+        sidecar_empty_scope_stdout.is_empty(),
+        "{sidecar_empty_scope_stdout}"
+    );
+    let sidecar_empty_scope_stderr = String::from_utf8(sidecar_empty_scope.stderr).unwrap();
+    assert!(
+        sidecar_empty_scope_stderr.contains("sidecar-volume-scope")
+            && sidecar_empty_scope_stderr.contains("\trecords-loaded=0")
+            && sidecar_empty_scope_stderr.contains("\tcandidate-ids=0")
+            && sidecar_empty_scope_stderr.contains("\tcontent-cache-misses=0")
+            && sidecar_empty_scope_stderr.contains("\tprefix-lookup-requests=0")
+            && sidecar_empty_scope_stderr.contains("\tsubstring-lookup-requests=0"),
+        "{sidecar_empty_scope_stderr}"
+    );
 
     fs::remove_file(index).unwrap();
     fs::remove_file(metadata).unwrap();

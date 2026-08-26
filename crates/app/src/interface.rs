@@ -28,11 +28,11 @@ use std::path::PathBuf;
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
         "app" => {
-            let spec = app_launch_spec(args.next());
+            let spec = app_launch_spec(args.next())?;
             gfm_ui::run_native(spec)?;
         }
         "ui-contract" => {
-            let spec = app_launch_spec(args.next());
+            let spec = app_launch_spec(args.next())?;
             println!("{}", WindowLifecycleContract::from_spec(&spec)?.as_tsv());
         }
         "ui-menu-contract" => {
@@ -149,11 +149,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             println!("{}", contract.as_tsv());
         }
         "ui-titlebar-contract" => {
-            let spec = app_launch_spec(args.next());
+            let spec = app_launch_spec(args.next())?;
             println!("{}", TitlebarContract::from_spec(&spec)?.as_tsv());
         }
         "ui-session-contract" => {
-            let spec = app_launch_spec(args.next());
+            let spec = app_launch_spec(args.next())?;
             let store = args
                 .next()
                 .map(WindowSessionStore::new)
@@ -413,8 +413,14 @@ fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
     )
 }
 
-fn app_launch_spec(path: Option<String>) -> AppLaunchSpec {
-    path.map(AppLaunchSpec::new).unwrap_or_default()
+fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
+    let spec = path.map(AppLaunchSpec::new).unwrap_or_default();
+    let plan = current_permission_onboarding()?;
+    if plan.finder_parity_default || plan.action != gfm_mac::PermissionAction::ContinueNormally {
+        Ok(spec.with_permission_dialog(DialogContract::finder_default(DialogSurface::Permission)))
+    } else {
+        Ok(spec)
+    }
 }
 
 fn default_current_path(path: Option<String>) -> PathBuf {
