@@ -1,11 +1,12 @@
 use crate::durable;
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use codec::{
-    read_blocked_id_block, read_content_posting, read_content_posting_limited_from_slice,
+    read_blocked_id_block, read_content_posting,
+    read_content_posting_for_volume_limited_from_slice, read_content_posting_limited_from_slice,
     read_content_posting_term, write_content_posting, write_file_ids, write_varint,
 };
 pub(crate) use codec::{read_file_ids, read_varint};
-use gfm_types::{ContentPosting, ContentSegment, FileId, GfmError, Result};
+use gfm_types::{ContentPosting, ContentSegment, FileId, GfmError, Result, VolumeId};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -429,6 +430,76 @@ impl MmapContentArchive {
                     )?;
                     if posting.term.trim().to_lowercase() == term {
                         postings.push(LimitedContentPosting { posting, truncated });
+                    } else {
+                        return Err(content_format_error(
+                            &self.path,
+                            "content directory points at the wrong term",
+                        ));
+                    }
+                }
+            }
+            previous = Some(term);
+        }
+
+        Ok(postings)
+    }
+
+    pub fn postings_for_sorted_terms_volume_limit<I, S>(
+        &self,
+        terms: I,
+        volume: VolumeId,
+        limit_per_term: usize,
+    ) -> Result<Vec<LimitedContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        if limit_per_term == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut postings = Vec::new();
+        let mut directory_index = 0usize;
+        let mut previous: Option<String> = None;
+
+        for term in terms {
+            let term = term.as_ref().trim().to_lowercase();
+            if term.is_empty() {
+                continue;
+            }
+            if let Some(previous_term) = previous.as_ref() {
+                if term < *previous_term {
+                    return Err(content_format_error(
+                        &self.path,
+                        "batch content volume lookup terms must be sorted",
+                    ));
+                }
+                if term == *previous_term {
+                    continue;
+                }
+            }
+
+            while let Some(entry) = self.directory.get(directory_index) {
+                if entry.term.as_str() >= term.as_str() {
+                    break;
+                }
+                directory_index += 1;
+            }
+
+            if let Some(entry) = self.directory.get(directory_index) {
+                if entry.term.as_str() == term.as_str() {
+                    let bytes = self.posting_bytes(entry)?;
+                    let (posting, truncated) = read_content_posting_for_volume_limited_from_slice(
+                        bytes,
+                        &self.path,
+                        self.version,
+                        volume,
+                        limit_per_term,
+                    )?;
+                    if posting.term.trim().to_lowercase() == term {
+                        if !posting.ids.is_empty() || !posting.positions.is_empty() {
+                            postings.push(LimitedContentPosting { posting, truncated });
+                        }
                     } else {
                         return Err(content_format_error(
                             &self.path,

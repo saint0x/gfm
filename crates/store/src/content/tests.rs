@@ -234,6 +234,66 @@ fn mmap_content_archive_reads_bounded_sorted_terms_in_one_pass() {
 }
 
 #[test]
+fn mmap_content_archive_reads_bounded_sorted_terms_for_one_volume() {
+    let path = temp_path("gfm-content-volume-batch-postings", "gfmcontent");
+    let volume_one_ids = (0..4)
+        .map(|node| FileId::new(VolumeId(1), 10_000 + node))
+        .collect::<Vec<_>>();
+    let volume_two_ids = (0..5)
+        .map(|node| FileId::new(VolumeId(2), 20_000 + node))
+        .collect::<Vec<_>>();
+    let postings = vec![
+        ContentPosting {
+            term: "alpha".to_string(),
+            ids: volume_one_ids
+                .iter()
+                .chain(volume_two_ids.iter())
+                .copied()
+                .collect(),
+            positions: volume_one_ids
+                .iter()
+                .chain(volume_two_ids.iter())
+                .map(|id| ContentPositions {
+                    id: *id,
+                    positions: vec![2],
+                })
+                .collect(),
+        },
+        ContentPosting {
+            term: "beta".to_string(),
+            ids: volume_one_ids.clone(),
+            positions: volume_one_ids
+                .iter()
+                .map(|id| ContentPositions {
+                    id: *id,
+                    positions: vec![4],
+                })
+                .collect(),
+        },
+    ];
+
+    write_content_postings(&path, &postings).unwrap();
+    let archive = MmapContentArchive::open(&path).unwrap();
+    let batch = archive
+        .postings_for_sorted_terms_volume_limit(
+            ["alpha", "alpha", "beta", "missing"],
+            VolumeId(2),
+            3,
+        )
+        .unwrap();
+
+    assert_eq!(batch.len(), 1);
+    assert_eq!(batch[0].posting.term, "alpha");
+    assert_eq!(batch[0].posting.ids, volume_two_ids[..3]);
+    assert_eq!(batch[0].posting.positions.len(), 3);
+    assert!(batch[0].truncated);
+    assert!(archive
+        .postings_for_sorted_terms_volume_limit(["beta", "alpha"], VolumeId(2), 3)
+        .is_err());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn checksummed_content_archive_rejects_corruption() {
     let path = temp_path("gfm-content-checksum", "gfmcontent");
     write_content_postings(

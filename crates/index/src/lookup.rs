@@ -373,8 +373,26 @@ impl SidecarIndexQuerySession {
         if scope_excludes_all(scope) || !self.records_contains_scope(scope) {
             return Ok(Vec::new());
         }
-        let postings = self.content_postings_for_terms(terms, limit_per_term, cancellation)?;
-        Ok(scope_content_postings(postings, scope))
+        match scope {
+            SearchVolumeScope::All => {
+                self.content_postings_for_terms(terms, limit_per_term, cancellation)
+            }
+            SearchVolumeScope::Only(volumes) => {
+                let mut postings = Vec::new();
+                for volume in volumes {
+                    cancellation.check()?;
+                    if self.records.contains_volume(*volume) {
+                        postings.extend(self.content_postings_for_terms_in_volume(
+                            terms.clone(),
+                            *volume,
+                            limit_per_term,
+                            cancellation,
+                        )?);
+                    }
+                }
+                Ok(postings)
+            }
+        }
     }
 
     fn records_contains_scope(&self, scope: &SearchVolumeScope) -> bool {
@@ -384,6 +402,84 @@ impl SidecarIndexQuerySession {
                 .iter()
                 .any(|volume| self.records.contains_volume(*volume)),
         }
+    }
+
+    fn content_postings_for_terms_in_volume(
+        &self,
+        terms: Vec<String>,
+        volume: VolumeId,
+        limit_per_term: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<ContentPosting>> {
+        if limit_per_term == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut selected = BTreeSet::new();
+        for term in terms {
+            cancellation.check()?;
+            let term = term.trim().to_lowercase();
+            if !term.is_empty() {
+                selected.insert(term);
+            }
+        }
+        if selected.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut postings = Vec::with_capacity(selected.len());
+        let mut misses = Vec::new();
+        {
+            let cache = self.content_cache_lock();
+            for term in &selected {
+                cancellation.check()?;
+                let key = bounded_volume_posting_cache_key(term, volume, limit_per_term);
+                if let Some(cached) = cache.get(&key) {
+                    self.content_cache_hits.fetch_add(1, Ordering::Relaxed);
+                    if let Some(posting) = cached {
+                        postings.push(posting);
+                    }
+                } else {
+                    self.content_cache_misses.fetch_add(1, Ordering::Relaxed);
+                    misses.push(term.clone());
+                }
+            }
+        }
+
+        cancellation.check()?;
+        let loaded = self
+            .content
+            .postings_for_sorted_terms_volume_limit(&misses, volume, limit_per_term)?
+            .into_iter()
+            .map(|limited| {
+                (
+                    limited.posting.term.clone(),
+                    (Some(limited.posting), limited.truncated),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        let mut cache = self.content_cache_lock();
+        for term in misses {
+            cancellation.check()?;
+            let (posting, truncated) = loaded.get(&term).cloned().unwrap_or((None, false));
+            if !truncated {
+                cache.insert(
+                    bounded_volume_posting_cache_key(&term, volume, limit_per_term),
+                    posting.clone(),
+                );
+            }
+            if let Some(posting) = posting {
+                postings.push(posting);
+            }
+        }
+
+        postings.sort_by(|left, right| {
+            left.term
+                .cmp(&right.term)
+                .then_with(|| left.ids.first().cmp(&right.ids.first()))
+        });
+        Ok(postings)
     }
 
     fn live_from_import(
@@ -1372,6 +1468,10 @@ fn bounded_posting_cache_key(term: &str, limit: usize) -> String {
     format!("{limit}:{term}")
 }
 
+fn bounded_volume_posting_cache_key(term: &str, volume: VolumeId, limit: usize) -> String {
+    format!("{limit}:volume={}:{}", volume.0, term)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1512,6 +1612,15 @@ mod tests {
         assert!(report.hydration.import.prefix_postings > 0);
         assert!(report.hydration.import.substring_postings > 0);
         assert_eq!(report.hydration.import.content_postings, 1);
+        assert_eq!(report.content_cache_misses, 1);
+
+        let cached = session
+            .search_with_volume_scope("finderlatency", 10, &SearchVolumeScope::only([VolumeId(8)]))
+            .unwrap();
+
+        assert_eq!(cached.search.hits.len(), 1);
+        assert_eq!(cached.content_cache_hits, 1);
+        assert_eq!(cached.content_cache_misses, 0);
     }
 
     #[test]
