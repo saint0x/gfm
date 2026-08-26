@@ -887,6 +887,36 @@ fn reports_quicklook_session_from_binary() {
 }
 
 #[test]
+fn adaptive_quicklook_session_stays_visible_under_pressure_from_binary() {
+    let path =
+        std::env::temp_dir().join(format!("gfm-quicklook-adaptive-{}.pdf", std::process::id()));
+    std::fs::write(&path, b"%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "quicklook-session-adaptive",
+            path.to_str().unwrap(),
+            "saturated",
+            "critical",
+            "low",
+            "active",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("quicklook-session\tquick-look\t"));
+    assert!(stdout.contains("\tschedule=scheduled:visible\taction=Run\tdeferred=false\n"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn cancelled_quicklook_session_stops_before_planning_from_binary() {
     let path =
         std::env::temp_dir().join(format!("gfm-quicklook-cancel-{}.pdf", std::process::id()));
@@ -934,6 +964,38 @@ fn reports_thumbnail_generation_from_binary() {
     assert!(stdout.contains("\tcache=refresh-memory-only\t"));
     assert!(stdout.contains("\tinvalidate-memory=true\tinvalidate-disk=false\t"));
     assert!(stdout.ends_with("schedule=scheduled:visible\n"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn adaptive_thumbnail_generation_defers_under_saturated_pressure_from_binary() {
+    let path =
+        std::env::temp_dir().join(format!("gfm-thumbnail-adaptive-{}.png", std::process::id()));
+    std::fs::write(&path, b"png").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "thumbnail-generation-adaptive",
+            path.to_str().unwrap(),
+            "saturated",
+            "critical",
+            "low",
+            "active",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert_eq!(
+        stdout,
+        "thumbnail-generation\tstatus=deferred\taction=Defer\tdeferred=true\n"
+    );
 
     let _ = std::fs::remove_file(path);
 }

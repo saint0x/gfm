@@ -1,7 +1,10 @@
-use crate::{detect_volume_id, index_volume_descriptor, run_preview_contract_cancellable};
+use crate::{
+    detect_volume_id, index_volume_descriptor, parse_required_scheduling_pressure,
+    run_preview_contract_adaptive, run_preview_contract_cancellable,
+};
 use gfm_fs::record_for_path;
 use gfm_index::{parse_volume_indexing_policy, VolumeIndexPolicy};
-use gfm_jobs::Cancellation;
+use gfm_jobs::{Cancellation, Priority, SchedulingAction};
 use gfm_mac::{
     parse_spotlight_fixture, AccessIntent, FileProviderStateReport, MacBridgeContract,
     NativeIconDescriptor, SecurityScopedAccessReport, SpotlightMetadataReader,
@@ -138,6 +141,53 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!("{}", contract.as_tsv());
         }
+        "quicklook-session-adaptive" => {
+            let path = required_path(args.next(), "quicklook-session-adaptive requires a path")?;
+            let pressure = parse_required_scheduling_pressure(args, "quicklook preview")?;
+            let record = record_for_path(&path, None, false)?;
+            let rect = Rect::new(0, 0, 640, 480);
+            let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
+            let volume = detect_volume_id(&path).ok();
+            let input = QuickLookSessionInput::new(
+                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
+                rect,
+                viewport,
+            )
+            .with_invalidation(PreviewInvalidationEvent {
+                content_changed: true,
+                ..PreviewInvalidationEvent::default()
+            });
+            let outcome = run_preview_contract_adaptive(
+                volume,
+                Priority::Visible,
+                "quicklook preview",
+                pressure,
+                move |cancellation| {
+                    QuickLookSessionContract::from_input_checked(
+                        &PreviewSecurityPolicy::default(),
+                        input.clone(),
+                        || cancellation.check(),
+                    )
+                },
+            )?;
+            match outcome.result {
+                Some(contract) => println!(
+                    "{}\taction={}\tdeferred={}",
+                    contract.as_tsv(),
+                    outcome.scheduling_action.as_str(),
+                    outcome.deferred
+                ),
+                None if outcome.scheduling_action == SchedulingAction::Defer => println!(
+                    "quicklook-session\tstatus=deferred\taction={}\tdeferred=true",
+                    outcome.scheduling_action.as_str()
+                ),
+                None => {
+                    return Err(GfmError::Format(
+                        "quicklook preview adaptive job completed without a contract".to_string(),
+                    ))
+                }
+            }
+        }
         "quicklook-session-cancel" => {
             let path = required_path(args.next(), "quicklook-session-cancel requires a path")?;
             let record = record_for_path(&path, None, false)?;
@@ -192,6 +242,55 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 },
             )?;
             println!("{}", contract.as_tsv());
+        }
+        "thumbnail-generation-adaptive" => {
+            let path = required_path(args.next(), "thumbnail-generation-adaptive requires a path")?;
+            let pressure = parse_required_scheduling_pressure(args, "thumbnail generation")?;
+            let record = record_for_path(&path, None, false)?;
+            let rect = Rect::new(0, 0, 160, 160);
+            let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
+            let volume = detect_volume_id(&path).ok();
+            let input = ThumbnailGenerationInput::new(
+                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
+                rect,
+                viewport,
+            )
+            .with_size(512, 2_000)
+            .with_invalidation(PreviewInvalidationEvent {
+                metadata_changed: true,
+                ..PreviewInvalidationEvent::default()
+            });
+            let outcome = run_preview_contract_adaptive(
+                volume,
+                Priority::Background,
+                "thumbnail generation",
+                pressure,
+                move |cancellation| {
+                    ThumbnailGenerationContract::from_input_checked(
+                        &PreviewSecurityPolicy::default(),
+                        input.clone(),
+                        || cancellation.check(),
+                    )
+                },
+            )?;
+            match outcome.result {
+                Some(contract) => println!(
+                    "{}\taction={}\tdeferred={}",
+                    contract.as_tsv(),
+                    outcome.scheduling_action.as_str(),
+                    outcome.deferred
+                ),
+                None if outcome.scheduling_action == SchedulingAction::Defer => println!(
+                    "thumbnail-generation\tstatus=deferred\taction={}\tdeferred=true",
+                    outcome.scheduling_action.as_str()
+                ),
+                None => {
+                    return Err(GfmError::Format(
+                        "thumbnail generation adaptive job completed without a contract"
+                            .to_string(),
+                    ))
+                }
+            }
         }
         "thumbnail-generation-cancel" => {
             let path = required_path(args.next(), "thumbnail-generation-cancel requires a path")?;

@@ -166,7 +166,7 @@ Foreground copy, move, rename, delete, trash, and restore actions enter the oper
 
 Interactive live content extraction/search enters through volume-isolated worker admission before crawling, extracting, and producing snippets, so one expensive search on a large volume cannot starve unrelated visible work.
 
-Quick Look preview and thumbnail generation commands also enter through volume-isolated worker admission before producing preview contracts, and visible preview workers propagate structured cancellation before security classification, scheduling, cache-policy decisions, or native preview/thumbnail planning.
+Quick Look preview and thumbnail generation commands also enter through volume-isolated worker admission before producing preview contracts, and visible preview workers propagate structured cancellation before security classification, scheduling, cache-policy decisions, or native preview/thumbnail planning. Adaptive preview scheduling keeps selected-item Quick Look work visible under host pressure while allowing bulk thumbnail generation to defer before it competes with interactive navigation, search, or file operations.
 
 Background content indexing persists its `VolumeId` in the durable job spec and resumes through the same isolated, journaled, capped-retry worker path.
 

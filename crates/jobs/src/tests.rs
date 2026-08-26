@@ -33,6 +33,13 @@ fn drains_ready_jobs_in_priority_order() {
 }
 
 #[test]
+fn scheduling_action_strings_are_stable_for_operator_output() {
+    assert_eq!(SchedulingAction::Run.as_str(), "Run");
+    assert_eq!(SchedulingAction::Throttle.as_str(), "Throttle");
+    assert_eq!(SchedulingAction::Defer.as_str(), "Defer");
+}
+
+#[test]
 fn fairness_planner_interleaves_job_classes_by_quota() {
     let mut scheduler = Scheduler::new();
     for index in 0..4 {

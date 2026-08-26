@@ -56,6 +56,16 @@ pub enum SchedulingAction {
     Defer,
 }
 
+impl SchedulingAction {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Run => "Run",
+            Self::Throttle => "Throttle",
+            Self::Defer => "Defer",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchedulingDecision {
     pub action: SchedulingAction,

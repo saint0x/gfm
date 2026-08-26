@@ -334,6 +334,19 @@ where
     runtime::run_volume_task_cancellable(volume, Priority::Visible, label, build)
 }
 
+pub(crate) fn run_preview_contract_adaptive<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    label: &'static str,
+    pressure: SchedulingPressure,
+    build: impl Fn(gfm_jobs::Cancellation) -> Result<T> + Send + Sync + 'static,
+) -> Result<runtime::ScheduledTaskOutcome<T>>
+where
+    T: Send + 'static,
+{
+    runtime::run_scheduled_volume_task_cancellable(volume, priority, label, pressure, build)
+}
+
 pub(crate) fn detect_volume_id(path: &Path) -> Result<VolumeId> {
     volume_id_from_metadata(&std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?)
 }
@@ -499,8 +512,10 @@ fn print_usage() {
   gfm spotlight-reconcile <path> [spotlight-fixture.tsv]
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm quicklook-session <path>
+  gfm quicklook-session-adaptive <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm quicklook-session-cancel <path>
   gfm thumbnail-generation <path>
+  gfm thumbnail-generation-adaptive <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm thumbnail-generation-cancel <path>
   gfm preview-schedule
   gfm macrobench <workspace> [smoke|standard]
