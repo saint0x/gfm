@@ -1,5 +1,5 @@
 use gfm_content::Extractor;
-use gfm_fs::{scan_tree, ScanOptions};
+use gfm_fs::{scan_tree, scan_tree_checked, ScanOptions};
 use gfm_jobs::Cancellation;
 pub use gfm_search::substring_candidate_grams;
 pub use gfm_search::{
@@ -316,6 +316,15 @@ impl Indexer {
         scan_tree(root, self.options.clone()).map(IndexSnapshot::from_page)
     }
 
+    pub fn build_cancellable(
+        &self,
+        root: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<IndexSnapshot> {
+        scan_tree_checked(root, self.options.clone(), || cancellation.check())
+            .map(IndexSnapshot::from_page)
+    }
+
     pub fn build_fair(
         &self,
         root: impl AsRef<Path>,
@@ -325,21 +334,49 @@ impl Indexer {
         FairScanScheduler::new(self.options.clone(), visible_burst).scan(root, visible_roots)
     }
 
+    pub fn build_fair_cancellable(
+        &self,
+        root: impl AsRef<Path>,
+        visible_roots: &[PathBuf],
+        visible_burst: usize,
+        cancellation: &Cancellation,
+    ) -> Result<FairScanReport> {
+        FairScanScheduler::new(self.options.clone(), visible_burst).scan_cancellable(
+            root,
+            visible_roots,
+            cancellation,
+        )
+    }
+
     pub fn build_persistent(
         &self,
         root: impl AsRef<Path>,
         records_path: impl AsRef<Path>,
         state_path: impl AsRef<Path>,
     ) -> Result<IndexVolumeState> {
+        self.build_persistent_cancellable(root, records_path, state_path, &Cancellation::default())
+    }
+
+    pub fn build_persistent_cancellable(
+        &self,
+        root: impl AsRef<Path>,
+        records_path: impl AsRef<Path>,
+        state_path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<IndexVolumeState> {
         let records_path = records_path.as_ref();
         let state_path = state_path.as_ref();
+        cancellation.check()?;
         let previous = state_path
             .exists()
             .then(|| IndexVolumeState::read(state_path))
             .transpose()?;
-        let snapshot = self.build(root)?;
+        let snapshot = self.build_cancellable(root, cancellation)?;
+        cancellation.check()?;
         snapshot.save(records_path)?;
+        cancellation.check()?;
         let state = snapshot.volume_state(records_path.to_path_buf(), previous.as_ref())?;
+        cancellation.check()?;
         state.write(state_path)?;
         Ok(state)
     }
@@ -378,20 +415,39 @@ impl Indexer {
         records_path: impl AsRef<Path>,
         progress_path: impl AsRef<Path>,
     ) -> Result<ScanProgressCheckpoint> {
+        self.build_with_progress_cancellable(
+            root,
+            records_path,
+            progress_path,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn build_with_progress_cancellable(
+        &self,
+        root: impl AsRef<Path>,
+        records_path: impl AsRef<Path>,
+        progress_path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<ScanProgressCheckpoint> {
         let root = root.as_ref();
         let records_path = records_path.as_ref();
         let progress_path = progress_path.as_ref();
+        cancellation.check()?;
         let started = ScanProgressCheckpoint::started(root, records_path);
         started.write(progress_path)?;
-        let snapshot = self.build(root)?;
+        let snapshot = self.build_cancellable(root, cancellation)?;
+        cancellation.check()?;
         let last_path = snapshot.records.last().map(|record| record.path.clone());
         let scanned = snapshot.records.len();
         let inaccessible = snapshot.inaccessible.len();
         let progress = started
             .with_progress(scanned, inaccessible, last_path)
             .with_publication(1, 0);
+        cancellation.check()?;
         snapshot.save(records_path)?;
         let completed = progress.completed();
+        cancellation.check()?;
         completed.write(progress_path)?;
         Ok(completed)
     }

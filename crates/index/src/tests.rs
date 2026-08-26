@@ -117,6 +117,37 @@ fn query_session_honors_cancellation() {
 }
 
 #[test]
+fn indexer_build_honors_pre_cancelled_token_without_scanning() {
+    let root = unique_temp_dir("gfm-index-build-cancel-root");
+    fs::write(root.join("never-scanned.md"), "needle").unwrap();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = Indexer::default().build_cancellable(&root, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn persistent_index_build_honors_pre_cancelled_token_without_publishing() {
+    let root = unique_temp_dir("gfm-index-state-cancel-root");
+    let records = unique_temp_path("gfm-index-state-cancel-records", "gfmidx");
+    let state = unique_temp_path("gfm-index-state-cancel", "gfmstate");
+    fs::write(root.join("never-published.md"), "needle").unwrap();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result =
+        Indexer::default().build_persistent_cancellable(&root, &records, &state, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!records.exists());
+    assert!(!state.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn publishes_secondary_metadata_to_mmap_archive() {
     let metadata_path = unique_temp_path("gfm-secondary-metadata", "gfmmeta");
     let record = FileRecord {
@@ -1216,6 +1247,21 @@ fn fair_scan_prioritizes_visible_roots_during_background_crawl() {
         .any(|record| record.name == "Needle.md"));
     assert!(report.as_tsv().starts_with("fair-scan\t"));
 
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn fair_scan_honors_pre_cancelled_token_without_scanning() {
+    let root = unique_temp_dir("gfm-fair-scan-cancel-root");
+    let visible = root.join("Visible");
+    fs::create_dir_all(&visible).unwrap();
+    fs::write(visible.join("Needle.md"), "visible first").unwrap();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = Indexer::default().build_fair_cancellable(&root, &[visible], 2, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -2594,6 +2640,28 @@ fn scan_progress_checkpoint_tracks_completed_scan_publication() {
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(progress).unwrap();
+}
+
+#[test]
+fn scan_progress_honors_pre_cancelled_token_without_publishing() {
+    let root = unique_temp_dir("gfm-scan-progress-cancel-root");
+    let records = unique_temp_path("gfm-scan-progress-cancel-records", "gfmidx");
+    let progress = unique_temp_path("gfm-scan-progress-cancel", "gfmprogress");
+    fs::write(root.join("never-published.md"), "needle").unwrap();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = Indexer::default().build_with_progress_cancellable(
+        &root,
+        &records,
+        &progress,
+        &cancellation,
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!records.exists());
+    assert!(!progress.exists());
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

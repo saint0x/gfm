@@ -243,12 +243,21 @@ pub fn read_directory(path: impl AsRef<Path>) -> Result<DirectoryPage> {
 }
 
 pub fn scan_tree(root: impl AsRef<Path>, options: ScanOptions) -> Result<DirectoryPage> {
+    scan_tree_checked(root, options, || Ok(()))
+}
+
+pub fn scan_tree_checked(
+    root: impl AsRef<Path>,
+    options: ScanOptions,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<DirectoryPage> {
     let root = root.as_ref().to_path_buf();
     let mut entries = Vec::new();
     let mut inaccessible = Vec::new();
     let mut queue = VecDeque::from([(root.clone(), 0usize, None)]);
 
     while let Some((path, depth, parent)) = queue.pop_front() {
+        check_control()?;
         let record = match record_for_path(path.clone(), parent, options.follow_symlinks) {
             Ok(record) => record,
             Err(GfmError::Io { path, message }) => {
@@ -272,6 +281,7 @@ pub fn scan_tree(root: impl AsRef<Path>, options: ScanOptions) -> Result<Directo
         }
 
         if should_descend {
+            check_control()?;
             let dir = match fs::read_dir(&path) {
                 Ok(dir) => dir,
                 Err(err) => {
@@ -284,6 +294,7 @@ pub fn scan_tree(root: impl AsRef<Path>, options: ScanOptions) -> Result<Directo
             };
 
             for child in dir {
+                check_control()?;
                 match child {
                     Ok(child) => queue.push_back((child.path(), depth + 1, Some(record_id))),
                     Err(err) => inaccessible.push(ScanIssue {
@@ -295,7 +306,9 @@ pub fn scan_tree(root: impl AsRef<Path>, options: ScanOptions) -> Result<Directo
         }
     }
 
+    check_control()?;
     entries.sort_by(|a, b| a.path.cmp(&b.path));
+    check_control()?;
     Ok(DirectoryPage {
         root,
         entries,
@@ -534,6 +547,29 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn checked_scan_stops_mid_walk_when_control_fails() {
+        let root = unique_temp_dir();
+        for index in 0..16 {
+            let dir = root.join(format!("child-{index:02}"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("leaf.txt"), "scan me").unwrap();
+        }
+        let mut checks = 0_u32;
+
+        let result = scan_tree_checked(&root, ScanOptions::default(), || {
+            checks += 1;
+            if checks > 8 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn scans_real_tree_with_identity() {

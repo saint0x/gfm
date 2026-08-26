@@ -1,5 +1,6 @@
 use crate::IndexSnapshot;
 use gfm_fs::ScanOptions;
+use gfm_jobs::Cancellation;
 use gfm_types::{DirectoryPage, FileId, GfmError, Result, ScanIssue};
 use std::collections::{HashSet, VecDeque};
 use std::fs;
@@ -75,6 +76,15 @@ impl FairScanScheduler {
         root: impl AsRef<Path>,
         visible_roots: &[PathBuf],
     ) -> Result<FairScanReport> {
+        self.scan_cancellable(root, visible_roots, &Cancellation::default())
+    }
+
+    pub fn scan_cancellable(
+        &self,
+        root: impl AsRef<Path>,
+        visible_roots: &[PathBuf],
+        cancellation: &Cancellation,
+    ) -> Result<FairScanReport> {
         let root = root.as_ref().to_path_buf();
         let mut queue = ScanQueue::new(self.visible_burst);
         let mut visited = HashSet::new();
@@ -92,6 +102,7 @@ impl FairScanScheduler {
         let mut max_background_gap = 0;
 
         while let Some(work) = queue.pop() {
+            cancellation.check()?;
             if !visited.insert(path_key(&work.path)) {
                 continue;
             }
@@ -140,12 +151,20 @@ impl FairScanScheduler {
             }
 
             if should_descend {
-                enqueue_children(&mut queue, &mut inaccessible, &work, record_id)?;
+                enqueue_children(
+                    &mut queue,
+                    &mut inaccessible,
+                    &work,
+                    record_id,
+                    cancellation,
+                )?;
             }
         }
+        cancellation.check()?;
         max_background_gap = max_background_gap.max(background_gap);
 
         entries.sort_by(|a, b| a.path.cmp(&b.path));
+        cancellation.check()?;
         let snapshot = IndexSnapshot::from_page(DirectoryPage {
             root,
             entries,
@@ -227,7 +246,9 @@ fn enqueue_children(
     inaccessible: &mut Vec<ScanIssue>,
     work: &ScanWork,
     parent: FileId,
+    cancellation: &Cancellation,
 ) -> Result<()> {
+    cancellation.check()?;
     let dir = match fs::read_dir(&work.path) {
         Ok(dir) => dir,
         Err(err) => {
@@ -241,6 +262,7 @@ fn enqueue_children(
 
     let mut children = Vec::new();
     for child in dir {
+        cancellation.check()?;
         match child {
             Ok(child) => children.push(child.path()),
             Err(err) => inaccessible.push(ScanIssue {
@@ -249,8 +271,10 @@ fn enqueue_children(
             }),
         }
     }
+    cancellation.check()?;
     children.sort();
     for child in children {
+        cancellation.check()?;
         queue.push(ScanWork::new(
             child,
             work.depth + 1,
