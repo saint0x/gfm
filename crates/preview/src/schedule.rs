@@ -1,5 +1,8 @@
 use crate::PreviewRequestKey;
-use gfm_jobs::Cancellation;
+use gfm_jobs::{
+    Cancellation, JobBatteryState, JobIoPressure, JobThermalState, JobUserActivity,
+    SchedulingPressure,
+};
 use gfm_types::{GfmError, Result};
 use std::collections::{HashMap, HashSet};
 
@@ -139,7 +142,7 @@ impl PreviewTaskDecision {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PreviewSchedulingPolicy {
     pub max_visible: usize,
     pub max_prefetch: usize,
@@ -153,6 +156,25 @@ impl Default for PreviewSchedulingPolicy {
             max_prefetch: 128,
             cancel_offscreen: true,
         }
+    }
+}
+
+impl PreviewSchedulingPolicy {
+    pub fn adapted_for_pressure(mut self, pressure: SchedulingPressure) -> Self {
+        if matches!(pressure.io, JobIoPressure::Saturated)
+            || matches!(pressure.thermal, JobThermalState::Critical)
+        {
+            self.max_prefetch = 0;
+            self.cancel_offscreen = true;
+        } else if matches!(pressure.io, JobIoPressure::Elevated)
+            || matches!(pressure.thermal, JobThermalState::Serious)
+            || matches!(pressure.battery, JobBatteryState::LowPower)
+            || matches!(pressure.user_activity, JobUserActivity::Active)
+        {
+            self.max_prefetch = throttle_limit(self.max_prefetch);
+            self.cancel_offscreen = true;
+        }
+        self
     }
 }
 
@@ -170,11 +192,6 @@ impl PreviewScheduler {
         if policy.max_visible == 0 {
             return Err(GfmError::Format(
                 "preview scheduler max_visible must be non-zero".to_string(),
-            ));
-        }
-        if policy.max_prefetch < policy.max_visible {
-            return Err(GfmError::Format(
-                "preview scheduler max_prefetch must be >= max_visible".to_string(),
             ));
         }
         Ok(Self {
@@ -282,6 +299,14 @@ impl PreviewScheduler {
                 PreviewPriority::Background => false,
             })
             .collect()
+    }
+}
+
+fn throttle_limit(limit: usize) -> usize {
+    if limit == 0 {
+        0
+    } else {
+        (limit / 2).max(1)
     }
 }
 
@@ -421,6 +446,68 @@ mod tests {
 
         assert_eq!(decisions.len(), 2);
         assert_eq!(scheduler.inflight_len(), 2);
+    }
+
+    #[test]
+    fn pressure_adaptation_preserves_visible_and_drops_prefetch_under_saturation() {
+        let policy = PreviewSchedulingPolicy {
+            max_visible: 4,
+            max_prefetch: 4,
+            cancel_offscreen: false,
+        }
+        .adapted_for_pressure(SchedulingPressure {
+            io: JobIoPressure::Saturated,
+            ..SchedulingPressure::default()
+        });
+        let mut scheduler = PreviewScheduler::new(policy).unwrap();
+        let decisions = scheduler.schedule(
+            Viewport::new(Rect::new(0, 0, 100, 100), 100),
+            vec![
+                task(1, Rect::new(0, 0, 20, 20)),
+                task(2, Rect::new(0, 150, 20, 20)),
+            ],
+        );
+
+        assert_eq!(decisions.len(), 1);
+        assert!(matches!(
+            decisions[0],
+            PreviewTaskDecision::Scheduled {
+                priority: PreviewPriority::Visible,
+                ..
+            }
+        ));
+        assert!(policy.cancel_offscreen);
+    }
+
+    #[test]
+    fn pressure_adaptation_throttles_prefetch_under_active_user_load() {
+        let policy = PreviewSchedulingPolicy {
+            max_visible: 4,
+            max_prefetch: 2,
+            cancel_offscreen: false,
+        }
+        .adapted_for_pressure(SchedulingPressure {
+            user_activity: JobUserActivity::Active,
+            ..SchedulingPressure::default()
+        });
+        let mut scheduler = PreviewScheduler::new(policy).unwrap();
+        let decisions = scheduler.schedule(
+            Viewport::new(Rect::new(0, 0, 100, 100), 100),
+            vec![
+                task(1, Rect::new(0, 150, 20, 20)),
+                task(2, Rect::new(20, 150, 20, 20)),
+            ],
+        );
+
+        assert_eq!(decisions.len(), 1);
+        assert!(matches!(
+            decisions[0],
+            PreviewTaskDecision::Scheduled {
+                priority: PreviewPriority::Prefetch,
+                ..
+            }
+        ));
+        assert!(policy.cancel_offscreen);
     }
 
     fn task(node: u64, rect: Rect) -> PreviewTask {

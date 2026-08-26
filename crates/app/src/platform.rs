@@ -153,6 +153,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 rect,
                 viewport,
             )
+            .with_scheduling_policy(
+                PreviewSchedulingPolicy {
+                    max_visible: 1,
+                    max_prefetch: 1,
+                    cancel_offscreen: true,
+                }
+                .adapted_for_pressure(pressure),
+            )
             .with_invalidation(PreviewInvalidationEvent {
                 content_changed: true,
                 ..PreviewInvalidationEvent::default()
@@ -254,6 +262,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
                 rect,
                 viewport,
+            )
+            .with_scheduling_policy(
+                PreviewSchedulingPolicy::default().adapted_for_pressure(pressure),
             )
             .with_size(512, 2_000)
             .with_invalidation(PreviewInvalidationEvent {

@@ -49,6 +49,7 @@ pub struct ThumbnailGenerationInput {
     pub key: PreviewRequestKey,
     pub rect: Rect,
     pub viewport: Viewport,
+    pub scheduling_policy: PreviewSchedulingPolicy,
     pub max_pixel_size: u16,
     pub scale_factor_milli: u16,
     pub invalidation_event: PreviewInvalidationEvent,
@@ -60,6 +61,7 @@ impl ThumbnailGenerationInput {
             key,
             rect,
             viewport,
+            scheduling_policy: PreviewSchedulingPolicy::default(),
             max_pixel_size: 512,
             scale_factor_milli: 2_000,
             invalidation_event: PreviewInvalidationEvent::default(),
@@ -76,6 +78,11 @@ impl ThumbnailGenerationInput {
 
     pub fn with_invalidation(mut self, event: PreviewInvalidationEvent) -> Self {
         self.invalidation_event = event;
+        self
+    }
+
+    pub fn with_scheduling_policy(mut self, policy: PreviewSchedulingPolicy) -> Self {
+        self.scheduling_policy = policy;
         self
     }
 }
@@ -113,11 +120,7 @@ impl ThumbnailGenerationContract {
         let invalidation = decide_invalidation(input.invalidation_event);
         let cache_disposition = cache_disposition(generator_mode, &invalidation);
         check()?;
-        let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy {
-            max_visible: 64,
-            max_prefetch: 128,
-            cancel_offscreen: true,
-        })?;
+        let mut scheduler = PreviewScheduler::new(input.scheduling_policy)?;
         check()?;
         let schedule_decision = scheduler
             .schedule(
@@ -255,6 +258,30 @@ mod tests {
             contract.cache_disposition,
             ThumbnailCacheDisposition::RefreshMemoryAndDisk
         );
+    }
+
+    #[test]
+    fn pressure_policy_can_drop_offscreen_thumbnail_prefetch() {
+        let contract = ThumbnailGenerationContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Image.png", Rect::new(0, 900, 128, 128)).with_scheduling_policy(
+                PreviewSchedulingPolicy::default().adapted_for_pressure(
+                    gfm_jobs::SchedulingPressure {
+                        io: gfm_jobs::JobIoPressure::Saturated,
+                        ..gfm_jobs::SchedulingPressure::default()
+                    },
+                ),
+            ),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "outside-thumbnail-budget",
+                ..
+            }
+        ));
     }
 
     #[test]

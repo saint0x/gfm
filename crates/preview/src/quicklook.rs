@@ -30,6 +30,7 @@ pub struct QuickLookSessionInput {
     pub key: PreviewRequestKey,
     pub rect: Rect,
     pub viewport: Viewport,
+    pub scheduling_policy: PreviewSchedulingPolicy,
     pub invalidation_event: PreviewInvalidationEvent,
 }
 
@@ -39,12 +40,22 @@ impl QuickLookSessionInput {
             key,
             rect,
             viewport,
+            scheduling_policy: PreviewSchedulingPolicy {
+                max_visible: 1,
+                max_prefetch: 1,
+                cancel_offscreen: true,
+            },
             invalidation_event: PreviewInvalidationEvent::default(),
         }
     }
 
     pub fn with_invalidation(mut self, event: PreviewInvalidationEvent) -> Self {
         self.invalidation_event = event;
+        self
+    }
+
+    pub fn with_scheduling_policy(mut self, policy: PreviewSchedulingPolicy) -> Self {
+        self.scheduling_policy = policy;
         self
     }
 }
@@ -78,11 +89,7 @@ impl QuickLookSessionContract {
         let controller_mode = controller_mode(security);
         let invalidation = decide_invalidation(input.invalidation_event);
         check()?;
-        let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy {
-            max_visible: 1,
-            max_prefetch: 1,
-            cancel_offscreen: true,
-        })?;
+        let mut scheduler = PreviewScheduler::new(input.scheduling_policy)?;
         check()?;
         let schedule_decision = scheduler
             .schedule(
@@ -194,6 +201,33 @@ mod tests {
         assert!(matches!(
             contract.schedule_decision,
             PreviewTaskDecision::Cancelled { .. }
+        ));
+    }
+
+    #[test]
+    fn pressure_policy_preserves_visible_quicklook_preview() {
+        let contract = QuickLookSessionContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Report.pdf", Rect::new(0, 0, 400, 300)).with_scheduling_policy(
+                PreviewSchedulingPolicy {
+                    max_visible: 1,
+                    max_prefetch: 1,
+                    cancel_offscreen: true,
+                }
+                .adapted_for_pressure(gfm_jobs::SchedulingPressure {
+                    thermal: gfm_jobs::JobThermalState::Critical,
+                    ..gfm_jobs::SchedulingPressure::default()
+                }),
+            ),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Scheduled {
+                priority: crate::PreviewPriority::Visible,
+                ..
+            }
         ));
     }
 
