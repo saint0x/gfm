@@ -1,5 +1,6 @@
 mod bridge;
 mod fileprovider;
+mod finder;
 mod host;
 mod icon;
 mod permissions;
@@ -15,6 +16,7 @@ pub use fileprovider::{
     CloudBadge, CloudCommandPolicy, CloudCommandState, CloudStorageState, FileProviderDomain,
     FileProviderStateReport,
 };
+pub use finder::{FinderKindSource, NativeFinderKindReport};
 pub use host::{
     current_host_profile, CpuArchitecture, HardwareProfile, HostProfile, MacOsVersion,
     SupportEvaluation, SupportMatrix, SupportTier,

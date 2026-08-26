@@ -144,10 +144,18 @@ impl MacBridgeContract {
                 MacBridgeStatus::Implemented,
             ),
             MacBridgeSpec::new(
-                "coreservices-kind-and-metadata",
+                "coreservices-kind-string",
                 MacFramework::CoreServices,
                 "crates/mac",
-                "finder-kind-localized-display-name-extension-hiding",
+                "launchservices-localized-kind-string",
+                MacBridgeThreadPolicy::BackgroundSafe,
+                MacBridgeStatus::Implemented,
+            ),
+            MacBridgeSpec::new(
+                "coreservices-finder-metadata",
+                MacFramework::CoreServices,
+                "crates/mac",
+                "localized-display-name-extension-hiding-finderinfo-aliases",
                 MacBridgeThreadPolicy::BackgroundSafe,
                 MacBridgeStatus::Required,
             ),
@@ -189,7 +197,7 @@ impl MacBridgeContract {
                 "crates/index",
                 "metadata-import-without-primary-correctness-dependency",
                 MacBridgeThreadPolicy::BackgroundSafe,
-                MacBridgeStatus::Required,
+                MacBridgeStatus::Implemented,
             ),
         ];
         bridges.sort_by_key(|bridge| (bridge.status, bridge.framework, bridge.id));
@@ -251,12 +259,15 @@ mod tests {
         let contract = MacBridgeContract::finder_required();
         let tsv = contract.as_tsv();
 
-        assert!(tsv.starts_with("mac-bridges\timplemented=4\trequired=6\ttotal=10"));
+        assert!(tsv.starts_with("mac-bridges\timplemented=6\trequired=5\ttotal=11"));
         assert!(tsv.contains(
             "bridge\tappkit-window-shell\tappkit\tcrates/ui\tapplication-window-menu-activation\tmain-thread\timplemented"
         ));
         assert!(tsv.contains(
-            "bridge\tspotlight-metadata-reconciliation\tspotlight\tcrates/index\tmetadata-import-without-primary-correctness-dependency\tbackground-safe\trequired"
+            "bridge\tcoreservices-kind-string\tcoreservices\tcrates/mac\tlaunchservices-localized-kind-string\tbackground-safe\timplemented"
+        ));
+        assert!(tsv.contains(
+            "bridge\tspotlight-metadata-reconciliation\tspotlight\tcrates/index\tmetadata-import-without-primary-correctness-dependency\tbackground-safe\timplemented"
         ));
     }
 }
