@@ -1,4 +1,5 @@
 mod access;
+mod conflict;
 mod progress;
 mod volume;
 
@@ -6,6 +7,9 @@ use access::destination_probe_path;
 pub use access::{
     OperationAccessAction, OperationAccessDecision, OperationAccessGate,
     OperationAccessRequirement, OperationAccessRole,
+};
+pub use conflict::{
+    ConflictPolicy, OperationBatchOutcome, OperationBatchReport, OperationConflictPlan,
 };
 use progress::{item_bytes, ProgressTracker};
 pub use progress::{
@@ -26,15 +30,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConflictPolicy {
-    Fail,
-    Replace,
-    KeepBoth,
-    Merge,
-    Skip,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operation {
@@ -145,56 +140,6 @@ impl Default for OperationRecoveryPolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationRecoveryOutcome {
     pub id: u128,
-    pub status: OperationStatus,
-    pub operation: Operation,
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OperationConflictPlan {
-    pub default: ConflictPolicy,
-    target_overrides: BTreeMap<PathBuf, ConflictPolicy>,
-}
-
-impl Default for OperationConflictPlan {
-    fn default() -> Self {
-        Self {
-            default: ConflictPolicy::Fail,
-            target_overrides: BTreeMap::new(),
-        }
-    }
-}
-
-impl OperationConflictPlan {
-    pub fn new(default: ConflictPolicy) -> Self {
-        Self {
-            default,
-            target_overrides: BTreeMap::new(),
-        }
-    }
-
-    pub fn with_target(mut self, target: impl Into<PathBuf>, conflict: ConflictPolicy) -> Self {
-        self.target_overrides.insert(target.into(), conflict);
-        self
-    }
-
-    fn conflict_for(&self, operation: &Operation) -> ConflictPolicy {
-        operation
-            .target_path()
-            .and_then(|target| self.target_overrides.get(target))
-            .copied()
-            .unwrap_or(self.default)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OperationBatchReport {
-    pub outcomes: Vec<OperationBatchOutcome>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OperationBatchOutcome {
-    pub conflict: ConflictPolicy,
     pub status: OperationStatus,
     pub operation: Operation,
     pub message: Option<String>,
