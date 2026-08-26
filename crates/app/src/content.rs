@@ -21,8 +21,8 @@ use gfm_index::{
     Indexer, QuarantineContentIndexRequest,
 };
 use gfm_jobs::{
-    Cancellation, JobJournal, JobPayloadKind, Priority, RetriableTask, RetryPolicy, Scheduler,
-    SchedulingAction, SchedulingPressure, TaskStatus, WorkerPool,
+    Cancellation, JobFairnessPolicy, JobJournal, JobPayloadKind, Priority, RetriableTask,
+    RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, TaskStatus, WorkerPool,
 };
 use gfm_store::read_records;
 use gfm_types::{GfmError, Result, SearchHit};
@@ -687,8 +687,15 @@ pub(crate) fn run_content_job(
         snapshot.records.len().max(1) as u64,
         format!("index:{}", spec.root.display()),
     )?;
-    let tasks: Vec<_> = scheduler
-        .drain_ready()
+    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    if let Some(blocked) = plan.blocked.first() {
+        return Err(GfmError::Format(format!(
+            "background content index job {} is blocked by missing dependencies",
+            blocked.label
+        )));
+    }
+    let tasks: Vec<_> = plan
+        .ready
         .into_iter()
         .map(|scheduled| {
             let snapshot = snapshot.clone();
