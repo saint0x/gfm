@@ -48,6 +48,6 @@ pub use spotlight::{
 pub use volume::{
     MountState, VolumeCapacity, VolumeCommandPolicy, VolumeCommandState, VolumeDescriptor,
     VolumeDiscoveryReport, VolumeKind, VolumeOperation, VolumeOperationDisposition,
-    VolumeOperationReport,
+    VolumeOperationReport, VolumeTopologyChange, VolumeTopologyChangeKind, VolumeTopologyDiff,
 };
 pub use watch::{map_notify_event, FileEventStream, WatchDepth, WatchRoot};

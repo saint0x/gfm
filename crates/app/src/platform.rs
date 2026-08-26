@@ -17,7 +17,7 @@ use gfm_mac::{
     FileProviderOperationReport, FileProviderProgressReport, FileProviderStateReport,
     MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
     SpotlightMetadataReader, SpotlightReconciliationReport, VolumeDiscoveryReport, VolumeOperation,
-    VolumeOperationReport,
+    VolumeOperationReport, VolumeTopologyDiff,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path, IconPreviewContract,
@@ -186,6 +186,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             println!(
                 "{}",
                 VolumeInvalidationReport::evaluate(Some(&previous), current.as_ref()).as_tsv()
+            );
+        }
+        "volume-topology-diff" => {
+            let (previous_paths, current_paths) = split_topology_paths(args)?;
+            let previous = VolumeDiscoveryReport::from_paths(previous_paths);
+            let current = VolumeDiscoveryReport::from_paths(current_paths);
+            println!(
+                "{}",
+                VolumeTopologyDiff::evaluate(&previous, &current).as_tsv()
             );
         }
         "spotlight-reconcile" => {
@@ -492,6 +501,29 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn split_topology_paths(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+    let mut previous = Vec::new();
+    let mut current = Vec::new();
+    let mut seen_separator = false;
+    for arg in args {
+        if arg == "--" {
+            seen_separator = true;
+        } else if seen_separator {
+            current.push(PathBuf::from(arg));
+        } else {
+            previous.push(PathBuf::from(arg));
+        }
+    }
+    if !seen_separator {
+        return Err(GfmError::Format(
+            "volume-topology-diff requires `--` between previous and current paths".to_string(),
+        ));
+    }
+    Ok((previous, current))
 }
 
 fn publish_fileprovider_progress_job(path: PathBuf) -> Result<FileProviderProgressReport> {

@@ -77,11 +77,15 @@ extern "C" {
 
 #[link(name = "Foundation", kind = "framework")]
 extern "C" {
+    static NSURLVolumeIsAutomountedKey: CFStringRef;
+    static NSURLVolumeIsBrowsableKey: CFStringRef;
     static NSURLVolumeIsEjectableKey: CFStringRef;
     static NSURLVolumeIsInternalKey: CFStringRef;
     static NSURLVolumeIsLocalKey: CFStringRef;
     static NSURLVolumeIsReadOnlyKey: CFStringRef;
     static NSURLVolumeIsRemovableKey: CFStringRef;
+    static NSURLVolumeURLForRemountingKey: CFStringRef;
+    static NSURLVolumeUUIDStringKey: CFStringRef;
     static NSURLVolumeSupportsCasePreservedNamesKey: CFStringRef;
     static NSURLVolumeSupportsCaseSensitiveNamesKey: CFStringRef;
 
@@ -136,13 +140,17 @@ pub struct NativeVolumeDescription {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeVolumeResourceValues {
     pub status: NativeVolumeStatus,
+    pub is_automounted: Option<bool>,
+    pub is_browsable: Option<bool>,
     pub is_ejectable: Option<bool>,
     pub is_internal: Option<bool>,
     pub is_local: Option<bool>,
     pub is_read_only: Option<bool>,
     pub is_removable: Option<bool>,
+    pub remount_url: Option<String>,
     pub supports_case_preserved_names: Option<bool>,
     pub supports_case_sensitive_names: Option<bool>,
+    pub volume_uuid: Option<String>,
     pub reason: Option<String>,
 }
 
@@ -363,17 +371,21 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
 
     NativeVolumeResourceValues {
         status: NativeVolumeStatus::Available,
+        is_automounted: copy_resource_bool(url, unsafe { NSURLVolumeIsAutomountedKey }),
+        is_browsable: copy_resource_bool(url, unsafe { NSURLVolumeIsBrowsableKey }),
         is_ejectable: copy_resource_bool(url, unsafe { NSURLVolumeIsEjectableKey }),
         is_internal: copy_resource_bool(url, unsafe { NSURLVolumeIsInternalKey }),
         is_local: copy_resource_bool(url, unsafe { NSURLVolumeIsLocalKey }),
         is_read_only: copy_resource_bool(url, unsafe { NSURLVolumeIsReadOnlyKey }),
         is_removable: copy_resource_bool(url, unsafe { NSURLVolumeIsRemovableKey }),
+        remount_url: copy_resource_url_string(url, unsafe { NSURLVolumeURLForRemountingKey }),
         supports_case_preserved_names: copy_resource_bool(url, unsafe {
             NSURLVolumeSupportsCasePreservedNamesKey
         }),
         supports_case_sensitive_names: copy_resource_bool(url, unsafe {
             NSURLVolumeSupportsCaseSensitiveNamesKey
         }),
+        volume_uuid: copy_resource_string(url, unsafe { NSURLVolumeUUIDStringKey }),
         reason: None,
     }
 }
@@ -509,6 +521,20 @@ fn copy_resource_bool(url: CFURLRef, key: CFStringRef) -> Option<bool> {
     Some(typed.into())
 }
 
+fn copy_resource_string(url: CFURLRef, key: CFStringRef) -> Option<String> {
+    copy_resource_value(url, key)?
+        .downcast::<CFString>()
+        .map(|value| value.to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn copy_resource_url_string(url: CFURLRef, key: CFStringRef) -> Option<String> {
+    copy_resource_value(url, key)?
+        .downcast::<CFURL>()
+        .map(|url| url.get_string().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 fn copy_resource_value(url: CFURLRef, key: CFStringRef) -> Option<CFType> {
     let mut value: CFTypeRef = ptr::null();
     let copied = unsafe { CFURLCopyResourcePropertyForKey(url, key, &mut value, ptr::null_mut()) };
@@ -612,13 +638,17 @@ fn unavailable_resource_values(
 ) -> NativeVolumeResourceValues {
     NativeVolumeResourceValues {
         status,
+        is_automounted: None,
+        is_browsable: None,
         is_ejectable: None,
         is_internal: None,
         is_local: None,
         is_read_only: None,
         is_removable: None,
+        remount_url: None,
         supports_case_preserved_names: None,
         supports_case_sensitive_names: None,
+        volume_uuid: None,
         reason: Some(reason.into()),
     }
 }
@@ -672,6 +702,7 @@ mod tests {
 
         assert_eq!(values.status, NativeVolumeStatus::Available);
         assert!(values.is_local.is_some() || values.is_read_only.is_some());
+        assert!(values.is_browsable.is_some() || values.volume_uuid.is_some());
     }
 
     #[test]

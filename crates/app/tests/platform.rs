@@ -840,6 +840,41 @@ fn reports_volume_invalidation_from_binary() {
 }
 
 #[test]
+fn reports_volume_topology_diff_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-volume-topology-{}", std::process::id()));
+    let previous = root.join("Work Drive");
+    let current = root.join("Team Share");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&previous).unwrap();
+    std::fs::create_dir_all(&current).unwrap();
+    std::fs::write(previous.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+    std::fs::write(current.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-topology-diff")
+        .arg(&previous)
+        .arg("--")
+        .arg(&current)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-topology-diff\tcount=2\n"));
+    assert!(stdout.contains("volume-topology\tdisconnected\t"));
+    assert!(stdout.contains("volume-topology\tconnected\t"));
+    assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.contains("\treason=volume-disconnected"));
+    assert!(stdout.contains("\treason=volume-connected"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_operation_refusal_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-volume-operation-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

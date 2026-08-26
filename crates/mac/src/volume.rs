@@ -3,6 +3,7 @@ use gfm_mac_sys::{
     NativeVolumeOperationStatus, NativeVolumeResourceValues, NativeVolumeStatus,
 };
 use gfm_types::{GfmError, Result, VolumeId};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -117,6 +118,10 @@ pub struct VolumeDescriptor {
     pub commands: VolumeCommandPolicy,
     pub native_status: Option<NativeVolumeStatus>,
     pub resource_status: Option<NativeVolumeStatus>,
+    pub resource_uuid: Option<String>,
+    pub resource_automounted: Option<bool>,
+    pub resource_browsable: Option<bool>,
+    pub resource_remount_url: Option<String>,
     pub mount_table_status: Option<NativeVolumeStatus>,
     pub mount_from: Option<String>,
     pub mount_filesystem: Option<String>,
@@ -219,7 +224,13 @@ impl VolumeDescriptor {
         let mountable = native.as_ref().and_then(|native| native.volume_mountable);
         let capacity = VolumeCapacity::read(&path);
         let commands = command_policy(kind, mount_state, ejectable);
-        let stable_identity = stable_identity(id, &path, native.as_ref(), mount_table.as_ref());
+        let stable_identity = stable_identity(
+            id,
+            &path,
+            native.as_ref(),
+            resource.as_ref(),
+            mount_table.as_ref(),
+        );
         let source = marker
             .map(|marker| format!("fixture-marker:{marker}"))
             .unwrap_or_else(|| volume_source(native.as_ref()));
@@ -245,6 +256,16 @@ impl VolumeDescriptor {
             commands,
             native_status,
             resource_status,
+            resource_uuid: resource
+                .as_ref()
+                .and_then(|resource| resource.volume_uuid.clone()),
+            resource_automounted: resource
+                .as_ref()
+                .and_then(|resource| resource.is_automounted),
+            resource_browsable: resource.as_ref().and_then(|resource| resource.is_browsable),
+            resource_remount_url: resource
+                .as_ref()
+                .and_then(|resource| resource.remount_url.clone()),
             mount_table_status,
             mount_from: mount_table
                 .as_ref()
@@ -303,7 +324,7 @@ impl VolumeDescriptor {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -379,6 +400,20 @@ impl VolumeDescriptor {
             self.resource_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
+            self.resource_uuid
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.resource_automounted
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.resource_browsable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.resource_remount_url
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
             self.mount_table_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
@@ -435,6 +470,181 @@ impl VolumeDiscoveryReport {
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!("volumes\tcount={}", self.volumes.len())];
         lines.extend(self.volumes.iter().map(VolumeDescriptor::as_tsv));
+        lines.join("\n")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolumeTopologyChangeKind {
+    Connected,
+    Disconnected,
+    Changed,
+}
+
+impl VolumeTopologyChangeKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Connected => "connected",
+            Self::Disconnected => "disconnected",
+            Self::Changed => "changed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeTopologyChange {
+    pub kind: VolumeTopologyChangeKind,
+    pub stable_identity: String,
+    pub label: String,
+    pub path: PathBuf,
+    pub previous_kind: Option<VolumeKind>,
+    pub current_kind: Option<VolumeKind>,
+    pub previous_mount_state: Option<MountState>,
+    pub current_mount_state: Option<MountState>,
+    pub invalidate_sidebar: bool,
+    pub invalidate_operation_policy: bool,
+    pub invalidate_index_admission: bool,
+    pub rescan_index: bool,
+    pub reason: String,
+}
+
+impl VolumeTopologyChange {
+    fn connected(volume: &VolumeDescriptor) -> Self {
+        Self {
+            kind: VolumeTopologyChangeKind::Connected,
+            stable_identity: volume.stable_identity.clone(),
+            label: volume.label.clone(),
+            path: volume.path.clone(),
+            previous_kind: None,
+            current_kind: Some(volume.kind),
+            previous_mount_state: None,
+            current_mount_state: Some(volume.mount_state),
+            invalidate_sidebar: true,
+            invalidate_operation_policy: true,
+            invalidate_index_admission: true,
+            rescan_index: true,
+            reason: "volume-connected".to_string(),
+        }
+    }
+
+    fn disconnected(volume: &VolumeDescriptor) -> Self {
+        Self {
+            kind: VolumeTopologyChangeKind::Disconnected,
+            stable_identity: volume.stable_identity.clone(),
+            label: volume.label.clone(),
+            path: volume.path.clone(),
+            previous_kind: Some(volume.kind),
+            current_kind: None,
+            previous_mount_state: Some(volume.mount_state),
+            current_mount_state: None,
+            invalidate_sidebar: true,
+            invalidate_operation_policy: true,
+            invalidate_index_admission: true,
+            rescan_index: true,
+            reason: "volume-disconnected".to_string(),
+        }
+    }
+
+    fn changed(previous: &VolumeDescriptor, current: &VolumeDescriptor) -> Option<Self> {
+        let reason = topology_change_reason(previous, current)?;
+        let invalidates_policy = matches!(
+            reason,
+            "volume-path-changed"
+                | "mount-state-changed"
+                | "volume-kind-changed"
+                | "volume-access-changed"
+                | "volume-locality-changed"
+                | "volume-ejectability-changed"
+        );
+        let rescan_index = matches!(
+            reason,
+            "volume-path-changed"
+                | "mount-state-changed"
+                | "volume-kind-changed"
+                | "volume-access-changed"
+                | "volume-locality-changed"
+        );
+        Some(Self {
+            kind: VolumeTopologyChangeKind::Changed,
+            stable_identity: current.stable_identity.clone(),
+            label: current.label.clone(),
+            path: current.path.clone(),
+            previous_kind: Some(previous.kind),
+            current_kind: Some(current.kind),
+            previous_mount_state: Some(previous.mount_state),
+            current_mount_state: Some(current.mount_state),
+            invalidate_sidebar: true,
+            invalidate_operation_policy: invalidates_policy,
+            invalidate_index_admission: invalidates_policy,
+            rescan_index,
+            reason: reason.to_string(),
+        })
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "volume-topology\t{}\tstable-id={}\tlabel={}\tpath={}\tprevious-kind={}\tcurrent-kind={}\tprevious-mount={}\tcurrent-mount={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
+            self.kind.as_str(),
+            escape_field(&self.stable_identity),
+            escape_field(&self.label),
+            self.path.display(),
+            self.previous_kind.map(VolumeKind::as_str).unwrap_or("-"),
+            self.current_kind.map(VolumeKind::as_str).unwrap_or("-"),
+            self.previous_mount_state
+                .map(MountState::as_str)
+                .unwrap_or("-"),
+            self.current_mount_state.map(MountState::as_str).unwrap_or("-"),
+            self.invalidate_sidebar,
+            self.invalidate_operation_policy,
+            self.invalidate_index_admission,
+            self.rescan_index,
+            escape_field(&self.reason)
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeTopologyDiff {
+    pub changes: Vec<VolumeTopologyChange>,
+}
+
+impl VolumeTopologyDiff {
+    pub fn evaluate(previous: &VolumeDiscoveryReport, current: &VolumeDiscoveryReport) -> Self {
+        let previous = volume_map(&previous.volumes);
+        let current = volume_map(&current.volumes);
+        let mut changes = Vec::new();
+
+        for (stable_identity, previous_volume) in &previous {
+            match current.get(stable_identity) {
+                Some(current_volume) => {
+                    if let Some(change) =
+                        VolumeTopologyChange::changed(previous_volume, current_volume)
+                    {
+                        changes.push(change);
+                    }
+                }
+                None => changes.push(VolumeTopologyChange::disconnected(previous_volume)),
+            }
+        }
+        for (stable_identity, current_volume) in &current {
+            if !previous.contains_key(stable_identity) {
+                changes.push(VolumeTopologyChange::connected(current_volume));
+            }
+        }
+        changes.sort_by(|left, right| {
+            left.path
+                .cmp(&right.path)
+                .then(left.stable_identity.cmp(&right.stable_identity))
+        });
+        Self { changes }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let mut lines = vec![format!(
+            "volume-topology-diff\tcount={}",
+            self.changes.len()
+        )];
+        lines.extend(self.changes.iter().map(VolumeTopologyChange::as_tsv));
         lines.join("\n")
     }
 }
@@ -662,6 +872,36 @@ fn disabled_command_reason(
     })
 }
 
+fn volume_map(volumes: &[VolumeDescriptor]) -> BTreeMap<String, &VolumeDescriptor> {
+    volumes
+        .iter()
+        .map(|volume| (volume.stable_identity.clone(), volume))
+        .collect()
+}
+
+fn topology_change_reason(
+    previous: &VolumeDescriptor,
+    current: &VolumeDescriptor,
+) -> Option<&'static str> {
+    if previous.path != current.path {
+        Some("volume-path-changed")
+    } else if previous.mount_state != current.mount_state {
+        Some("mount-state-changed")
+    } else if previous.kind != current.kind {
+        Some("volume-kind-changed")
+    } else if previous.read_only != current.read_only || previous.writable != current.writable {
+        Some("volume-access-changed")
+    } else if previous.network != current.network || previous.local != current.local {
+        Some("volume-locality-changed")
+    } else if previous.ejectable != current.ejectable || previous.commands != current.commands {
+        Some("volume-ejectability-changed")
+    } else if previous.label != current.label {
+        Some("volume-label-changed")
+    } else {
+        None
+    }
+}
+
 fn classify_volume(
     path: &Path,
     marker: Option<&str>,
@@ -829,6 +1069,7 @@ fn stable_identity(
     id: VolumeId,
     path: &Path,
     native: Option<&NativeVolumeDescription>,
+    resource: Option<&NativeVolumeResourceValues>,
     mount_table: Option<&NativeVolumeMountTableEntry>,
 ) -> String {
     if let Some(native) = native.filter(|native| native.status == NativeVolumeStatus::Available) {
@@ -841,6 +1082,13 @@ fn stable_identity(
         }
         if let Some(bsd_name) = native.media_bsd_name.as_deref() {
             return format!("diskarbitration:bsd:{}", escape_field(bsd_name));
+        }
+    }
+    if let Some(resource) =
+        resource.filter(|resource| resource.status == NativeVolumeStatus::Available)
+    {
+        if let Some(uuid) = resource.volume_uuid.as_deref() {
+            return format!("url-resource:uuid:{}", escape_field(uuid));
         }
     }
     if let Some(mount_table) =
@@ -999,6 +1247,10 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tcase-sensitive="));
         assert!(descriptor.as_tsv().contains("\tlocal="));
         assert!(descriptor.as_tsv().contains("\tresource-status=available"));
+        assert!(descriptor.as_tsv().contains("\tresource-uuid="));
+        assert!(descriptor.as_tsv().contains("\tresource-automounted="));
+        assert!(descriptor.as_tsv().contains("\tresource-browsable="));
+        assert!(descriptor.as_tsv().contains("\tresource-remount-url="));
         assert!(descriptor.as_tsv().contains("\tmount-status=available\t"));
         assert!(descriptor.source.contains("mount-table=available"));
         assert!(descriptor.source.contains("url-resource=available"));
@@ -1024,6 +1276,7 @@ mod tests {
             .contains("source=fixture-marker:external-removable"));
         assert_eq!(descriptor.case_sensitive, None);
         assert!(descriptor.as_tsv().contains("\tresource-status=-"));
+        assert!(descriptor.as_tsv().contains("\tresource-uuid=-\t"));
         assert!(descriptor.as_tsv().contains("\tmount-status=-\t"));
         assert!(!descriptor.source.contains("url-resource="));
         assert!(!descriptor.source.contains("mount-table="));
@@ -1164,11 +1417,86 @@ mod tests {
     }
 
     #[test]
+    fn topology_diff_reports_connected_and_disconnected_volumes() {
+        let first = unique_temp_dir("gfm-volume-topology-first");
+        let second = unique_temp_dir("gfm-volume-topology-second");
+        fs::write(first.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        fs::write(second.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        let previous = VolumeDiscoveryReport::from_paths(vec![first.clone()]);
+        let current = VolumeDiscoveryReport::from_paths(vec![second.clone()]);
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 2);
+        assert!(diff.changes.iter().any(|change| change.kind
+            == VolumeTopologyChangeKind::Disconnected
+            && change.reason == "volume-disconnected"
+            && change.invalidate_index_admission));
+        assert!(diff
+            .changes
+            .iter()
+            .any(|change| change.kind == VolumeTopologyChangeKind::Connected
+                && change.reason == "volume-connected"
+                && change.rescan_index));
+        assert!(diff.as_tsv().starts_with("volume-topology-diff\tcount=2"));
+
+        fs::remove_dir_all(first).unwrap();
+        fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_keeps_label_changes_out_of_index_rescan() {
+        let root = unique_temp_dir("gfm-volume-topology-label");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        let mut current_volume = previous_volume.clone();
+        current_volume.label = "Renamed Drive".to_string();
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].reason, "volume-label-changed");
+        assert!(diff.changes[0].invalidate_sidebar);
+        assert!(!diff.changes[0].invalidate_operation_policy);
+        assert!(!diff.changes[0].invalidate_index_admission);
+        assert!(!diff.changes[0].rescan_index);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn mounted_volume_paths_include_system_root_from_mount_table() {
         let paths = mounted_volume_paths();
 
         assert!(paths.iter().any(|path| path == Path::new("/")));
         assert!(paths.iter().all(|path| finder_visible_mount_path(path)));
+    }
+
+    #[test]
+    fn stable_identity_uses_url_resource_uuid_before_mount_table() {
+        let resource = resource_values(|values| {
+            values.volume_uuid = Some("RESOURCE-UUID".to_string());
+        });
+        let mount_table = mount_table_entry(|entry| {
+            entry.mounted_from = Some("/dev/disk9s9".to_string());
+            entry.mount_point = Some(PathBuf::from("/Volumes/Remote"));
+        });
+
+        let identity = stable_identity(
+            VolumeId(42),
+            Path::new("/Volumes/Remote"),
+            None,
+            Some(&resource),
+            Some(&mount_table),
+        );
+
+        assert_eq!(identity, "url-resource:uuid:RESOURCE-UUID");
     }
 
     #[test]
@@ -1201,13 +1529,17 @@ mod tests {
     ) -> NativeVolumeResourceValues {
         let mut values = NativeVolumeResourceValues {
             status: NativeVolumeStatus::Available,
+            is_automounted: None,
+            is_browsable: None,
             is_ejectable: None,
             is_internal: None,
             is_local: None,
             is_read_only: None,
             is_removable: None,
+            remount_url: None,
             supports_case_preserved_names: None,
             supports_case_sensitive_names: None,
+            volume_uuid: None,
             reason: None,
         };
         configure(&mut values);
