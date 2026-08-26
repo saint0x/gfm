@@ -1,4 +1,9 @@
+use super::fuzzy::{bounded_levenshtein, deletion_keys};
+use super::query::normalize;
+use super::terms::{is_fuzzy_term, is_prefix_term, substring_grams, SUBSTRING_GRAM_CHARS};
+use super::SearchIndex;
 use gfm_types::FileId;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchLookupBudget {
@@ -199,5 +204,180 @@ impl SearchLookup for EmptySearchLookup {
 
     fn fuzzy_terms(&self, _key: &str) -> gfm_types::Result<Vec<String>> {
         Ok(Vec::new())
+    }
+}
+
+impl SearchIndex {
+    pub(super) fn fuzzy_ids(
+        &self,
+        term: &str,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        telemetry: &mut SearchLookupTelemetry,
+    ) -> gfm_types::Result<BTreeSet<FileId>> {
+        if !is_fuzzy_term(term) {
+            return Ok(BTreeSet::new());
+        }
+        telemetry.fuzzy_terms += 1;
+        let mut ids = BTreeSet::new();
+        let keys = deletion_keys(term, 2);
+        if keys.len() > budget.max_fuzzy_keys_per_term {
+            telemetry.fuzzy_term_truncated_keys += 1;
+        }
+        for key in keys.into_iter().take(budget.max_fuzzy_keys_per_term) {
+            telemetry.fuzzy_keys += 1;
+            let mut candidates = self.fuzzy_terms.get(&key).cloned().unwrap_or_default();
+            let mut candidate_truncated = false;
+            if candidates.len() > budget.max_fuzzy_candidates_per_term {
+                candidate_truncated = true;
+                candidates = candidates
+                    .into_iter()
+                    .take(budget.max_fuzzy_candidates_per_term)
+                    .collect();
+            }
+            let remaining_candidates = budget
+                .max_fuzzy_candidates_per_term
+                .saturating_sub(candidates.len());
+            if remaining_candidates > 0 {
+                let lookup_limit = budget.max_fuzzy_terms_per_key.min(remaining_candidates);
+                let lookup_terms = lookup.fuzzy_terms_bounded(&key, lookup_limit)?;
+                telemetry.fuzzy_lookup_terms += lookup_terms.terms.len();
+                if lookup_terms.truncated {
+                    telemetry.fuzzy_key_truncated_terms += 1;
+                }
+                candidates.extend(
+                    lookup_terms
+                        .terms
+                        .into_iter()
+                        .map(|term| normalize(&term))
+                        .filter(|term| is_fuzzy_term(term)),
+                );
+            }
+            telemetry.fuzzy_candidate_terms += candidates.len();
+            if candidate_truncated {
+                telemetry.fuzzy_candidate_truncated_terms += 1;
+            }
+            for candidate in candidates {
+                telemetry.fuzzy_verified_candidates += 1;
+                if bounded_levenshtein(&candidate, term, 2).is_some() {
+                    if let Some(matches) = self.name_terms.get(&candidate) {
+                        ids.extend(matches);
+                    }
+                }
+            }
+        }
+        Ok(ids)
+    }
+
+    pub(super) fn name_prefix_ids(
+        &self,
+        term: &str,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        telemetry: &mut SearchLookupTelemetry,
+    ) -> gfm_types::Result<BTreeSet<FileId>> {
+        if !is_prefix_term(term) {
+            return Ok(BTreeSet::new());
+        }
+        telemetry.prefix_terms += 1;
+        let mut ids = self.name_prefixes.get(term).cloned().unwrap_or_default();
+        if ids.len() > budget.max_prefix_ids_per_term {
+            telemetry.prefix_truncated_terms += 1;
+            ids = ids
+                .into_iter()
+                .take(budget.max_prefix_ids_per_term)
+                .collect();
+        }
+        let remaining = budget.max_prefix_ids_per_term.saturating_sub(ids.len());
+        if remaining == 0 || term.chars().count() < budget.min_archive_prefix_chars {
+            telemetry.prefix_cutoff_terms += 1;
+            telemetry.prefix_candidate_ids += ids.len();
+            return Ok(ids);
+        }
+        let lookup_ids = lookup.prefix_ids_bounded(term, remaining)?;
+        telemetry.prefix_lookup_ids += lookup_ids.ids.len();
+        if lookup_ids.truncated {
+            telemetry.prefix_truncated_terms += 1;
+        }
+        ids.extend(
+            lookup_ids
+                .ids
+                .into_iter()
+                .filter(|id| self.records.contains_key(id)),
+        );
+        telemetry.prefix_candidate_ids += ids.len();
+        Ok(ids)
+    }
+
+    pub(super) fn name_substring_ids(
+        &self,
+        term: &str,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        telemetry: &mut SearchLookupTelemetry,
+    ) -> gfm_types::Result<BTreeSet<FileId>> {
+        if term.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        if term.chars().count() < SUBSTRING_GRAM_CHARS {
+            telemetry.substring_cutoff_terms += 1;
+            return Ok(BTreeSet::new());
+        }
+        let grams = substring_grams(term);
+        if grams.is_empty() {
+            telemetry.substring_cutoff_terms += 1;
+            return Ok(BTreeSet::new());
+        }
+        telemetry.substring_terms += 1;
+        if grams.len() > budget.max_substring_grams_per_term {
+            telemetry.substring_term_truncated_grams += 1;
+        }
+
+        let mut gram_sets = Vec::new();
+        for gram in grams.into_iter().take(budget.max_substring_grams_per_term) {
+            telemetry.substring_grams += 1;
+            let mut ids = self.name_substrings.get(&gram).cloned().unwrap_or_default();
+            let mut gram_truncated = false;
+            if ids.len() > budget.max_substring_ids_per_gram {
+                gram_truncated = true;
+                ids = ids
+                    .into_iter()
+                    .take(budget.max_substring_ids_per_gram)
+                    .collect();
+            }
+            let remaining = budget.max_substring_ids_per_gram.saturating_sub(ids.len());
+            if remaining > 0 {
+                let lookup_ids = lookup.substring_ids_bounded(&gram, remaining)?;
+                telemetry.substring_lookup_ids += lookup_ids.ids.len();
+                if lookup_ids.truncated {
+                    gram_truncated = true;
+                }
+                ids.extend(
+                    lookup_ids
+                        .ids
+                        .into_iter()
+                        .filter(|id| self.records.contains_key(id)),
+                );
+            }
+            if gram_truncated {
+                telemetry.substring_truncated_grams += 1;
+            }
+            if ids.is_empty() {
+                return Ok(BTreeSet::new());
+            }
+            gram_sets.push(ids);
+        }
+
+        gram_sets.sort_by_key(|ids| ids.len());
+        let mut gram_sets = gram_sets.into_iter();
+        let mut candidates = gram_sets.next().unwrap_or_default();
+        for ids in gram_sets {
+            candidates.retain(|id| ids.contains(id));
+            if candidates.is_empty() {
+                break;
+            }
+        }
+        telemetry.substring_candidate_ids += candidates.len();
+        Ok(candidates)
     }
 }
