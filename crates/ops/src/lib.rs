@@ -1,5 +1,6 @@
 mod access;
 mod conflict;
+mod control;
 mod progress;
 mod volume;
 
@@ -11,6 +12,7 @@ pub use access::{
 pub use conflict::{
     ConflictPolicy, OperationBatchOutcome, OperationBatchReport, OperationConflictPlan,
 };
+pub use control::{OperationCancellation, OperationPause};
 use progress::{item_bytes, ProgressTracker};
 pub use progress::{
     OperationProgress, OperationProgressEvent, OperationProgressPhase, OperationThroughputClass,
@@ -27,8 +29,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,40 +204,6 @@ impl OperationContext {
     pub fn with_volume_copy_policy(mut self, policy: OperationVolumeCopyPolicy) -> Self {
         self.volume_copy_policy = policy;
         self
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct OperationCancellation(Arc<AtomicBool>);
-
-impl OperationCancellation {
-    pub fn cancel(&self) {
-        self.0.store(true, AtomicOrdering::SeqCst);
-    }
-
-    pub fn check(&self) -> Result<()> {
-        if self.0.load(AtomicOrdering::SeqCst) {
-            Err(GfmError::Cancelled)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct OperationPause(Arc<AtomicBool>);
-
-impl OperationPause {
-    pub fn pause(&self) {
-        self.0.store(true, AtomicOrdering::SeqCst);
-    }
-
-    pub fn check(&self) -> Result<()> {
-        if self.0.load(AtomicOrdering::SeqCst) {
-            Err(GfmError::Paused)
-        } else {
-            Ok(())
-        }
     }
 }
 
