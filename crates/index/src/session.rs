@@ -8,11 +8,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 const CONTENT_RECORD_CACHE_CAPACITY: usize = 8192;
+const CONTENT_POSTING_CACHE_CAPACITY: usize = 512;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentQuerySessionReport {
     pub load: ContentQueryLoadReport,
     pub search: SearchQueryReport,
+    pub posting_cache_hits: usize,
+    pub posting_cache_misses: usize,
     pub record_cache_hits: usize,
     pub record_cache_misses: usize,
 }
@@ -21,6 +24,9 @@ pub struct ContentQuerySessionReport {
 pub struct ContentIndexQuerySession {
     records: MmapRecordArchive,
     content: MmapContentSet,
+    posting_cache: Mutex<ContentPostingCache>,
+    posting_cache_hits: AtomicUsize,
+    posting_cache_misses: AtomicUsize,
     record_cache: Mutex<ContentRecordCache>,
     record_cache_hits: AtomicUsize,
     record_cache_misses: AtomicUsize,
@@ -42,6 +48,9 @@ impl ContentIndexQuerySession {
         Ok(Self {
             records: MmapRecordArchive::open(records_path)?,
             content: MmapContentSet::open(content_paths)?,
+            posting_cache: Mutex::new(ContentPostingCache::new(CONTENT_POSTING_CACHE_CAPACITY)),
+            posting_cache_hits: AtomicUsize::new(0),
+            posting_cache_misses: AtomicUsize::new(0),
             record_cache: Mutex::new(ContentRecordCache::new(CONTENT_RECORD_CACHE_CAPACITY)),
             record_cache_hits: AtomicUsize::new(0),
             record_cache_misses: AtomicUsize::new(0),
@@ -55,6 +64,9 @@ impl ContentIndexQuerySession {
         Ok(Self {
             records: MmapRecordArchive::open(records_path)?,
             content: MmapContentSet::open_manifest(manifest_path)?,
+            posting_cache: Mutex::new(ContentPostingCache::new(CONTENT_POSTING_CACHE_CAPACITY)),
+            posting_cache_hits: AtomicUsize::new(0),
+            posting_cache_misses: AtomicUsize::new(0),
             record_cache: Mutex::new(ContentRecordCache::new(CONTENT_RECORD_CACHE_CAPACITY)),
             record_cache_hits: AtomicUsize::new(0),
             record_cache_misses: AtomicUsize::new(0),
@@ -67,6 +79,13 @@ impl ContentIndexQuerySession {
 
     pub fn archive_count(&self) -> usize {
         self.content.archive_count()
+    }
+
+    pub fn posting_cache_telemetry(&self) -> (usize, usize) {
+        (
+            self.posting_cache_hits.load(Ordering::Relaxed),
+            self.posting_cache_misses.load(Ordering::Relaxed),
+        )
     }
 
     pub fn record_cache_telemetry(&self) -> (usize, usize) {
@@ -86,10 +105,9 @@ impl ContentIndexQuerySession {
         limit: usize,
         budget: SearchLookupBudget,
     ) -> Result<ContentQuerySessionReport> {
-        let postings = self.content.postings_for_terms_limit(
-            content_query_terms(query),
-            budget.max_content_ids_per_term,
-        )?;
+        let posting_hits_before = self.posting_cache_hits.load(Ordering::Relaxed);
+        let posting_misses_before = self.posting_cache_misses.load(Ordering::Relaxed);
+        let postings = self.postings_for_terms(content_query_terms(query), budget)?;
         let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
         let (live, load) = self.live_from_postings(postings)?;
@@ -100,6 +118,14 @@ impl ContentIndexQuerySession {
                 hits,
                 lookup: SearchLookupTelemetry::default(),
             },
+            posting_cache_hits: self
+                .posting_cache_hits
+                .load(Ordering::Relaxed)
+                .saturating_sub(posting_hits_before),
+            posting_cache_misses: self
+                .posting_cache_misses
+                .load(Ordering::Relaxed)
+                .saturating_sub(posting_misses_before),
             record_cache_hits: self
                 .record_cache_hits
                 .load(Ordering::Relaxed)
@@ -109,6 +135,63 @@ impl ContentIndexQuerySession {
                 .load(Ordering::Relaxed)
                 .saturating_sub(cache_misses_before),
         })
+    }
+
+    fn postings_for_terms(
+        &self,
+        terms: Vec<String>,
+        budget: SearchLookupBudget,
+    ) -> Result<Vec<ContentPosting>> {
+        let mut selected = BTreeSet::new();
+        for term in terms {
+            let term = term.trim().to_lowercase();
+            if !term.is_empty() {
+                selected.insert(term);
+            }
+        }
+        if selected.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut postings = Vec::with_capacity(selected.len());
+        let mut misses = Vec::new();
+        {
+            let cache = self.record_posting_cache()?;
+            for term in &selected {
+                let key = posting_cache_key(term, budget.max_content_ids_per_term);
+                if let Some(posting) = cache.get(&key) {
+                    self.posting_cache_hits.fetch_add(1, Ordering::Relaxed);
+                    postings.push(posting);
+                } else {
+                    self.posting_cache_misses.fetch_add(1, Ordering::Relaxed);
+                    misses.push(term.clone());
+                }
+            }
+        }
+
+        for term in misses {
+            let (posting, truncated) = self
+                .content
+                .posting_for_term_limit(&term, budget.max_content_ids_per_term)?;
+            if let Some(posting) = posting {
+                if !truncated {
+                    self.record_posting_cache()?.insert(
+                        posting_cache_key(&term, budget.max_content_ids_per_term),
+                        posting.clone(),
+                    );
+                }
+                postings.push(posting);
+            }
+        }
+
+        postings.sort_by(|left, right| left.term.cmp(&right.term));
+        Ok(postings)
+    }
+
+    fn record_posting_cache(&self) -> Result<std::sync::MutexGuard<'_, ContentPostingCache>> {
+        self.posting_cache
+            .lock()
+            .map_err(|_| GfmError::Format("content posting cache lock poisoned".to_string()))
     }
 
     fn live_from_postings(
@@ -208,6 +291,47 @@ fn content_candidate_ids(postings: &[ContentPosting]) -> BTreeSet<FileId> {
         ids.extend(posting.positions.iter().map(|positions| positions.id));
     }
     ids
+}
+
+fn posting_cache_key(term: &str, limit: usize) -> String {
+    format!("{limit}:{term}")
+}
+
+#[derive(Debug)]
+struct ContentPostingCache {
+    capacity: usize,
+    order: VecDeque<String>,
+    values: HashMap<String, ContentPosting>,
+}
+
+impl ContentPostingCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::with_capacity(capacity),
+            values: HashMap::new(),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<ContentPosting> {
+        self.values.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: String, posting: ContentPosting) {
+        if self.capacity == 0 {
+            return;
+        }
+        if !self.values.contains_key(&key) {
+            self.order.push_back(key.clone());
+        }
+        self.values.insert(key, posting);
+        while self.values.len() > self.capacity {
+            let Some(expired) = self.order.pop_front() else {
+                break;
+            };
+            self.values.remove(&expired);
+        }
+    }
 }
 
 #[derive(Debug)]

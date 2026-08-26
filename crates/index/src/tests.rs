@@ -1681,8 +1681,10 @@ fn content_query_session_reuses_archives_and_record_cache() {
         .load_content_set_query_session(&records, [&first_content, &second_content])
         .unwrap();
     let first = session.search("contentcache", 5).unwrap();
+    let posting_before_second = session.posting_cache_telemetry();
     let before_second = session.record_cache_telemetry();
     let second = session.search("contentcache", 5).unwrap();
+    let posting_after_second = session.posting_cache_telemetry();
     let after_second = session.record_cache_telemetry();
 
     assert_eq!(session.indexed_records(), snapshot.records.len());
@@ -1691,10 +1693,15 @@ fn content_query_session_reuses_archives_and_record_cache() {
     assert_eq!(first.load.candidate_ids, 1);
     assert_eq!(first.search.hits[0].record.id, matched);
     assert_eq!(second.search.hits[0].record.id, matched);
+    assert_eq!(first.posting_cache_hits, 0);
+    assert_eq!(first.posting_cache_misses, 1);
+    assert_eq!(second.posting_cache_hits, 1);
+    assert_eq!(second.posting_cache_misses, 0);
     assert_eq!(first.record_cache_hits, 0);
     assert_eq!(first.record_cache_misses, 1);
     assert_eq!(second.record_cache_hits, 1);
     assert_eq!(second.record_cache_misses, 0);
+    assert!(posting_after_second.0 > posting_before_second.0);
     assert!(after_second.0 > before_second.0);
 
     fs::remove_dir_all(root).unwrap();
