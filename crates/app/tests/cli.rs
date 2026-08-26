@@ -5054,8 +5054,18 @@ fn reports_restorable_job_progress_from_binary() {
 fn normalizes_interrupted_job_progress_for_restore_from_binary() {
     let progress = unique_temp_path("gfm-cli-job-progress-restore", "gfmprogress");
 
+    let snapshot = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["jobs-progress-snapshot", progress.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        snapshot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&snapshot.stderr)
+    );
+
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
-        .args(["jobs-progress-restore", progress.to_str().unwrap()])
+        .args(["jobs-progress-restore", progress.to_str().unwrap(), "2000"])
         .output()
         .unwrap();
     assert!(

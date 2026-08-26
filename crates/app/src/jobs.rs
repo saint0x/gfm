@@ -7,6 +7,7 @@ use gfm_jobs::{
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
@@ -102,11 +103,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "jobs-progress-restore requires a progress path",
             )?;
+            let updated_ms = parse_optional_timestamp_ms(args.next())?;
             let store = JobProgressStore::new(&path);
-            for snapshot in sample_progress_snapshots() {
-                store.upsert(snapshot)?;
-            }
-            for snapshot in store.restore_interrupted(2_000)? {
+            for snapshot in store.restore_interrupted(updated_ms)? {
                 println!("{}", snapshot.as_tsv());
             }
         }
@@ -322,6 +321,20 @@ fn sample_cancellation_tree_report() -> Vec<String> {
 
 fn priority_name(priority: Priority) -> &'static str {
     priority.as_str()
+}
+
+fn parse_optional_timestamp_ms(value: Option<String>) -> Result<u64> {
+    match value {
+        Some(value) => value.parse().map_err(|_| {
+            GfmError::Format(format!(
+                "jobs-progress-restore timestamp must be an unsigned millisecond value; got `{value}`"
+            ))
+        }),
+        None => Ok(SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)),
+    }
 }
 
 fn runtime_retry_probe(state: &Path) -> Result<usize> {

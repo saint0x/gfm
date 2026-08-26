@@ -289,6 +289,17 @@ fn progress_store_normalizes_interrupted_jobs_for_restore() {
 }
 
 #[test]
+fn progress_restore_missing_store_is_noop() {
+    let path = temp_path("gfm-job-progress-missing-restore", "gfmprogress");
+    let store = JobProgressStore::new(&path);
+
+    let restored = store.restore_interrupted(99).unwrap();
+
+    assert!(restored.is_empty());
+    assert!(!path.exists());
+}
+
+#[test]
 fn scheduling_pressure_defers_background_under_saturated_io() {
     let pressure = SchedulingPressure {
         io: JobIoPressure::Saturated,

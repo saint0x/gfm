@@ -213,6 +213,9 @@ impl JobProgressStore {
     }
 
     pub fn restore_interrupted(&self, updated_ms: u64) -> Result<Vec<JobProgressSnapshot>> {
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
         let mut snapshots = self.read()?;
         for snapshot in &mut snapshots {
             if matches!(

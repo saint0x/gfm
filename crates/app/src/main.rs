@@ -541,7 +541,7 @@ fn print_usage() {
   gfm jobs-payload-catalog <catalog.gfmjobs>
   gfm jobs-fairness-plan
   gfm jobs-progress-snapshot <progress.gfmprogress>
-  gfm jobs-progress-restore <progress.gfmprogress>
+  gfm jobs-progress-restore <progress.gfmprogress> [updated-ms]
   gfm jobs-cancel-tree
   gfm jobs-runtime-retry-probe <attempt-state> [<nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>]
   gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
