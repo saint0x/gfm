@@ -1,5 +1,6 @@
 use super::*;
 use gfm_content::ExtractionQuarantine;
+use gfm_fs::FinderMetadataReport;
 use gfm_store::{
     fuzzy_postings_from_records, metadata_postings_from_records, prefix_postings_from_records,
     substring_postings_from_records, write_content_postings, write_fuzzy_postings,
@@ -102,6 +103,38 @@ fn publishes_secondary_metadata_to_mmap_archive() {
     assert!(report
         .as_tsv()
         .starts_with("secondary-metadata-publication\t"));
+    fs::remove_file(metadata_path).unwrap();
+}
+
+#[test]
+fn publishes_finder_visible_metadata_to_query_sidecar() {
+    let root = unique_temp_dir("gfm-finder-visible-metadata-root");
+    let metadata_path = unique_temp_path("gfm-finder-visible-metadata", "gfmmeta");
+    let file = root.join("LaunchNotes.md");
+    fs::write(&file, "notes").unwrap();
+    let report = FinderMetadataReport::read_path(&file).unwrap();
+    let secondary = report.secondary_metadata_record();
+    let record = report.record.clone();
+
+    publish_secondary_metadata(
+        std::slice::from_ref(&record),
+        std::slice::from_ref(&secondary),
+        &metadata_path,
+    )
+    .unwrap();
+    let archive = MmapMetadataArchive::open(&metadata_path).unwrap();
+
+    assert_eq!(
+        archive
+            .ids_for(MetadataField::Comment, "launchnotes")
+            .unwrap(),
+        vec![record.id]
+    );
+    assert_eq!(
+        archive.ids_for(MetadataField::Comment, "document").unwrap(),
+        vec![record.id]
+    );
+    fs::remove_dir_all(root).unwrap();
     fs::remove_file(metadata_path).unwrap();
 }
 

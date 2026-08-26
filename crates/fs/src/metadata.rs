@@ -1,5 +1,5 @@
 use crate::{record_for_path, PackageKind, PackagePolicy};
-use gfm_types::{FileKind, FileRecord, Result};
+use gfm_types::{FileKind, FileRecord, Result, SecondaryMetadataRecord};
 use std::path::Path;
 
 const USER_TAGS_XATTR: &str = "com.apple.metadata:_kMDItemUserTags";
@@ -180,6 +180,35 @@ impl FinderMetadataReport {
                 .map(|tag| format!("tag\t{}\t{}", escape_field(&tag.name), tag.color.as_str())),
         );
         lines.join("\n")
+    }
+
+    pub fn secondary_metadata_record(&self) -> SecondaryMetadataRecord {
+        let mut comments = vec![
+            self.display_name.clone(),
+            self.kind_string.clone(),
+            self.type_role.as_str().to_string(),
+            self.link_role.as_str().to_string(),
+            self.label.as_str().to_string(),
+        ];
+        comments.extend(self.localized_name.iter().cloned());
+        comments.extend(self.comment.iter().cloned());
+        comments.retain(|value| !value.trim().is_empty());
+        comments.sort();
+        comments.dedup();
+
+        let mut tags = self
+            .tags
+            .iter()
+            .map(|tag| tag.name.clone())
+            .collect::<Vec<_>>();
+        tags.sort();
+        tags.dedup();
+
+        SecondaryMetadataRecord {
+            id: self.record.id,
+            tags,
+            comments,
+        }
     }
 }
 
@@ -418,6 +447,16 @@ mod tests {
         assert!(report.extension_hidden);
         assert!(report.as_tsv().contains("tag\tImportant\tred"));
         assert!(report.as_tsv().contains("comment=handoff notes"));
+
+        let secondary = report.secondary_metadata_record();
+        assert_eq!(secondary.id, report.record.id);
+        assert_eq!(
+            secondary.tags,
+            vec!["Client".to_string(), "Important".to_string()]
+        );
+        assert!(secondary.comments.contains(&"Report".to_string()));
+        assert!(secondary.comments.contains(&"Md Document".to_string()));
+        assert!(secondary.comments.contains(&"handoff notes".to_string()));
 
         fs::remove_dir_all(root).unwrap();
     }
