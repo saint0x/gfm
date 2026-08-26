@@ -38,6 +38,7 @@ mod recovery;
 mod rename;
 mod repair;
 mod scan;
+mod session;
 mod state;
 mod volume;
 
@@ -76,6 +77,7 @@ pub use recovery::{
 pub use rename::{correlate_rename, RenameCorrelationReport};
 pub use repair::{RepairPriority, RepairReason, RepairSchedule, SubtreeRepairJob};
 pub use scan::{FairScanReport, FairScanScheduler, FairScanSummary, ScanLane};
+pub use session::{ContentIndexQuerySession, ContentQuerySessionReport};
 pub use state::{IndexVolumeState, INDEX_STATE_SCHEMA_VERSION};
 pub use volume::{
     parse_volume_indexing_policy, volume_indexing_policy_name, IndexMountState, IndexVolumeClass,
@@ -489,6 +491,34 @@ impl Indexer {
             budget.max_content_ids_per_term,
         )?;
         LiveIndex::from_mmap_records_with_content_postings(&records, postings)
+    }
+
+    pub fn load_content_query_session(
+        &self,
+        records_path: impl AsRef<Path>,
+        content_path: impl AsRef<Path>,
+    ) -> Result<ContentIndexQuerySession> {
+        ContentIndexQuerySession::open_content(records_path, content_path)
+    }
+
+    pub fn load_content_set_query_session<I, P>(
+        &self,
+        records_path: impl AsRef<Path>,
+        content_paths: I,
+    ) -> Result<ContentIndexQuerySession>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        ContentIndexQuerySession::open_set(records_path, content_paths)
+    }
+
+    pub fn load_content_manifest_query_session(
+        &self,
+        records_path: impl AsRef<Path>,
+        manifest_path: impl AsRef<Path>,
+    ) -> Result<ContentIndexQuerySession> {
+        ContentIndexQuerySession::open_manifest(records_path, manifest_path)
     }
 
     pub fn load_live_with_content_set(

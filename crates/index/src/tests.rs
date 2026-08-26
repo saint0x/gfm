@@ -1629,6 +1629,81 @@ fn content_set_search_loader_uses_default_bounded_budget() {
 }
 
 #[test]
+fn content_query_session_reuses_archives_and_record_cache() {
+    let root = unique_temp_dir("gfm-content-query-session-root");
+    let records = unique_temp_path("gfm-content-query-session-records", "gfmidx");
+    let first_content = unique_temp_path("gfm-content-query-session-first", "gfmcontent");
+    let second_content = unique_temp_path("gfm-content-query-session-second", "gfmcontent");
+    fs::write(root.join("SearchNotes.md"), "cached content").unwrap();
+    fs::write(root.join("Other.md"), "other content").unwrap();
+
+    let indexer = Indexer::default();
+    let snapshot = indexer.build(&root).unwrap();
+    snapshot.save(&records).unwrap();
+    let matched = snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "SearchNotes.md")
+        .unwrap()
+        .id;
+    let other = snapshot
+        .records
+        .iter()
+        .find(|record| record.name == "Other.md")
+        .unwrap()
+        .id;
+    write_content_postings(
+        &first_content,
+        &[ContentPosting {
+            term: "contentcache".to_string(),
+            ids: vec![matched],
+            positions: vec![ContentPositions {
+                id: matched,
+                positions: vec![1],
+            }],
+        }],
+    )
+    .unwrap();
+    write_content_postings(
+        &second_content,
+        &[ContentPosting {
+            term: "elsewhere".to_string(),
+            ids: vec![other],
+            positions: vec![ContentPositions {
+                id: other,
+                positions: vec![1],
+            }],
+        }],
+    )
+    .unwrap();
+
+    let session = indexer
+        .load_content_set_query_session(&records, [&first_content, &second_content])
+        .unwrap();
+    let first = session.search("contentcache", 5).unwrap();
+    let before_second = session.record_cache_telemetry();
+    let second = session.search("contentcache", 5).unwrap();
+    let after_second = session.record_cache_telemetry();
+
+    assert_eq!(session.indexed_records(), snapshot.records.len());
+    assert_eq!(session.archive_count(), 2);
+    assert_eq!(first.load.content_keys, 1);
+    assert_eq!(first.load.candidate_ids, 1);
+    assert_eq!(first.search.hits[0].record.id, matched);
+    assert_eq!(second.search.hits[0].record.id, matched);
+    assert_eq!(first.record_cache_hits, 0);
+    assert_eq!(first.record_cache_misses, 1);
+    assert_eq!(second.record_cache_hits, 1);
+    assert_eq!(second.record_cache_misses, 0);
+    assert!(after_second.0 > before_second.0);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(first_content).unwrap();
+    fs::remove_file(second_content).unwrap();
+}
+
+#[test]
 fn content_archive_search_loader_uses_default_bounded_budget() {
     let root = unique_temp_dir("gfm-default-budgeted-content-archive-root");
     let records = unique_temp_path("gfm-default-budgeted-content-archive-records", "gfmidx");
