@@ -82,7 +82,7 @@ pub use state::{IndexVolumeState, INDEX_STATE_SCHEMA_VERSION};
 pub use volume::{
     parse_volume_indexing_policy, volume_indexing_policy_name, IndexMountState, IndexVolumeClass,
     IndexVolumeDescriptor, VolumeIndexAction, VolumeIndexDecision, VolumeIndexPlan,
-    VolumeIndexPolicy, VolumeIndexThrottle, VolumeThrottleClass,
+    VolumeIndexPolicy, VolumeIndexThrottle, VolumeInvalidationReport, VolumeThrottleClass,
 };
 
 pub fn content_query_terms(query: &str) -> Vec<String> {

@@ -3,7 +3,10 @@ use crate::{
     run_preview_contract_adaptive, run_preview_contract_cancellable, runtime::RuntimeJobHandle,
 };
 use gfm_fs::record_for_path;
-use gfm_index::{parse_volume_indexing_policy, VolumeIndexPolicy};
+use gfm_index::{
+    parse_volume_indexing_policy, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor,
+    VolumeIndexPolicy, VolumeInvalidationReport,
+};
 use gfm_jobs::{
     Cancellation, JobClass, JobPayloadKind, JobProgressState, Priority, Scheduler, SchedulingAction,
 };
@@ -155,6 +158,35 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .collect::<Vec<_>>();
             let policy = VolumeIndexPolicy::new(external, network).with_opted_in_roots(opted_in);
             println!("{}", policy.plan(volumes).as_tsv());
+        }
+        "volume-invalidation" => {
+            let previous_class = IndexVolumeClass::parse(&required_string(
+                args.next(),
+                "volume-invalidation requires a previous class",
+            )?)?;
+            let previous_mount = IndexMountState::parse(&required_string(
+                args.next(),
+                "volume-invalidation requires a previous mount state",
+            )?)?;
+            let previous_path = required_path(args.next(), "volume-invalidation requires a path")?;
+            let current = VolumeDiscoveryReport::from_paths(vec![previous_path.clone()])
+                .volumes
+                .into_iter()
+                .next()
+                .map(|volume| index_volume_descriptor(&volume));
+            let previous = IndexVolumeDescriptor::new(
+                previous_path
+                    .file_name()
+                    .and_then(|label| label.to_str())
+                    .unwrap_or("Volume"),
+                previous_path.clone(),
+                previous_class,
+                previous_mount,
+            );
+            println!(
+                "{}",
+                VolumeInvalidationReport::evaluate(Some(&previous), current.as_ref()).as_tsv()
+            );
         }
         "spotlight-reconcile" => {
             let path = required_path(args.next(), "spotlight-reconcile requires a path")?;

@@ -1399,6 +1399,82 @@ fn volume_index_policy_suspends_disabled_and_disconnected_volumes() {
 }
 
 #[test]
+fn volume_invalidation_rescans_admission_when_mount_state_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Stale,
+    );
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    );
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+    assert!(report.invalidate_sidebar);
+    assert!(report.invalidate_operation_policy);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(!report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "mount-state-changed");
+    assert!(report.as_tsv().contains("\tcurrent-mount=mounted\t"));
+    assert!(report
+        .as_tsv()
+        .contains("\tcancel-index-jobs=false\tclear-fsevents-cursor=true\t"));
+}
+
+#[test]
+fn volume_invalidation_keeps_label_changes_out_of_index_rescan() {
+    let previous = IndexVolumeDescriptor::new(
+        "Backup",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    );
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    );
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+    assert!(report.invalidate_sidebar);
+    assert!(!report.invalidate_operation_policy);
+    assert!(!report.invalidate_index_admission);
+    assert!(!report.rescan_index);
+    assert!(!report.cancel_index_jobs);
+    assert!(!report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-label-changed");
+}
+
+#[test]
+fn volume_invalidation_cancels_index_jobs_when_volume_disconnects() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    );
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), None);
+
+    assert!(report.invalidate_sidebar);
+    assert!(report.invalidate_operation_policy);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-disconnected");
+}
+
+#[test]
 fn live_index_correlates_file_renames_without_identity_churn() {
     let root = unique_temp_dir("gfm-rename-file-root");
     let from = root.join("NeedleOld.txt");

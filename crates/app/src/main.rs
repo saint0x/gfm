@@ -522,6 +522,7 @@ fn print_usage() {
   gfm volume-discovery [paths...]
   gfm volume-operation <eject|unmount|mount> <path>
   gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]
+  gfm volume-invalidation <previous-class> <previous-mount> <path>
   gfm spotlight-reconcile <path> [spotlight-fixture.tsv]
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm icon-preview <path>

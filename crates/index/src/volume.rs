@@ -30,6 +30,19 @@ impl IndexVolumeClass {
             Self::System | Self::Internal | Self::Unknown => VolumePolicyFamily::Local,
         }
     }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "system" => Ok(Self::System),
+            "internal" => Ok(Self::Internal),
+            "external" | "removable" | "disk-image" => Ok(Self::External),
+            "network" => Ok(Self::Network),
+            "unknown" => Ok(Self::Unknown),
+            other => Err(GfmError::Format(format!(
+                "unsupported index volume class `{other}`"
+            ))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +58,17 @@ impl IndexMountState {
             Self::Mounted => "mounted",
             Self::Unmounted => "unmounted",
             Self::Stale => "stale",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "mounted" => Ok(Self::Mounted),
+            "unmounted" => Ok(Self::Unmounted),
+            "stale" | "disconnected" => Ok(Self::Stale),
+            other => Err(GfmError::Format(format!(
+                "unsupported index mount state `{other}`"
+            ))),
         }
     }
 }
@@ -323,6 +347,124 @@ impl VolumeIndexDecision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeIndexPlan {
     pub decisions: Vec<VolumeIndexDecision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeInvalidationReport {
+    pub path: PathBuf,
+    pub previous_class: Option<IndexVolumeClass>,
+    pub previous_mount_state: Option<IndexMountState>,
+    pub current_class: Option<IndexVolumeClass>,
+    pub current_mount_state: Option<IndexMountState>,
+    pub invalidate_sidebar: bool,
+    pub invalidate_operation_policy: bool,
+    pub invalidate_index_admission: bool,
+    pub rescan_index: bool,
+    pub cancel_index_jobs: bool,
+    pub clear_fsevents_cursor: bool,
+    pub reason: String,
+}
+
+impl VolumeInvalidationReport {
+    pub fn evaluate(
+        previous: Option<&IndexVolumeDescriptor>,
+        current: Option<&IndexVolumeDescriptor>,
+    ) -> Self {
+        let path = current
+            .or(previous)
+            .map(|volume| volume.path.clone())
+            .unwrap_or_else(|| PathBuf::from("-"));
+        let previous_class = previous.map(|volume| volume.class);
+        let previous_mount_state = previous.map(|volume| volume.mount_state);
+        let current_class = current.map(|volume| volume.class);
+        let current_mount_state = current.map(|volume| volume.mount_state);
+
+        let (
+            invalidate_sidebar,
+            invalidate_operation_policy,
+            invalidate_index_admission,
+            rescan_index,
+            cancel_index_jobs,
+            clear_fsevents_cursor,
+            reason,
+        ) = match (previous, current) {
+            (None, None) => (false, false, false, false, false, false, "unchanged"),
+            (None, Some(_)) => (true, true, true, true, false, true, "volume-connected"),
+            (Some(previous), None) => (
+                true,
+                true,
+                true,
+                true,
+                previous.mount_state == IndexMountState::Mounted,
+                true,
+                "volume-disconnected",
+            ),
+            (Some(previous), Some(current)) if previous.path != current.path => {
+                (true, true, true, true, true, true, "volume-path-changed")
+            }
+            (Some(previous), Some(current)) if previous.mount_state != current.mount_state => (
+                true,
+                true,
+                true,
+                true,
+                previous.mount_state == IndexMountState::Mounted,
+                true,
+                "mount-state-changed",
+            ),
+            (Some(previous), Some(current)) if previous.class != current.class => {
+                (true, true, true, true, true, true, "volume-class-changed")
+            }
+            (Some(previous), Some(current)) if previous.label != current.label => (
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                "volume-label-changed",
+            ),
+            (Some(_), Some(_)) => (false, false, false, false, false, false, "unchanged"),
+        };
+
+        Self {
+            path,
+            previous_class,
+            previous_mount_state,
+            current_class,
+            current_mount_state,
+            invalidate_sidebar,
+            invalidate_operation_policy,
+            invalidate_index_admission,
+            rescan_index,
+            cancel_index_jobs,
+            clear_fsevents_cursor,
+            reason: reason.to_string(),
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tcurrent-class={}\tcurrent-mount={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
+            self.path.display(),
+            self.previous_class
+                .map(IndexVolumeClass::as_str)
+                .unwrap_or("-"),
+            self.previous_mount_state
+                .map(IndexMountState::as_str)
+                .unwrap_or("-"),
+            self.current_class.map(IndexVolumeClass::as_str).unwrap_or("-"),
+            self.current_mount_state
+                .map(IndexMountState::as_str)
+                .unwrap_or("-"),
+            self.invalidate_sidebar,
+            self.invalidate_operation_policy,
+            self.invalidate_index_admission,
+            self.rescan_index,
+            self.cancel_index_jobs,
+            self.clear_fsevents_cursor,
+            escape_field(&self.reason)
+        )
+    }
 }
 
 impl VolumeIndexPlan {
