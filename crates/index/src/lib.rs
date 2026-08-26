@@ -524,6 +524,77 @@ impl SearchArchiveLookup {
         postings.sort_by(|left, right| left.prefix.cmp(&right.prefix));
         Ok(postings)
     }
+
+    fn fuzzy_postings_bounded<I, S>(&self, keys: I, limit: usize) -> Result<Vec<SearchFuzzyPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut selected = BTreeSet::new();
+        for key in keys {
+            let key = key.as_ref();
+            if !key.is_empty() {
+                selected.insert(key.to_string());
+            }
+        }
+
+        let mut postings = Vec::with_capacity(selected.len());
+        let mut misses = Vec::new();
+        {
+            let cache = self
+                .fuzzy_cache
+                .lock()
+                .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?;
+            for key in &selected {
+                self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
+                if let Some(mut terms) = cache.get(key) {
+                    self.fuzzy_hits.fetch_add(1, Ordering::Relaxed);
+                    terms.truncate(limit);
+                    postings.push(SearchFuzzyPosting {
+                        key: key.clone(),
+                        terms,
+                    });
+                } else {
+                    self.fuzzy_misses.fetch_add(1, Ordering::Relaxed);
+                    misses.push(key.clone());
+                }
+            }
+        }
+
+        let loaded = self
+            .fuzzy
+            .postings_for_sorted_keys_limit(&misses, limit)?
+            .into_iter()
+            .map(|limited| {
+                (
+                    limited.posting.key,
+                    (limited.posting.terms, limited.truncated),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        let mut cache = self
+            .fuzzy_cache
+            .lock()
+            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?;
+        for key in misses {
+            let (terms, truncated) = loaded
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| (Vec::new(), false));
+            if !truncated {
+                cache.insert(key.clone(), terms.clone());
+            }
+            postings.push(SearchFuzzyPosting { key, terms });
+        }
+
+        postings.sort_by(|left, right| left.key.cmp(&right.key));
+        Ok(postings)
+    }
 }
 
 impl SearchLookup for SearchArchiveLookup {
@@ -750,11 +821,11 @@ pub fn query_sidecar_imports(
 
     let mut prefix_candidates = prefix_terms.clone();
     let mut fuzzy_candidate_terms = BTreeSet::new();
-    let fuzzy = fuzzy_keys
+    let fuzzy = lookup
+        .fuzzy_postings_bounded(fuzzy_keys, budget.max_fuzzy_terms_per_key)?
         .into_iter()
-        .map(|key| {
-            let terms = lookup.fuzzy_terms_bounded(&key, budget.max_fuzzy_terms_per_key)?;
-            let terms = terms
+        .map(|posting| {
+            let terms = posting
                 .terms
                 .into_iter()
                 .filter(|term| {
@@ -765,9 +836,12 @@ pub fn query_sidecar_imports(
             for term in &terms {
                 prefix_candidates.push(term.clone());
             }
-            Ok(SearchFuzzyPosting { key, terms })
+            SearchFuzzyPosting {
+                key: posting.key,
+                terms,
+            }
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
 
     let prefixes =
         lookup.prefix_postings_bounded(prefix_candidates, budget.max_prefix_ids_per_term)?;

@@ -21,6 +21,12 @@ pub struct FuzzyPosting {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LimitedFuzzyPosting {
+    pub posting: FuzzyPosting,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct FuzzyDirectoryEntry {
     key: String,
     offset: u64,
@@ -155,23 +161,60 @@ impl MmapFuzzyArchive {
         else {
             return Ok((Vec::new(), false));
         };
-        let bytes = self.posting_bytes(entry)?;
-        let mut cursor = Cursor::new(bytes);
-        let posting_key = read_string(&mut cursor, &self.path, "key")?;
-        if posting_key != key {
-            return Err(fuzzy_format_error(
-                &self.path,
-                "fuzzy directory points at the wrong posting",
-            ));
+        let posting = self.limited_posting_for_entry(entry, limit)?;
+        Ok((posting.posting.terms, posting.truncated))
+    }
+
+    pub fn postings_for_sorted_keys_limit<I, S>(
+        &self,
+        keys: I,
+        limit_per_key: usize,
+    ) -> Result<Vec<LimitedFuzzyPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        if limit_per_key == 0 {
+            return Ok(Vec::new());
         }
-        let count = read_varint(&mut cursor).map_err(|err| GfmError::io(&self.path, err))?;
-        let capacity_count = usize::try_from(count).unwrap_or(usize::MAX);
-        let mut terms = Vec::with_capacity(limit.min(capacity_count));
-        let read_count = count.min(limit as u64);
-        for _ in 0..read_count {
-            terms.push(read_string(&mut cursor, &self.path, "term")?);
+
+        let mut postings = Vec::new();
+        let mut directory_index = 0usize;
+        let mut previous: Option<String> = None;
+
+        for key in keys {
+            let key = normalize(key.as_ref());
+            if key.is_empty() {
+                continue;
+            }
+            if let Some(previous_key) = previous.as_ref() {
+                if key < *previous_key {
+                    return Err(fuzzy_format_error(
+                        &self.path,
+                        "batch fuzzy lookup keys must be sorted",
+                    ));
+                }
+                if key == *previous_key {
+                    continue;
+                }
+            }
+
+            while let Some(entry) = self.directory.get(directory_index) {
+                if entry.key.as_str() >= key.as_str() {
+                    break;
+                }
+                directory_index += 1;
+            }
+
+            if let Some(entry) = self.directory.get(directory_index) {
+                if entry.key.as_str() == key.as_str() {
+                    postings.push(self.limited_posting_for_entry(entry, limit_per_key)?);
+                }
+            }
+            previous = Some(key);
         }
-        Ok((terms, count > limit as u64))
+
+        Ok(postings)
     }
 
     pub fn postings(&self) -> Result<Vec<FuzzyPosting>> {
@@ -197,10 +240,13 @@ impl MmapFuzzyArchive {
             }
         }
 
-        selected
-            .into_iter()
-            .filter_map(|key| self.posting_for(&key).transpose())
-            .collect()
+        self.postings_for_sorted_keys_limit(selected, usize::MAX)
+            .map(|postings| {
+                postings
+                    .into_iter()
+                    .map(|posting| posting.posting)
+                    .collect()
+            })
     }
 
     pub fn posting_for(&self, key: &str) -> Result<Option<FuzzyPosting>> {
@@ -252,6 +298,36 @@ impl MmapFuzzyArchive {
         self.mmap
             .get(start..end)
             .ok_or_else(|| fuzzy_format_error(&self.path, "posting range out of bounds"))
+    }
+
+    fn limited_posting_for_entry(
+        &self,
+        entry: &FuzzyDirectoryEntry,
+        limit: usize,
+    ) -> Result<LimitedFuzzyPosting> {
+        let bytes = self.posting_bytes(entry)?;
+        let mut cursor = Cursor::new(bytes);
+        let posting_key = read_string(&mut cursor, &self.path, "key")?;
+        if posting_key != entry.key {
+            return Err(fuzzy_format_error(
+                &self.path,
+                "fuzzy directory points at the wrong posting",
+            ));
+        }
+        let count = read_varint(&mut cursor).map_err(|err| GfmError::io(&self.path, err))?;
+        let capacity_count = usize::try_from(count).unwrap_or(usize::MAX);
+        let mut terms = Vec::with_capacity(limit.min(capacity_count));
+        let read_count = count.min(limit as u64);
+        for _ in 0..read_count {
+            terms.push(read_string(&mut cursor, &self.path, "term")?);
+        }
+        Ok(LimitedFuzzyPosting {
+            posting: FuzzyPosting {
+                key: posting_key,
+                terms,
+            },
+            truncated: count > limit as u64,
+        })
     }
 }
 
@@ -529,6 +605,48 @@ mod tests {
             vec![posting]
         );
         assert!(archive.is_checksummed());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_fuzzy_archive_reads_bounded_sorted_postings_in_one_pass() {
+        let path = temp_path("gfm-fuzzy-batch-postings", "gfmfuzzy");
+        let postings = vec![
+            FuzzyPosting {
+                key: "aplha".to_string(),
+                terms: vec![
+                    "alpha".to_string(),
+                    "alphanum".to_string(),
+                    "alphas".to_string(),
+                ],
+            },
+            FuzzyPosting {
+                key: "projet".to_string(),
+                terms: vec![
+                    "project".to_string(),
+                    "projected".to_string(),
+                    "projects".to_string(),
+                    "projectx".to_string(),
+                ],
+            },
+        ];
+
+        write_fuzzy_postings(&path, &postings).unwrap();
+        let archive = MmapFuzzyArchive::open(&path).unwrap();
+        let batch = archive
+            .postings_for_sorted_keys_limit(["", "aplha", "aplha", "missing", "projet"], 2)
+            .unwrap();
+
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].posting.key, "aplha");
+        assert_eq!(batch[0].posting.terms, postings[0].terms[..2]);
+        assert!(batch[0].truncated);
+        assert_eq!(batch[1].posting.key, "projet");
+        assert_eq!(batch[1].posting.terms, postings[1].terms[..2]);
+        assert!(batch[1].truncated);
+        assert!(archive
+            .postings_for_sorted_keys_limit(["projet", "aplha"], 2)
+            .is_err());
         std::fs::remove_file(path).unwrap();
     }
 

@@ -46,7 +46,7 @@ pub use dictionary::{
 pub use durable::{atomic_write, DurableCommit};
 pub use fuzzy::{
     fuzzy_postings_from_records, read_fuzzy_postings, write_fuzzy_postings, FuzzyPosting,
-    MmapFuzzyArchive,
+    LimitedFuzzyPosting, MmapFuzzyArchive,
 };
 pub use metadata::{
     metadata_postings_from_records, read_metadata_postings, write_metadata_postings, MetadataField,

@@ -554,6 +554,8 @@ fn query_sidecar_imports_enforce_query_level_lookup_budgets() {
     );
     assert_eq!(import.report.candidate_ids, 1);
     assert_eq!(lookup.cache_telemetry().prefix_lookup_requests, 1);
+    assert_eq!(lookup.cache_telemetry().fuzzy_lookup_requests, 1);
+    assert_eq!(lookup.cache_telemetry().fuzzy_cache_misses, 1);
 
     fs::remove_file(metadata_path).unwrap();
     fs::remove_file(prefixes_path).unwrap();
@@ -650,6 +652,68 @@ fn search_archive_lookup_caches_are_bounded() {
     );
     assert_eq!(after.fuzzy_cache_misses, before.fuzzy_cache_misses + 1);
     assert_eq!(lookup.cache_entry_counts().unwrap(), (2, 2, 2));
+
+    fs::remove_file(prefixes).unwrap();
+    fs::remove_file(substrings).unwrap();
+    fs::remove_file(fuzzy).unwrap();
+}
+
+#[test]
+fn search_archive_lookup_batches_fuzzy_misses_for_query_import() {
+    let prefixes = unique_temp_path("gfm-prefix-fuzzy-batch", "gfmprefix");
+    let substrings = unique_temp_path("gfm-substring-fuzzy-batch", "gfmsubstr");
+    let fuzzy = unique_temp_path("gfm-fuzzy-batch", "gfmfuzzy");
+
+    write_prefix_postings(&prefixes, &[]).unwrap();
+    write_substring_postings(&substrings, &[]).unwrap();
+    write_fuzzy_postings(
+        &fuzzy,
+        &[
+            FuzzyPosting {
+                key: "aplha".to_string(),
+                terms: vec!["alpha".to_string(), "alphas".to_string()],
+            },
+            FuzzyPosting {
+                key: "projet".to_string(),
+                terms: vec!["project".to_string(), "projects".to_string()],
+            },
+        ],
+    )
+    .unwrap();
+
+    let lookup = SearchArchiveLookup::open(&prefixes, &substrings, &fuzzy).unwrap();
+    let first = lookup
+        .fuzzy_postings_bounded(["projet", "missing", "aplha", "aplha"], 2)
+        .unwrap();
+    assert_eq!(first.len(), 3);
+    assert_eq!(first[0].key, "aplha");
+    assert_eq!(
+        first[0].terms,
+        vec!["alpha".to_string(), "alphas".to_string()]
+    );
+    assert_eq!(first[1].key, "missing");
+    assert!(first[1].terms.is_empty());
+    assert_eq!(first[2].key, "projet");
+    assert_eq!(
+        first[2].terms,
+        vec!["project".to_string(), "projects".to_string()]
+    );
+    assert_eq!(lookup.cache_telemetry().fuzzy_lookup_requests, 3);
+    assert_eq!(lookup.cache_telemetry().fuzzy_cache_misses, 3);
+    assert_eq!(lookup.cache_entry_counts().unwrap().2, 3);
+
+    let second = lookup
+        .fuzzy_postings_bounded(["missing", "aplha"], 2)
+        .unwrap();
+    assert_eq!(second.len(), 2);
+    assert_eq!(
+        second[0].terms,
+        vec!["alpha".to_string(), "alphas".to_string()]
+    );
+    assert!(second[1].terms.is_empty());
+    assert_eq!(lookup.cache_telemetry().fuzzy_lookup_requests, 5);
+    assert_eq!(lookup.cache_telemetry().fuzzy_cache_hits, 2);
+    assert_eq!(lookup.cache_telemetry().fuzzy_cache_misses, 3);
 
     fs::remove_file(prefixes).unwrap();
     fs::remove_file(substrings).unwrap();
