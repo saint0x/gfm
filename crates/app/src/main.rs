@@ -1,4 +1,4 @@
-use content::{run_content_job, run_content_search};
+use content::run_content_job;
 use extract::{
     extraction_budget_profile, run_adaptive_extraction_worker,
     run_adaptive_extraction_worker_cancellable, run_quarantined_adaptive_extraction_worker,
@@ -14,13 +14,12 @@ use gfm_diagnostics::{
 };
 use gfm_fs::{read_directory, record_for_path};
 use gfm_index::{
-    query_sidecar_imports, BackgroundContentIndexer, BatteryState, CompactionPressure,
-    ContentArchiveCleanupPolicy, ContentArchiveManifest, ContentArchiveManifestEntry,
-    ContentIndexJobSpec, ContentMaintenanceOptions, ContentMaintenanceReport, ContentMergePolicy,
-    ContentMergeTier, EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
+    BackgroundContentIndexer, BatteryState, CompactionPressure, ContentArchiveCleanupPolicy,
+    ContentArchiveManifest, ContentArchiveManifestEntry, ContentIndexJobSpec,
+    ContentMaintenanceOptions, ContentMaintenanceReport, ContentMergePolicy, ContentMergeTier,
+    EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
     IndexFootprintSpec, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState,
-    Indexer, IoPressure, LiveIndex, PersistentIndexRecovery, SearchArchiveLookup,
-    SearchLookupBudget, SearchRecordColumns, SearchStreamStage, ThermalState, UserActivity,
+    Indexer, IoPressure, LiveIndex, PersistentIndexRecovery, ThermalState, UserActivity,
 };
 use gfm_jobs::{
     Cancellation, JobBatteryState, JobClass, JobFairnessPlanner, JobFairnessPolicy, JobIoPressure,
@@ -59,9 +58,7 @@ use gfm_testkit::{
     MacrobenchScale, MacrobenchStage, ParityAppearance, ParityFixtureOptions, ParityFixtureScale,
     ParitySurface, PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
 };
-use gfm_types::{
-    FileEvent, FileEventKind, FileId, FileKind, GfmError, Result, SearchHit, VolumeId,
-};
+use gfm_types::{FileEvent, FileEventKind, FileId, FileKind, GfmError, Result, VolumeId};
 use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -74,6 +71,7 @@ mod operation;
 mod packaging;
 mod platform;
 mod runtime;
+mod search;
 
 use runtime::{
     default_content_job_path, default_job_journal_path, run_scheduled_volume_task, run_volume_task,
@@ -90,6 +88,7 @@ fn run() -> Result<()> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
         Some(command) if interface::run(command, &mut args)? => {}
+        Some(command) if search::run(command, &mut args)? => {}
         Some("list") => {
             let path = args
                 .next()
@@ -915,313 +914,6 @@ fn run() -> Result<()> {
                 }
             }
         }
-        Some("search") => {
-            let root = required_path(args.next(), "search requires a root path")?;
-            let query = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format("search requires a query string".to_string())
-            })?;
-            let snapshot = Indexer::default().build(root)?;
-            for hit in snapshot.search(&query, 50) {
-                print_hit(&hit);
-            }
-        }
-        Some("search-stream") => {
-            let root = required_path(args.next(), "search-stream requires a root path")?;
-            let query = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format("search-stream requires a query string".to_string())
-            })?;
-            let snapshot = Indexer::default().build(root)?;
-            for batch in snapshot.stream_search(&query, 50)? {
-                println!("batch\t{}", stream_stage(batch.stage));
-                for hit in batch.hits {
-                    print_hit(&hit);
-                }
-            }
-        }
-        Some("search-content") => {
-            let root = required_path(args.next(), "search-content requires a root path")?;
-            let query = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format("search-content requires a query string".to_string())
-            })?;
-            let (indexed, hits) = run_content_search(root, query, Extractor::default())?;
-            eprintln!("content-indexed {indexed} files");
-            for hit in hits {
-                print_hit(&hit);
-            }
-        }
-        Some("search-content-adaptive") => {
-            let root = required_path(args.next(), "search-content-adaptive requires a root path")?;
-            let query = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format(
-                    "search-content-adaptive requires a query string".to_string(),
-                )
-            })?;
-            let pressure = parse_required_scheduling_pressure(&mut args, "content search")?;
-            let extractor =
-                Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
-            let (indexed, hits) = run_content_search(root, query, extractor)?;
-            eprintln!("content-indexed {indexed} files");
-            for hit in hits {
-                print_hit(&hit);
-            }
-        }
-        Some("search-index") => {
-            let index_path = required_path(args.next(), "search-index requires an index path")?;
-            let query = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format("search-index requires a query string".to_string())
-            })?;
-            let snapshot = Indexer::default().load(index_path)?;
-            for hit in snapshot.search(&query, 50) {
-                print_hit(&hit);
-            }
-        }
-        Some("search-index-mmap") => {
-            let index_path =
-                required_path(args.next(), "search-index-mmap requires an index path")?;
-            let query = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format("search-index-mmap requires a query string".to_string())
-            })?;
-            let live = LiveIndex::from_records(MmapRecordArchive::open(index_path)?.records()?);
-            for hit in live.search(&query, 50) {
-                print_hit(&hit);
-            }
-        }
-        Some("search-index-columns") => {
-            let records =
-                required_path(args.next(), "search-index-columns requires a records path")?;
-            let columns =
-                required_path(args.next(), "search-index-columns requires a columns path")?;
-            let query = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format(
-                    "search-index-columns requires a query string".to_string(),
-                )
-            })?;
-            let records = MmapRecordArchive::open(records)?;
-            let columns = MmapRecordColumns::open(columns)?;
-            let mut search_columns = Vec::with_capacity(columns.len());
-            for index in 0..columns.len() {
-                let column = columns.column(index)?;
-                search_columns.push(SearchRecordColumns {
-                    id: column.id,
-                    name: column.name,
-                    path: column.path,
-                    extension: column.extension,
-                    tags: column.tags,
-                    comment: column.comment,
-                });
-            }
-            let (live, applied) =
-                LiveIndex::from_records_with_columns(records.records()?, search_columns);
-            eprintln!("columns-indexed {applied}");
-            for hit in live.search(&query, 50) {
-                print_hit(&hit);
-            }
-        }
-        Some("search-index-sidecars") => {
-            let records =
-                required_path(args.next(), "search-index-sidecars requires a records path")?;
-            let columns =
-                required_path(args.next(), "search-index-sidecars requires a columns path")?;
-            let metadata = required_path(
-                args.next(),
-                "search-index-sidecars requires a metadata path",
-            )?;
-            let prefixes = required_path(
-                args.next(),
-                "search-index-sidecars requires a prefixes path",
-            )?;
-            let substrings = required_path(
-                args.next(),
-                "search-index-sidecars requires a substrings path",
-            )?;
-            let fuzzy = required_path(args.next(), "search-index-sidecars requires a fuzzy path")?;
-            let content =
-                required_path(args.next(), "search-index-sidecars requires a content path")?;
-            let query = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format(
-                    "search-index-sidecars requires a query string".to_string(),
-                )
-            })?;
-            let records = MmapRecordArchive::open(records)?;
-            let columns = MmapRecordColumns::open(columns)?;
-            let metadata = MmapMetadataArchive::open(metadata)?;
-            let substrings_archive = MmapSubstringArchive::open(&substrings)?;
-            let lookup = SearchArchiveLookup::open(prefixes, substrings, fuzzy)?;
-            let content = MmapContentArchive::open(content)?;
-            let budget = SearchLookupBudget::default();
-            let import = query_sidecar_imports(
-                &metadata,
-                &lookup,
-                &substrings_archive,
-                &content,
-                &query,
-                budget,
-            )?;
-            let (live, hydration) =
-                LiveIndex::from_mmap_records_with_sidecar_import(&records, &columns, import)?;
-            eprintln!(
-                "columns-indexed {} records-loaded {} records-missing {} candidate-ids {} full-hydration {} metadata-keys {} prefix-keys {} substring-keys {} fuzzy-keys {} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {} metadata-budget {} substring-budget {} content-budget {}",
-                hydration.columns_applied,
-                hydration.records_loaded,
-                hydration.records_missing,
-                hydration.import.candidate_ids,
-                hydration.import.requires_full_record_hydration,
-                hydration.metadata_keys,
-                hydration.prefix_keys,
-                hydration.substring_keys,
-                hydration.fuzzy_keys,
-                lookup.indexed_prefixes(),
-                lookup.indexed_substring_grams(),
-                lookup.indexed_fuzzy_keys(),
-                hydration.content_keys,
-                budget.max_metadata_ids_per_term,
-                budget.max_substring_ids_per_gram,
-                budget.max_content_ids_per_term
-            );
-            let report = live.search_with_lookup_budget(&query, 50, &lookup, budget)?;
-            for hit in report.hits {
-                print_hit(&hit);
-            }
-        }
-        Some("search-index-sidecars-budget") => {
-            let records = required_path(
-                args.next(),
-                "search-index-sidecars-budget requires a records path",
-            )?;
-            let columns = required_path(
-                args.next(),
-                "search-index-sidecars-budget requires a columns path",
-            )?;
-            let metadata = required_path(
-                args.next(),
-                "search-index-sidecars-budget requires a metadata path",
-            )?;
-            let prefixes = required_path(
-                args.next(),
-                "search-index-sidecars-budget requires a prefixes path",
-            )?;
-            let substrings = required_path(
-                args.next(),
-                "search-index-sidecars-budget requires a substrings path",
-            )?;
-            let fuzzy = required_path(
-                args.next(),
-                "search-index-sidecars-budget requires a fuzzy path",
-            )?;
-            let content = required_path(
-                args.next(),
-                "search-index-sidecars-budget requires a content path",
-            )?;
-            let max_prefix_ids = parse_usize_arg(
-                args.next(),
-                "search-index-sidecars-budget requires max-prefix-ids",
-            )?;
-            let max_substring_grams = parse_usize_arg(
-                args.next(),
-                "search-index-sidecars-budget requires max-substring-grams",
-            )?;
-            let max_substring_ids = parse_usize_arg(
-                args.next(),
-                "search-index-sidecars-budget requires max-substring-ids",
-            )?;
-            let max_fuzzy_keys = parse_usize_arg(
-                args.next(),
-                "search-index-sidecars-budget requires max-fuzzy-keys",
-            )?;
-            let max_fuzzy_terms = parse_usize_arg(
-                args.next(),
-                "search-index-sidecars-budget requires max-fuzzy-terms",
-            )?;
-            let max_fuzzy_candidates = parse_usize_arg(
-                args.next(),
-                "search-index-sidecars-budget requires max-fuzzy-candidates",
-            )?;
-            let max_content_ids = parse_usize_arg(
-                args.next(),
-                "search-index-sidecars-budget requires max-content-ids",
-            )?;
-            let query = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format(
-                    "search-index-sidecars-budget requires a query string".to_string(),
-                )
-            })?;
-            let records = MmapRecordArchive::open(records)?;
-            let columns = MmapRecordColumns::open(columns)?;
-            let metadata = MmapMetadataArchive::open(metadata)?;
-            let substrings_archive = MmapSubstringArchive::open(&substrings)?;
-            let lookup = SearchArchiveLookup::open(prefixes, substrings, fuzzy)?;
-            let content = MmapContentArchive::open(content)?;
-            let budget = SearchLookupBudget {
-                max_prefix_ids_per_term: max_prefix_ids,
-                min_archive_prefix_chars: SearchLookupBudget::default().min_archive_prefix_chars,
-                max_substring_grams_per_term: max_substring_grams,
-                max_substring_ids_per_gram: max_substring_ids,
-                max_fuzzy_keys_per_term: max_fuzzy_keys,
-                max_fuzzy_terms_per_key: max_fuzzy_terms,
-                max_fuzzy_candidates_per_term: max_fuzzy_candidates,
-                max_metadata_ids_per_term: max_content_ids,
-                max_content_ids_per_term: max_content_ids,
-            };
-            let import = query_sidecar_imports(
-                &metadata,
-                &lookup,
-                &substrings_archive,
-                &content,
-                &query,
-                budget,
-            )?;
-            let (live, hydration) =
-                LiveIndex::from_mmap_records_with_sidecar_import(&records, &columns, import)?;
-            let report = live.search_with_lookup_budget(&query, 50, &lookup, budget)?;
-            eprintln!(
-                "sidecar-budget\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tmetadata-budget={max_content_ids}\tcontent-budget={max_content_ids}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
-                hydration.columns_applied,
-                hydration.records_loaded,
-                hydration.records_missing,
-                hydration.import.candidate_ids,
-                hydration.import.requires_full_record_hydration,
-                hydration.metadata_keys,
-                hydration.prefix_keys,
-                hydration.substring_keys,
-                hydration.fuzzy_keys,
-                hydration.content_keys,
-                lookup.indexed_prefixes(),
-                lookup.indexed_substring_grams(),
-                lookup.indexed_fuzzy_keys(),
-                report.lookup.prefix_terms,
-                report.lookup.prefix_lookup_requests,
-                report.lookup.prefix_lookup_ids,
-                report.lookup.prefix_candidate_ids,
-                report.lookup.prefix_cache_hits,
-                report.lookup.prefix_cache_misses,
-                report.lookup.prefix_cutoff_terms,
-                report.lookup.prefix_truncated_terms,
-                report.lookup.substring_terms,
-                report.lookup.substring_grams,
-                report.lookup.substring_lookup_requests,
-                report.lookup.substring_lookup_ids,
-                report.lookup.substring_candidate_ids,
-                report.lookup.substring_cache_hits,
-                report.lookup.substring_cache_misses,
-                report.lookup.substring_cutoff_terms,
-                report.lookup.substring_term_truncated_grams,
-                report.lookup.substring_truncated_grams,
-                report.lookup.fuzzy_terms,
-                report.lookup.fuzzy_keys,
-                report.lookup.fuzzy_lookup_requests,
-                report.lookup.fuzzy_lookup_terms,
-                report.lookup.fuzzy_candidate_terms,
-                report.lookup.fuzzy_verified_candidates,
-                report.lookup.fuzzy_cache_hits,
-                report.lookup.fuzzy_cache_misses,
-                report.lookup.fuzzy_key_truncated_terms,
-                report.lookup.fuzzy_term_truncated_keys,
-                report.lookup.fuzzy_candidate_truncated_terms
-            );
-            for hit in report.hits {
-                print_hit(&hit);
-            }
-        }
         Some("index-footprint") => {
             let records = required_path(args.next(), "index-footprint requires a records path")?;
             let columns =
@@ -1898,7 +1590,7 @@ fn run() -> Result<()> {
                 report.full_hydration
             );
             for hit in live.search_with_snippets(&query, 50, &Extractor::default(), 96)? {
-                print_hit(&hit);
+                search::print_hit(&hit);
             }
         }
         Some("search-content-index-adaptive") => {
@@ -1933,7 +1625,7 @@ fn run() -> Result<()> {
                 report.full_hydration
             );
             for hit in live.search_with_snippets(&query, 50, &extractor, 96)? {
-                print_hit(&hit);
+                search::print_hit(&hit);
             }
         }
         Some("search-content-index-set") => {
@@ -1964,7 +1656,7 @@ fn run() -> Result<()> {
                 report.full_hydration
             );
             for hit in live.search(&query, 50) {
-                print_hit(&hit);
+                search::print_hit(&hit);
             }
         }
         Some("search-content-index-manifest") => {
@@ -1992,7 +1684,7 @@ fn run() -> Result<()> {
                 report.full_hydration
             );
             for hit in live.search(&query, 50) {
-                print_hit(&hit);
+                search::print_hit(&hit);
             }
         }
         Some("content-ids") => {
@@ -2842,7 +2534,7 @@ fn parse_sidecar_kind(value: Option<String>, command: &str) -> Result<SidecarKin
     }
 }
 
-fn required_string(value: Option<String>, message: &str) -> Result<String> {
+pub(crate) fn required_string(value: Option<String>, message: &str) -> Result<String> {
     value.ok_or_else(|| GfmError::Format(message.to_string()))
 }
 
@@ -2855,7 +2547,7 @@ fn parse_optional_scheduling_pressure(
     parse_scheduling_pressure_tail(io, args, "adaptive scheduling")
 }
 
-fn parse_required_scheduling_pressure(
+pub(crate) fn parse_required_scheduling_pressure(
     args: &mut impl Iterator<Item = String>,
     context: &str,
 ) -> Result<SchedulingPressure> {
@@ -3029,7 +2721,7 @@ fn parse_event_ids(value: &str) -> Result<Vec<u64>> {
         .collect()
 }
 
-fn parse_usize_arg(value: Option<String>, message: &str) -> Result<usize> {
+pub(crate) fn parse_usize_arg(value: Option<String>, message: &str) -> Result<usize> {
     let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
     parse_usize(&value, message)
 }
@@ -3217,39 +2909,6 @@ fn marker(kind: FileKind) -> &'static str {
         FileKind::Symlink => "link",
         FileKind::Other => "other",
     }
-}
-
-fn print_hit(hit: &SearchHit) {
-    print!(
-        "{}\t{}\t{}\t{}",
-        hit.score,
-        marker(hit.record.kind),
-        hit.record.len,
-        hit.record.path.display()
-    );
-    if let Some(snippet) = &hit.snippet {
-        print!("\t{}", escape_output_field(&highlight_snippet(snippet)));
-    }
-    println!();
-}
-
-fn highlight_snippet(snippet: &gfm_types::SearchSnippet) -> String {
-    let Some(highlight) = snippet.highlights.first() else {
-        return snippet.text.clone();
-    };
-    if highlight.start > highlight.end
-        || highlight.end > snippet.text.len()
-        || !snippet.text.is_char_boundary(highlight.start)
-        || !snippet.text.is_char_boundary(highlight.end)
-    {
-        return snippet.text.clone();
-    }
-    format!(
-        "{}[[{}]]{}",
-        &snippet.text[..highlight.start],
-        &snippet.text[highlight.start..highlight.end],
-        &snippet.text[highlight.end..]
-    )
 }
 
 fn escape_output_field(input: &str) -> String {
@@ -3462,13 +3121,6 @@ fn runtime_retry_probe(state: &Path) -> Result<usize> {
         Err(GfmError::Format("temporary runtime probe busy".to_string()))
     } else {
         Ok(attempt)
-    }
-}
-
-fn stream_stage(stage: SearchStreamStage) -> &'static str {
-    match stage {
-        SearchStreamStage::Hot => "hot",
-        SearchStreamStage::Deep => "deep",
     }
 }
 
