@@ -63,15 +63,27 @@ impl QuickLookSessionContract {
         policy: &PreviewSecurityPolicy,
         input: QuickLookSessionInput,
     ) -> Result<Self> {
+        Self::from_input_checked(policy, input, || Ok(()))
+    }
+
+    pub fn from_input_checked(
+        policy: &PreviewSecurityPolicy,
+        input: QuickLookSessionInput,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
         let security_input = security_input_for_path(&input.key.path, PreviewKind::QuickLook);
+        check()?;
         let security = decide_preview_security(policy, &security_input);
         let controller_mode = controller_mode(security);
         let invalidation = decide_invalidation(input.invalidation_event);
+        check()?;
         let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy {
             max_visible: 1,
             max_prefetch: 1,
             cancel_offscreen: true,
         })?;
+        check()?;
         let schedule_decision = scheduler
             .schedule(
                 input.viewport,
@@ -83,6 +95,7 @@ impl QuickLookSessionContract {
                 key: input.key.clone(),
                 reason: "outside-preview-budget",
             });
+        check()?;
 
         Ok(Self {
             key: input.key,
@@ -182,6 +195,18 @@ mod tests {
             contract.schedule_decision,
             PreviewTaskDecision::Cancelled { .. }
         ));
+    }
+
+    #[test]
+    fn checked_contract_honors_pre_cancelled_work() {
+        let err = QuickLookSessionContract::from_input_checked(
+            &PreviewSecurityPolicy::default(),
+            input("Report.pdf", Rect::new(0, 0, 400, 300)),
+            || Err(gfm_types::GfmError::Cancelled),
+        )
+        .expect_err("pre-cancelled quicklook contract fails before planning");
+
+        assert!(matches!(err, gfm_types::GfmError::Cancelled));
     }
 
     #[test]

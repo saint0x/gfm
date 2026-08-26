@@ -19,6 +19,18 @@ pub(crate) fn run_volume_task<T>(
 where
     T: Send + 'static,
 {
+    run_volume_task_cancellable(volume, priority, label, move |_| work())
+}
+
+pub(crate) fn run_volume_task_cancellable<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    label: &'static str,
+    work: impl FnOnce(Cancellation) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
     let result_slot = Arc::new(Mutex::new(None));
     let result_slot_task = Arc::clone(&result_slot);
     let mut scheduler = Scheduler::new();
@@ -35,9 +47,9 @@ where
         format!("{}:{label}", priority.as_str()),
     )?;
     let runtime_task = runtime.clone();
-    let task = Task::new(job.clone(), move |_| {
+    let task = Task::new(job.clone(), move |cancellation| {
         runtime_task.running()?;
-        let result = work()?;
+        let result = work(cancellation)?;
         *result_slot_task
             .lock()
             .expect("volume task result lock poisoned") = Some(result);

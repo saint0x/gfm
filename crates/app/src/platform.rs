@@ -1,6 +1,7 @@
-use crate::{detect_volume_id, index_volume_descriptor, run_preview_contract};
+use crate::{detect_volume_id, index_volume_descriptor, run_preview_contract_cancellable};
 use gfm_fs::record_for_path;
 use gfm_index::{parse_volume_indexing_policy, VolumeIndexPolicy};
+use gfm_jobs::Cancellation;
 use gfm_mac::{
     parse_spotlight_fixture, AccessIntent, FileProviderStateReport, MacBridgeContract,
     NativeIconDescriptor, SecurityScopedAccessReport, SpotlightMetadataReader,
@@ -124,10 +125,44 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 content_changed: true,
                 ..PreviewInvalidationEvent::default()
             });
-            let contract = run_preview_contract(volume, "quicklook preview", move || {
-                QuickLookSessionContract::from_input(&PreviewSecurityPolicy::default(), input)
-            })?;
+            let contract = run_preview_contract_cancellable(
+                volume,
+                "quicklook preview",
+                move |cancellation| {
+                    QuickLookSessionContract::from_input_checked(
+                        &PreviewSecurityPolicy::default(),
+                        input,
+                        || cancellation.check(),
+                    )
+                },
+            )?;
             println!("{}", contract.as_tsv());
+        }
+        "quicklook-session-cancel" => {
+            let path = required_path(args.next(), "quicklook-session-cancel requires a path")?;
+            let record = record_for_path(&path, None, false)?;
+            let cancellation = Cancellation::default();
+            cancellation.cancel();
+            let input = QuickLookSessionInput::new(
+                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
+                Rect::new(0, 0, 640, 480),
+                Viewport::new(Rect::new(0, 0, 1024, 768), 256),
+            );
+            match QuickLookSessionContract::from_input_checked(
+                &PreviewSecurityPolicy::default(),
+                input,
+                || cancellation.check(),
+            ) {
+                Err(GfmError::Cancelled) => {
+                    println!("quicklook-session\tstatus=cancelled\treason=cancelled-before-plan")
+                }
+                Err(err) => return Err(err),
+                Ok(_) => {
+                    return Err(GfmError::Format(
+                        "pre-cancelled quicklook session unexpectedly completed".to_string(),
+                    ))
+                }
+            }
         }
         "thumbnail-generation" => {
             let path = required_path(args.next(), "thumbnail-generation requires a path")?;
@@ -145,10 +180,45 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 metadata_changed: true,
                 ..PreviewInvalidationEvent::default()
             });
-            let contract = run_preview_contract(volume, "thumbnail generation", move || {
-                ThumbnailGenerationContract::from_input(&PreviewSecurityPolicy::default(), input)
-            })?;
+            let contract = run_preview_contract_cancellable(
+                volume,
+                "thumbnail generation",
+                move |cancellation| {
+                    ThumbnailGenerationContract::from_input_checked(
+                        &PreviewSecurityPolicy::default(),
+                        input,
+                        || cancellation.check(),
+                    )
+                },
+            )?;
             println!("{}", contract.as_tsv());
+        }
+        "thumbnail-generation-cancel" => {
+            let path = required_path(args.next(), "thumbnail-generation-cancel requires a path")?;
+            let record = record_for_path(&path, None, false)?;
+            let cancellation = Cancellation::default();
+            cancellation.cancel();
+            let input = ThumbnailGenerationInput::new(
+                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
+                Rect::new(0, 0, 160, 160),
+                Viewport::new(Rect::new(0, 0, 1024, 768), 256),
+            )
+            .with_size(512, 2_000);
+            match ThumbnailGenerationContract::from_input_checked(
+                &PreviewSecurityPolicy::default(),
+                input,
+                || cancellation.check(),
+            ) {
+                Err(GfmError::Cancelled) => {
+                    println!("thumbnail-generation\tstatus=cancelled\treason=cancelled-before-plan")
+                }
+                Err(err) => return Err(err),
+                Ok(_) => {
+                    return Err(GfmError::Format(
+                        "pre-cancelled thumbnail generation unexpectedly completed".to_string(),
+                    ))
+                }
+            }
         }
         "preview-schedule" => {
             let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy {

@@ -97,16 +97,28 @@ impl ThumbnailGenerationContract {
         policy: &PreviewSecurityPolicy,
         input: ThumbnailGenerationInput,
     ) -> Result<Self> {
+        Self::from_input_checked(policy, input, || Ok(()))
+    }
+
+    pub fn from_input_checked(
+        policy: &PreviewSecurityPolicy,
+        input: ThumbnailGenerationInput,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
         let security_input = security_input_for_path(&input.key.path, PreviewKind::Thumbnail);
+        check()?;
         let security = decide_preview_security(policy, &security_input);
         let generator_mode = generator_mode(security);
         let invalidation = decide_invalidation(input.invalidation_event);
         let cache_disposition = cache_disposition(generator_mode, &invalidation);
+        check()?;
         let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy {
             max_visible: 64,
             max_prefetch: 128,
             cancel_offscreen: true,
         })?;
+        check()?;
         let schedule_decision = scheduler
             .schedule(
                 input.viewport,
@@ -118,6 +130,7 @@ impl ThumbnailGenerationContract {
                 key: input.key.clone(),
                 reason: "outside-thumbnail-budget",
             });
+        check()?;
 
         Ok(Self {
             key: input.key,
@@ -242,6 +255,18 @@ mod tests {
             contract.cache_disposition,
             ThumbnailCacheDisposition::RefreshMemoryAndDisk
         );
+    }
+
+    #[test]
+    fn checked_contract_honors_pre_cancelled_work() {
+        let err = ThumbnailGenerationContract::from_input_checked(
+            &PreviewSecurityPolicy::default(),
+            input("Image.png", Rect::new(0, 0, 128, 128)),
+            || Err(gfm_types::GfmError::Cancelled),
+        )
+        .expect_err("pre-cancelled thumbnail contract fails before planning");
+
+        assert!(matches!(err, gfm_types::GfmError::Cancelled));
     }
 
     #[test]

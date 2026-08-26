@@ -887,6 +887,32 @@ fn reports_quicklook_session_from_binary() {
 }
 
 #[test]
+fn cancelled_quicklook_session_stops_before_planning_from_binary() {
+    let path =
+        std::env::temp_dir().join(format!("gfm-quicklook-cancel-{}.pdf", std::process::id()));
+    std::fs::write(&path, b"%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("quicklook-session-cancel")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert_eq!(
+        stdout,
+        "quicklook-session\tstatus=cancelled\treason=cancelled-before-plan\n"
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn reports_thumbnail_generation_from_binary() {
     let path = std::env::temp_dir().join(format!("gfm-thumbnail-{}.png", std::process::id()));
     std::fs::write(&path, b"png").unwrap();
@@ -908,6 +934,32 @@ fn reports_thumbnail_generation_from_binary() {
     assert!(stdout.contains("\tcache=refresh-memory-only\t"));
     assert!(stdout.contains("\tinvalidate-memory=true\tinvalidate-disk=false\t"));
     assert!(stdout.ends_with("schedule=scheduled:visible\n"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn cancelled_thumbnail_generation_stops_before_planning_from_binary() {
+    let path =
+        std::env::temp_dir().join(format!("gfm-thumbnail-cancel-{}.png", std::process::id()));
+    std::fs::write(&path, b"png").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("thumbnail-generation-cancel")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert_eq!(
+        stdout,
+        "thumbnail-generation\tstatus=cancelled\treason=cancelled-before-plan\n"
+    );
 
     let _ = std::fs::remove_file(path);
 }

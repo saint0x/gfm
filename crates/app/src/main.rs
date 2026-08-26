@@ -30,8 +30,6 @@ mod platform;
 mod runtime;
 mod search;
 
-use runtime::run_volume_task;
-
 fn main() {
     if let Err(err) = run() {
         eprintln!("gfm: {err}");
@@ -325,15 +323,15 @@ pub(crate) fn parent_volume(path: &Path) -> Option<VolumeId> {
         .and_then(|parent| detect_volume_id(parent).ok())
 }
 
-pub(crate) fn run_preview_contract<T>(
+pub(crate) fn run_preview_contract_cancellable<T>(
     volume: Option<VolumeId>,
     label: &'static str,
-    build: impl FnOnce() -> Result<T> + Send + 'static,
+    build: impl FnOnce(gfm_jobs::Cancellation) -> Result<T> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
 {
-    run_volume_task(volume, Priority::Visible, label, build)
+    runtime::run_volume_task_cancellable(volume, Priority::Visible, label, build)
 }
 
 pub(crate) fn detect_volume_id(path: &Path) -> Result<VolumeId> {
@@ -501,7 +499,9 @@ fn print_usage() {
   gfm spotlight-reconcile <path> [spotlight-fixture.tsv]
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm quicklook-session <path>
+  gfm quicklook-session-cancel <path>
   gfm thumbnail-generation <path>
+  gfm thumbnail-generation-cancel <path>
   gfm preview-schedule
   gfm macrobench <workspace> [smoke|standard]
   gfm macrobench-fixture <workspace> [smoke|standard|million]
