@@ -1,4 +1,5 @@
 use crate::PreviewRequestKey;
+use gfm_jobs::Cancellation;
 use gfm_types::{GfmError, Result};
 use std::collections::{HashMap, HashSet};
 
@@ -157,7 +158,11 @@ impl Default for PreviewSchedulingPolicy {
 
 pub struct PreviewScheduler {
     policy: PreviewSchedulingPolicy,
-    inflight: HashMap<PreviewRequestKey, ScheduledTask>,
+    inflight: HashMap<PreviewRequestKey, InflightTask>,
+}
+
+struct InflightTask {
+    cancellation: Cancellation,
 }
 
 impl PreviewScheduler {
@@ -213,7 +218,9 @@ impl PreviewScheduler {
                 .cloned()
                 .collect::<Vec<_>>();
             for key in stale {
-                self.inflight.remove(&key);
+                if let Some(inflight) = self.inflight.remove(&key) {
+                    inflight.cancellation.cancel();
+                }
                 decisions.push(PreviewTaskDecision::Cancelled {
                     key,
                     reason: "offscreen-or-superseded",
@@ -229,7 +236,12 @@ impl PreviewScheduler {
                     priority: item.priority,
                 });
             } else {
-                self.inflight.insert(key.clone(), item.clone());
+                self.inflight.insert(
+                    key.clone(),
+                    InflightTask {
+                        cancellation: Cancellation::default(),
+                    },
+                );
                 decisions.push(PreviewTaskDecision::Scheduled {
                     key,
                     priority: item.priority,
@@ -237,6 +249,12 @@ impl PreviewScheduler {
             }
         }
         decisions
+    }
+
+    pub fn cancellation_for(&self, key: &PreviewRequestKey) -> Option<Cancellation> {
+        self.inflight
+            .get(key)
+            .map(|inflight| inflight.cancellation.clone())
     }
 
     pub fn finish(&mut self, key: &PreviewRequestKey) {
@@ -330,6 +348,10 @@ mod tests {
             Viewport::new(Rect::new(0, 0, 100, 100), 0),
             vec![task.clone()],
         );
+        let cancellation = scheduler
+            .cancellation_for(&task.key)
+            .expect("scheduled thumbnail has a cancellation token");
+        assert!(!cancellation.is_cancelled());
         let decisions =
             scheduler.schedule(Viewport::new(Rect::new(0, 200, 100, 100), 0), vec![task]);
 
@@ -340,7 +362,43 @@ mod tests {
                 ..
             }
         ));
+        assert!(cancellation.is_cancelled());
         assert_eq!(scheduler.inflight_len(), 0);
+    }
+
+    #[test]
+    fn coalesced_work_reuses_existing_cancellation_token() {
+        let viewport = Viewport::new(Rect::new(0, 0, 100, 100), 0);
+        let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy::default()).unwrap();
+        let task = task(1, Rect::new(0, 0, 20, 20));
+
+        scheduler.schedule(viewport, vec![task.clone()]);
+        let first = scheduler
+            .cancellation_for(&task.key)
+            .expect("first scheduled task has a cancellation token");
+        scheduler.schedule(viewport, vec![task.clone()]);
+        let second = scheduler
+            .cancellation_for(&task.key)
+            .expect("coalesced task keeps a cancellation token");
+
+        second.cancel();
+        assert!(first.is_cancelled());
+    }
+
+    #[test]
+    fn finished_work_removes_token_without_cancelling_completed_generation() {
+        let viewport = Viewport::new(Rect::new(0, 0, 100, 100), 0);
+        let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy::default()).unwrap();
+        let task = task(1, Rect::new(0, 0, 20, 20));
+
+        scheduler.schedule(viewport, vec![task.clone()]);
+        let cancellation = scheduler
+            .cancellation_for(&task.key)
+            .expect("scheduled task has a cancellation token");
+        scheduler.finish(&task.key);
+
+        assert!(scheduler.cancellation_for(&task.key).is_none());
+        assert!(!cancellation.is_cancelled());
     }
 
     #[test]
