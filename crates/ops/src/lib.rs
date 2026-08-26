@@ -2,6 +2,7 @@ mod access;
 mod conflict;
 mod control;
 mod journal;
+mod plan;
 mod progress;
 mod recovery;
 mod trashmeta;
@@ -18,7 +19,9 @@ pub use conflict::{
 pub use control::{OperationCancellation, OperationPause};
 use journal::{append_journal, now_nanos, operation_status_from_error};
 pub use journal::{read_journal, JournalEntry, OperationStatus};
-use progress::{item_bytes, ProgressTracker};
+pub use plan::plan_operation;
+use plan::plan_operation_checked;
+use progress::ProgressTracker;
 pub use progress::{
     OperationProgress, OperationProgressEvent, OperationProgressPhase, OperationThroughputClass,
     OperationThroughputSnapshot,
@@ -378,68 +381,6 @@ impl Operator {
     fn append(&self, entry: JournalEntry) -> Result<()> {
         append_journal(&self.context.journal_path, &entry)
     }
-}
-
-pub fn plan_operation(operation: &Operation) -> Result<OperationProgress> {
-    plan_operation_checked(operation, &OperationCancellation::default())
-}
-
-fn plan_operation_checked(
-    operation: &Operation,
-    cancellation: &OperationCancellation,
-) -> Result<OperationProgress> {
-    match operation {
-        Operation::Copy { from, .. }
-        | Operation::Move { from, .. }
-        | Operation::Rename { from, .. }
-        | Operation::Restore { from, .. } => plan_path(from, cancellation),
-        Operation::Delete { path } | Operation::Trash { path } => plan_path(path, cancellation),
-        Operation::EmptyTrash { path } => plan_empty_trash(path, cancellation),
-    }
-}
-
-fn plan_path(path: &Path, cancellation: &OperationCancellation) -> Result<OperationProgress> {
-    cancellation.check()?;
-    let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
-    let mut progress = OperationProgress {
-        total_items: 1,
-        total_bytes: item_bytes(&metadata),
-        completed_items: 0,
-        completed_bytes: 0,
-    };
-    if metadata.is_dir() {
-        for entry in fs::read_dir(path).map_err(|err| GfmError::io(path, err))? {
-            cancellation.check()?;
-            let entry = entry.map_err(|err| GfmError::io(path, err))?;
-            let child = plan_path(&entry.path(), cancellation)?;
-            progress.total_items += child.total_items;
-            progress.total_bytes += child.total_bytes;
-        }
-    }
-    Ok(progress)
-}
-
-fn plan_empty_trash(
-    path: &Path,
-    cancellation: &OperationCancellation,
-) -> Result<OperationProgress> {
-    cancellation.check()?;
-    let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
-    if !metadata.is_dir() {
-        return Err(GfmError::Format(format!(
-            "empty trash requires a directory: {}",
-            path.display()
-        )));
-    }
-    let mut progress = OperationProgress::default();
-    for entry in fs::read_dir(path).map_err(|err| GfmError::io(path, err))? {
-        cancellation.check()?;
-        let entry = entry.map_err(|err| GfmError::io(path, err))?;
-        let child = plan_path(&entry.path(), cancellation)?;
-        progress.total_items += child.total_items;
-        progress.total_bytes += child.total_bytes;
-    }
-    Ok(progress)
 }
 
 #[derive(Debug, Default)]
