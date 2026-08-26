@@ -136,6 +136,14 @@ impl MacBridgeContract {
                 MacBridgeStatus::Implemented,
             ),
             MacBridgeSpec::new(
+                "corefoundation-security-bookmarks",
+                MacFramework::Security,
+                "crates/mac-sys",
+                "security-scoped-bookmark-create-resolve-access",
+                MacBridgeThreadPolicy::BackgroundSafe,
+                MacBridgeStatus::Implemented,
+            ),
+            MacBridgeSpec::new(
                 "fsevents-file-event-stream",
                 MacFramework::FileEvents,
                 "crates/mac",
@@ -259,7 +267,7 @@ mod tests {
         let contract = MacBridgeContract::finder_required();
         let tsv = contract.as_tsv();
 
-        assert!(tsv.starts_with("mac-bridges\timplemented=6\trequired=5\ttotal=11"));
+        assert!(tsv.starts_with("mac-bridges\timplemented=7\trequired=5\ttotal=12"));
         assert!(tsv.contains(
             "bridge\tappkit-window-shell\tappkit\tcrates/ui\tapplication-window-menu-activation\tmain-thread\timplemented"
         ));
@@ -268,6 +276,9 @@ mod tests {
         ));
         assert!(tsv.contains(
             "bridge\tspotlight-metadata-reconciliation\tspotlight\tcrates/index\tmetadata-import-without-primary-correctness-dependency\tbackground-safe\timplemented"
+        ));
+        assert!(tsv.contains(
+            "bridge\tcorefoundation-security-bookmarks\tsecurity\tcrates/mac-sys\tsecurity-scoped-bookmark-create-resolve-access\tbackground-safe\timplemented"
         ));
     }
 }

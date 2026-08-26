@@ -44,7 +44,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 27. Finish Finder-visible metadata direct macOS binding for FinderInfo alias resolution, sidebar/tag UI propagation, and captured Finder pixel baselines.
 28. Finish iCloud Drive and FileProvider integration by binding the implemented filesystem/xattr/path-hint state, badge, command-policy, conflict, and offline contract to direct FileProvider.framework/NSFileProviderManager state reads, native download/evict operations, provider progress callbacks, materialized placeholder detection, conflict-resolution UI plumbing, sidebar/icon badge propagation, live invalidation, and captured Finder pixel baselines.
 29. Finish DiskArbitration volume integration for long-lived session callbacks, native eject/unmount/mount operations, APFS/container metadata, network-volume reachability, sidebar propagation, live index policy invalidation, and captured Finder pixel baselines.
-30. Finish Security-scoped access by binding the implemented per-path access/probe/bookmark/Full-Disk/degraded-mode contract to direct Security.framework scoped bookmark creation and resolution, TCC prompt orchestration, persistent bookmark storage, stale-bookmark repair, Full Disk Access diagnostics, operation/index/preview worker enforcement, GPUI permission sheets, and captured Finder prompt baselines.
+30. Finish Security-scoped access for TCC prompt orchestration, persistent bookmark storage, stale-bookmark repair, Full Disk Access diagnostics, operation/index/preview worker enforcement, GPUI permission sheets, and captured Finder prompt baselines.
 
 ## Content Extraction
 
