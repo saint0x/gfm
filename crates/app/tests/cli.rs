@@ -139,6 +139,38 @@ fn parity_gate_and_review_use_governed_masks_from_binary() {
 }
 
 #[test]
+fn search_typing_benchmark_reports_hot_path_latency_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-typing-benchmark");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-typing-benchmark",
+            root.to_str().unwrap(),
+            "256",
+            "1",
+            "PackageProject00000006",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("search-typing-benchmark\t"), "{stdout}");
+    assert!(stdout.contains("\trecords=256\t"), "{stdout}");
+    assert!(stdout.contains("\trepetitions=1\t"), "{stdout}");
+    assert!(stdout.contains("\tprefix-candidates="), "{stdout}");
+    assert!(stdout.contains("\tprefix-cache-hits="), "{stdout}");
+    assert!(stdout.contains("\tviolations=0\tpassed=true"), "{stdout}");
+    assert!(root.join("gfm-search-typing-history.tsv").exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn inspects_archive_schema_from_binary() {
     let root = unique_temp_dir("gfm-cli-archive-schema-root");
     let index = unique_temp_path("gfm-cli-archive-schema", "gfmidx");
@@ -5395,6 +5427,58 @@ fn deferred_adaptive_thumbnail_persists_runtime_payload_and_progress_from_binary
     );
     assert!(
         progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
+        "{progress_text}"
+    );
+
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn visible_adaptive_quicklook_persists_runtime_payload_and_progress_under_pressure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-visible-quicklook-root");
+    let document = root.join("Visible.pdf");
+    fs::write(&document, b"%PDF-1.7\nquicklook visible runtime metadata").unwrap();
+    let catalog = unique_temp_path("gfm-cli-runtime-visible-quicklook", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-runtime-visible-quicklook", "gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "quicklook-session-adaptive",
+            document.to_str().unwrap(),
+            "saturated",
+            "critical",
+            "low",
+            "active",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("quicklook-session\t"), "{stdout}");
+    assert!(stdout.contains("\taction=Run\tdeferred=false"), "{stdout}");
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(catalog_text.contains("\tpreview\t"), "{catalog_text}");
+    assert!(catalog_text.contains("quicklook preview"), "{catalog_text}");
+    assert!(
+        catalog_text.contains("runtime/preview/quicklook-preview.gfmjob"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tquicklook preview"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tcompleted\t1\t1\tcompleted\t"),
         "{progress_text}"
     );
 

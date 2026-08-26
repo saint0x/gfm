@@ -13,7 +13,7 @@ use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegressionInputs<'a> {
@@ -202,6 +202,65 @@ pub struct LargeSidecarGateReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchTypingBenchmarkOptions {
+    pub workspace: PathBuf,
+    pub records: usize,
+    pub repetitions: usize,
+    pub query: String,
+    pub limit: usize,
+    pub budget: SearchLookupBudget,
+    pub max_p95_latency: Duration,
+}
+
+impl SearchTypingBenchmarkOptions {
+    pub fn new(workspace: impl Into<PathBuf>, records: usize) -> Self {
+        Self {
+            workspace: workspace.into(),
+            records,
+            repetitions: 5,
+            query: "packageproject00000006".to_string(),
+            limit: 50,
+            budget: SearchLookupBudget::default(),
+            max_p95_latency: Duration::from_millis(25),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchTypingBenchmarkReport {
+    pub fixture_root: PathBuf,
+    pub history_path: PathBuf,
+    pub records: usize,
+    pub probe_records: usize,
+    pub repetitions: usize,
+    pub queries: Vec<String>,
+    pub samples: usize,
+    pub hits: usize,
+    pub p50: Duration,
+    pub p95: Duration,
+    pub p99: Duration,
+    pub max: Duration,
+    pub lookup: SearchLookupTelemetry,
+    pub violations: Vec<SearchTypingBenchmarkViolation>,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchTypingBenchmarkViolation {
+    P95LatencyExceeded {
+        observed: Duration,
+        budget: Duration,
+    },
+    LookupTruncated {
+        prefix_terms: usize,
+        substring_terms: usize,
+        fuzzy_terms_with_truncated_keys: usize,
+        fuzzy_keys_with_truncated_terms: usize,
+        fuzzy_candidate_terms: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LargeSidecarGateViolation {
     PrefixBytesPerRecordExceeded {
         observed: u64,
@@ -334,6 +393,109 @@ pub fn run_large_sidecar_gate(options: &LargeSidecarGateOptions) -> Result<Large
     })
 }
 
+pub fn run_search_typing_benchmark(
+    options: &SearchTypingBenchmarkOptions,
+) -> Result<SearchTypingBenchmarkReport> {
+    fs::create_dir_all(&options.workspace).map_err(|err| GfmError::io(&options.workspace, err))?;
+    let fixture_root = options.workspace.join("gfm-search-typing-benchmark");
+    if fixture_root.exists() {
+        fs::remove_dir_all(&fixture_root).map_err(|err| GfmError::io(&fixture_root, err))?;
+    }
+    fs::create_dir_all(&fixture_root).map_err(|err| GfmError::io(&fixture_root, err))?;
+
+    let records = realistic_large_records(options.records);
+    let prefix_path = fixture_root.join("records.gfmprefix");
+    let substring_path = fixture_root.join("records.gfmsubstr");
+    let fuzzy_path = fixture_root.join("records.gfmfuzzy");
+    write_prefix_postings(&prefix_path, &prefix_postings_from_records(&records))?;
+    write_substring_postings(&substring_path, &substring_postings_from_records(&records))?;
+    write_fuzzy_postings(&fuzzy_path, &fuzzy_postings_from_records(&records))?;
+
+    let probe_records = records
+        .iter()
+        .take(
+            options
+                .budget
+                .max_prefix_ids_per_term
+                .saturating_mul(2)
+                .max(options.limit),
+        )
+        .cloned()
+        .collect::<Vec<_>>();
+    drop(records);
+
+    let lookup = SearchArchiveLookup::open(&prefix_path, &substring_path, &fuzzy_path)?;
+    let live = LiveIndex::from_records_deferred_sidecars(probe_records);
+    let queries = incremental_queries(
+        &options.query,
+        bounded_typing_start_chars(&options.query, options.budget.min_archive_prefix_chars),
+    );
+    if queries.is_empty() {
+        return Err(GfmError::Format(
+            "search typing benchmark query must contain enough non-whitespace characters"
+                .to_string(),
+        ));
+    }
+
+    let repetitions = options.repetitions.max(1);
+    let mut durations = Vec::with_capacity(repetitions.saturating_mul(queries.len()));
+    let mut lookup_telemetry = SearchLookupTelemetry::default();
+    let mut hits = 0usize;
+    for _ in 0..repetitions {
+        for query in &queries {
+            let started = Instant::now();
+            let report =
+                live.search_with_lookup_budget(query, options.limit, &lookup, options.budget)?;
+            durations.push(started.elapsed());
+            lookup_telemetry.merge(&report.lookup);
+            hits += report.hits.len();
+        }
+    }
+
+    durations.sort_unstable();
+    let p50 = percentile_duration(&durations, 50);
+    let p95 = percentile_duration(&durations, 95);
+    let p99 = percentile_duration(&durations, 99);
+    let max = durations.last().copied().unwrap_or_default();
+    let violations =
+        evaluate_search_typing_benchmark(p95, &lookup_telemetry, options.max_p95_latency);
+    let passed = violations.is_empty();
+    let history_path = options.workspace.join("gfm-search-typing-history.tsv");
+    append_search_typing_history(SearchTypingHistoryRow {
+        path: &history_path,
+        options,
+        probe_records: live.indexed_records(),
+        query_count: queries.len(),
+        samples: durations.len(),
+        hits,
+        p50,
+        p95,
+        p99,
+        max,
+        telemetry: &lookup_telemetry,
+        violations: violations.len(),
+        passed,
+    })?;
+
+    Ok(SearchTypingBenchmarkReport {
+        fixture_root,
+        history_path,
+        records: options.records,
+        probe_records: live.indexed_records(),
+        repetitions,
+        queries,
+        samples: durations.len(),
+        hits,
+        p50,
+        p95,
+        p99,
+        max,
+        lookup: lookup_telemetry,
+        violations,
+        passed,
+    })
+}
+
 pub fn run_regression_gate(
     macrobench_options: &MacrobenchOptions,
     gate_options: RegressionGateOptions,
@@ -459,6 +621,145 @@ pub fn evaluate_regression_gate(
     }
 
     RegressionGateReport { violations }
+}
+
+fn evaluate_search_typing_benchmark(
+    p95: Duration,
+    telemetry: &SearchLookupTelemetry,
+    max_p95_latency: Duration,
+) -> Vec<SearchTypingBenchmarkViolation> {
+    let mut violations = Vec::new();
+    if p95 > max_p95_latency {
+        violations.push(SearchTypingBenchmarkViolation::P95LatencyExceeded {
+            observed: p95,
+            budget: max_p95_latency,
+        });
+    }
+    if telemetry.prefix_truncated_terms > 0
+        || telemetry.substring_term_truncated_grams > 0
+        || telemetry.substring_truncated_grams > 0
+        || telemetry.fuzzy_term_truncated_keys > 0
+        || telemetry.fuzzy_key_truncated_terms > 0
+        || telemetry.fuzzy_candidate_truncated_terms > 0
+    {
+        violations.push(SearchTypingBenchmarkViolation::LookupTruncated {
+            prefix_terms: telemetry.prefix_truncated_terms,
+            substring_terms: telemetry.substring_term_truncated_grams
+                + telemetry.substring_truncated_grams,
+            fuzzy_terms_with_truncated_keys: telemetry.fuzzy_term_truncated_keys,
+            fuzzy_keys_with_truncated_terms: telemetry.fuzzy_key_truncated_terms,
+            fuzzy_candidate_terms: telemetry.fuzzy_candidate_truncated_terms,
+        });
+    }
+    violations
+}
+
+fn incremental_queries(query: &str, min_chars: usize) -> Vec<String> {
+    let normalized = query.trim();
+    normalized
+        .char_indices()
+        .filter_map(|(index, _)| {
+            let next = &normalized[..index];
+            (next.chars().count() >= min_chars).then(|| next.to_string())
+        })
+        .chain((normalized.chars().count() >= min_chars).then(|| normalized.to_string()))
+        .collect()
+}
+
+fn bounded_typing_start_chars(query: &str, min_chars: usize) -> usize {
+    let mut consecutive_digits = 0usize;
+    for (index, ch) in query.trim().chars().enumerate() {
+        if ch.is_ascii_digit() {
+            consecutive_digits += 1;
+            if consecutive_digits > 4 {
+                return min_chars.max(index + 1);
+            }
+        } else {
+            consecutive_digits = 0;
+        }
+    }
+    min_chars.max(4)
+}
+
+fn percentile_duration(sorted: &[Duration], percentile: usize) -> Duration {
+    if sorted.is_empty() {
+        return Duration::default();
+    }
+    let last = sorted.len() - 1;
+    let index = (last * percentile).div_ceil(100);
+    sorted[index]
+}
+
+struct SearchTypingHistoryRow<'a> {
+    path: &'a PathBuf,
+    options: &'a SearchTypingBenchmarkOptions,
+    probe_records: usize,
+    query_count: usize,
+    samples: usize,
+    hits: usize,
+    p50: Duration,
+    p95: Duration,
+    p99: Duration,
+    max: Duration,
+    telemetry: &'a SearchLookupTelemetry,
+    violations: usize,
+    passed: bool,
+}
+
+fn append_search_typing_history(row: SearchTypingHistoryRow<'_>) -> Result<()> {
+    let existed = row.path.exists();
+    let run = if existed {
+        fs::read_to_string(row.path)
+            .map_err(|err| GfmError::io(row.path, err))?
+            .lines()
+            .filter(|line| line.starts_with("search-typing-history\t"))
+            .count()
+            + 1
+    } else {
+        1
+    };
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(row.path)
+        .map_err(|err| GfmError::io(row.path, err))?;
+    if !existed {
+        writeln!(
+            file,
+            "search-typing-thresholds\tmax-p95-ns={}",
+            duration_ns(row.options.max_p95_latency)
+        )
+        .map_err(|err| GfmError::io(row.path, err))?;
+    }
+    writeln!(
+        file,
+        "search-typing-history\trun={run}\trecords={}\tprobe-records={}\trepetitions={}\tqueries={}\tsamples={}\thits={}\tlimit={}\tp50-ns={}\tp95-ns={}\tp99-ns={}\tmax-ns={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tprefix-truncated={}\tsubstring-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
+        row.options.records,
+        row.probe_records,
+        row.options.repetitions.max(1),
+        row.query_count,
+        row.samples,
+        row.hits,
+        row.options.limit,
+        duration_ns(row.p50),
+        duration_ns(row.p95),
+        duration_ns(row.p99),
+        duration_ns(row.max),
+        row.telemetry.prefix_candidate_ids,
+        row.telemetry.substring_candidate_ids,
+        row.telemetry.fuzzy_verified_candidates,
+        row.telemetry.prefix_cache_hits,
+        row.telemetry.substring_cache_hits,
+        row.telemetry.fuzzy_cache_hits,
+        row.telemetry.prefix_truncated_terms,
+        row.telemetry.substring_term_truncated_grams + row.telemetry.substring_truncated_grams,
+        row.telemetry.fuzzy_term_truncated_keys
+            + row.telemetry.fuzzy_key_truncated_terms
+            + row.telemetry.fuzzy_candidate_truncated_terms,
+        row.violations,
+        row.passed,
+    )
+    .map_err(|err| GfmError::io(row.path, err))
 }
 
 fn duration_ns(value: std::time::Duration) -> u64 {
@@ -1085,6 +1386,67 @@ mod tests {
         assert!(history.contains("large-sidecar-history\trun=2"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn search_typing_benchmark_records_latency_and_lookup_telemetry() {
+        let root = unique_temp_dir("gfm-search-typing-benchmark");
+        let mut options = SearchTypingBenchmarkOptions::new(&root, 512);
+        options.repetitions = 3;
+        options.budget = SearchLookupBudget {
+            max_prefix_ids_per_term: 100_000,
+            min_archive_prefix_chars: 2,
+            max_substring_grams_per_term: 64,
+            max_substring_ids_per_gram: 100_000,
+            max_fuzzy_keys_per_term: 100_000,
+            max_fuzzy_terms_per_key: 100_000,
+            max_fuzzy_candidates_per_term: 100_000,
+            max_metadata_ids_per_term: 100_000,
+            max_content_ids_per_term: 100_000,
+        };
+        options.max_p95_latency = Duration::from_secs(60);
+
+        let report = run_search_typing_benchmark(&options).unwrap();
+
+        assert_eq!(report.records, 512);
+        assert_eq!(report.probe_records, 512);
+        assert_eq!(report.repetitions, 3);
+        assert!(report.queries.len() >= 3);
+        assert_eq!(report.samples, report.queries.len() * report.repetitions);
+        assert!(report.lookup.prefix_terms > 0);
+        assert!(report.lookup.prefix_cache_misses > 0);
+        assert!(report.lookup.prefix_cache_hits > 0);
+        assert!(report.p95 >= report.p50);
+        assert!(report.p99 >= report.p95);
+        assert!(report.max >= report.p99);
+        assert!(report.passed);
+        assert!(report.violations.is_empty());
+        assert!(report.fixture_root.join("records.gfmprefix").exists());
+        assert!(report.fixture_root.join("records.gfmsubstr").exists());
+        assert!(report.fixture_root.join("records.gfmfuzzy").exists());
+        let history = fs::read_to_string(&report.history_path).unwrap();
+        assert!(history.contains("search-typing-thresholds\tmax-p95-ns="));
+        assert!(history.contains("search-typing-history\trun=1"));
+        assert!(history.contains("\tprefix-cache-hits="));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn search_typing_benchmark_flags_latency_budget_drift() {
+        let violations = evaluate_search_typing_benchmark(
+            Duration::from_millis(2),
+            &SearchLookupTelemetry::default(),
+            Duration::from_millis(1),
+        );
+
+        assert_eq!(
+            violations,
+            vec![SearchTypingBenchmarkViolation::P95LatencyExceeded {
+                observed: Duration::from_millis(2),
+                budget: Duration::from_millis(1),
+            }]
+        );
     }
 
     fn macrobench_report(

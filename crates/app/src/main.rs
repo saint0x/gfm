@@ -528,6 +528,7 @@ fn print_usage() {
   gfm parity-profile <macos-build> [system|light|dark] [1x|2x|3x] [srgb|display-p3]
   gfm regression-gate <workspace> [smoke|standard]
   gfm large-sidecar-gate <workspace> <synthetic-records>
+  gfm search-typing-benchmark <workspace> <synthetic-records> [repetitions] [query]
   gfm release-policy
   gfm release-toolchain
   gfm release-validate <GFM.app> [--allow-unsigned] [--skip-notarization] [--skip-gatekeeper]
