@@ -357,6 +357,117 @@ fn live_index_queries_prefix_and_fuzzy_archive_lookup_without_importing_sidecars
 }
 
 #[test]
+fn query_sidecar_loader_hydrates_only_candidate_records() {
+    let records_path = unique_temp_path("gfm-index-sidecar-candidates", "gfmidx");
+    let columns_path = unique_temp_path("gfm-index-sidecar-candidates", "gfmcols");
+    let metadata_path = unique_temp_path("gfm-index-sidecar-candidates", "gfmmeta");
+    let prefixes_path = unique_temp_path("gfm-index-sidecar-candidates", "gfmprefix");
+    let substrings_path = unique_temp_path("gfm-index-sidecar-candidates", "gfmsubstr");
+    let fuzzy_path = unique_temp_path("gfm-index-sidecar-candidates", "gfmfuzzy");
+    let content_path = unique_temp_path("gfm-index-sidecar-candidates", "gfmcontent");
+    let hot = FileRecord {
+        id: FileId::new(VolumeId(1), 1),
+        parent: None,
+        path: PathBuf::from("/tmp/hot/tagged.md"),
+        name: "tagged.md".to_string(),
+        kind: FileKind::File,
+        len: 11,
+        created: Some(UNIX_EPOCH),
+        modified: Some(UNIX_EPOCH),
+        changed: Some(UNIX_EPOCH),
+        mode: 0o644,
+        owner: 501,
+        group: 20,
+        hidden: false,
+        tags: vec!["Important".to_string()],
+        finder_comment: Some("bodymarker".to_string()),
+        xattrs_digest: 0,
+    };
+    let cold = FileRecord {
+        id: FileId::new(VolumeId(1), 2),
+        parent: None,
+        path: PathBuf::from("/tmp/cold/other.md"),
+        name: "other.md".to_string(),
+        kind: FileKind::File,
+        len: 11,
+        created: Some(UNIX_EPOCH),
+        modified: Some(UNIX_EPOCH),
+        changed: Some(UNIX_EPOCH),
+        mode: 0o644,
+        owner: 501,
+        group: 20,
+        hidden: false,
+        tags: vec!["Cold".to_string()],
+        finder_comment: Some("coldmarker".to_string()),
+        xattrs_digest: 0,
+    };
+    let records = vec![hot.clone(), cold.clone()];
+    write_records(&records_path, &records).unwrap();
+    write_record_columns(&columns_path, &records).unwrap();
+    write_metadata_postings(&metadata_path, &metadata_postings_from_records(&records)).unwrap();
+    write_prefix_postings(&prefixes_path, &prefix_postings_from_records(&records)).unwrap();
+    write_substring_postings(&substrings_path, &substring_postings_from_records(&records)).unwrap();
+    write_fuzzy_postings(&fuzzy_path, &fuzzy_postings_from_records(&records)).unwrap();
+    write_content_postings(
+        &content_path,
+        &[
+            ContentPosting {
+                term: "bodymarker".to_string(),
+                ids: vec![hot.id],
+                positions: vec![ContentPositions {
+                    id: hot.id,
+                    positions: vec![0],
+                }],
+            },
+            ContentPosting {
+                term: "coldmarker".to_string(),
+                ids: vec![cold.id],
+                positions: vec![ContentPositions {
+                    id: cold.id,
+                    positions: vec![0],
+                }],
+            },
+        ],
+    )
+    .unwrap();
+
+    let record_archive = MmapRecordArchive::open(&records_path).unwrap();
+    let columns = MmapRecordColumns::open(&columns_path).unwrap();
+    let metadata = MmapMetadataArchive::open(&metadata_path).unwrap();
+    let lookup = SearchArchiveLookup::open(&prefixes_path, &substrings_path, &fuzzy_path).unwrap();
+    let substrings = MmapSubstringArchive::open(&substrings_path).unwrap();
+    let content = MmapContentArchive::open(&content_path).unwrap();
+    let import = query_sidecar_imports(
+        &metadata,
+        &lookup,
+        &substrings,
+        &content,
+        "bodymarker",
+        SearchLookupBudget::default(),
+    )
+    .unwrap();
+    let (live, report) =
+        LiveIndex::from_mmap_records_with_sidecar_import(&record_archive, &columns, import)
+            .unwrap();
+
+    assert_eq!(report.records_loaded, 1);
+    assert_eq!(report.records_missing, 0);
+    assert_eq!(report.columns_applied, 1);
+    assert_eq!(report.import.candidate_ids, 1);
+    assert!(!report.import.requires_full_record_hydration);
+    assert_eq!(live.search("bodymarker", 5)[0].record.id, hot.id);
+    assert!(live.search("coldmarker", 5).is_empty());
+
+    fs::remove_file(records_path).unwrap();
+    fs::remove_file(columns_path).unwrap();
+    fs::remove_file(metadata_path).unwrap();
+    fs::remove_file(prefixes_path).unwrap();
+    fs::remove_file(substrings_path).unwrap();
+    fs::remove_file(fuzzy_path).unwrap();
+    fs::remove_file(content_path).unwrap();
+}
+
+#[test]
 fn search_archive_lookup_caches_are_bounded() {
     let prefixes = unique_temp_path("gfm-prefix-cache-bound", "gfmprefix");
     let substrings = unique_temp_path("gfm-substring-cache-bound", "gfmsubstr");

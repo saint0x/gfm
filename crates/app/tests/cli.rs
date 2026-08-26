@@ -1769,7 +1769,10 @@ fn searches_persisted_tags_from_binary() {
     );
     let sidecar_prefix_stderr = String::from_utf8(sidecar_prefix_search.stderr).unwrap();
     assert!(
-        sidecar_prefix_stderr.contains("prefix-keys 0")
+        sidecar_prefix_stderr.contains("prefix-keys 1")
+            && sidecar_prefix_stderr.contains("records-loaded 1")
+            && sidecar_prefix_stderr.contains("candidate-ids 1")
+            && sidecar_prefix_stderr.contains("full-hydration false")
             && sidecar_prefix_stderr.contains("prefix-archive-keys")
             && sidecar_prefix_stderr.contains("substring-archive-keys"),
         "{sidecar_prefix_stderr}"
@@ -1803,7 +1806,12 @@ fn searches_persisted_tags_from_binary() {
     let sidecar_budget_stderr = String::from_utf8(sidecar_budget_search.stderr).unwrap();
     assert!(
         sidecar_budget_stderr.contains("sidecar-budget")
-            && sidecar_budget_stderr.contains("\tprefix-terms=2")
+            && sidecar_budget_stderr.contains("\trecords-loaded=1")
+            && sidecar_budget_stderr.contains("\tcandidate-ids=1")
+            && sidecar_budget_stderr.contains("\tfull-hydration=false")
+            && sidecar_budget_stderr.contains("\tprefix-keys=1")
+            && sidecar_budget_stderr.contains("\tsubstring-keys=1")
+            && sidecar_budget_stderr.contains("\tprefix-terms=1")
             && sidecar_budget_stderr.contains("\tprefix-lookup-requests=")
             && sidecar_budget_stderr.contains("\tprefix-lookup-ids=")
             && sidecar_budget_stderr.contains("\tprefix-candidate-ids=")
@@ -1812,12 +1820,12 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_budget_stderr.contains("\tsubstring-terms=")
             && sidecar_budget_stderr.contains("\tsubstring-lookup-requests=")
             && sidecar_budget_stderr.contains("\tsubstring-cache-misses=")
-            && sidecar_budget_stderr.contains("\tfuzzy-terms=2")
+            && sidecar_budget_stderr.contains("\tfuzzy-terms=1")
             && sidecar_budget_stderr.contains("\tfuzzy-lookup-requests=")
             && sidecar_budget_stderr.contains("\tfuzzy-cache-misses=")
             && sidecar_budget_stderr.contains("\tmetadata-budget=1")
             && sidecar_budget_stderr.contains("\tcontent-budget=1")
-            && sidecar_budget_stderr.contains("\tfuzzy-term-truncated-keys=2"),
+            && sidecar_budget_stderr.contains("\tfuzzy-term-truncated-keys=1"),
         "{sidecar_budget_stderr}"
     );
     let sidecar_content_search = Command::new(env!("CARGO_BIN_EXE_gfm"))

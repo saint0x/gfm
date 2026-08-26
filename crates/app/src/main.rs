@@ -13,17 +13,15 @@ use gfm_fs::{
     PackageTraversalReport, ScanOptions,
 };
 use gfm_index::{
-    comment_query_terms, content_query_terms, parse_volume_indexing_policy,
-    substring_candidate_grams, tag_query_terms, BackgroundContentIndexer, BatteryState,
+    parse_volume_indexing_policy, query_sidecar_imports, BackgroundContentIndexer, BatteryState,
     CompactionPressure, ContentArchiveCleanupPolicy, ContentArchiveManifest,
     ContentArchiveManifestEntry, ContentIndexJobSpec, ContentIndexReport,
     ContentMaintenanceOptions, ContentMaintenanceReport, ContentMergePolicy, ContentMergeTier,
     EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
     IndexFootprintSpec, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState,
     Indexer, IoPressure, LiveIndex, PersistentIndexRecovery, QuarantineContentIndexRequest,
-    SearchArchiveLookup, SearchLookupBudget, SearchMetadataField, SearchMetadataPosting,
-    SearchRecordColumns, SearchStreamStage, SearchSubstringPosting, ThermalState, UserActivity,
-    VolumeIndexPolicy,
+    SearchArchiveLookup, SearchLookupBudget, SearchRecordColumns, SearchStreamStage, ThermalState,
+    UserActivity, VolumeIndexPolicy,
 };
 use gfm_jobs::{
     Cancellation, Job, JobBatteryState, JobClass, JobFairnessPlanner, JobFairnessPolicy,
@@ -1417,76 +1415,31 @@ fn run() -> Result<()> {
             let lookup = SearchArchiveLookup::open(prefixes, substrings, fuzzy)?;
             let content = MmapContentArchive::open(content)?;
             let budget = SearchLookupBudget::default();
-            let mut search_columns = Vec::with_capacity(columns.len());
-            for index in 0..columns.len() {
-                let column = columns.column(index)?;
-                search_columns.push(SearchRecordColumns {
-                    id: column.id,
-                    name: column.name,
-                    path: column.path,
-                    extension: column.extension,
-                    tags: column.tags,
-                    comment: column.comment,
-                });
-            }
-            let mut selected_metadata = metadata.postings_for_limit(
-                MetadataField::Comment,
-                comment_query_terms(&query),
-                budget.max_metadata_ids_per_term,
+            let import = query_sidecar_imports(
+                &metadata,
+                &lookup,
+                &substrings_archive,
+                &content,
+                &query,
+                budget,
             )?;
-            selected_metadata.extend(metadata.postings_for_limit(
-                MetadataField::Tag,
-                tag_query_terms(&query),
-                budget.max_metadata_ids_per_term,
-            )?);
-            let search_metadata = selected_metadata
-                .into_iter()
-                .map(|posting| SearchMetadataPosting {
-                    field: match posting.field {
-                        MetadataField::Tag => SearchMetadataField::Tag,
-                        MetadataField::Comment => SearchMetadataField::Comment,
-                    },
-                    term: posting.term,
-                    ids: posting.ids,
-                })
-                .collect();
-            let search_substrings = substrings_archive
-                .postings_for_limit(
-                    substring_candidate_grams(&query),
-                    budget.max_substring_ids_per_gram,
-                )?
-                .into_iter()
-                .map(|posting| SearchSubstringPosting {
-                    gram: posting.gram,
-                    ids: posting.ids,
-                })
-                .collect();
-            let search_content = content.postings_for_terms_limit(
-                content_query_terms(&query),
-                budget.max_content_ids_per_term,
-            )?;
-            let (
-                live,
-                applied,
-                metadata_keys,
-                prefix_keys,
-                substring_keys,
-                fuzzy_keys,
-                content_keys,
-            ) = LiveIndex::from_records_with_sidecars(
-                records.records()?,
-                search_columns,
-                search_metadata,
-                Vec::new(),
-                search_substrings,
-                Vec::new(),
-                search_content,
-            );
+            let (live, hydration) =
+                LiveIndex::from_mmap_records_with_sidecar_import(&records, &columns, import)?;
             eprintln!(
-                "columns-indexed {applied} metadata-keys {metadata_keys} prefix-keys {prefix_keys} substring-keys {substring_keys} fuzzy-keys {fuzzy_keys} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {content_keys} metadata-budget {} substring-budget {} content-budget {}",
+                "columns-indexed {} records-loaded {} records-missing {} candidate-ids {} full-hydration {} metadata-keys {} prefix-keys {} substring-keys {} fuzzy-keys {} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {} metadata-budget {} substring-budget {} content-budget {}",
+                hydration.columns_applied,
+                hydration.records_loaded,
+                hydration.records_missing,
+                hydration.import.candidate_ids,
+                hydration.import.requires_full_record_hydration,
+                hydration.metadata_keys,
+                hydration.prefix_keys,
+                hydration.substring_keys,
+                hydration.fuzzy_keys,
                 lookup.indexed_prefixes(),
                 lookup.indexed_substring_grams(),
                 lookup.indexed_fuzzy_keys(),
+                hydration.content_keys,
                 budget.max_metadata_ids_per_term,
                 budget.max_substring_ids_per_gram,
                 budget.max_content_ids_per_term
@@ -1564,85 +1517,40 @@ fn run() -> Result<()> {
             let substrings_archive = MmapSubstringArchive::open(&substrings)?;
             let lookup = SearchArchiveLookup::open(prefixes, substrings, fuzzy)?;
             let content = MmapContentArchive::open(content)?;
-            let mut search_columns = Vec::with_capacity(columns.len());
-            for index in 0..columns.len() {
-                let column = columns.column(index)?;
-                search_columns.push(SearchRecordColumns {
-                    id: column.id,
-                    name: column.name,
-                    path: column.path,
-                    extension: column.extension,
-                    tags: column.tags,
-                    comment: column.comment,
-                });
-            }
-            let mut selected_metadata = metadata.postings_for_limit(
-                MetadataField::Comment,
-                comment_query_terms(&query),
-                max_content_ids,
-            )?;
-            selected_metadata.extend(metadata.postings_for_limit(
-                MetadataField::Tag,
-                tag_query_terms(&query),
-                max_content_ids,
-            )?);
-            let search_metadata = selected_metadata
-                .into_iter()
-                .map(|posting| SearchMetadataPosting {
-                    field: match posting.field {
-                        MetadataField::Tag => SearchMetadataField::Tag,
-                        MetadataField::Comment => SearchMetadataField::Comment,
-                    },
-                    term: posting.term,
-                    ids: posting.ids,
-                })
-                .collect();
-            let search_substrings = substrings_archive
-                .postings_for_limit(substring_candidate_grams(&query), max_substring_ids)?
-                .into_iter()
-                .map(|posting| SearchSubstringPosting {
-                    gram: posting.gram,
-                    ids: posting.ids,
-                })
-                .collect();
-            let search_content =
-                content.postings_for_terms_limit(content_query_terms(&query), max_content_ids)?;
-            let (
-                live,
-                applied,
-                metadata_keys,
-                prefix_keys,
-                substring_keys,
-                fuzzy_keys,
-                content_keys,
-            ) = LiveIndex::from_records_with_sidecars(
-                records.records()?,
-                search_columns,
-                search_metadata,
-                Vec::new(),
-                search_substrings,
-                Vec::new(),
-                search_content,
-            );
-            let report = live.search_with_lookup_budget(
-                &query,
-                50,
+            let budget = SearchLookupBudget {
+                max_prefix_ids_per_term: max_prefix_ids,
+                min_archive_prefix_chars: SearchLookupBudget::default().min_archive_prefix_chars,
+                max_substring_grams_per_term: max_substring_grams,
+                max_substring_ids_per_gram: max_substring_ids,
+                max_fuzzy_keys_per_term: max_fuzzy_keys,
+                max_fuzzy_terms_per_key: max_fuzzy_terms,
+                max_fuzzy_candidates_per_term: max_fuzzy_candidates,
+                max_metadata_ids_per_term: max_content_ids,
+                max_content_ids_per_term: max_content_ids,
+            };
+            let import = query_sidecar_imports(
+                &metadata,
                 &lookup,
-                SearchLookupBudget {
-                    max_prefix_ids_per_term: max_prefix_ids,
-                    min_archive_prefix_chars: SearchLookupBudget::default()
-                        .min_archive_prefix_chars,
-                    max_substring_grams_per_term: max_substring_grams,
-                    max_substring_ids_per_gram: max_substring_ids,
-                    max_fuzzy_keys_per_term: max_fuzzy_keys,
-                    max_fuzzy_terms_per_key: max_fuzzy_terms,
-                    max_fuzzy_candidates_per_term: max_fuzzy_candidates,
-                    max_metadata_ids_per_term: max_content_ids,
-                    max_content_ids_per_term: max_content_ids,
-                },
+                &substrings_archive,
+                &content,
+                &query,
+                budget,
             )?;
+            let (live, hydration) =
+                LiveIndex::from_mmap_records_with_sidecar_import(&records, &columns, import)?;
+            let report = live.search_with_lookup_budget(&query, 50, &lookup, budget)?;
             eprintln!(
-                "sidecar-budget\tcolumns-indexed={applied}\tmetadata-keys={metadata_keys}\tprefix-keys={prefix_keys}\tsubstring-keys={substring_keys}\tfuzzy-keys={fuzzy_keys}\tcontent-keys={content_keys}\tmetadata-budget={max_content_ids}\tcontent-budget={max_content_ids}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
+                "sidecar-budget\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tmetadata-budget={max_content_ids}\tcontent-budget={max_content_ids}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
+                hydration.columns_applied,
+                hydration.records_loaded,
+                hydration.records_missing,
+                hydration.import.candidate_ids,
+                hydration.import.requires_full_record_hydration,
+                hydration.metadata_keys,
+                hydration.prefix_keys,
+                hydration.substring_keys,
+                hydration.fuzzy_keys,
+                hydration.content_keys,
                 lookup.indexed_prefixes(),
                 lookup.indexed_substring_grams(),
                 lookup.indexed_fuzzy_keys(),

@@ -15,8 +15,9 @@ use gfm_store::{
     compact_content_postings_with_segments, compact_content_segments,
     compact_content_segments_with_policy, plan_content_segment_merge, read_content_postings,
     read_records, summarize_content_segment, write_content_postings, write_content_segment,
-    write_records, MmapContentArchive, MmapContentSet, MmapFuzzyArchive, MmapMetadataArchive,
-    MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
+    write_records, MetadataField, MmapContentArchive, MmapContentSet, MmapFuzzyArchive,
+    MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
+    MmapSubstringArchive,
 };
 pub use gfm_store::{
     ContentArchiveCleanupAction, ContentArchiveCleanupPlan, ContentArchiveCleanupPolicy,
@@ -27,7 +28,7 @@ use gfm_types::{
     ContentPosting, ContentSegment, DirectoryPage, FileEvent, FileEventKind, FileId, FileKind,
     FileRecord, GfmError, Result, ScanIssue, SearchHit, VolumeId,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -239,9 +240,84 @@ impl IndexSnapshot {
     }
 }
 
+fn insert_mmap_record_with_columns(
+    live: &mut LiveIndex,
+    columns: &MmapRecordColumns,
+    record: FileRecord,
+) -> Result<bool> {
+    if let Some(column) = columns.find(record.id)? {
+        Ok(live.index.insert_with_columns_deferred_sidecars(
+            record,
+            SearchRecordColumns {
+                id: column.id,
+                name: column.name,
+                path: column.path,
+                extension: column.extension,
+                tags: column.tags,
+                comment: column.comment,
+            },
+        ))
+    } else {
+        live.index.insert(record);
+        Ok(false)
+    }
+}
+
+fn sidecar_candidate_ids(import: &SidecarQueryImport) -> BTreeSet<FileId> {
+    let mut ids = BTreeSet::new();
+    for posting in &import.metadata {
+        ids.extend(posting.ids.iter().copied());
+    }
+    for posting in &import.prefixes {
+        ids.extend(posting.ids.iter().copied());
+    }
+    for posting in &import.substrings {
+        ids.extend(posting.ids.iter().copied());
+    }
+    for posting in &import.content {
+        ids.extend(posting.ids.iter().copied());
+        ids.extend(posting.positions.iter().map(|positions| positions.id));
+    }
+    ids
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LiveIndex {
     index: ShardedSearchIndex,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SidecarQueryImport {
+    pub metadata: Vec<SearchMetadataPosting>,
+    pub prefixes: Vec<SearchPrefixPosting>,
+    pub substrings: Vec<SearchSubstringPosting>,
+    pub fuzzy: Vec<SearchFuzzyPosting>,
+    pub content: Vec<ContentPosting>,
+    pub report: SidecarQueryImportReport,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SidecarQueryImportReport {
+    pub metadata_postings: usize,
+    pub prefix_postings: usize,
+    pub substring_postings: usize,
+    pub fuzzy_postings: usize,
+    pub content_postings: usize,
+    pub candidate_ids: usize,
+    pub requires_full_record_hydration: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SidecarRecordHydrationReport {
+    pub records_loaded: usize,
+    pub records_missing: usize,
+    pub columns_applied: usize,
+    pub metadata_keys: usize,
+    pub prefix_keys: usize,
+    pub substring_keys: usize,
+    pub fuzzy_keys: usize,
+    pub content_keys: usize,
+    pub import: SidecarQueryImportReport,
 }
 
 #[derive(Debug)]
@@ -507,6 +583,139 @@ impl SearchLookup for SearchArchiveLookup {
             ..SearchLookupTelemetry::default()
         }
     }
+}
+
+pub fn query_sidecar_imports(
+    metadata: &MmapMetadataArchive,
+    lookup: &SearchArchiveLookup,
+    substrings: &MmapSubstringArchive,
+    content: &MmapContentArchive,
+    query: &str,
+    budget: SearchLookupBudget,
+) -> Result<SidecarQueryImport> {
+    let parsed = SearchQuery::parse(query);
+    let mut candidate_ids = BTreeSet::new();
+
+    let mut selected_metadata = metadata.postings_for_limit(
+        MetadataField::Comment,
+        parsed.comment_candidate_terms(),
+        budget.max_metadata_ids_per_term,
+    )?;
+    selected_metadata.extend(metadata.postings_for_limit(
+        MetadataField::Tag,
+        parsed.tag_candidate_terms(),
+        budget.max_metadata_ids_per_term,
+    )?);
+    let metadata = selected_metadata
+        .into_iter()
+        .map(|posting| {
+            candidate_ids.extend(posting.ids.iter().copied());
+            SearchMetadataPosting {
+                field: match posting.field {
+                    MetadataField::Tag => SearchMetadataField::Tag,
+                    MetadataField::Comment => SearchMetadataField::Comment,
+                },
+                term: posting.term,
+                ids: posting.ids,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let prefixes = parsed
+        .prefix_candidate_terms()
+        .into_iter()
+        .map(|prefix| {
+            let ids = lookup.prefix_ids_bounded(&prefix, budget.max_prefix_ids_per_term)?;
+            candidate_ids.extend(ids.ids.iter().copied());
+            Ok(SearchPrefixPosting {
+                prefix,
+                ids: ids.ids,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let substrings = substrings
+        .postings_for_limit(
+            parsed
+                .content_candidate_terms()
+                .into_iter()
+                .flat_map(|term| substring_candidate_grams(&term)),
+            budget.max_substring_ids_per_gram,
+        )?
+        .into_iter()
+        .map(|posting| {
+            candidate_ids.extend(posting.ids.iter().copied());
+            SearchSubstringPosting {
+                gram: posting.gram,
+                ids: posting.ids,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut fuzzy_prefixes = Vec::new();
+    let fuzzy = parsed
+        .fuzzy_candidate_keys()
+        .into_iter()
+        .map(|key| {
+            let terms = lookup.fuzzy_terms_bounded(&key, budget.max_fuzzy_terms_per_key)?;
+            for term in &terms.terms {
+                let ids = lookup.prefix_ids_bounded(term, budget.max_prefix_ids_per_term)?;
+                candidate_ids.extend(ids.ids.iter().copied());
+                fuzzy_prefixes.push(SearchPrefixPosting {
+                    prefix: term.clone(),
+                    ids: ids.ids,
+                });
+            }
+            Ok(SearchFuzzyPosting {
+                key,
+                terms: terms.terms,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut prefixes = prefixes;
+    prefixes.extend(fuzzy_prefixes);
+
+    let content = content.postings_for_terms_limit(
+        parsed.content_candidate_terms(),
+        budget.max_content_ids_per_term,
+    )?;
+    for posting in &content {
+        candidate_ids.extend(posting.ids.iter().copied());
+        candidate_ids.extend(posting.positions.iter().map(|positions| positions.id));
+    }
+
+    let has_positive_anchor = !parsed.content_candidate_terms().is_empty()
+        || !parsed.tag_candidate_terms().is_empty()
+        || !metadata.is_empty()
+        || !prefixes.is_empty()
+        || !substrings.is_empty()
+        || !fuzzy.is_empty()
+        || !content.is_empty();
+    let has_any_query = !parsed.terms.is_empty()
+        || !parsed.excluded_terms.is_empty()
+        || !parsed.phrases.is_empty()
+        || !parsed.proximities.is_empty()
+        || !parsed.filters.is_empty()
+        || parsed.expression.is_some();
+    let requires_full_record_hydration = !has_positive_anchor && has_any_query;
+
+    Ok(SidecarQueryImport {
+        report: SidecarQueryImportReport {
+            metadata_postings: metadata.len(),
+            prefix_postings: prefixes.len(),
+            substring_postings: substrings.len(),
+            fuzzy_postings: fuzzy.len(),
+            content_postings: content.len(),
+            candidate_ids: candidate_ids.len(),
+            requires_full_record_hydration,
+        },
+        metadata,
+        prefixes,
+        substrings,
+        fuzzy,
+        content,
+    })
 }
 
 #[derive(Debug)]
@@ -1021,6 +1230,58 @@ impl LiveIndex {
             fuzzy_keys,
             content_keys,
         )
+    }
+
+    pub fn from_mmap_records_with_sidecar_import(
+        records: &MmapRecordArchive,
+        columns: &MmapRecordColumns,
+        import: SidecarQueryImport,
+    ) -> Result<(Self, SidecarRecordHydrationReport)> {
+        let mut live = Self::new();
+        let mut loaded = 0usize;
+        let mut missing = 0usize;
+        let mut applied = 0usize;
+
+        if import.report.requires_full_record_hydration {
+            for index in 0..records.len() {
+                let record = records.record(index)?;
+                if insert_mmap_record_with_columns(&mut live, columns, record)? {
+                    applied += 1;
+                }
+                loaded += 1;
+            }
+        } else {
+            let candidate_ids = sidecar_candidate_ids(&import);
+            for id in candidate_ids {
+                let Some(record) = records.find(id)? else {
+                    missing += 1;
+                    continue;
+                };
+                if insert_mmap_record_with_columns(&mut live, columns, record)? {
+                    applied += 1;
+                }
+                loaded += 1;
+            }
+        }
+
+        let metadata_keys = live.index.import_metadata_postings(&import.metadata);
+        let prefix_keys = live.index.import_prefix_postings(&import.prefixes);
+        let substring_keys = live.index.import_substring_postings(&import.substrings);
+        let fuzzy_keys = live.index.import_fuzzy_postings(&import.fuzzy);
+        let content_keys = import.content.len();
+        live.index.import_content_postings(&import.content);
+        let report = SidecarRecordHydrationReport {
+            records_loaded: loaded,
+            records_missing: missing,
+            columns_applied: applied,
+            metadata_keys,
+            prefix_keys,
+            substring_keys,
+            fuzzy_keys,
+            content_keys,
+            import: import.report,
+        };
+        Ok((live, report))
     }
 
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {

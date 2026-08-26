@@ -471,6 +471,8 @@ This avoids treating every rename as delete-plus-create when the platform expose
 - Query-time prefix, substring, and fuzzy archive lookup:
   - prefix, name-substring trigram, and delete-key fuzzy sidecars expose a store-agnostic lookup contract to the search engine;
   - live hot records keep in-memory prefix/substring/fuzzy maps while immutable sidecars answer query candidates directly from mmap archives;
+  - sidecar-backed query loading collects bounded metadata, prefix, substring, fuzzy-term, and content candidate IDs first, then hydrates only those mmap record rows and matching columns before ranking;
+  - filter-only, negative-only, and other genuinely unanchored universe queries conservatively hydrate the full record set because correctness requires evaluating all records;
   - positive `name:`, `path:`, `ext:`, `tag:`, and `kind:` filters seed boolean expression candidates from maintained posting maps before final expression evaluation, so indexed filter `AND`/`OR` branches do not force a full-record universe scan;
   - sharded search fans out the same archive lookup across volume shards and filters candidate ids per shard;
   - archive-backed lookup avoids importing large prefix/substring/fuzzy candidate maps into heap memory for each machine-wide query session;
