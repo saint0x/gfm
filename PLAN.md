@@ -463,6 +463,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - single immutable mmap content archives and archive sets are opened as query-scoped search surfaces;
   - each query term performs binary directory lookup inside each archive instead of hydrating all postings before the active query is known;
   - budgeted content-term loads decode only the bounded compressed ID prefix and matching bounded positional prefix needed by the active lookup budget, then union per-archive heads deterministically before import;
+  - content archive, archive-set, and manifest search hydrates only the record rows identified by bounded content posting candidates through the mmap record file-ID directory, with full-record hydration reserved for queries whose content postings produce no candidate anchor;
   - duplicate file ids and positional offsets are merged deterministically through ordered sets;
   - this lets background compaction publish new tier files while retained archives remain searchable.
 - Query-time record hydration:

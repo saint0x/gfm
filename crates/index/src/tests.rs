@@ -1296,12 +1296,17 @@ fn content_set_search_loader_uses_default_bounded_budget() {
     )
     .unwrap();
 
-    let (live, terms) = indexer
+    let (live, load) = indexer
         .load_live_with_content_set(&records, &[&content], "defaultbudgetneedle")
         .unwrap();
     let hits = live.search("defaultbudgetneedle", 5000);
 
-    assert_eq!(terms, 1);
+    assert_eq!(load.content_keys, 1);
+    assert_eq!(
+        load.records_loaded,
+        SearchLookupBudget::default().max_content_ids_per_term
+    );
+    assert!(!load.full_hydration);
     assert_eq!(
         hits.len(),
         SearchLookupBudget::default().max_content_ids_per_term
@@ -1348,12 +1353,17 @@ fn content_archive_search_loader_uses_default_bounded_budget() {
     )
     .unwrap();
 
-    let (live, terms) = indexer
+    let (live, load) = indexer
         .load_live_with_content_for_query(&records, &content, "defaultarchivebudgetneedle")
         .unwrap();
     let hits = live.search("defaultarchivebudgetneedle", 5000);
 
-    assert_eq!(terms, 1);
+    assert_eq!(load.content_keys, 1);
+    assert_eq!(
+        load.records_loaded,
+        SearchLookupBudget::default().max_content_ids_per_term
+    );
+    assert!(!load.full_hydration);
     assert_eq!(
         hits.len(),
         SearchLookupBudget::default().max_content_ids_per_term
@@ -1700,7 +1710,7 @@ fn background_content_maintenance_compacts_segments_and_updates_manifest() {
             &ContentMaintenanceOptions::default(),
         )
         .unwrap();
-    let (live, keys) = indexer
+    let (live, load) = indexer
         .load_live_with_content_manifest(&records, &manifest, "maintenancetoken")
         .unwrap();
     let hits = live.search("maintenancetoken", 5);
@@ -1710,7 +1720,9 @@ fn background_content_maintenance_compacts_segments_and_updates_manifest() {
     assert_eq!(report.retained_segments.len(), 0);
     assert_eq!(report.manifest_archives, 2);
     assert_eq!(report.published_archive, Some(output_content.clone()));
-    assert_eq!(keys, 1);
+    assert_eq!(load.content_keys, 1);
+    assert_eq!(load.records_loaded, 1);
+    assert!(!load.full_hydration);
     assert_eq!(hits.len(), 1);
 
     fs::remove_dir_all(root).unwrap();

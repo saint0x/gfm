@@ -2253,9 +2253,16 @@ fn run() -> Result<()> {
                     "search-content-index requires a query string".to_string(),
                 )
             })?;
-            let (live, content_keys) =
+            let (live, report) =
                 Indexer::default().load_live_with_content_for_query(records, content, &query)?;
-            eprintln!("content-keys {content_keys}");
+            eprintln!(
+                "content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
+                report.content_keys,
+                report.records_loaded,
+                report.records_missing,
+                report.candidate_ids,
+                report.full_hydration
+            );
             for hit in live.search_with_snippets(&query, 50, &Extractor::default(), 96)? {
                 print_hit(&hit);
             }
@@ -2281,9 +2288,16 @@ fn run() -> Result<()> {
                 .unwrap_or_else(|| PathBuf::from("."));
             let extractor =
                 Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
-            let (live, content_keys) =
+            let (live, report) =
                 Indexer::default().load_live_with_content_for_query(records, content, &query)?;
-            eprintln!("content-keys {content_keys}");
+            eprintln!(
+                "content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
+                report.content_keys,
+                report.records_loaded,
+                report.records_missing,
+                report.candidate_ids,
+                report.full_hydration
+            );
             for hit in live.search_with_snippets(&query, 50, &extractor, 96)? {
                 print_hit(&hit);
             }
@@ -2304,11 +2318,16 @@ fn run() -> Result<()> {
                     "search-content-index-set requires at least one content archive".to_string(),
                 ));
             }
-            let (live, content_keys) =
+            let (live, report) =
                 Indexer::default().load_live_with_content_set(records, &content_paths, &query)?;
             eprintln!(
-                "content-archives {} content-keys {content_keys}",
-                content_paths.len()
+                "content-archives {} content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
+                content_paths.len(),
+                report.content_keys,
+                report.records_loaded,
+                report.records_missing,
+                report.candidate_ids,
+                report.full_hydration
             );
             for hit in live.search(&query, 50) {
                 print_hit(&hit);
@@ -2328,9 +2347,16 @@ fn run() -> Result<()> {
                     "search-content-index-manifest requires a query string".to_string(),
                 )
             })?;
-            let (live, content_keys) =
+            let (live, report) =
                 Indexer::default().load_live_with_content_manifest(records, manifest, &query)?;
-            eprintln!("content-manifest-keys {content_keys}");
+            eprintln!(
+                "content-manifest-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
+                report.content_keys,
+                report.records_loaded,
+                report.records_missing,
+                report.candidate_ids,
+                report.full_hydration
+            );
             for hit in live.search(&query, 50) {
                 print_hit(&hit);
             }

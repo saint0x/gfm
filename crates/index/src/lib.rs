@@ -281,6 +281,15 @@ fn sidecar_candidate_ids(import: &SidecarQueryImport) -> BTreeSet<FileId> {
     ids
 }
 
+fn content_candidate_ids(postings: &[ContentPosting]) -> BTreeSet<FileId> {
+    let mut ids = BTreeSet::new();
+    for posting in postings {
+        ids.extend(posting.ids.iter().copied());
+        ids.extend(posting.positions.iter().map(|positions| positions.id));
+    }
+    ids
+}
+
 fn bounded_substring_grams(terms: &[String], budget: SearchLookupBudget) -> Vec<String> {
     let mut grams = BTreeSet::new();
     for term in terms {
@@ -330,6 +339,15 @@ pub struct SidecarRecordHydrationReport {
     pub fuzzy_keys: usize,
     pub content_keys: usize,
     pub import: SidecarQueryImportReport,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContentQueryLoadReport {
+    pub content_keys: usize,
+    pub candidate_ids: usize,
+    pub records_loaded: usize,
+    pub records_missing: usize,
+    pub full_hydration: bool,
 }
 
 #[derive(Debug)]
@@ -1300,6 +1318,46 @@ impl LiveIndex {
             import: import.report,
         };
         Ok((live, report))
+    }
+
+    pub fn from_mmap_records_with_content_postings(
+        records: &MmapRecordArchive,
+        postings: Vec<ContentPosting>,
+    ) -> Result<(Self, ContentQueryLoadReport)> {
+        let candidate_ids = content_candidate_ids(&postings);
+        let full_hydration = candidate_ids.is_empty();
+        let mut live = Self::new();
+        let mut loaded = 0usize;
+        let mut missing = 0usize;
+
+        if full_hydration {
+            for index in 0..records.len() {
+                live.index.insert(records.record(index)?);
+                loaded += 1;
+            }
+        } else {
+            for id in &candidate_ids {
+                let Some(record) = records.find(*id)? else {
+                    missing += 1;
+                    continue;
+                };
+                live.index.insert(record);
+                loaded += 1;
+            }
+        }
+
+        let content_keys = postings.len();
+        live.index.import_content_postings(&postings);
+        Ok((
+            live,
+            ContentQueryLoadReport {
+                content_keys,
+                candidate_ids: candidate_ids.len(),
+                records_loaded: loaded,
+                records_missing: missing,
+                full_hydration,
+            },
+        ))
     }
 
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {
@@ -2354,7 +2412,7 @@ impl Indexer {
         records_path: impl AsRef<Path>,
         content_path: impl AsRef<Path>,
         query: &str,
-    ) -> Result<(LiveIndex, usize)> {
+    ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
         self.load_live_with_content_for_query_with_budget(
             records_path,
             content_path,
@@ -2369,10 +2427,14 @@ impl Indexer {
         content_path: impl AsRef<Path>,
         query: &str,
         budget: SearchLookupBudget,
-    ) -> Result<(LiveIndex, usize)> {
-        let mut live = self.load(records_path)?.into_live();
-        let terms = live.load_content_postings_with_budget(content_path, query, budget)?;
-        Ok((live, terms))
+    ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
+        let records = MmapRecordArchive::open(records_path)?;
+        let content = MmapContentArchive::open(content_path)?;
+        let postings = content.postings_for_terms_limit(
+            content_query_terms(query),
+            budget.max_content_ids_per_term,
+        )?;
+        LiveIndex::from_mmap_records_with_content_postings(&records, postings)
     }
 
     pub fn load_live_with_content_set(
@@ -2380,14 +2442,14 @@ impl Indexer {
         records_path: impl AsRef<Path>,
         content_paths: &[impl AsRef<Path>],
         query: &str,
-    ) -> Result<(LiveIndex, usize)> {
-        let mut live = self.load(records_path)?.into_live();
-        let terms = live.load_content_set_postings_with_budget(
-            content_paths,
-            query,
-            SearchLookupBudget::default(),
+    ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
+        let records = MmapRecordArchive::open(records_path)?;
+        let content = MmapContentSet::open(content_paths)?;
+        let postings = content.postings_for_terms_limit(
+            content_query_terms(query),
+            SearchLookupBudget::default().max_content_ids_per_term,
         )?;
-        Ok((live, terms))
+        LiveIndex::from_mmap_records_with_content_postings(&records, postings)
     }
 
     pub fn load_live_with_content_manifest(
@@ -2395,14 +2457,14 @@ impl Indexer {
         records_path: impl AsRef<Path>,
         manifest_path: impl AsRef<Path>,
         query: &str,
-    ) -> Result<(LiveIndex, usize)> {
-        let mut live = self.load(records_path)?.into_live();
-        let terms = live.load_content_manifest_postings_with_budget(
-            manifest_path,
-            query,
-            SearchLookupBudget::default(),
+    ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
+        let records = MmapRecordArchive::open(records_path)?;
+        let content = MmapContentSet::open_manifest(manifest_path)?;
+        let postings = content.postings_for_terms_limit(
+            content_query_terms(query),
+            SearchLookupBudget::default().max_content_ids_per_term,
         )?;
-        Ok((live, terms))
+        LiveIndex::from_mmap_records_with_content_postings(&records, postings)
     }
 
     pub fn compact_content_segments(

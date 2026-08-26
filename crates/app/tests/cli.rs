@@ -3191,7 +3191,13 @@ fn searches_persisted_text_content_from_binary() {
     let stdout = String::from_utf8(search_output.stdout).unwrap();
     let stderr = String::from_utf8(search_output.stderr).unwrap();
     assert!(stdout.contains("archive.md"), "{stdout}");
-    assert!(stderr.contains("content-keys 1"), "{stderr}");
+    assert!(
+        stderr.contains("content-keys 1")
+            && stderr.contains("records-loaded 1")
+            && stderr.contains("candidate-ids 1")
+            && stderr.contains("full-hydration false"),
+        "{stderr}"
+    );
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
@@ -3574,7 +3580,11 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     assert!(stdout.contains("right.md"), "{stdout}");
     let stderr = String::from_utf8(search_output.stderr).unwrap();
     assert!(
-        stderr.contains("content-archives 2") && stderr.contains("content-keys 1"),
+        stderr.contains("content-archives 2")
+            && stderr.contains("content-keys 1")
+            && stderr.contains("records-loaded 2")
+            && stderr.contains("candidate-ids 2")
+            && stderr.contains("full-hydration false"),
         "{stderr}"
     );
 
@@ -3616,7 +3626,10 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     );
     let manifest_stderr = String::from_utf8(manifest_search_output.stderr).unwrap();
     assert!(
-        manifest_stderr.contains("content-manifest-keys 1"),
+        manifest_stderr.contains("content-manifest-keys 1")
+            && manifest_stderr.contains("records-loaded 2")
+            && manifest_stderr.contains("candidate-ids 2")
+            && manifest_stderr.contains("full-hydration false"),
         "{manifest_stderr}"
     );
 
