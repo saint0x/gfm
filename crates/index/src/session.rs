@@ -1,11 +1,11 @@
 use crate::{content_query_terms, ContentQueryLoadReport, LiveIndex};
 use gfm_search::{SearchLookupBudget, SearchLookupTelemetry, SearchQueryReport};
 use gfm_store::{MmapContentSet, MmapRecordArchive};
-use gfm_types::{ContentPosting, FileId, FileRecord, GfmError, Result};
+use gfm_types::{ContentPosting, FileId, FileRecord, Result};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 const CONTENT_RECORD_CACHE_CAPACITY: usize = 8192;
 const CONTENT_POSTING_CACHE_CAPACITY: usize = 512;
@@ -158,7 +158,7 @@ impl ContentIndexQuerySession {
         let mut postings = Vec::with_capacity(selected.len());
         let mut misses = Vec::new();
         {
-            let cache = self.record_posting_cache()?;
+            let cache = self.posting_cache_lock();
             for term in &selected {
                 let key = posting_cache_key(term, budget.max_content_ids_per_term);
                 if let Some(cached) = cache.get(&key) {
@@ -178,7 +178,7 @@ impl ContentIndexQuerySession {
                 .content
                 .posting_for_term_limit(&term, budget.max_content_ids_per_term)?;
             if !truncated {
-                self.record_posting_cache()?.insert(
+                self.posting_cache_lock().insert(
                     posting_cache_key(&term, budget.max_content_ids_per_term),
                     posting.clone(),
                 );
@@ -192,10 +192,10 @@ impl ContentIndexQuerySession {
         Ok(postings)
     }
 
-    fn record_posting_cache(&self) -> Result<std::sync::MutexGuard<'_, ContentPostingCache>> {
+    fn posting_cache_lock(&self) -> MutexGuard<'_, ContentPostingCache> {
         self.posting_cache
             .lock()
-            .map_err(|_| GfmError::Format("content posting cache lock poisoned".to_string()))
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn live_from_postings(
@@ -253,10 +253,7 @@ impl ContentIndexQuerySession {
         let mut records_by_id = HashMap::new();
         let mut misses = Vec::new();
         {
-            let cache = self
-                .record_cache
-                .lock()
-                .map_err(|_| GfmError::Format("content record cache lock poisoned".to_string()))?;
+            let cache = self.record_cache_lock();
             for id in &ids {
                 if let Some(record) = cache.get(*id) {
                     self.record_cache_hits.fetch_add(1, Ordering::Relaxed);
@@ -273,10 +270,7 @@ impl ContentIndexQuerySession {
             .records_for_sorted_ids(misses.iter().copied())?;
         let missing = batch.missing;
         {
-            let mut cache = self
-                .record_cache
-                .lock()
-                .map_err(|_| GfmError::Format("content record cache lock poisoned".to_string()))?;
+            let mut cache = self.record_cache_lock();
             for record in batch.records {
                 cache.insert(record.id, record.clone());
                 records_by_id.insert(record.id, record);
@@ -288,6 +282,12 @@ impl ContentIndexQuerySession {
             .filter_map(|id| records_by_id.remove(&id))
             .collect::<Vec<_>>();
         Ok((records, missing))
+    }
+
+    fn record_cache_lock(&self) -> MutexGuard<'_, ContentRecordCache> {
+        self.record_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -375,5 +375,140 @@ impl ContentRecordCache {
             };
             self.values.remove(&expired);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gfm_store::{write_content_postings, write_records};
+    use gfm_types::{ContentPositions, FileKind, VolumeId};
+    use std::fs;
+    use std::panic::{self, AssertUnwindSafe};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn content_session_recovers_poisoned_posting_cache() {
+        let fixture = ContentSessionFixture::new("posting-cache");
+        let session = fixture.session();
+
+        poison_posting_cache(&session);
+        let report = session.search("needle", 5).unwrap();
+
+        assert_eq!(report.search.hits.len(), 1);
+        assert_eq!(report.search.hits[0].record.name, "Needle.md");
+        assert_eq!(report.posting_cache_misses, 1);
+        assert_eq!(report.record_cache_misses, 1);
+    }
+
+    #[test]
+    fn content_session_recovers_poisoned_record_cache() {
+        let fixture = ContentSessionFixture::new("record-cache");
+        let session = fixture.session();
+        let first = session.search("needle", 5).unwrap();
+        assert_eq!(first.search.hits.len(), 1);
+
+        poison_record_cache(&session);
+        let second = session.search("needle", 5).unwrap();
+
+        assert_eq!(second.search.hits.len(), 1);
+        assert_eq!(second.search.hits[0].record.name, "Needle.md");
+        assert_eq!(second.posting_cache_hits, 1);
+        assert_eq!(second.record_cache_hits, 1);
+    }
+
+    fn poison_posting_cache(session: &ContentIndexQuerySession) {
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = session
+                .posting_cache
+                .lock()
+                .expect("initial content posting cache lock");
+            panic!("poison content posting cache");
+        }));
+    }
+
+    fn poison_record_cache(session: &ContentIndexQuerySession) {
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = session
+                .record_cache
+                .lock()
+                .expect("initial content record cache lock");
+            panic!("poison content record cache");
+        }));
+    }
+
+    struct ContentSessionFixture {
+        root: PathBuf,
+        records: PathBuf,
+        content: PathBuf,
+    }
+
+    impl ContentSessionFixture {
+        fn new(name: &str) -> Self {
+            let root = temp_dir(&format!("gfm-content-session-{name}"));
+            let records = root.join("records.gfmidx");
+            let content = root.join("content.gfmcontent");
+            let id = FileId::new(VolumeId(1), 42);
+            write_records(&records, &[record(id)]).unwrap();
+            write_content_postings(
+                &content,
+                &[ContentPosting {
+                    term: "needle".to_string(),
+                    ids: vec![id],
+                    positions: vec![ContentPositions {
+                        id,
+                        positions: vec![1],
+                    }],
+                }],
+            )
+            .unwrap();
+            Self {
+                root,
+                records,
+                content,
+            }
+        }
+
+        fn session(&self) -> ContentIndexQuerySession {
+            ContentIndexQuerySession::open_content(&self.records, &self.content).unwrap()
+        }
+    }
+
+    impl Drop for ContentSessionFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn record(id: FileId) -> FileRecord {
+        FileRecord {
+            id,
+            parent: None,
+            path: PathBuf::from("/tmp/Needle.md"),
+            name: "Needle.md".to_string(),
+            kind: FileKind::File,
+            len: 6,
+            mode: 0o100644,
+            owner: 501,
+            group: 20,
+            xattrs_digest: 0,
+            created: None,
+            modified: None,
+            changed: None,
+            hidden: false,
+            tags: Vec::new(),
+            finder_comment: None,
+        }
+    }
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 }
