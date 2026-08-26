@@ -7,8 +7,8 @@ use gfm_index::{
     SearchRecordColumns, SearchStreamStage,
 };
 use gfm_store::{
-    MmapContentArchive, MmapMetadataArchive, MmapRecordArchive, MmapRecordColumns,
-    MmapSubstringArchive,
+    ContentArchive, MmapContentArchive, MmapContentSet, MmapMetadataArchive, MmapRecordArchive,
+    MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_types::{FileKind, Result, SearchHit};
 use std::path::{Path, PathBuf};
@@ -416,9 +416,70 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
+        "content-ids" => {
+            let content = required_path(args.next(), "content-ids requires a content path")?;
+            let term = required_string(args.next(), "content-ids requires a term")?;
+            let mut archive = ContentArchive::open(content)?;
+            print_file_ids(archive.ids_for_term(&term)?);
+        }
+        "content-ids-mmap" => {
+            let content = required_path(args.next(), "content-ids-mmap requires a content path")?;
+            let term = required_string(args.next(), "content-ids-mmap requires a term")?;
+            let archive = MmapContentArchive::open(content)?;
+            print_file_ids(archive.ids_for_term(&term)?);
+        }
+        "content-ids-mmap-set" => {
+            let term = required_string(args.next(), "content-ids-mmap-set requires a term")?;
+            let content_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            if content_paths.is_empty() {
+                return Err(gfm_types::GfmError::Format(
+                    "content-ids-mmap-set requires at least one content archive".to_string(),
+                ));
+            }
+            let archive = MmapContentSet::open(&content_paths)?;
+            print_file_ids(archive.ids_for_term(&term)?);
+        }
+        "content-ids-mmap-manifest" => {
+            let manifest = required_path(
+                args.next(),
+                "content-ids-mmap-manifest requires a manifest path",
+            )?;
+            let term = required_string(args.next(), "content-ids-mmap-manifest requires a term")?;
+            let archive = MmapContentSet::open_manifest(manifest)?;
+            print_file_ids(archive.ids_for_term(&term)?);
+        }
+        "content-id-block-mmap" => {
+            let content =
+                required_path(args.next(), "content-id-block-mmap requires a content path")?;
+            let term = required_string(args.next(), "content-id-block-mmap requires a term")?;
+            let block_index =
+                parse_usize_arg(args.next(), "content-id-block-mmap requires a block index")?;
+            let archive = MmapContentArchive::open(content)?;
+            print_file_ids(archive.id_block_for_term(&term, block_index)?);
+        }
+        "content-verify" => {
+            let content = required_path(args.next(), "content-verify requires a content path")?;
+            let archive = MmapContentArchive::open(content)?;
+            println!(
+                "content-verify\tterms={}\tbytes={}\tchecksum={}",
+                archive.indexed_terms(),
+                archive.mapped_len(),
+                if archive.is_checksummed() {
+                    "verified"
+                } else {
+                    "legacy"
+                }
+            );
+        }
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn print_file_ids(ids: Vec<gfm_types::FileId>) {
+    for id in ids {
+        println!("{}\t{}", id.volume.0, id.node);
+    }
 }
 
 fn marker(kind: FileKind) -> &'static str {

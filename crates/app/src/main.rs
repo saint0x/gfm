@@ -40,9 +40,9 @@ use gfm_store::{
     promote_content_archive_manifest, rebuild_columns_archive, rebuild_derived_sidecar,
     recover_content_manifest, recover_content_manifest_promotion, write_dictionary,
     write_metadata_postings, write_record_columns, ArchiveRebuildInputs, ArchiveSchemaKind,
-    ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive, MmapContentSet,
-    MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
-    MmapRecordColumns, MmapSubstringArchive,
+    ContentArchiveHealth, MetadataField, MmapContentSet, MmapDictionary, MmapFuzzyArchive,
+    MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
+    MmapSubstringArchive,
 };
 use gfm_store::{
     fuzzy_postings_from_records, plan_sidecar_recovery, prefix_postings_from_records,
@@ -1560,86 +1560,6 @@ fn run() -> Result<()> {
             let archive = MmapMetadataArchive::open(metadata)?;
             println!(
                 "metadata-verify\tterms={}\tbytes={}\tchecksum={}",
-                archive.indexed_terms(),
-                archive.mapped_len(),
-                if archive.is_checksummed() {
-                    "verified"
-                } else {
-                    "legacy"
-                }
-            );
-        }
-        Some("content-ids") => {
-            let content = required_path(args.next(), "content-ids requires a content path")?;
-            let term = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format("content-ids requires a term".to_string())
-            })?;
-            let mut archive = ContentArchive::open(content)?;
-            for id in archive.ids_for_term(&term)? {
-                println!("{}\t{}", id.volume.0, id.node);
-            }
-        }
-        Some("content-ids-mmap") => {
-            let content = required_path(args.next(), "content-ids-mmap requires a content path")?;
-            let term = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format("content-ids-mmap requires a term".to_string())
-            })?;
-            let archive = MmapContentArchive::open(content)?;
-            for id in archive.ids_for_term(&term)? {
-                println!("{}\t{}", id.volume.0, id.node);
-            }
-        }
-        Some("content-ids-mmap-set") => {
-            let term = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format("content-ids-mmap-set requires a term".to_string())
-            })?;
-            let content_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
-            if content_paths.is_empty() {
-                return Err(gfm_types::GfmError::Format(
-                    "content-ids-mmap-set requires at least one content archive".to_string(),
-                ));
-            }
-            let archive = MmapContentSet::open(&content_paths)?;
-            for id in archive.ids_for_term(&term)? {
-                println!("{}\t{}", id.volume.0, id.node);
-            }
-        }
-        Some("content-ids-mmap-manifest") => {
-            let manifest = required_path(
-                args.next(),
-                "content-ids-mmap-manifest requires a manifest path",
-            )?;
-            let term = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format("content-ids-mmap-manifest requires a term".to_string())
-            })?;
-            let archive = MmapContentSet::open_manifest(manifest)?;
-            for id in archive.ids_for_term(&term)? {
-                println!("{}\t{}", id.volume.0, id.node);
-            }
-        }
-        Some("content-id-block-mmap") => {
-            let content =
-                required_path(args.next(), "content-id-block-mmap requires a content path")?;
-            let term = args.next().ok_or_else(|| {
-                gfm_types::GfmError::Format("content-id-block-mmap requires a term".to_string())
-            })?;
-            let block_index = args
-                .next()
-                .ok_or_else(|| {
-                    GfmError::Format("content-id-block-mmap requires a block index".to_string())
-                })?
-                .parse::<usize>()
-                .map_err(|err| GfmError::Format(format!("invalid content block index: {err}")))?;
-            let archive = MmapContentArchive::open(content)?;
-            for id in archive.id_block_for_term(&term, block_index)? {
-                println!("{}\t{}", id.volume.0, id.node);
-            }
-        }
-        Some("content-verify") => {
-            let content = required_path(args.next(), "content-verify requires a content path")?;
-            let archive = MmapContentArchive::open(content)?;
-            println!(
-                "content-verify\tterms={}\tbytes={}\tchecksum={}",
                 archive.indexed_terms(),
                 archive.mapped_len(),
                 if archive.is_checksummed() {
