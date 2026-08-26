@@ -11,6 +11,30 @@ use gfm_types::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SearchVolumeScope {
+    #[default]
+    All,
+    Only(BTreeSet<VolumeId>),
+}
+
+impl SearchVolumeScope {
+    pub fn all() -> Self {
+        Self::All
+    }
+
+    pub fn only(volumes: impl IntoIterator<Item = VolumeId>) -> Self {
+        Self::Only(volumes.into_iter().collect())
+    }
+
+    pub fn allows(&self, volume: VolumeId) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(volumes) => volumes.contains(&volume),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ShardedSearchIndex {
     shards: BTreeMap<VolumeId, SearchIndex>,
@@ -251,6 +275,44 @@ impl ShardedSearchIndex {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<SearchQueryReport> {
+        self.query_structured_with_volume_scope_lookup_budget_cancellable(
+            query,
+            limit,
+            &SearchVolumeScope::All,
+            lookup,
+            budget,
+            cancellation,
+        )
+    }
+
+    pub fn query_structured_with_volume_scope_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchHit>> {
+        Ok(self
+            .query_structured_with_volume_scope_lookup_budget_cancellable(
+                query,
+                limit,
+                scope,
+                &crate::EmptySearchLookup,
+                SearchLookupBudget::default(),
+                cancellation,
+            )?
+            .hits)
+    }
+
+    pub fn query_structured_with_volume_scope_lookup_budget_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<SearchQueryReport> {
         cancellation.check()?;
         if query.is_empty() || limit == 0 || self.shards.is_empty() {
             return Ok(SearchQueryReport {
@@ -258,11 +320,22 @@ impl ShardedSearchIndex {
                 lookup: SearchLookupTelemetry::default(),
             });
         }
-        if let Some(shard) = self.single_shard() {
+        let shards = self.scoped_shards(scope);
+        if shards.is_empty() {
+            return Ok(SearchQueryReport {
+                hits: Vec::new(),
+                lookup: SearchLookupTelemetry::default(),
+            });
+        }
+        if let [(volume, shard)] = shards.as_slice() {
+            let scoped_lookup = VolumeScopedSearchLookup {
+                lookup,
+                volume: *volume,
+            };
             return shard.query_structured_with_lookup_budget_cancellable(
                 query,
                 limit,
-                lookup,
+                &scoped_lookup,
                 budget,
                 cancellation,
             );
@@ -270,16 +343,17 @@ impl ShardedSearchIndex {
 
         let mut merged = BoundedHitMerge::new(limit);
         let mut telemetry = SearchLookupTelemetry::default();
-        std::thread::scope(|scope| {
+        std::thread::scope(|thread_scope| {
             let handles: Vec<_> = self
-                .shards
-                .values()
-                .map(|shard| {
-                    scope.spawn(move || {
+                .scoped_shards(scope)
+                .into_iter()
+                .map(|(volume, shard)| {
+                    thread_scope.spawn(move || {
+                        let scoped_lookup = VolumeScopedSearchLookup { lookup, volume };
                         shard.query_structured_with_lookup_budget_cancellable(
                             query,
                             limit,
-                            lookup,
+                            &scoped_lookup,
                             budget,
                             cancellation,
                         )
@@ -332,22 +406,41 @@ impl ShardedSearchIndex {
         limit: usize,
         cancellation: &Cancellation,
     ) -> Result<Vec<SearchStreamBatch>> {
+        self.stream_structured_with_volume_scope_cancellable(
+            query,
+            limit,
+            &SearchVolumeScope::All,
+            cancellation,
+        )
+    }
+
+    pub fn stream_structured_with_volume_scope_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
         cancellation.check()?;
         if query.is_empty() || limit == 0 || self.shards.is_empty() {
             return Ok(Vec::new());
         }
-        if let Some(shard) = self.single_shard() {
+        let shards = self.scoped_shards(scope);
+        if shards.is_empty() {
+            return Ok(Vec::new());
+        }
+        if let [(_, shard)] = shards.as_slice() {
             return shard.stream_structured_cancellable(query, limit, cancellation);
         }
 
         let mut hot = BoundedHitMerge::new(limit);
         let mut deep = BoundedHitMerge::new(limit.saturating_mul(2));
-        std::thread::scope(|scope| {
+        std::thread::scope(|thread_scope| {
             let handles: Vec<_> = self
-                .shards
-                .values()
-                .map(|shard| {
-                    scope.spawn(move || {
+                .scoped_shards(scope)
+                .into_iter()
+                .map(|(_, shard)| {
+                    thread_scope.spawn(move || {
                         shard.stream_structured_cancellable(query, limit, cancellation)
                     })
                 })
@@ -400,12 +493,34 @@ impl ShardedSearchIndex {
         self.shards.retain(|_, shard| !shard.is_empty());
     }
 
-    fn single_shard(&self) -> Option<&SearchIndex> {
-        if self.shards.len() == 1 {
-            self.shards.values().next()
-        } else {
-            None
-        }
+    fn scoped_shards(&self, scope: &SearchVolumeScope) -> Vec<(VolumeId, &SearchIndex)> {
+        self.shards
+            .iter()
+            .filter_map(|(volume, shard)| scope.allows(*volume).then_some((*volume, shard)))
+            .collect()
+    }
+}
+
+struct VolumeScopedSearchLookup<'a> {
+    lookup: &'a dyn SearchLookup,
+    volume: VolumeId,
+}
+
+impl SearchLookup for VolumeScopedSearchLookup<'_> {
+    fn prefix_ids(&self, prefix: &str) -> Result<Vec<FileId>> {
+        self.lookup.prefix_ids_for_volume(prefix, self.volume)
+    }
+
+    fn substring_ids(&self, gram: &str) -> Result<Vec<FileId>> {
+        self.lookup.substring_ids_for_volume(gram, self.volume)
+    }
+
+    fn fuzzy_terms(&self, key: &str) -> Result<Vec<String>> {
+        self.lookup.fuzzy_terms(key)
+    }
+
+    fn cache_telemetry(&self) -> SearchLookupTelemetry {
+        self.lookup.cache_telemetry()
     }
 }
 

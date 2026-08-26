@@ -6,6 +6,7 @@ pub use gfm_search::{
     SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupIds, SearchLookupTelemetry,
     SearchLookupTerms, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
     SearchQueryReport, SearchRecordColumns, SearchStreamStage, SearchSubstringPosting,
+    SearchVolumeScope,
 };
 use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
@@ -137,8 +138,27 @@ impl IndexQuerySession {
         self.live.search(query, limit)
     }
 
+    pub fn search_with_volume_scope(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+    ) -> Result<Vec<SearchHit>> {
+        self.live.search_with_volume_scope(query, limit, scope)
+    }
+
     pub fn stream_search(&self, query: &str, limit: usize) -> Result<Vec<SearchStreamBatch>> {
         self.live.stream_search(query, limit)
+    }
+
+    pub fn stream_search_with_volume_scope(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.live
+            .stream_search_with_volume_scope(query, limit, scope)
     }
 
     pub fn search_cancellable(

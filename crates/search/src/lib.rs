@@ -44,7 +44,7 @@ use ranking::{
 };
 use scoring::{add_scores, seed_scores};
 pub use session::SearchSupersession;
-pub use shard::ShardedSearchIndex;
+pub use shard::{SearchVolumeScope, ShardedSearchIndex};
 use terms::substring_grams;
 pub(crate) use terms::{is_fuzzy_term, is_prefix_term};
 

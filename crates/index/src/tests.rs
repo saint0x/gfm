@@ -9,8 +9,8 @@ use gfm_store::{
     FuzzyPosting, MetadataField, MmapMetadataArchive, PrefixPosting, SubstringPosting,
 };
 use gfm_types::{
-    ContentPositions, ContentPosting, FileKind, GfmError, MatchReason, SecondaryMetadataRecord,
-    VolumeId,
+    ContentPositions, ContentPosting, FileId, FileKind, FileRecord, GfmError, MatchReason,
+    SecondaryMetadataRecord, VolumeId,
 };
 use std::collections::HashSet;
 use std::fs;
@@ -99,6 +99,50 @@ fn snapshot_query_session_streams_without_rebuilding_per_query() {
     assert_eq!(batches[0].hits[0].record.name, "needle.md");
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn query_session_searches_only_admitted_volume_scope() {
+    let session = IndexSnapshot {
+        root: PathBuf::from("/Volumes"),
+        records: vec![
+            volume_file_record(1, 1, "/Volumes/A/report.md", "report.md"),
+            volume_file_record(2, 1, "/Volumes/B/report.md", "report.md"),
+        ],
+        inaccessible: Vec::new(),
+    }
+    .query_session();
+
+    let hits = session
+        .search_with_volume_scope("report", 10, &SearchVolumeScope::only([VolumeId(2)]))
+        .unwrap();
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.path, PathBuf::from("/Volumes/B/report.md"));
+}
+
+#[test]
+fn query_session_streams_only_admitted_volume_scope() {
+    let session = IndexSnapshot {
+        root: PathBuf::from("/Volumes"),
+        records: vec![
+            volume_file_record(1, 1, "/Volumes/A/needle.md", "needle.md"),
+            volume_file_record(2, 1, "/Volumes/B/needle.md", "needle.md"),
+        ],
+        inaccessible: Vec::new(),
+    }
+    .query_session();
+
+    let batches = session
+        .stream_search_with_volume_scope("needle", 10, &SearchVolumeScope::only([VolumeId(1)]))
+        .unwrap();
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].hits.len(), 1);
+    assert_eq!(
+        batches[0].hits[0].record.path,
+        PathBuf::from("/Volumes/A/needle.md")
+    );
 }
 
 #[test]
@@ -3031,6 +3075,27 @@ fn unique_temp_path(prefix: &str, extension: &str) -> PathBuf {
         name.push_str(extension);
     }
     std::env::temp_dir().join(name)
+}
+
+fn volume_file_record(volume: u64, node: u64, path: &str, name: &str) -> FileRecord {
+    FileRecord {
+        id: FileId::new(VolumeId(volume), node),
+        parent: None,
+        path: PathBuf::from(path),
+        name: name.to_string(),
+        kind: FileKind::File,
+        len: 0,
+        mode: 0,
+        owner: 0,
+        group: 0,
+        xattrs_digest: 0,
+        created: None,
+        modified: None,
+        changed: None,
+        hidden: false,
+        tags: Vec::new(),
+        finder_comment: None,
+    }
 }
 
 fn set_finder_tags(path: &Path, tags: &[&str]) {

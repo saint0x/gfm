@@ -10,7 +10,7 @@ use gfm_jobs::Cancellation;
 use gfm_search::{
     SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchMetadataPosting,
     SearchPrefixPosting, SearchQuery, SearchQueryReport, SearchRecordColumns, SearchStreamBatch,
-    SearchSubstringPosting, ShardedSearchIndex,
+    SearchSubstringPosting, SearchVolumeScope, ShardedSearchIndex,
 };
 use gfm_store::{
     read_content_postings, write_content_postings, MmapContentArchive, MmapContentSet,
@@ -309,8 +309,71 @@ impl LiveIndex {
         Ok(report)
     }
 
+    pub fn search_with_volume_scope(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+    ) -> Result<Vec<SearchHit>> {
+        self.search_with_volume_scope_cancellable(query, limit, scope, &Cancellation::default())
+    }
+
+    pub fn search_with_volume_scope_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchHit>> {
+        self.index.query_structured_with_volume_scope_cancellable(
+            &SearchQuery::parse(query),
+            limit,
+            scope,
+            cancellation,
+        )
+    }
+
+    pub fn search_with_volume_scope_lookup_budget_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<SearchQueryReport> {
+        let cache_before = lookup.cache_telemetry();
+        let mut report = self
+            .index
+            .query_structured_with_volume_scope_lookup_budget_cancellable(
+                &SearchQuery::parse(query),
+                limit,
+                scope,
+                lookup,
+                budget,
+                cancellation,
+            )?;
+        let cache_after = lookup.cache_telemetry();
+        report.lookup.merge_cache_delta(&cache_before, &cache_after);
+        Ok(report)
+    }
+
     pub fn stream_search(&self, query: &str, limit: usize) -> Result<Vec<SearchStreamBatch>> {
         self.index.stream(query, limit)
+    }
+
+    pub fn stream_search_with_volume_scope(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.index.stream_structured_with_volume_scope_cancellable(
+            &SearchQuery::parse(query),
+            limit,
+            scope,
+            &Cancellation::default(),
+        )
     }
 
     pub fn search_cancellable(

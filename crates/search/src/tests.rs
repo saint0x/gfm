@@ -3,6 +3,7 @@ use gfm_types::{
     ContentPositions, ContentPosting, FileId, FileKind, FileRecord, GfmError, VolumeId,
 };
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 #[test]
@@ -1950,6 +1951,103 @@ fn sharded_search_merges_volume_results_deterministically() {
 }
 
 #[test]
+fn sharded_search_volume_scope_queries_only_admitted_volumes() {
+    let mut index = ShardedSearchIndex::new();
+    index.insert(volume_record(1, 1, "/Volumes/A/report.md", "report.md"));
+    index.insert(volume_record(2, 1, "/Volumes/B/report.md", "report.md"));
+
+    let hits = index
+        .query_structured_with_volume_scope_cancellable(
+            &SearchQuery::parse("report"),
+            10,
+            &SearchVolumeScope::only([VolumeId(2)]),
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.path, PathBuf::from("/Volumes/B/report.md"));
+}
+
+#[test]
+fn sharded_search_volume_scope_uses_volume_specific_sidecar_lookup() {
+    let mut index = ShardedSearchIndex::new();
+    index.insert_with_columns_deferred_sidecars(
+        volume_record(1, 1, "/Volumes/A/original.md", "original.md"),
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(1), 1),
+            name: "project-alpha.md".to_string(),
+            path: "/Volumes/A/project-alpha.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: Vec::new(),
+            comment: None,
+        },
+    );
+    index.insert_with_columns_deferred_sidecars(
+        volume_record(2, 2, "/Volumes/B/original.md", "original.md"),
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(2), 2),
+            name: "project-beta.md".to_string(),
+            path: "/Volumes/B/project-beta.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: Vec::new(),
+            comment: None,
+        },
+    );
+    let lookup = TrackingVolumeLookup {
+        prefix_ids: vec![FileId::new(VolumeId(1), 1), FileId::new(VolumeId(2), 2)],
+        global_prefix_calls: AtomicUsize::new(0),
+        volume_prefix_calls: AtomicUsize::new(0),
+    };
+
+    let report = index
+        .query_structured_with_volume_scope_lookup_budget_cancellable(
+            &SearchQuery::parse("proj"),
+            10,
+            &SearchVolumeScope::only([VolumeId(2)]),
+            &lookup,
+            SearchLookupBudget::default(),
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits.len(), 1);
+    assert_eq!(
+        report.hits[0].record.path,
+        PathBuf::from("/Volumes/B/original.md")
+    );
+    assert_eq!(lookup.global_prefix_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(lookup.volume_prefix_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(report.lookup.prefix_lookup_ids, 1);
+}
+
+#[test]
+fn sharded_search_empty_volume_scope_does_not_query_sidecars() {
+    let mut index = ShardedSearchIndex::new();
+    index.insert(volume_record(1, 1, "/Volumes/A/report.md", "report.md"));
+    let lookup = TrackingVolumeLookup {
+        prefix_ids: vec![FileId::new(VolumeId(1), 1)],
+        global_prefix_calls: AtomicUsize::new(0),
+        volume_prefix_calls: AtomicUsize::new(0),
+    };
+
+    let report = index
+        .query_structured_with_volume_scope_lookup_budget_cancellable(
+            &SearchQuery::parse("report"),
+            10,
+            &SearchVolumeScope::only([VolumeId(9)]),
+            &lookup,
+            SearchLookupBudget::default(),
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert!(report.hits.is_empty());
+    assert_eq!(lookup.global_prefix_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(lookup.volume_prefix_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn single_shard_search_dispatches_directly_with_query_report() {
     let mut index = ShardedSearchIndex::new();
     let record = volume_record(1, 1, "/Volumes/A/report.md", "report.md");
@@ -2317,6 +2415,29 @@ fn sharded_stream_merges_stages_across_volumes() {
 }
 
 #[test]
+fn sharded_stream_volume_scope_skips_excluded_deep_hits() {
+    let mut index = ShardedSearchIndex::new();
+    let hot = volume_record(1, 1, "/Volumes/A/needle.md", "needle.md");
+    let excluded_deep = volume_record(2, 1, "/Volumes/B/deep.md", "deep.md");
+    index.insert(hot.clone());
+    index.insert(excluded_deep.clone());
+    index.insert_content(excluded_deep.id, "needle exists only in excluded content");
+
+    let batches = index
+        .stream_structured_with_volume_scope_cancellable(
+            &SearchQuery::parse("needle"),
+            10,
+            &SearchVolumeScope::only([VolumeId(1)]),
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].stage, SearchStreamStage::Hot);
+    assert_eq!(batches[0].hits[0].record.path, hot.path);
+}
+
+#[test]
 fn single_shard_stream_dispatches_directly_with_hot_and_deep_batches() {
     let mut index = ShardedSearchIndex::new();
     let hot = volume_record(1, 1, "/Volumes/A/needle.md", "needle.md");
@@ -2415,6 +2536,41 @@ impl SearchLookup for StaticLookup {
 
     fn fuzzy_terms(&self, _key: &str) -> gfm_types::Result<Vec<String>> {
         Ok(self.fuzzy_terms.clone())
+    }
+}
+
+struct TrackingVolumeLookup {
+    prefix_ids: Vec<FileId>,
+    global_prefix_calls: AtomicUsize,
+    volume_prefix_calls: AtomicUsize,
+}
+
+impl SearchLookup for TrackingVolumeLookup {
+    fn prefix_ids(&self, _prefix: &str) -> gfm_types::Result<Vec<FileId>> {
+        self.global_prefix_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.prefix_ids.clone())
+    }
+
+    fn prefix_ids_for_volume(
+        &self,
+        _prefix: &str,
+        volume: VolumeId,
+    ) -> gfm_types::Result<Vec<FileId>> {
+        self.volume_prefix_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self
+            .prefix_ids
+            .iter()
+            .copied()
+            .filter(|id| id.volume == volume)
+            .collect())
+    }
+
+    fn substring_ids(&self, _gram: &str) -> gfm_types::Result<Vec<FileId>> {
+        Ok(Vec::new())
+    }
+
+    fn fuzzy_terms(&self, _key: &str) -> gfm_types::Result<Vec<String>> {
+        Ok(Vec::new())
     }
 }
 

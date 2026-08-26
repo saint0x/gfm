@@ -2,7 +2,7 @@ use super::fuzzy::{bounded_levenshtein, deletion_keys};
 use super::query::normalize;
 use super::terms::{is_fuzzy_term, is_prefix_term, substring_grams, SUBSTRING_GRAM_CHARS};
 use super::SearchIndex;
-use gfm_types::FileId;
+use gfm_types::{FileId, VolumeId};
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +135,30 @@ pub trait SearchLookup: Sync {
     fn prefix_ids(&self, prefix: &str) -> gfm_types::Result<Vec<FileId>>;
     fn substring_ids(&self, gram: &str) -> gfm_types::Result<Vec<FileId>>;
     fn fuzzy_terms(&self, key: &str) -> gfm_types::Result<Vec<String>>;
+
+    fn prefix_ids_for_volume(
+        &self,
+        prefix: &str,
+        volume: VolumeId,
+    ) -> gfm_types::Result<Vec<FileId>> {
+        Ok(self
+            .prefix_ids(prefix)?
+            .into_iter()
+            .filter(|id| id.volume == volume)
+            .collect())
+    }
+
+    fn substring_ids_for_volume(
+        &self,
+        gram: &str,
+        volume: VolumeId,
+    ) -> gfm_types::Result<Vec<FileId>> {
+        Ok(self
+            .substring_ids(gram)?
+            .into_iter()
+            .filter(|id| id.volume == volume)
+            .collect())
+    }
 
     fn prefix_ids_bounded(&self, prefix: &str, limit: usize) -> gfm_types::Result<SearchLookupIds> {
         let mut ids = self.prefix_ids(prefix)?;

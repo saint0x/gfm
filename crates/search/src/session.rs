@@ -1,4 +1,4 @@
-use crate::{SearchIndex, SearchStreamBatch, ShardedSearchIndex};
+use crate::{SearchIndex, SearchStreamBatch, SearchVolumeScope, ShardedSearchIndex};
 use gfm_jobs::Cancellation;
 use gfm_types::{Result, SearchHit};
 use std::sync::{Mutex, MutexGuard};
@@ -44,6 +44,22 @@ impl SearchSupersession {
         index.query_cancellable(query, limit, &cancellation)
     }
 
+    pub fn query_sharded_with_volume_scope(
+        &self,
+        index: &ShardedSearchIndex,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+    ) -> Result<Vec<SearchHit>> {
+        let cancellation = self.begin();
+        index.query_structured_with_volume_scope_cancellable(
+            &crate::SearchQuery::parse(query),
+            limit,
+            scope,
+            &cancellation,
+        )
+    }
+
     pub fn stream(
         &self,
         index: &SearchIndex,
@@ -62,6 +78,22 @@ impl SearchSupersession {
     ) -> Result<Vec<SearchStreamBatch>> {
         let cancellation = self.begin();
         index.stream_cancellable(query, limit, &cancellation)
+    }
+
+    pub fn stream_sharded_with_volume_scope(
+        &self,
+        index: &ShardedSearchIndex,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        let cancellation = self.begin();
+        index.stream_structured_with_volume_scope_cancellable(
+            &crate::SearchQuery::parse(query),
+            limit,
+            scope,
+            &cancellation,
+        )
     }
 
     fn active_lock(&self) -> MutexGuard<'_, Option<Cancellation>> {
