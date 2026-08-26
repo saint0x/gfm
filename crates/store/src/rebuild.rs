@@ -356,10 +356,22 @@ pub fn rebuild_derived_sidecar(
     sidecar_path: impl AsRef<Path>,
     backup_dir: impl AsRef<Path>,
 ) -> Result<DerivedSidecarRebuild> {
+    rebuild_derived_sidecar_checked(records_path, kind, sidecar_path, backup_dir, || Ok(()))
+}
+
+pub fn rebuild_derived_sidecar_checked(
+    records_path: impl AsRef<Path>,
+    kind: SidecarKind,
+    sidecar_path: impl AsRef<Path>,
+    backup_dir: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<DerivedSidecarRebuild> {
     let records_path = records_path.as_ref();
     let sidecar_path = sidecar_path.as_ref();
     let backup_dir = backup_dir.as_ref();
+    check_control()?;
     let before = plan_derived_sidecar_rebuild(records_path, kind, sidecar_path);
+    check_control()?;
     match before.action {
         DerivedSidecarRebuildAction::Ready => {
             return Ok(DerivedSidecarRebuild {
@@ -382,7 +394,9 @@ pub fn rebuild_derived_sidecar(
         DerivedSidecarRebuildAction::Rebuild => {}
     }
 
+    check_control()?;
     let records = MmapRecordArchive::open(records_path)?.records()?;
+    check_control()?;
     let backup_path = if sidecar_path.exists() {
         let label = match before.sidecar.status {
             ArchiveSchemaStatus::Legacy => "legacy",
@@ -390,12 +404,17 @@ pub fn rebuild_derived_sidecar(
             ArchiveSchemaStatus::Unreadable => "unreadable",
             ArchiveSchemaStatus::Current | ArchiveSchemaStatus::Missing => sidecar_kind_name(kind),
         };
-        Some(schema::backup_archive(sidecar_path, backup_dir, label)?)
+        let backup = schema::backup_archive(sidecar_path, backup_dir, label)?;
+        check_control()?;
+        Some(backup)
     } else {
         None
     };
+    check_control()?;
     write_derived_sidecar(kind, sidecar_path, &records)?;
+    check_control()?;
     let after = inspect_archive_schema(archive_kind_for_sidecar(kind), sidecar_path);
+    check_control()?;
     if after.status != ArchiveSchemaStatus::Current {
         return Err(GfmError::Format(format!(
             "{} rebuild produced {} instead of current schema",
@@ -815,6 +834,36 @@ mod tests {
             .unwrap()
             .is_empty());
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn checked_derived_sidecar_rebuild_stops_before_publication() {
+        let dir = temp_dir("gfm-derived-sidecar-rebuild-cancel");
+        let records = dir.join("records.gfmidx");
+        let prefixes = dir.join("records.gfmprefix");
+        let backup = dir.join("backup");
+        write_records(&records, &[record()]).unwrap();
+        let mut checks = 0_u32;
+
+        let result = rebuild_derived_sidecar_checked(
+            &records,
+            SidecarKind::Prefixes,
+            &prefixes,
+            &backup,
+            || {
+                checks += 1;
+                if checks > 4 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!prefixes.exists());
+        assert!(!backup.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

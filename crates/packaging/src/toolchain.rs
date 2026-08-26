@@ -59,7 +59,9 @@ fn require_toolchain(
         });
     }
     if metal_smoke_required {
-        validate_metal_toolchain(&developer_dir, label)?;
+        let metal = resolved_utility_path(&utilities, "metal", label)?;
+        let metallib = resolved_utility_path(&utilities, "metallib", label)?;
+        validate_metal_toolchain(&developer_dir, metal, metallib, label)?;
     }
     Ok(AppleToolchainReport {
         developer_dir,
@@ -252,7 +254,28 @@ fn xcrun_find(name: &str, developer_dir: &Path, label: &str) -> Result<std::proc
     Ok(output)
 }
 
-fn validate_metal_toolchain(developer_dir: &Path, label: &str) -> Result<()> {
+fn resolved_utility_path<'a>(
+    utilities: &'a [AppleToolchainUtility],
+    name: &str,
+    label: &str,
+) -> Result<&'a Path> {
+    utilities
+        .iter()
+        .find(|utility| utility.name == name)
+        .map(|utility| utility.path.as_path())
+        .ok_or_else(|| {
+            GfmError::Format(format!(
+                "{label} Apple toolchain resolved no `{name}` executable"
+            ))
+        })
+}
+
+fn validate_metal_toolchain(
+    developer_dir: &Path,
+    metal_path: &Path,
+    metallib_path: &Path,
+    label: &str,
+) -> Result<()> {
     let root = unique_temp_dir("gfm-metal-toolchain")?;
     let source = root.join("gfm_toolchain_probe.metal");
     let air = root.join("gfm_toolchain_probe.air");
@@ -261,8 +284,8 @@ fn validate_metal_toolchain(developer_dir: &Path, label: &str) -> Result<()> {
     let result = (|| {
         fs::write(&source, metal_probe_source()).map_err(|err| GfmError::io(&source, err))?;
 
-        let metal = xcrun(developer_dir)
-            .args(["-sdk", "macosx", "metal", "-c"])
+        let metal = apple_tool(developer_dir, metal_path)
+            .arg("-c")
             .arg(&source)
             .arg("-o")
             .arg(&air)
@@ -273,14 +296,17 @@ fn validate_metal_toolchain(developer_dir: &Path, label: &str) -> Result<()> {
         if !metal.status.success() {
             return Err(command_failure(
                 label,
-                "xcrun -sdk macosx metal -c <probe.metal> -o <probe.air>",
+                &format!(
+                    "DEVELOPER_DIR={} {} -c <probe.metal> -o <probe.air>",
+                    developer_dir.display(),
+                    metal_path.display()
+                ),
                 metal,
                 Some(developer_dir),
             ));
         }
 
-        let link = xcrun(developer_dir)
-            .args(["-sdk", "macosx", "metallib"])
+        let link = apple_tool(developer_dir, metallib_path)
             .arg(&air)
             .arg("-o")
             .arg(&metallib)
@@ -293,7 +319,11 @@ fn validate_metal_toolchain(developer_dir: &Path, label: &str) -> Result<()> {
         if !link.status.success() {
             return Err(command_failure(
                 label,
-                "xcrun -sdk macosx metallib <probe.air> -o <probe.metallib>",
+                &format!(
+                    "DEVELOPER_DIR={} {} <probe.air> -o <probe.metallib>",
+                    developer_dir.display(),
+                    metallib_path.display()
+                ),
                 link,
                 Some(developer_dir),
             ));
@@ -381,6 +411,12 @@ fn xcrun(developer_dir: &Path) -> Command {
     command
 }
 
+fn apple_tool(developer_dir: &Path, path: &Path) -> Command {
+    let mut command = Command::new(path);
+    command.env("DEVELOPER_DIR", developer_dir);
+    command
+}
+
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
@@ -447,5 +483,44 @@ mod tests {
         assert!(source.contains("#include <metal_stdlib>"));
         assert!(source.contains("kernel void gfm_toolchain_probe"));
         assert!(source.contains("thread_position_in_grid"));
+    }
+
+    #[test]
+    fn resolves_smoke_test_tools_from_reported_utilities() {
+        let utilities = vec![
+            AppleToolchainUtility {
+                name: "metal".to_string(),
+                path: PathBuf::from("/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/metal"),
+            },
+            AppleToolchainUtility {
+                name: "metallib".to_string(),
+                path: PathBuf::from("/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/metallib"),
+            },
+        ];
+
+        assert_eq!(
+            resolved_utility_path(&utilities, "metal", "production release")
+                .expect("metal utility path"),
+            Path::new(
+                "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/metal"
+            )
+        );
+        assert_eq!(
+            resolved_utility_path(&utilities, "metallib", "production release")
+                .expect("metallib utility path"),
+            Path::new(
+                "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/metallib"
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_missing_resolved_smoke_test_tool() {
+        let err = resolved_utility_path(&[], "metal", "production release")
+            .expect_err("missing Metal utility must fail");
+
+        assert!(err
+            .to_string()
+            .contains("production release Apple toolchain resolved no `metal` executable"));
     }
 }

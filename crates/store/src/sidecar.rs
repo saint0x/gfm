@@ -189,9 +189,20 @@ pub fn recover_sidecars(
     sidecars: &SidecarPaths,
     quarantine_dir: impl AsRef<Path>,
 ) -> Result<SidecarRecovery> {
+    recover_sidecars_checked(records_path, sidecars, quarantine_dir, || Ok(()))
+}
+
+pub fn recover_sidecars_checked(
+    records_path: impl AsRef<Path>,
+    sidecars: &SidecarPaths,
+    quarantine_dir: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<SidecarRecovery> {
     let records_path = records_path.as_ref();
     let quarantine_dir = quarantine_dir.as_ref();
+    check_control()?;
     let before = plan_sidecar_recovery(records_path, sidecars);
+    check_control()?;
     if before.action == SidecarRecoveryAction::CannotRecover {
         return Err(GfmError::Format(format!(
             "{} cannot rebuild sidecars: {}",
@@ -203,17 +214,24 @@ pub fn recover_sidecars(
     let mut rebuilt_sidecars = Vec::new();
     let mut quarantined_sidecars = Vec::new();
     if before.action == SidecarRecoveryAction::Rebuild {
+        check_control()?;
         let records = read_records(records_path)?;
+        check_control()?;
         for health in &before.invalid_sidecars {
+            check_control()?;
             if health.path.exists() {
                 quarantined_sidecars.push(quarantine_sidecar(&health.path, quarantine_dir)?);
+                check_control()?;
             }
             rebuild_sidecar(health.kind, &health.path, &records)?;
+            check_control()?;
             rebuilt_sidecars.push(health.kind);
         }
     }
 
+    check_control()?;
     let after = plan_sidecar_recovery(records_path, sidecars);
+    check_control()?;
     Ok(SidecarRecovery {
         before,
         after,
@@ -370,6 +388,33 @@ mod tests {
             .unwrap()
             .iter()
             .any(|term| term.contains("projectplan")));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn checked_sidecar_recovery_stops_before_rebuilding_missing_sidecar() {
+        let dir = temp_dir("gfm-sidecar-recovery-cancel");
+        let records = dir.join("records.gfmidx");
+        let prefixes = dir.join("records.gfmprefix");
+        fs::create_dir_all(&dir).unwrap();
+        write_records(&records, &[record("ProjectPlan.md")]).unwrap();
+        let paths = SidecarPaths {
+            prefixes: Some(prefixes.clone()),
+            ..SidecarPaths::default()
+        };
+        let mut checks = 0_u32;
+
+        let result = recover_sidecars_checked(&records, &paths, dir.join("quarantine"), || {
+            checks += 1;
+            if checks > 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!prefixes.exists());
         fs::remove_dir_all(dir).unwrap();
     }
 

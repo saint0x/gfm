@@ -66,10 +66,10 @@ pub use prefix::{
 };
 pub use rebuild::{
     plan_archive_rebuilds, plan_columns_archive_rebuild, plan_derived_sidecar_rebuild,
-    rebuild_columns_archive, rebuild_derived_sidecar, ArchiveRebuildInputs, ArchiveRebuildPlan,
-    ArchiveRebuildPlanEntry, ArchiveRebuildRoute, ColumnsArchiveRebuild,
-    ColumnsArchiveRebuildAction, ColumnsArchiveRebuildPlan, DerivedSidecarRebuild,
-    DerivedSidecarRebuildAction, DerivedSidecarRebuildPlan,
+    rebuild_columns_archive, rebuild_derived_sidecar, rebuild_derived_sidecar_checked,
+    ArchiveRebuildInputs, ArchiveRebuildPlan, ArchiveRebuildPlanEntry, ArchiveRebuildRoute,
+    ColumnsArchiveRebuild, ColumnsArchiveRebuildAction, ColumnsArchiveRebuildPlan,
+    DerivedSidecarRebuild, DerivedSidecarRebuildAction, DerivedSidecarRebuildPlan,
 };
 pub use schema::{
     inspect_archive_schema, migrate_content_archive, migrate_metadata_archive,
@@ -80,9 +80,10 @@ pub use schema::{
     RecordArchiveMigration, RecordArchiveMigrationAction, RecordArchiveMigrationPlan,
 };
 pub use sidecar::{
-    plan_sidecar_recovery, recover_sidecars, sidecar_kind_name, sidecar_recovery_action_name,
-    sidecar_recovery_reason_name, SidecarHealth, SidecarKind, SidecarPaths, SidecarRecovery,
-    SidecarRecoveryAction, SidecarRecoveryPlan, SidecarRecoveryReason,
+    plan_sidecar_recovery, recover_sidecars, recover_sidecars_checked, sidecar_kind_name,
+    sidecar_recovery_action_name, sidecar_recovery_reason_name, SidecarHealth, SidecarKind,
+    SidecarPaths, SidecarRecovery, SidecarRecoveryAction, SidecarRecoveryPlan,
+    SidecarRecoveryReason,
 };
 pub use substring::{
     read_substring_postings, substring_postings_from_records, write_substring_postings,

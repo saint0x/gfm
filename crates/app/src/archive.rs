@@ -1,4 +1,4 @@
-use crate::runtime::{run_scheduled_volume_task, run_volume_task};
+use crate::runtime::{run_scheduled_volume_task_cancellable, run_volume_task_cancellable};
 use crate::{
     detect_volume_id, optional_path_arg, parent_volume, parse_required_scheduling_pressure,
     parse_u64_arg, required_path,
@@ -11,8 +11,8 @@ use gfm_store::{
     migrate_record_archive, plan_archive_rebuilds, plan_columns_archive_rebuild,
     plan_content_archive_migration, plan_derived_sidecar_rebuild, plan_metadata_archive_migration,
     plan_record_archive_migration, plan_sidecar_recovery, prefix_postings_from_records,
-    rebuild_columns_archive, rebuild_derived_sidecar, recover_sidecars, sidecar_kind_name,
-    substring_postings_from_records, write_dictionary, write_fuzzy_postings,
+    rebuild_columns_archive, rebuild_derived_sidecar_checked, recover_sidecars_checked,
+    sidecar_kind_name, substring_postings_from_records, write_dictionary, write_fuzzy_postings,
     write_metadata_postings, write_prefix_postings, write_record_columns, write_substring_postings,
     ArchiveRebuildInputs, ArchiveSchemaKind, MmapRecordArchive, MmapRecordColumns, SidecarHealth,
     SidecarKind, SidecarPaths, SidecarRecovery,
@@ -180,7 +180,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "derived-sidecar-rebuild requires a backup directory",
             )?;
-            let rebuild = rebuild_derived_sidecar(records, kind, sidecar, backup_dir)?;
+            let volume = detect_volume_id(&records)
+                .ok()
+                .or_else(|| parent_volume(&records));
+            let rebuild = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "derived sidecar rebuild",
+                move |cancellation| {
+                    rebuild_derived_sidecar_checked(records, kind, sidecar, backup_dir, || {
+                        cancellation.check()
+                    })
+                },
+            )?;
             println!("{}", rebuild.as_tsv());
         }
         "index-columns" => {
@@ -303,9 +315,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&records)
                 .ok()
                 .or_else(|| parent_volume(&records));
-            let report = run_volume_task(volume, Priority::Visible, "sidecar repair", move || {
-                recover_sidecars(&records, &sidecars, &quarantine)
-            })?;
+            let report = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "sidecar repair",
+                move |cancellation| {
+                    recover_sidecars_checked(&records, &sidecars, &quarantine, || {
+                        cancellation.check()
+                    })
+                },
+            )?;
             print_sidecar_recovery_report(report);
         }
         "sidecar-recover-adaptive" => {
@@ -322,12 +341,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&records)
                 .ok()
                 .or_else(|| parent_volume(&records));
-            let outcome = run_scheduled_volume_task(
+            let outcome = run_scheduled_volume_task_cancellable(
                 volume,
                 Priority::Background,
                 "sidecar repair",
                 pressure,
-                move || recover_sidecars(&records, &sidecars, &quarantine),
+                move |cancellation| {
+                    recover_sidecars_checked(&records, &sidecars, &quarantine, || {
+                        cancellation.check()
+                    })
+                },
             )?;
             if outcome.deferred {
                 eprintln!(

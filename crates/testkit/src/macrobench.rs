@@ -236,8 +236,9 @@ pub fn run_macrobench(options: &MacrobenchOptions) -> Result<MacrobenchReport> {
             hits: 0,
         });
 
+        let session = snapshot.query_session();
         let hot_start = Instant::now();
-        let hot_hits = snapshot.search("needle", options.limit);
+        let hot_hits = session.search("needle", options.limit);
         let hot_duration = hot_start.elapsed();
         scenario_observations
             .entry(ScenarioMetric::FirstResult)
@@ -252,7 +253,7 @@ pub fn run_macrobench(options: &MacrobenchOptions) -> Result<MacrobenchReport> {
         });
 
         let stream_start = Instant::now();
-        let stream_hits: usize = snapshot
+        let stream_hits: usize = session
             .stream_search("project", options.limit)?
             .into_iter()
             .map(|batch| batch.hits.len())
