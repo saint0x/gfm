@@ -13,8 +13,8 @@ pub use bridge::{
     MacBridgeContract, MacBridgeSpec, MacBridgeStatus, MacBridgeThreadPolicy, MacFramework,
 };
 pub use fileprovider::{
-    CloudBadge, CloudCommandPolicy, CloudCommandState, CloudStorageState, CloudTransferDirection,
-    CloudTransferProgress, FileProviderConflictReport, FileProviderDomain,
+    CloudBadge, CloudCommandPolicy, CloudCommandState, CloudMaterialization, CloudStorageState,
+    CloudTransferDirection, CloudTransferProgress, FileProviderConflictReport, FileProviderDomain,
     FileProviderDomainEnumerationReport, FileProviderDomainReport, FileProviderInvalidationReport,
     FileProviderOperation, FileProviderOperationDisposition, FileProviderOperationReport,
     FileProviderProgressReport, FileProviderRegisteredDomain, FileProviderStateReport,

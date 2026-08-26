@@ -371,6 +371,8 @@ fn reports_fileprovider_state_from_binary() {
     let downloaded_stdout = String::from_utf8(downloaded_output.stdout).unwrap();
     assert!(downloaded_stdout.starts_with("fileprovider-state\t"));
     assert!(downloaded_stdout.contains("\tdomain=icloud-drive\tstate=downloaded\t"));
+    assert!(downloaded_stdout.contains("\tmaterialization=materialized\t"));
+    assert!(downloaded_stdout.contains("\tmaterialization-source=path-fallback\t"));
     assert!(downloaded_stdout.contains("\tbadges=available-offline\t"));
     assert!(downloaded_stdout.contains("\tdownload=disabled\tevict=enabled\t"));
     assert!(!downloaded_stdout.contains("nsfileprovidermanager"));
@@ -388,6 +390,7 @@ fn reports_fileprovider_state_from_binary() {
     let identity_state_stdout = String::from_utf8(identity_state_output.stdout).unwrap();
     assert!(identity_state_stdout.starts_with("fileprovider-state\t"));
     assert!(identity_state_stdout.contains("\tdomain=icloud-drive\tstate=downloaded\t"));
+    assert!(identity_state_stdout.contains("\tmaterialization=materialized\t"));
     assert!(identity_state_stdout.contains("\tsource="));
 
     let domain_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -436,7 +439,9 @@ fn reports_fileprovider_state_from_binary() {
         String::from_utf8_lossy(&evicted_output.stderr)
     );
     let evicted_stdout = String::from_utf8(evicted_output.stdout).unwrap();
-    assert!(evicted_stdout.contains("\tstate=evicted\toffline=true\t"));
+    assert!(evicted_stdout.contains("\tstate=evicted\tmaterialization=remote-placeholder\t"));
+    assert!(evicted_stdout.contains("\tmaterialization-source=path-fallback\t"));
+    assert!(evicted_stdout.contains("\toffline=true\t"));
     assert!(evicted_stdout.contains("\tbadges=cloud\t"));
     assert!(evicted_stdout.contains("\tdownload=enabled\tevict=disabled\t"));
 
@@ -451,7 +456,8 @@ fn reports_fileprovider_state_from_binary() {
         String::from_utf8_lossy(&conflict_output.stderr)
     );
     let conflict_stdout = String::from_utf8(conflict_output.stdout).unwrap();
-    assert!(conflict_stdout.contains("\tstate=conflict\toffline=false\tconflict=true\t"));
+    assert!(conflict_stdout.contains("\tstate=conflict\tmaterialization=conflict\t"));
+    assert!(conflict_stdout.contains("\toffline=false\tconflict=true\t"));
     assert!(conflict_stdout.contains("\tbadges=conflict\t"));
     assert!(conflict_stdout.contains("\treveal-conflict=enabled\t"));
 

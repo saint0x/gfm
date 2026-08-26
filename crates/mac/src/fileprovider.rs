@@ -74,6 +74,31 @@ impl CloudStorageState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudMaterialization {
+    NotProviderBacked,
+    Materialized,
+    RemotePlaceholder,
+    InFlight,
+    Conflict,
+    Offline,
+    Unknown,
+}
+
+impl CloudMaterialization {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotProviderBacked => "not-provider-backed",
+            Self::Materialized => "materialized",
+            Self::RemotePlaceholder => "remote-placeholder",
+            Self::InFlight => "in-flight",
+            Self::Conflict => "conflict",
+            Self::Offline => "offline",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CloudBadge {
     AvailableOffline,
@@ -140,6 +165,8 @@ pub struct FileProviderStateReport {
     pub path: PathBuf,
     pub domain: FileProviderDomain,
     pub storage_state: CloudStorageState,
+    pub materialization: CloudMaterialization,
+    pub materialization_source: String,
     pub progress: CloudTransferProgress,
     pub badges: Vec<CloudBadge>,
     pub commands: CloudCommandPolicy,
@@ -761,6 +788,8 @@ impl FileProviderStateReport {
     fn from_hints(path: PathBuf, hints: CloudHints) -> Self {
         let domain = domain_for_path(&path, &hints);
         let storage_state = storage_state_for_path(&path, domain, &hints);
+        let materialization = materialization_for_state(storage_state);
+        let materialization_source = materialization_source_for_state(storage_state, &hints);
         let progress = progress_for_state(storage_state, &hints);
         let mut badges = badges_for_state(storage_state);
         badges.sort();
@@ -771,6 +800,8 @@ impl FileProviderStateReport {
             path,
             domain,
             storage_state,
+            materialization,
+            materialization_source,
             progress,
             badges,
             commands,
@@ -786,10 +817,12 @@ impl FileProviderStateReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "fileprovider-state\t{}\tdomain={}\tstate={}\toffline={}\tconflict={}\tbadges={}\t{}\tdownload={}\tevict={}\treveal-conflict={}\tprovider={}\tsource={}\treason={}",
+            "fileprovider-state\t{}\tdomain={}\tstate={}\tmaterialization={}\tmaterialization-source={}\toffline={}\tconflict={}\tbadges={}\t{}\tdownload={}\tevict={}\treveal-conflict={}\tprovider={}\tsource={}\treason={}",
             self.path.display(),
             self.domain.as_str(),
             self.storage_state.as_str(),
+            self.materialization.as_str(),
+            escape_field(&self.materialization_source),
             self.offline,
             self.conflict,
             self.badges
@@ -1018,6 +1051,38 @@ fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<Clo
             None if values.is_uploaded == Some(true) => Some(CloudStorageState::Downloaded),
             None => None,
         }
+    }
+}
+
+fn materialization_for_state(state: CloudStorageState) -> CloudMaterialization {
+    match state {
+        CloudStorageState::LocalOnly => CloudMaterialization::NotProviderBacked,
+        CloudStorageState::Downloaded => CloudMaterialization::Materialized,
+        CloudStorageState::Evicted => CloudMaterialization::RemotePlaceholder,
+        CloudStorageState::Downloading
+        | CloudStorageState::Uploading
+        | CloudStorageState::Waiting => CloudMaterialization::InFlight,
+        CloudStorageState::Conflict => CloudMaterialization::Conflict,
+        CloudStorageState::Offline => CloudMaterialization::Offline,
+        CloudStorageState::Unknown => CloudMaterialization::Unknown,
+    }
+}
+
+fn materialization_source_for_state(state: CloudStorageState, hints: &CloudHints) -> String {
+    if hints.native.is_ubiquitous == Some(true) && native_storage_state(&hints.native).is_some() {
+        "native-url-resource".to_string()
+    } else if hints.native_identity.status == NativeFileProviderIdentityStatus::Available
+        && state == CloudStorageState::Unknown
+    {
+        "nsfileprovidermanager:unknown".to_string()
+    } else if !hints.xattrs.is_empty() {
+        "xattr-fallback".to_string()
+    } else if hints.source.contains("fixture-name") || hints.source.contains("icloud-extension") {
+        "path-fallback".to_string()
+    } else if hints.source == "filesystem" {
+        "filesystem".to_string()
+    } else {
+        "state-fallback".to_string()
     }
 }
 
@@ -1678,6 +1743,14 @@ mod tests {
         assert_eq!(progress.percent_milli, Some(12_500));
         assert!(progress.requested);
         assert!(!progress.indeterminate);
+        assert_eq!(
+            materialization_for_state(state),
+            CloudMaterialization::InFlight
+        );
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            "native-url-resource"
+        );
     }
 
     #[test]
@@ -1711,6 +1784,41 @@ mod tests {
 
         assert_eq!(domain, FileProviderDomain::ICloudDrive);
         assert_eq!(state, CloudStorageState::Conflict);
+        assert_eq!(
+            materialization_for_state(state),
+            CloudMaterialization::Conflict
+        );
+    }
+
+    #[test]
+    fn materialization_report_marks_path_fallback_placeholders() {
+        let path = PathBuf::from("/tmp/Remote.icloud-placeholder");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("test fixture has no native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name+icloud-extension".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+
+        assert_eq!(domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(state, CloudStorageState::Evicted);
+        assert_eq!(
+            materialization_for_state(state),
+            CloudMaterialization::RemotePlaceholder
+        );
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            "path-fallback"
+        );
     }
 
     fn unique_temp_dir() -> PathBuf {
