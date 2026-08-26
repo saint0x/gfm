@@ -28,6 +28,33 @@ impl SidebarItemKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarCloudState {
+    None,
+    AvailableOffline,
+    CloudOnly,
+    Downloading,
+    Syncing,
+    Waiting,
+    Unavailable,
+    Conflict,
+}
+
+impl SidebarCloudState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::AvailableOffline => "available-offline",
+            Self::CloudOnly => "cloud-only",
+            Self::Downloading => "downloading",
+            Self::Syncing => "syncing",
+            Self::Waiting => "waiting",
+            Self::Unavailable => "unavailable",
+            Self::Conflict => "conflict",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidebarItemSpec {
     pub section: &'static str,
@@ -42,6 +69,8 @@ pub struct SidebarItemSpec {
     pub selected: bool,
     pub ejectable: bool,
     pub virtual_item: bool,
+    pub cloud_state: SidebarCloudState,
+    pub cloud_progress_milli: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +85,8 @@ pub struct SidebarVolumeSpec {
 struct SidebarEnvironment {
     home: PathBuf,
     icloud_drive: Option<PathBuf>,
+    icloud_state: SidebarCloudState,
+    icloud_progress_milli: Option<u32>,
     volumes: Vec<SidebarVolumeSpec>,
 }
 
@@ -71,6 +102,8 @@ impl SidebarEnvironment {
         Self {
             home,
             icloud_drive,
+            icloud_state: SidebarCloudState::None,
+            icloud_progress_milli: None,
             volumes,
         }
     }
@@ -90,6 +123,19 @@ impl SidebarContract {
         Self::from_environment(current_path, SidebarEnvironment::discover())
     }
 
+    pub fn discover_with_icloud_state(
+        current_path: impl AsRef<Path>,
+        icloud_drive: impl Into<PathBuf>,
+        cloud_state: SidebarCloudState,
+        progress_milli: Option<u32>,
+    ) -> Self {
+        let mut environment = SidebarEnvironment::discover();
+        environment.icloud_drive = Some(icloud_drive.into());
+        environment.icloud_state = cloud_state;
+        environment.icloud_progress_milli = progress_milli;
+        Self::from_environment(current_path, environment)
+    }
+
     fn from_environment(current_path: impl AsRef<Path>, environment: SidebarEnvironment) -> Self {
         let current_path = current_path.as_ref();
         let mut rows = Vec::new();
@@ -97,6 +143,8 @@ impl SidebarContract {
         rows.extend(favorite_rows(&environment.home, current_path));
         rows.push(icloud_row(
             environment.icloud_drive.as_deref(),
+            environment.icloud_state,
+            environment.icloud_progress_milli,
             current_path,
         ));
         rows.extend(location_rows(&environment.volumes, current_path));
@@ -122,7 +170,7 @@ impl SidebarContract {
         ));
         lines.extend(self.rows.iter().map(|row| {
             format!(
-                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}",
+                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tcloud={}\tcloud-progress={}",
                 row.section,
                 row.id,
                 row.label,
@@ -136,7 +184,11 @@ impl SidebarContract {
                 row.enabled,
                 row.selected,
                 row.ejectable,
-                row.virtual_item
+                row.virtual_item,
+                row.cloud_state.as_str(),
+                row.cloud_progress_milli
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string())
             )
         }));
         lines.join("\n")
@@ -207,6 +259,7 @@ fn render_row(row: &SidebarItemSpec) -> gpui::Div {
         .text_color(text_color)
         .child(icon_cell(row))
         .child(div().flex_1().truncate().text_sm().child(row.label.clone()))
+        .child(cloud_cell(row))
         .child(eject_cell(row))
 }
 
@@ -226,6 +279,27 @@ fn icon_cell(row: &SidebarItemSpec) -> gpui::Div {
         .rounded(px(8.0))
         .bg(color)
         .text_xs()
+}
+
+fn cloud_cell(row: &SidebarItemSpec) -> gpui::Div {
+    let color = match row.cloud_state {
+        SidebarCloudState::None => return div().w(px(12.0)).h(px(ROW_HEIGHT)),
+        SidebarCloudState::AvailableOffline => rgb(0x8f8f8f),
+        SidebarCloudState::CloudOnly => rgb(0x8f8f8f),
+        SidebarCloudState::Downloading => rgb(0x0a84ff),
+        SidebarCloudState::Syncing => rgb(0x32d74b),
+        SidebarCloudState::Waiting => rgb(0xffd60a),
+        SidebarCloudState::Unavailable => rgb(0xff453a),
+        SidebarCloudState::Conflict => rgb(0xff9f0a),
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(8.0))
+        .rounded(px(4.0))
+        .bg(color)
 }
 
 fn eject_cell(row: &SidebarItemSpec) -> gpui::Div {
@@ -327,7 +401,12 @@ fn favorite_path(
     )
 }
 
-fn icloud_row(icloud_drive: Option<&Path>, current_path: &Path) -> SidebarItemSpec {
+fn icloud_row(
+    icloud_drive: Option<&Path>,
+    cloud_state: SidebarCloudState,
+    progress_milli: Option<u32>,
+    current_path: &Path,
+) -> SidebarItemSpec {
     let path = icloud_drive.map(Path::to_path_buf);
     let selected = path
         .as_ref()
@@ -341,6 +420,7 @@ fn icloud_row(icloud_drive: Option<&Path>, current_path: &Path) -> SidebarItemSp
         "icloud",
     )
     .optional_path(path)
+    .cloud(cloud_state, progress_milli)
     .state(RowState::path(icloud_drive.is_some(), selected)))
 }
 
@@ -435,6 +515,8 @@ struct RowDescriptor {
     icon: &'static str,
     path: Option<PathBuf>,
     state: RowState,
+    cloud_state: SidebarCloudState,
+    cloud_progress_milli: Option<u32>,
 }
 
 impl RowDescriptor {
@@ -455,6 +537,8 @@ impl RowDescriptor {
             icon,
             path: None,
             state: RowState::path(true, false),
+            cloud_state: SidebarCloudState::None,
+            cloud_progress_milli: None,
         }
     }
 
@@ -470,6 +554,12 @@ impl RowDescriptor {
 
     fn state(mut self, state: RowState) -> Self {
         self.state = state;
+        self
+    }
+
+    fn cloud(mut self, state: SidebarCloudState, progress_milli: Option<u32>) -> Self {
+        self.cloud_state = state;
+        self.cloud_progress_milli = progress_milli;
         self
     }
 }
@@ -488,6 +578,8 @@ fn row(descriptor: RowDescriptor) -> SidebarItemSpec {
         selected: descriptor.state.selected,
         ejectable: descriptor.state.ejectable,
         virtual_item: descriptor.state.virtual_item,
+        cloud_state: descriptor.cloud_state,
+        cloud_progress_milli: descriptor.cloud_progress_milli,
     }
 }
 
@@ -576,6 +668,8 @@ mod tests {
                 icloud_drive: Some(PathBuf::from(
                     "/Users/tester/Library/Mobile Documents/com~apple~CloudDocs",
                 )),
+                icloud_state: SidebarCloudState::None,
+                icloud_progress_milli: None,
                 volumes: vec![SidebarVolumeSpec {
                     id: "volume-work".to_string(),
                     label: "Work".to_string(),
@@ -602,6 +696,8 @@ mod tests {
             SidebarEnvironment {
                 home: PathBuf::from("/Users/tester"),
                 icloud_drive: None,
+                icloud_state: SidebarCloudState::None,
+                icloud_progress_milli: None,
                 volumes: Vec::new(),
             },
         );
@@ -614,7 +710,7 @@ mod tests {
             "row\tFavorites\thome\ttester\thome-folder\tfavorite\t/Users/tester\tdepth=0"
         ));
         assert!(output.contains(
-            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false"
+            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false\tselected=false\tejectable=false\tvirtual=false\tcloud=none\tcloud-progress=-"
         ));
         assert!(output.contains(
             "row\tTags\ttag-all\tAll Tags...\tfinder-tag\ttag\t-\tdepth=0\tenabled=true"
@@ -632,5 +728,28 @@ mod tests {
         assert!(is_system_volume_label("Macintosh HD"));
         assert!(is_system_volume_label("Recovery"));
         assert!(!is_system_volume_label("Hex"));
+    }
+
+    #[test]
+    fn icloud_sidebar_row_carries_typed_cloud_state() {
+        let path = PathBuf::from("/Users/tester/Library/Mobile Documents/com~apple~CloudDocs");
+        let contract = SidebarContract::discover_with_icloud_state(
+            &path,
+            &path,
+            SidebarCloudState::Downloading,
+            Some(12_500),
+        );
+        let row = contract
+            .rows
+            .iter()
+            .find(|row| row.id == "icloud-drive")
+            .unwrap();
+
+        assert!(row.selected);
+        assert_eq!(row.cloud_state, SidebarCloudState::Downloading);
+        assert_eq!(row.cloud_progress_milli, Some(12_500));
+        assert!(contract
+            .as_tsv()
+            .contains("\tcloud=downloading\tcloud-progress=12500"));
     }
 }

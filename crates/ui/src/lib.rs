@@ -58,7 +58,9 @@ pub use session::{
     ActivationPolicy, PlacementPolicy, RestorePolicy, TabPolicy, WindowPlacement,
     WindowSessionContract, WindowSessionStore, WindowSessionWriter,
 };
-pub use sidebar::{SidebarContract, SidebarItemKind, SidebarItemSpec, SidebarVolumeSpec};
+pub use sidebar::{
+    SidebarCloudState, SidebarContract, SidebarItemKind, SidebarItemSpec, SidebarVolumeSpec,
+};
 pub use titlebar::{
     FullScreenPolicy, TitlebarContract, TitlebarFocusPolicy, TitlebarMaterialPolicy,
 };

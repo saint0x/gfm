@@ -4,6 +4,7 @@ use gfm_fs::{
 };
 use gfm_index::Indexer;
 use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore};
+use gfm_mac::{CloudStorageState, FileProviderStateReport};
 use gfm_types::{FileKind, GfmError, Result};
 use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
@@ -11,9 +12,9 @@ use gfm_ui::{
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
     MenuContract, OperationProgressContract, OperationProgressInput, OperationProgressState,
     SearchResultsBatch, SearchResultsContract, SearchResultsOptions, SearchResultsStage,
-    SidebarContract, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
-    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
-    WindowSessionContract, WindowSessionStore,
+    SidebarCloudState, SidebarContract, TitlebarContract, ToolbarContract, TrashEntryMetadata,
+    TrashViewContract, TrashViewOptions, VirtualSurface, VirtualizationContract,
+    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -140,6 +141,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "ui-sidebar-contract" => {
             let path = default_current_path(args.next());
             println!("{}", SidebarContract::discover(path).as_tsv());
+        }
+        "ui-sidebar-fileprovider-contract" => {
+            let current_path = default_current_path(args.next());
+            let provider_path = required_path(
+                args.next(),
+                "ui-sidebar-fileprovider-contract requires a FileProvider path",
+            )?;
+            let report = FileProviderStateReport::read_path(&provider_path)?;
+            println!(
+                "{}",
+                SidebarContract::discover_with_icloud_state(
+                    current_path,
+                    provider_path,
+                    sidebar_cloud_state(report.storage_state),
+                    report.progress.percent_milli,
+                )
+                .as_tsv()
+            );
         }
         "ui-icon-view-contract" => {
             let path = required_path(
@@ -477,6 +496,20 @@ fn operation_progress_state(state: JobProgressState) -> OperationProgressState {
         JobProgressState::Completed => OperationProgressState::Completed,
         JobProgressState::Cancelled => OperationProgressState::Cancelled,
         JobProgressState::Failed => OperationProgressState::Failed,
+    }
+}
+
+fn sidebar_cloud_state(state: CloudStorageState) -> SidebarCloudState {
+    match state {
+        CloudStorageState::LocalOnly => SidebarCloudState::None,
+        CloudStorageState::Downloaded => SidebarCloudState::AvailableOffline,
+        CloudStorageState::Evicted => SidebarCloudState::CloudOnly,
+        CloudStorageState::Downloading => SidebarCloudState::Downloading,
+        CloudStorageState::Uploading => SidebarCloudState::Syncing,
+        CloudStorageState::Waiting => SidebarCloudState::Waiting,
+        CloudStorageState::Conflict => SidebarCloudState::Conflict,
+        CloudStorageState::Offline => SidebarCloudState::Unavailable,
+        CloudStorageState::Unknown => SidebarCloudState::Waiting,
     }
 }
 

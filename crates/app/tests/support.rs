@@ -265,6 +265,37 @@ fn reports_ui_sidebar_contract_from_binary() {
 }
 
 #[test]
+fn reports_fileprovider_state_in_ui_sidebar_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-sidebar-fileprovider-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let downloading = root.join("Downloading.icloud-downloading");
+    std::fs::write(&downloading, "downloading").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-sidebar-fileprovider-contract")
+        .arg(&downloading)
+        .arg(&downloading)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains("row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud"));
+    assert!(stdout.contains("\tselected=true\t"));
+    assert!(stdout.contains("\tcloud=downloading\tcloud-progress=-"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_ui_icon_view_contract_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-icon-view-contract-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
