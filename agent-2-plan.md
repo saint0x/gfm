@@ -540,10 +540,9 @@ If a feature is better than Finder, it must not disturb default parity. Put powe
 
 These are good first slices because they are valuable, testable, and unlikely to collide with Agent 1:
 
-1. Split an oversized file only when the split follows a real ownership boundary and all tests stay green.
-2. Wire one GPUI progress/operation surface to real job progress state.
-4. Extend the pixel parity manifest and bundle writer without touching GPUI runtime paths.
-5. Add a deterministic fixture generator for one Finder view state.
+1. Wire one GPUI progress/operation surface to real job progress state.
+2. Extend the pixel parity manifest and bundle writer without touching GPUI runtime paths.
+3. Add a deterministic fixture generator for one Finder view state.
 
 ## What Not To Do
 
