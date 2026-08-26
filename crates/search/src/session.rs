@@ -1,4 +1,4 @@
-use crate::SearchIndex;
+use crate::{SearchIndex, SearchStreamBatch, ShardedSearchIndex};
 use gfm_jobs::Cancellation;
 use gfm_types::{Result, SearchHit};
 use std::sync::Mutex;
@@ -38,5 +38,35 @@ impl SearchSupersession {
     pub fn query(&self, index: &SearchIndex, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
         let cancellation = self.begin();
         index.query_cancellable(query, limit, &cancellation)
+    }
+
+    pub fn query_sharded(
+        &self,
+        index: &ShardedSearchIndex,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>> {
+        let cancellation = self.begin();
+        index.query_cancellable(query, limit, &cancellation)
+    }
+
+    pub fn stream(
+        &self,
+        index: &SearchIndex,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        let cancellation = self.begin();
+        index.stream_cancellable(query, limit, &cancellation)
+    }
+
+    pub fn stream_sharded(
+        &self,
+        index: &ShardedSearchIndex,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        let cancellation = self.begin();
+        index.stream_cancellable(query, limit, &cancellation)
     }
 }

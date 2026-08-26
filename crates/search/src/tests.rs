@@ -845,6 +845,40 @@ fn superseding_query_runs_latest_search() {
 }
 
 #[test]
+fn superseding_query_runs_latest_sharded_search() {
+    let mut index = ShardedSearchIndex::new();
+    index.insert(volume_record(1, 1, "/Volumes/A/report.md", "report.md"));
+    index.insert(volume_record(2, 1, "/Volumes/B/notes.md", "notes.md"));
+    let supersession = SearchSupersession::new();
+
+    let stale = supersession.begin();
+    let hits = supersession.query_sharded(&index, "report", 10).unwrap();
+
+    assert!(matches!(stale.check(), Err(GfmError::Cancelled)));
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.path, PathBuf::from("/Volumes/A/report.md"));
+}
+
+#[test]
+fn superseding_stream_runs_latest_sharded_search() {
+    let mut index = ShardedSearchIndex::new();
+    let hot = volume_record(1, 1, "/Volumes/A/needle.md", "needle.md");
+    let deep = volume_record(2, 1, "/Volumes/B/body.md", "body.md");
+    index.insert(hot);
+    index.insert(deep.clone());
+    index.insert_content(deep.id, "needle only appears in body content");
+    let supersession = SearchSupersession::new();
+
+    let stale = supersession.begin();
+    let batches = supersession.stream_sharded(&index, "needle", 10).unwrap();
+
+    assert!(matches!(stale.check(), Err(GfmError::Cancelled)));
+    assert_eq!(batches.len(), 2);
+    assert_eq!(batches[0].stage, SearchStreamStage::Hot);
+    assert_eq!(batches[1].stage, SearchStreamStage::Deep);
+}
+
+#[test]
 fn matches_content_phrases_by_token_position() {
     let mut index = SearchIndex::new();
     let keep = record(1, "/tmp/keep.txt", "keep.txt");
