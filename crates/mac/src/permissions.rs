@@ -60,6 +60,20 @@ impl PermissionScope {
             Self::FullDiskAccess => "full-disk-access",
         }
     }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "desktop" => Ok(Self::Desktop),
+            "documents" => Ok(Self::Documents),
+            "downloads" => Ok(Self::Downloads),
+            "mail" => Ok(Self::Mail),
+            "photos" => Ok(Self::Photos),
+            "full-disk-access" => Ok(Self::FullDiskAccess),
+            other => Err(GfmError::Format(format!(
+                "permission scope must be desktop, documents, downloads, mail, photos, or full-disk-access; got `{other}`"
+            ))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +96,18 @@ impl PermissionState {
 
     const fn is_granted(self) -> bool {
         matches!(self, Self::Granted | Self::Missing)
+    }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "granted" => Ok(Self::Granted),
+            "denied" => Ok(Self::Denied),
+            "missing" => Ok(Self::Missing),
+            "unknown" => Ok(Self::Unknown),
+            other => Err(GfmError::Format(format!(
+                "permission state must be granted, denied, missing, or unknown; got `{other}`"
+            ))),
+        }
     }
 }
 
@@ -120,6 +146,29 @@ pub struct PermissionOnboardingPlan {
     pub finder_parity_default: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionStateSnapshot {
+    pub readiness: Vec<PermissionReadiness>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionScopeChange {
+    pub scope: PermissionScope,
+    pub path: PathBuf,
+    pub previous: Option<PermissionState>,
+    pub current: PermissionState,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionStateInvalidationReport {
+    pub initialized: bool,
+    pub changed: Vec<PermissionScopeChange>,
+    pub refresh_ui: bool,
+    pub refresh_workers: bool,
+    pub refresh_operations: bool,
+}
+
 impl PermissionOnboardingPlan {
     pub fn denied_scopes(&self) -> impl Iterator<Item = &PermissionReadiness> {
         self.readiness
@@ -132,6 +181,135 @@ impl PermissionOnboardingPlan {
             .iter()
             .filter(|item| item.scope != PermissionScope::FullDiskAccess)
             .all(|item| item.state.is_granted())
+    }
+}
+
+impl PermissionStateSnapshot {
+    pub fn from_plan(plan: &PermissionOnboardingPlan) -> Self {
+        Self {
+            readiness: plan.readiness.clone(),
+        }
+    }
+
+    pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let text = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+        let mut lines = text.lines();
+        match lines.next() {
+            Some("gfm-permission-state-v1") => {}
+            Some(other) => {
+                return Err(GfmError::Format(format!(
+                    "unsupported permission state header `{other}` in {}",
+                    path.display()
+                )))
+            }
+            None => {
+                return Err(GfmError::Format(format!(
+                    "empty permission state file {}",
+                    path.display()
+                )))
+            }
+        }
+        let mut readiness = Vec::new();
+        for (line_index, line) in lines.enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let fields = line.split('\t').collect::<Vec<_>>();
+            if fields.len() != 4 {
+                return Err(GfmError::Format(format!(
+                    "{}:{} expected 4 tab-separated fields: scope, state, path, reason",
+                    path.display(),
+                    line_index + 2
+                )));
+            }
+            readiness.push(PermissionReadiness {
+                scope: PermissionScope::parse(fields[0])?,
+                state: PermissionState::parse(fields[1])?,
+                path: PathBuf::from(fields[2]),
+                reason: unescape_field(fields[3]),
+            });
+        }
+        Ok(Self { readiness })
+    }
+
+    pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        let mut output = String::from("gfm-permission-state-v1\n");
+        for item in &self.readiness {
+            output.push_str(&format!(
+                "{}\t{}\t{}\t{}\n",
+                item.scope.as_str(),
+                item.state.as_str(),
+                item.path.display(),
+                escape_field(&item.reason)
+            ));
+        }
+        fs::write(path, output).map_err(|err| GfmError::io(path, err))
+    }
+}
+
+impl PermissionStateInvalidationReport {
+    pub fn evaluate(
+        previous: Option<&PermissionStateSnapshot>,
+        current: &PermissionStateSnapshot,
+    ) -> Self {
+        let initialized = previous.is_none();
+        let mut changed = Vec::new();
+        for current_item in &current.readiness {
+            let previous_state = previous.and_then(|snapshot| {
+                snapshot
+                    .readiness
+                    .iter()
+                    .find(|item| item.scope == current_item.scope)
+                    .map(|item| item.state)
+            });
+            if initialized || previous_state != Some(current_item.state) {
+                changed.push(PermissionScopeChange {
+                    scope: current_item.scope,
+                    path: current_item.path.clone(),
+                    previous: previous_state,
+                    current: current_item.state,
+                    reason: current_item.reason.clone(),
+                });
+            }
+        }
+        let refresh_workers = changed.iter().any(|change| {
+            matches!(
+                (change.previous, change.current),
+                (_, PermissionState::Denied | PermissionState::Unknown)
+                    | (Some(PermissionState::Denied | PermissionState::Unknown), _)
+            )
+        });
+        Self {
+            initialized,
+            refresh_ui: initialized || !changed.is_empty(),
+            refresh_workers,
+            refresh_operations: refresh_workers,
+            changed,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let mut lines = vec![format!(
+            "permission-invalidation\tinitialized={}\tchanged={}\trefresh-ui={}\trefresh-workers={}\trefresh-operations={}",
+            self.initialized,
+            self.changed.len(),
+            self.refresh_ui,
+            self.refresh_workers,
+            self.refresh_operations
+        )];
+        lines.extend(self.changed.iter().map(|change| {
+            format!(
+                "permission-change\t{}\tprevious={}\tcurrent={}\tpath={}\treason={}",
+                change.scope.as_str(),
+                change.previous.map(PermissionState::as_str).unwrap_or("-"),
+                change.current.as_str(),
+                change.path.display(),
+                escape_field(&change.reason)
+            )
+        }));
+        lines.join("\n")
     }
 }
 
@@ -234,6 +412,20 @@ fn probe_file(path: &Path) -> PermissionState {
     }
 }
 
+fn escape_field(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            '\t' | '\n' | '\r' => ' ',
+            other => other,
+        })
+        .collect()
+}
+
+fn unescape_field(value: &str) -> String {
+    value.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +508,61 @@ mod tests {
 
         assert_eq!(plan.action, PermissionAction::BlockUntilGranted);
         assert!(!plan.finder_parity_default);
+    }
+
+    #[test]
+    fn permission_state_snapshot_round_trips_readiness() {
+        let root = temp_root("permissions-snapshot");
+        let path = root.join("permission-state.tsv");
+        let plan = PermissionOnboardingPlan {
+            policy: PermissionPolicy::default(),
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: root.join("Documents"),
+                state: PermissionState::Granted,
+                reason: "readable".to_string(),
+            }],
+            action: PermissionAction::ContinueNormally,
+            finder_parity_default: true,
+        };
+        let snapshot = PermissionStateSnapshot::from_plan(&plan);
+
+        snapshot.write(&path).unwrap();
+        let reloaded = PermissionStateSnapshot::read(&path).unwrap();
+
+        assert_eq!(reloaded, snapshot);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permission_invalidation_marks_denial_changes_for_workers_and_operations() {
+        let root = temp_root("permissions-invalidates");
+        let previous = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Desktop,
+                path: root.join("Desktop"),
+                state: PermissionState::Granted,
+                reason: "readable".to_string(),
+            }],
+        };
+        let current = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Desktop,
+                path: root.join("Desktop"),
+                state: PermissionState::Denied,
+                reason: "macOS denied read access".to_string(),
+            }],
+        };
+
+        let report = PermissionStateInvalidationReport::evaluate(Some(&previous), &current);
+
+        assert!(!report.initialized);
+        assert_eq!(report.changed.len(), 1);
+        assert!(report.refresh_ui);
+        assert!(report.refresh_workers);
+        assert!(report.refresh_operations);
+        assert!(report.as_tsv().contains("previous=granted\tcurrent=denied"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn temp_root(name: &str) -> PathBuf {

@@ -2324,6 +2324,25 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "permission-invalidation",
+        "tmp/gfm-fozzy-permission-state.tsv"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "permission-invalidation",
+        "tmp/gfm-fozzy-permission-state.tsv"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-security.md",
       "data": "security scoped probe"

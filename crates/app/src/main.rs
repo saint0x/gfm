@@ -8,8 +8,9 @@ use gfm_jobs::{
     JobBatteryState, JobIoPressure, JobThermalState, JobUserActivity, Priority, SchedulingPressure,
 };
 use gfm_mac::{
-    current_host_profile, current_permission_onboarding, MountState, SupportMatrix,
-    VolumeDescriptor, VolumeKind,
+    current_host_profile, current_permission_onboarding, MountState,
+    PermissionStateInvalidationReport, PermissionStateSnapshot, SupportMatrix, VolumeDescriptor,
+    VolumeKind,
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::env;
@@ -104,6 +105,21 @@ fn run() -> Result<()> {
                     escape_output_field(&item.reason)
                 );
             }
+        }
+        Some("permission-invalidation") => {
+            let path = args
+                .next()
+                .map(PathBuf::from)
+                .unwrap_or_else(runtime::default_permission_state_path);
+            let previous = if path.is_file() {
+                Some(PermissionStateSnapshot::read(&path)?)
+            } else {
+                None
+            };
+            let current = PermissionStateSnapshot::from_plan(&current_permission_onboarding()?);
+            let report = PermissionStateInvalidationReport::evaluate(previous.as_ref(), &current);
+            current.write(&path)?;
+            println!("{}", report.as_tsv());
         }
         Some(command) if platform::run(command, &mut args)? => {}
         Some(command) if gates::run(command, &mut args)? => {}
@@ -510,6 +526,7 @@ fn print_usage() {
   gfm diagnostics-storage-inspect <records.gfmidx|content.gfmcontent>
   gfm support-check
   gfm permission-onboarding
+  gfm permission-invalidation [permission-state.tsv]
   gfm security-scope <path> [read|write|index|preview|operate]
   gfm mac-bridges
   gfm native-icon <path>

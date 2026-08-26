@@ -31,7 +31,8 @@ pub use icon::{
 };
 pub use permissions::{
     current_permission_onboarding, PermissionAction, PermissionOnboardingPlan, PermissionPolicy,
-    PermissionPromptMode, PermissionReadiness, PermissionScope, PermissionState,
+    PermissionPromptMode, PermissionReadiness, PermissionScope, PermissionScopeChange,
+    PermissionState, PermissionStateInvalidationReport, PermissionStateSnapshot,
 };
 pub use security::{
     AccessIntent, AccessProbeState, ProtectedScope, SecurityAccessMode, SecurityDecisionAction,

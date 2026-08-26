@@ -58,6 +58,59 @@ fn reports_permission_onboarding_from_binary() {
 }
 
 #[test]
+fn persists_permission_invalidation_state_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-permission-invalidation-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("permission-state.tsv");
+
+    let first = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation")
+        .arg(&state)
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_stdout = String::from_utf8(first.stdout).unwrap();
+    assert!(first_stdout.starts_with("permission-invalidation\tinitialized=true\t"));
+    assert!(
+        first_stdout.contains("\trefresh-ui=true\t"),
+        "{first_stdout}"
+    );
+    assert!(
+        first_stdout.contains("\npermission-change\tdesktop\t"),
+        "{first_stdout}"
+    );
+    assert!(state.is_file());
+
+    let second = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation")
+        .arg(&state)
+        .output()
+        .unwrap();
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_stdout = String::from_utf8(second.stdout).unwrap();
+    assert!(second_stdout.starts_with("permission-invalidation\tinitialized=false\t"));
+    assert!(second_stdout.contains("\tchanged=0\t"), "{second_stdout}");
+    assert!(
+        second_stdout.contains("\trefresh-ui=false\t"),
+        "{second_stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_security_scoped_access_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-security-{}", std::process::id()));
     let unprotected = root.join("plain.md");

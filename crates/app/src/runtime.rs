@@ -352,6 +352,12 @@ pub(crate) fn default_security_bookmarks_path() -> PathBuf {
         .unwrap_or_else(|| env::temp_dir().join("gfm-security-bookmarks.tsv"))
 }
 
+pub(crate) fn default_permission_state_path() -> PathBuf {
+    env::var_os("GFM_PERMISSION_STATE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env::temp_dir().join("gfm-permission-state.tsv"))
+}
+
 fn runtime_payload_catalog() -> Option<JobPayloadCatalog> {
     env::var_os("GFM_JOB_PAYLOAD_CATALOG").map(JobPayloadCatalog::new)
 }
