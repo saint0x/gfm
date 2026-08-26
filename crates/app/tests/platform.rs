@@ -105,6 +105,35 @@ fn reports_security_scoped_access_from_binary() {
 }
 
 #[test]
+fn quicklook_refuses_missing_path_before_preview_from_binary() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "gfm-quicklook-missing-{}-{}.pdf",
+        std::process::id(),
+        nanos
+    ));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("quicklook-session")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert!(stderr.contains("\taction=deny\t"), "{stderr}");
+    assert!(
+        stderr.contains("quicklook preview access blocked: path is not present on this host"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn reports_mac_bridge_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("mac-bridges")
@@ -599,6 +628,15 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
         "{}",
         String::from_utf8_lossy(&quicklook.stderr)
     );
+    let quicklook_stderr = String::from_utf8_lossy(&quicklook.stderr);
+    assert!(
+        quicklook_stderr.contains("security-scope\t"),
+        "{quicklook_stderr}"
+    );
+    assert!(
+        quicklook_stderr.contains("\tintent=preview\t"),
+        "{quicklook_stderr}"
+    );
     let quicklook_stdout = String::from_utf8(quicklook.stdout).unwrap();
     assert!(
         quicklook_stdout.contains("\tallow-native\tcloud=metadata-only\tmetadata-only\t"),
@@ -618,6 +656,15 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
         thumbnail.status.success(),
         "{}",
         String::from_utf8_lossy(&thumbnail.stderr)
+    );
+    let thumbnail_stderr = String::from_utf8_lossy(&thumbnail.stderr);
+    assert!(
+        thumbnail_stderr.contains("security-scope\t"),
+        "{thumbnail_stderr}"
+    );
+    assert!(
+        thumbnail_stderr.contains("\tintent=preview\t"),
+        "{thumbnail_stderr}"
     );
     let thumbnail_stdout = String::from_utf8(thumbnail.stdout).unwrap();
     assert!(

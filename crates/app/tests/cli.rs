@@ -775,6 +775,7 @@ fn persists_volume_index_state_from_binary() {
         String::from_utf8_lossy(&first.stderr)
     );
     let first_stdout = String::from_utf8(first.stdout).unwrap();
+    assert_index_security_preflight(&first.stderr);
     assert!(first_stdout.starts_with("index-state\t"), "{first_stdout}");
     assert!(first_stdout.contains("\tschema=1\t"), "{first_stdout}");
     assert!(first_stdout.contains("\tscan-epoch=1\t"), "{first_stdout}");
@@ -798,6 +799,7 @@ fn persists_volume_index_state_from_binary() {
         String::from_utf8_lossy(&second.stderr)
     );
     let second_stdout = String::from_utf8(second.stdout).unwrap();
+    assert_index_security_preflight(&second.stderr);
     assert!(
         second_stdout.contains("\tscan-epoch=2\t"),
         "{second_stdout}"
@@ -858,6 +860,7 @@ fn reports_scan_progress_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_index_security_preflight(&output.stderr);
     assert!(stdout.starts_with("scan-progress\t"), "{stdout}");
     assert!(stdout.contains("\tcompleted=true"), "{stdout}");
 
@@ -903,6 +906,7 @@ fn reports_fair_scan_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_index_security_preflight(&output.stderr);
     assert!(stdout.starts_with("fair-scan\t"), "{stdout}");
     assert!(stdout.contains("\tvisible-records="), "{stdout}");
     assert!(stdout.contains("\tbackground-records="), "{stdout}");
@@ -932,6 +936,7 @@ fn reports_rename_correlation_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_index_security_preflight(&output.stderr);
     assert!(stdout.starts_with("rename-correlation\t"), "{stdout}");
     assert!(stdout.contains("\tremoved=1\t"), "{stdout}");
     assert!(stdout.contains("\tinserted=1\t"), "{stdout}");
@@ -963,6 +968,7 @@ fn reports_metadata_update_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_index_security_preflight(&output.stderr);
     assert!(stdout.starts_with("metadata-update\t"), "{stdout}");
     assert!(stdout.contains("\texisted=true\t"), "{stdout}");
     assert!(stdout.contains("size"), "{stdout}");
@@ -3138,6 +3144,9 @@ fn reports_compressed_pdf_extraction_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=read\t"), "{stderr}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("extract\tpath="), "{stdout}");
     assert!(
@@ -3154,6 +3163,26 @@ fn reports_compressed_pdf_extraction_from_binary() {
     assert!(stdout.contains("quarantine\tallow"), "{stdout}");
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extract_report_refuses_missing_path_before_extraction_from_binary() {
+    let path = unique_temp_path("gfm-cli-extract-missing-path", "txt");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["extract-report", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=read\t"), "{stderr}");
+    assert!(stderr.contains("\taction=deny\t"), "{stderr}");
+    assert!(
+        stderr.contains("content extraction access blocked: path is not present on this host"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -3183,6 +3212,9 @@ fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=read\t"), "{stderr}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("\tformat=text\t"), "{stdout}");
     assert!(stdout.contains("\tstatus=skipped\t"), "{stdout}");
@@ -5413,6 +5445,9 @@ fn volume_producers_persist_runtime_payload_and_progress_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
 
     let catalog_text = fs::read_to_string(&catalog).unwrap();
     assert!(catalog_text.contains("\tthumbnail\t"), "{catalog_text}");
@@ -5466,6 +5501,9 @@ fn deferred_adaptive_thumbnail_persists_runtime_payload_and_progress_from_binary
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
@@ -5523,6 +5561,9 @@ fn visible_adaptive_quicklook_persists_runtime_payload_and_progress_under_pressu
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("quicklook-session\t"), "{stdout}");
@@ -5600,6 +5641,13 @@ fn run_gfm<const N: usize>(journal: &std::path::Path, args: [&str; N]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn assert_index_security_preflight(stderr: &[u8]) {
+    let stderr = String::from_utf8_lossy(stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=index\t"), "{stderr}");
+    assert!(stderr.contains("\taction=allow\t"), "{stderr}");
 }
 
 fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {

@@ -15,6 +15,7 @@ use gfm_types::{GfmError, Result, VolumeId};
 use std::env;
 use std::path::{Path, PathBuf};
 
+mod access;
 mod archive;
 mod content;
 mod diagnostics;

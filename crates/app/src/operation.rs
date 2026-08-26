@@ -231,6 +231,9 @@ fn operation_access_gate(
             continue;
         }
         let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        if mutation_allowed_for_role(&probe_path, requirement.role) {
+            continue;
+        }
         let Some(volume) = read_only_volume_for_path(volume_report, &probe_path) else {
             continue;
         };
@@ -264,6 +267,20 @@ fn read_only_volume_for_path<'a>(
         .iter()
         .filter(|volume| volume.read_only && path.starts_with(&volume.path))
         .max_by_key(|volume| volume.path.components().count())
+}
+
+fn mutation_allowed_for_role(path: &Path, role: OperationAccessRole) -> bool {
+    let probe_path = match role {
+        OperationAccessRole::DestinationParent => path.to_path_buf(),
+        OperationAccessRole::Source | OperationAccessRole::Target => path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| path.to_path_buf()),
+    };
+    matches!(
+        SecurityScopedAccessReport::evaluate(probe_path, AccessIntent::Operate).action,
+        SecurityDecisionAction::Allow
+    )
 }
 
 fn operation_security_accesses(operation: &Operation) -> Result<Vec<SecurityScopedBookmarkAccess>> {
@@ -427,6 +444,7 @@ fn operation_kind(operation: &Operation) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_mac::VolumeDescriptor;
     use gfm_ops::{read_journal, OperationStatus};
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -534,6 +552,36 @@ mod tests {
             .contains("read-only volume external"));
 
         fs::set_permissions(&volume, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_access_gate_ignores_broad_read_only_root_for_writable_data_path() {
+        let root = unique_temp_dir("gfm-app-op-writable-data-volume");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "content").unwrap();
+        let mut system_root = VolumeDescriptor::for_path("/").unwrap();
+        system_root.read_only = true;
+        system_root.writable = false;
+        system_root.kind = VolumeKind::System;
+        let report = VolumeDiscoveryReport {
+            volumes: vec![system_root],
+        };
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let gate = operation_access_gate(&operation, &report);
+        let journal = root.join("journal.tsv");
+        let entry = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
+            .execute(operation)
+            .unwrap();
+
+        assert_eq!(entry.status, OperationStatus::Completed);
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "content");
+
         fs::remove_dir_all(root).unwrap();
     }
 

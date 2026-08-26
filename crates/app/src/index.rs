@@ -1,12 +1,10 @@
-use crate::{parse_u64_arg, parse_usize_arg, required_path};
+use crate::{access::preflight_access, parse_u64_arg, parse_usize_arg, required_path};
 use gfm_fs::read_directory;
 use gfm_index::{
     EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth, IndexVolumeState,
     Indexer, LiveIndex,
 };
-use gfm_mac::{
-    AccessIntent, FileEventStream, SecurityDecisionAction, SecurityScopedAccessReport, WatchRoot,
-};
+use gfm_mac::{AccessIntent, FileEventStream, WatchRoot};
 use gfm_types::{FileEvent, FileEventKind, FileKind, GfmError, Result};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -262,17 +260,7 @@ fn parse_event_ids(value: &str) -> Result<Vec<u64>> {
 }
 
 fn enforce_index_access(root: &Path) -> Result<()> {
-    let report = SecurityScopedAccessReport::evaluate(root, AccessIntent::Index);
-    eprintln!("{}", report.as_tsv());
-    match report.action {
-        SecurityDecisionAction::Allow | SecurityDecisionAction::Degrade => Ok(()),
-        SecurityDecisionAction::Prompt | SecurityDecisionAction::Deny => {
-            Err(GfmError::Permission {
-                path: root.to_path_buf(),
-                message: format!("index access blocked: {}", report.reason),
-            })
-        }
-    }
+    preflight_access(root, AccessIntent::Index, "index")
 }
 
 fn parse_usize(value: &str, message: &str) -> Result<usize> {
