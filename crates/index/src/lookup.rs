@@ -1,0 +1,677 @@
+use gfm_search::substring_candidate_grams;
+use gfm_search::{
+    SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupIds, SearchLookupTelemetry,
+    SearchLookupTerms, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
+    SearchSubstringPosting,
+};
+use gfm_store::{
+    MetadataField, MmapContentArchive, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
+    MmapSubstringArchive,
+};
+use gfm_types::{ContentPosting, FileId, GfmError, Result};
+use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::path::Path;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Mutex,
+};
+
+const SEARCH_ARCHIVE_LOOKUP_CACHE_CAPACITY: usize = 512;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SidecarQueryImport {
+    pub metadata: Vec<SearchMetadataPosting>,
+    pub prefixes: Vec<SearchPrefixPosting>,
+    pub substrings: Vec<SearchSubstringPosting>,
+    pub fuzzy: Vec<SearchFuzzyPosting>,
+    pub content: Vec<ContentPosting>,
+    pub report: SidecarQueryImportReport,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SidecarQueryImportReport {
+    pub metadata_postings: usize,
+    pub prefix_postings: usize,
+    pub substring_postings: usize,
+    pub fuzzy_postings: usize,
+    pub content_postings: usize,
+    pub candidate_ids: usize,
+    pub requires_full_record_hydration: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SidecarRecordHydrationReport {
+    pub records_loaded: usize,
+    pub records_missing: usize,
+    pub columns_applied: usize,
+    pub metadata_keys: usize,
+    pub prefix_keys: usize,
+    pub substring_keys: usize,
+    pub fuzzy_keys: usize,
+    pub content_keys: usize,
+    pub import: SidecarQueryImportReport,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContentQueryLoadReport {
+    pub content_keys: usize,
+    pub candidate_ids: usize,
+    pub records_loaded: usize,
+    pub records_missing: usize,
+    pub full_hydration: bool,
+}
+
+#[derive(Debug)]
+pub struct SearchArchiveLookup {
+    prefixes: MmapPrefixArchive,
+    substrings: MmapSubstringArchive,
+    fuzzy: MmapFuzzyArchive,
+    prefix_cache: Mutex<LookupCache<Vec<FileId>>>,
+    substring_cache: Mutex<LookupCache<Vec<FileId>>>,
+    fuzzy_cache: Mutex<LookupCache<Vec<String>>>,
+    prefix_requests: AtomicUsize,
+    prefix_hits: AtomicUsize,
+    prefix_misses: AtomicUsize,
+    substring_requests: AtomicUsize,
+    substring_hits: AtomicUsize,
+    substring_misses: AtomicUsize,
+    fuzzy_requests: AtomicUsize,
+    fuzzy_hits: AtomicUsize,
+    fuzzy_misses: AtomicUsize,
+}
+
+impl SearchArchiveLookup {
+    pub fn open(
+        prefixes: impl AsRef<Path>,
+        substrings: impl AsRef<Path>,
+        fuzzy: impl AsRef<Path>,
+    ) -> Result<SearchArchiveLookup> {
+        Self::open_with_capacity(
+            prefixes,
+            substrings,
+            fuzzy,
+            SEARCH_ARCHIVE_LOOKUP_CACHE_CAPACITY,
+        )
+    }
+
+    fn open_with_capacity(
+        prefixes: impl AsRef<Path>,
+        substrings: impl AsRef<Path>,
+        fuzzy: impl AsRef<Path>,
+        cache_capacity: usize,
+    ) -> Result<SearchArchiveLookup> {
+        Ok(Self {
+            prefixes: MmapPrefixArchive::open(prefixes)?,
+            substrings: MmapSubstringArchive::open(substrings)?,
+            fuzzy: MmapFuzzyArchive::open(fuzzy)?,
+            prefix_cache: Mutex::new(LookupCache::new(cache_capacity)),
+            substring_cache: Mutex::new(LookupCache::new(cache_capacity)),
+            fuzzy_cache: Mutex::new(LookupCache::new(cache_capacity)),
+            prefix_requests: AtomicUsize::new(0),
+            prefix_hits: AtomicUsize::new(0),
+            prefix_misses: AtomicUsize::new(0),
+            substring_requests: AtomicUsize::new(0),
+            substring_hits: AtomicUsize::new(0),
+            substring_misses: AtomicUsize::new(0),
+            fuzzy_requests: AtomicUsize::new(0),
+            fuzzy_hits: AtomicUsize::new(0),
+            fuzzy_misses: AtomicUsize::new(0),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_with_cache_capacity(
+        prefixes: impl AsRef<Path>,
+        substrings: impl AsRef<Path>,
+        fuzzy: impl AsRef<Path>,
+        cache_capacity: usize,
+    ) -> Result<SearchArchiveLookup> {
+        Self::open_with_capacity(prefixes, substrings, fuzzy, cache_capacity)
+    }
+
+    pub fn indexed_prefixes(&self) -> usize {
+        self.prefixes.indexed_prefixes()
+    }
+
+    pub fn indexed_substring_grams(&self) -> usize {
+        self.substrings.indexed_grams()
+    }
+
+    pub fn indexed_fuzzy_keys(&self) -> usize {
+        self.fuzzy.indexed_keys()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cache_entry_counts(&self) -> Result<(usize, usize, usize)> {
+        let prefixes = self
+            .prefix_cache
+            .lock()
+            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
+            .len();
+        let substrings = self
+            .substring_cache
+            .lock()
+            .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
+            .len();
+        let fuzzy = self
+            .fuzzy_cache
+            .lock()
+            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
+            .len();
+        Ok((prefixes, substrings, fuzzy))
+    }
+
+    fn prefix_postings_bounded<I, S>(
+        &self,
+        prefixes: I,
+        limit: usize,
+    ) -> Result<Vec<SearchPrefixPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut selected = BTreeSet::new();
+        for prefix in prefixes {
+            let prefix = prefix.as_ref();
+            if !prefix.is_empty() {
+                selected.insert(prefix.to_string());
+            }
+        }
+
+        let mut postings = Vec::with_capacity(selected.len());
+        let mut misses = Vec::new();
+        {
+            let cache = self
+                .prefix_cache
+                .lock()
+                .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?;
+            for prefix in &selected {
+                self.prefix_requests.fetch_add(1, Ordering::Relaxed);
+                if let Some(mut ids) = cache.get(prefix) {
+                    self.prefix_hits.fetch_add(1, Ordering::Relaxed);
+                    ids.truncate(limit);
+                    postings.push(SearchPrefixPosting {
+                        prefix: prefix.clone(),
+                        ids,
+                    });
+                } else {
+                    self.prefix_misses.fetch_add(1, Ordering::Relaxed);
+                    misses.push(prefix.clone());
+                }
+            }
+        }
+
+        let loaded = self
+            .prefixes
+            .postings_for_sorted_prefixes_limit(&misses, limit)?
+            .into_iter()
+            .map(|limited| {
+                (
+                    limited.posting.prefix,
+                    (limited.posting.ids, limited.truncated),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        let mut cache = self
+            .prefix_cache
+            .lock()
+            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?;
+        for prefix in misses {
+            let (ids, truncated) = loaded
+                .get(&prefix)
+                .cloned()
+                .unwrap_or_else(|| (Vec::new(), false));
+            if !truncated {
+                cache.insert(prefix.clone(), ids.clone());
+            }
+            postings.push(SearchPrefixPosting { prefix, ids });
+        }
+
+        postings.sort_by(|left, right| left.prefix.cmp(&right.prefix));
+        Ok(postings)
+    }
+
+    pub(crate) fn fuzzy_postings_bounded<I, S>(
+        &self,
+        keys: I,
+        limit: usize,
+    ) -> Result<Vec<SearchFuzzyPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut selected = BTreeSet::new();
+        for key in keys {
+            let key = key.as_ref();
+            if !key.is_empty() {
+                selected.insert(key.to_string());
+            }
+        }
+
+        let mut postings = Vec::with_capacity(selected.len());
+        let mut misses = Vec::new();
+        {
+            let cache = self
+                .fuzzy_cache
+                .lock()
+                .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?;
+            for key in &selected {
+                self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
+                if let Some(mut terms) = cache.get(key) {
+                    self.fuzzy_hits.fetch_add(1, Ordering::Relaxed);
+                    terms.truncate(limit);
+                    postings.push(SearchFuzzyPosting {
+                        key: key.clone(),
+                        terms,
+                    });
+                } else {
+                    self.fuzzy_misses.fetch_add(1, Ordering::Relaxed);
+                    misses.push(key.clone());
+                }
+            }
+        }
+
+        let loaded = self
+            .fuzzy
+            .postings_for_sorted_keys_limit(&misses, limit)?
+            .into_iter()
+            .map(|limited| {
+                (
+                    limited.posting.key,
+                    (limited.posting.terms, limited.truncated),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        let mut cache = self
+            .fuzzy_cache
+            .lock()
+            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?;
+        for key in misses {
+            let (terms, truncated) = loaded
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| (Vec::new(), false));
+            if !truncated {
+                cache.insert(key.clone(), terms.clone());
+            }
+            postings.push(SearchFuzzyPosting { key, terms });
+        }
+
+        postings.sort_by(|left, right| left.key.cmp(&right.key));
+        Ok(postings)
+    }
+}
+
+impl SearchLookup for SearchArchiveLookup {
+    fn prefix_ids(&self, prefix: &str) -> Result<Vec<FileId>> {
+        self.prefix_requests.fetch_add(1, Ordering::Relaxed);
+        if let Some(ids) = self
+            .prefix_cache
+            .lock()
+            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
+            .get(prefix)
+        {
+            self.prefix_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(ids);
+        }
+
+        self.prefix_misses.fetch_add(1, Ordering::Relaxed);
+        let ids = self.prefixes.ids_for(prefix)?;
+        self.prefix_cache
+            .lock()
+            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
+            .insert(prefix.to_string(), ids.clone());
+        Ok(ids)
+    }
+
+    fn prefix_ids_bounded(&self, prefix: &str, limit: usize) -> Result<SearchLookupIds> {
+        self.prefix_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupIds::new(Vec::new(), false));
+        }
+        if let Some(mut ids) = self
+            .prefix_cache
+            .lock()
+            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
+            .get(prefix)
+        {
+            self.prefix_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = ids.len() > limit;
+            ids.truncate(limit);
+            return Ok(SearchLookupIds::new(ids, truncated));
+        }
+
+        self.prefix_misses.fetch_add(1, Ordering::Relaxed);
+        let (ids, truncated) = self.prefixes.ids_for_limit(prefix, limit)?;
+        if !truncated {
+            self.prefix_cache
+                .lock()
+                .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
+                .insert(prefix.to_string(), ids.clone());
+        }
+        Ok(SearchLookupIds::new(ids, truncated))
+    }
+
+    fn substring_ids(&self, gram: &str) -> Result<Vec<FileId>> {
+        self.substring_requests.fetch_add(1, Ordering::Relaxed);
+        if let Some(ids) = self
+            .substring_cache
+            .lock()
+            .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
+            .get(gram)
+        {
+            self.substring_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(ids);
+        }
+
+        self.substring_misses.fetch_add(1, Ordering::Relaxed);
+        let ids = self.substrings.ids_for(gram)?;
+        self.substring_cache
+            .lock()
+            .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
+            .insert(gram.to_string(), ids.clone());
+        Ok(ids)
+    }
+
+    fn substring_ids_bounded(&self, gram: &str, limit: usize) -> Result<SearchLookupIds> {
+        self.substring_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupIds::new(Vec::new(), false));
+        }
+        if let Some(mut ids) = self
+            .substring_cache
+            .lock()
+            .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
+            .get(gram)
+        {
+            self.substring_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = ids.len() > limit;
+            ids.truncate(limit);
+            return Ok(SearchLookupIds::new(ids, truncated));
+        }
+
+        self.substring_misses.fetch_add(1, Ordering::Relaxed);
+        let (ids, truncated) = self.substrings.ids_for_limit(gram, limit)?;
+        if !truncated {
+            self.substring_cache
+                .lock()
+                .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
+                .insert(gram.to_string(), ids.clone());
+        }
+        Ok(SearchLookupIds::new(ids, truncated))
+    }
+
+    fn fuzzy_terms(&self, key: &str) -> Result<Vec<String>> {
+        self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
+        if let Some(terms) = self
+            .fuzzy_cache
+            .lock()
+            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
+            .get(key)
+        {
+            self.fuzzy_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(terms);
+        }
+
+        self.fuzzy_misses.fetch_add(1, Ordering::Relaxed);
+        let terms = self.fuzzy.terms_for(key)?;
+        self.fuzzy_cache
+            .lock()
+            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
+            .insert(key.to_string(), terms.clone());
+        Ok(terms)
+    }
+
+    fn fuzzy_terms_bounded(&self, key: &str, limit: usize) -> Result<SearchLookupTerms> {
+        self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupTerms::new(Vec::new(), false));
+        }
+        if let Some(mut terms) = self
+            .fuzzy_cache
+            .lock()
+            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
+            .get(key)
+        {
+            self.fuzzy_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = terms.len() > limit;
+            terms.truncate(limit);
+            return Ok(SearchLookupTerms::new(terms, truncated));
+        }
+
+        self.fuzzy_misses.fetch_add(1, Ordering::Relaxed);
+        let (terms, truncated) = self.fuzzy.terms_for_limit(key, limit)?;
+        if !truncated {
+            self.fuzzy_cache
+                .lock()
+                .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
+                .insert(key.to_string(), terms.clone());
+        }
+        Ok(SearchLookupTerms::new(terms, truncated))
+    }
+
+    fn cache_telemetry(&self) -> SearchLookupTelemetry {
+        SearchLookupTelemetry {
+            prefix_lookup_requests: self.prefix_requests.load(Ordering::Relaxed),
+            prefix_cache_hits: self.prefix_hits.load(Ordering::Relaxed),
+            prefix_cache_misses: self.prefix_misses.load(Ordering::Relaxed),
+            substring_lookup_requests: self.substring_requests.load(Ordering::Relaxed),
+            substring_cache_hits: self.substring_hits.load(Ordering::Relaxed),
+            substring_cache_misses: self.substring_misses.load(Ordering::Relaxed),
+            fuzzy_lookup_requests: self.fuzzy_requests.load(Ordering::Relaxed),
+            fuzzy_cache_hits: self.fuzzy_hits.load(Ordering::Relaxed),
+            fuzzy_cache_misses: self.fuzzy_misses.load(Ordering::Relaxed),
+            ..SearchLookupTelemetry::default()
+        }
+    }
+}
+
+pub fn query_sidecar_imports(
+    metadata: &MmapMetadataArchive,
+    lookup: &SearchArchiveLookup,
+    substrings: &MmapSubstringArchive,
+    content: &MmapContentArchive,
+    query: &str,
+    budget: SearchLookupBudget,
+) -> Result<SidecarQueryImport> {
+    let parsed = gfm_search::SearchQuery::parse(query);
+    let content_terms = parsed.content_candidate_terms();
+    let comment_terms = parsed.comment_candidate_terms();
+    let tag_terms = parsed.tag_candidate_terms();
+    let prefix_terms = parsed.prefix_candidate_terms();
+    let substring_grams = bounded_substring_grams(&content_terms, budget);
+    let fuzzy_keys = parsed
+        .fuzzy_candidate_keys()
+        .into_iter()
+        .take(budget.max_fuzzy_keys_per_term)
+        .collect::<Vec<_>>();
+    let mut candidate_ids = BTreeSet::new();
+
+    let mut selected_metadata = metadata.postings_for_limit(
+        MetadataField::Comment,
+        comment_terms,
+        budget.max_metadata_ids_per_term,
+    )?;
+    selected_metadata.extend(metadata.postings_for_limit(
+        MetadataField::Tag,
+        tag_terms.clone(),
+        budget.max_metadata_ids_per_term,
+    )?);
+    let metadata = selected_metadata
+        .into_iter()
+        .map(|posting| {
+            candidate_ids.extend(posting.ids.iter().copied());
+            SearchMetadataPosting {
+                field: match posting.field {
+                    MetadataField::Tag => SearchMetadataField::Tag,
+                    MetadataField::Comment => SearchMetadataField::Comment,
+                },
+                term: posting.term,
+                ids: posting.ids,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let substrings = substrings
+        .postings_for_limit(substring_grams, budget.max_substring_ids_per_gram)?
+        .into_iter()
+        .map(|posting| {
+            candidate_ids.extend(posting.ids.iter().copied());
+            SearchSubstringPosting {
+                gram: posting.gram,
+                ids: posting.ids,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut prefix_candidates = prefix_terms.clone();
+    let mut fuzzy_candidate_terms = BTreeSet::new();
+    let fuzzy = lookup
+        .fuzzy_postings_bounded(fuzzy_keys, budget.max_fuzzy_terms_per_key)?
+        .into_iter()
+        .map(|posting| {
+            let terms = posting
+                .terms
+                .into_iter()
+                .filter(|term| {
+                    fuzzy_candidate_terms.len() < budget.max_fuzzy_candidates_per_term
+                        && fuzzy_candidate_terms.insert(term.clone())
+                })
+                .collect::<Vec<_>>();
+            for term in &terms {
+                prefix_candidates.push(term.clone());
+            }
+            SearchFuzzyPosting {
+                key: posting.key,
+                terms,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let prefixes =
+        lookup.prefix_postings_bounded(prefix_candidates, budget.max_prefix_ids_per_term)?;
+    for posting in &prefixes {
+        candidate_ids.extend(posting.ids.iter().copied());
+    }
+
+    let content =
+        content.postings_for_terms_limit(content_terms.clone(), budget.max_content_ids_per_term)?;
+    for posting in &content {
+        candidate_ids.extend(posting.ids.iter().copied());
+        candidate_ids.extend(posting.positions.iter().map(|positions| positions.id));
+    }
+
+    let has_positive_anchor = !content_terms.is_empty()
+        || !tag_terms.is_empty()
+        || !metadata.is_empty()
+        || !prefixes.is_empty()
+        || !substrings.is_empty()
+        || !fuzzy.is_empty()
+        || !content.is_empty();
+    let has_any_query = !parsed.terms.is_empty()
+        || !parsed.excluded_terms.is_empty()
+        || !parsed.phrases.is_empty()
+        || !parsed.proximities.is_empty()
+        || !parsed.filters.is_empty()
+        || parsed.expression.is_some();
+    let requires_full_record_hydration = !has_positive_anchor && has_any_query;
+
+    Ok(SidecarQueryImport {
+        report: SidecarQueryImportReport {
+            metadata_postings: metadata.len(),
+            prefix_postings: prefixes.len(),
+            substring_postings: substrings.len(),
+            fuzzy_postings: fuzzy.len(),
+            content_postings: content.len(),
+            candidate_ids: candidate_ids.len(),
+            requires_full_record_hydration,
+        },
+        metadata,
+        prefixes,
+        substrings,
+        fuzzy,
+        content,
+    })
+}
+
+pub(crate) fn sidecar_candidate_ids(import: &SidecarQueryImport) -> BTreeSet<FileId> {
+    let mut ids = BTreeSet::new();
+    for posting in &import.metadata {
+        ids.extend(posting.ids.iter().copied());
+    }
+    for posting in &import.prefixes {
+        ids.extend(posting.ids.iter().copied());
+    }
+    for posting in &import.substrings {
+        ids.extend(posting.ids.iter().copied());
+    }
+    for posting in &import.content {
+        ids.extend(posting.ids.iter().copied());
+        ids.extend(posting.positions.iter().map(|positions| positions.id));
+    }
+    ids
+}
+
+fn bounded_substring_grams(terms: &[String], budget: SearchLookupBudget) -> Vec<String> {
+    let mut grams = BTreeSet::new();
+    for term in terms {
+        grams.extend(
+            substring_candidate_grams(term)
+                .into_iter()
+                .take(budget.max_substring_grams_per_term),
+        );
+    }
+    grams.into_iter().collect()
+}
+
+#[derive(Debug)]
+struct LookupCache<V> {
+    capacity: usize,
+    order: VecDeque<String>,
+    values: HashMap<String, V>,
+}
+
+impl<V: Clone> LookupCache<V> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::with_capacity(capacity),
+            values: HashMap::new(),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<V> {
+        self.values.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: String, value: V) {
+        if self.capacity == 0 {
+            return;
+        }
+        if !self.values.contains_key(&key) {
+            self.order.push_back(key.clone());
+        }
+        self.values.insert(key, value);
+        while self.values.len() > self.capacity {
+            let Some(expired) = self.order.pop_front() else {
+                break;
+            };
+            self.values.remove(&expired);
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+}
