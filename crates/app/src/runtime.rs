@@ -208,12 +208,30 @@ impl RuntimeJobHandle {
         total_units: u64,
         summary: String,
     ) -> Result<Self> {
+        Self::begin_with_payload_path(
+            job,
+            kind,
+            label,
+            runtime_payload_path(kind, label),
+            total_units,
+            summary,
+        )
+    }
+
+    pub(crate) fn begin_with_payload_path(
+        job: &Job,
+        kind: JobPayloadKind,
+        label: &str,
+        payload_path: impl Into<PathBuf>,
+        total_units: u64,
+        summary: String,
+    ) -> Result<Self> {
         if let Some(catalog) = runtime_payload_catalog() {
             catalog.append(&JobPayloadRecord::new(
                 job.id,
                 kind,
                 label,
-                runtime_payload_path(kind, label),
+                payload_path.into(),
                 job.volume,
                 summary.clone(),
             ))?;

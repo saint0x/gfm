@@ -178,7 +178,7 @@ Job progress is persisted through atomic typed snapshots that record job id, cla
 
 When `GFM_JOB_PAYLOAD_CATALOG` and `GFM_JOB_PROGRESS_STORE` are configured, shared operation, volume-scoped, adaptive scheduled, and adaptive extraction worker producers publish payload catalog rows and planned/running/terminal progress snapshots directly from the scheduler path. That gives foreground operations, visible preview and repair jobs, adaptive sidecar and persistent-index repair, diagnostics rebuilds, direct and quarantined extraction workers, and thumbnail generation one durable runtime metadata contract.
 
-The retriable background content indexing worker also publishes payload and progress records as it plans, enters retry attempts, and records terminal completion or failure, so machine-wide indexing work can be restored and diagnosed through the same runtime metadata layer.
+The retriable background content indexing worker also publishes payload and progress records as it plans, enters retry attempts, and records terminal completion or failure, with catalog payload paths pointing at the persisted content job spec so machine-wide indexing work can be restored and diagnosed through the same runtime metadata layer.
 
 Adaptive scheduled producers for sidecar repair, persistent-index repair, diagnostics rebuilds, and content maintenance run through the same isolated retriable worker. Transient and offline-volume failures receive bounded backoff and durable attempt journal entries; permission, missing-file, corrupt-file, and permanent failures are terminal. The `jobs-runtime-retry-probe` diagnostic exercises that path deterministically.
 

@@ -4384,6 +4384,14 @@ fn runs_background_content_indexer_from_binary() {
         catalog_text.contains("background content index"),
         "{catalog_text}"
     );
+    assert!(
+        catalog_text.contains(spec.to_str().unwrap()),
+        "{catalog_text}"
+    );
+    assert!(
+        !catalog_text.contains("runtime/indexing/background-content-index.gfmjob"),
+        "{catalog_text}"
+    );
     let progress_text = fs::read_to_string(&progress).unwrap();
     assert!(
         progress_text.contains("progress\t1\tbackground\tbackground\tbackground content index"),

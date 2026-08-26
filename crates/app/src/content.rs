@@ -339,8 +339,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let journal = JobJournal::new(default_job_journal_path());
             let spec = ContentIndexJobSpec::new(&root, segment_dir, records, content)
                 .with_volume(detect_volume_id(&root)?);
-            spec.write(default_content_job_path())?;
-            let outcome = run_content_job(&spec, &journal, pressure)?;
+            let spec_path = default_content_job_path();
+            spec.write(&spec_path)?;
+            let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
             if outcome.deferred {
                 eprintln!(
                     "background-content-deferred action={:?}; journal {}; {} inaccessible",
@@ -381,8 +382,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             if recoverable.is_empty() {
                 eprintln!("no recoverable background content jobs");
             } else {
-                let spec = ContentIndexJobSpec::read(spec_path)?;
-                let outcome = run_content_job(&spec, &journal, SchedulingPressure::default())?;
+                let spec = ContentIndexJobSpec::read(&spec_path)?;
+                let outcome =
+                    run_content_job(&spec, &journal, SchedulingPressure::default(), &spec_path)?;
                 if outcome.deferred {
                     eprintln!(
                         "resumed-background-content-deferred action={:?}; recoverable {}",
@@ -425,8 +427,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             if recoverable.is_empty() {
                 eprintln!("no recoverable background content jobs");
             } else {
-                let spec = ContentIndexJobSpec::read(spec_path)?;
-                let outcome = run_content_job(&spec, &journal, pressure)?;
+                let spec = ContentIndexJobSpec::read(&spec_path)?;
+                let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
                 if outcome.deferred {
                     eprintln!(
                         "resumed-background-content-deferred action={:?}; recoverable {}",
@@ -643,6 +645,7 @@ pub(crate) fn run_content_job(
     spec: &ContentIndexJobSpec,
     journal: &JobJournal,
     pressure: SchedulingPressure,
+    spec_path: &Path,
 ) -> Result<ContentJobOutcome> {
     let scheduling = pressure.decide(Priority::Background, 1, 1);
     if scheduling.action == SchedulingAction::Defer {
@@ -680,10 +683,11 @@ pub(crate) fn run_content_job(
     let mut scheduler = Scheduler::new();
     let label = "background content index";
     let job = scheduler.schedule_on_volume(Priority::Background, label, volume);
-    let runtime = RuntimeJobHandle::begin(
+    let runtime = RuntimeJobHandle::begin_with_payload_path(
         &job,
         JobPayloadKind::Indexing,
         label,
+        spec_path,
         snapshot.records.len().max(1) as u64,
         format!("index:{}", spec.root.display()),
     )?;
