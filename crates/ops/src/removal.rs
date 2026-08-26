@@ -1,8 +1,9 @@
 use crate::progress::ProgressTracker;
+use crate::target::ensure_source_exists;
 use crate::trashmeta::{
     append_trash_metadata, reconcile_empty_trash_metadata, remove_trash_metadata,
 };
-use crate::{ensure_source_exists, OperationProgressEvent};
+use crate::OperationProgressEvent;
 use gfm_types::{GfmError, Result};
 use std::fs;
 use std::path::Path;

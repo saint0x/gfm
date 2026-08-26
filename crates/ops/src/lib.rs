@@ -18,6 +18,7 @@ pub use access::{
     OperationAccessAction, OperationAccessDecision, OperationAccessGate,
     OperationAccessRequirement, OperationAccessRole,
 };
+use conflict::resolve_operation_conflicts;
 pub use conflict::{
     ConflictPolicy, OperationBatchOutcome, OperationBatchReport, OperationConflictPlan,
 };
@@ -45,9 +46,10 @@ pub use recovery::{OperationRecoveryOutcome, OperationRecoveryPolicy, OperationR
 use removal::{delete_path, delete_path_untracked, empty_trash_path, trash_path};
 use target::{
     allocate_replace_backup_path, allocate_replace_stage_path, commit_staged_directory_replace,
-    keep_both_path, metadata_same_file, path_exists_or_symlink, rename_replacing_file,
-    replacement_destination_is_directory, replacement_destination_is_non_directory,
-    same_canonical_path, source_is_directory, source_is_regular_file, source_is_symlink,
+    ensure_source_exists, metadata_same_file, path_exists_or_symlink, prepare_destination,
+    rename_replacing_file, replacement_destination_is_directory,
+    replacement_destination_is_non_directory, same_canonical_path, source_is_directory,
+    source_is_regular_file, source_is_symlink,
 };
 #[cfg(test)]
 use transfer::copy_file_bytes;
@@ -539,7 +541,7 @@ fn copy_path_with_session(
     {
         return copy_directory_replacing_existing(from, to, execution, progress, session);
     }
-    prepare_destination(to, conflict)?;
+    prepare_destination(to, conflict, delete_path_untracked)?;
     if metadata.file_type().is_symlink() {
         copy_symlink(from, to, progress)
     } else if metadata.is_dir() {
@@ -711,7 +713,7 @@ fn move_path(
             progress,
         );
     }
-    prepare_destination(to, conflict)?;
+    prepare_destination(to, conflict, delete_path_untracked)?;
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
@@ -1206,75 +1208,8 @@ fn create_symlink(target: &Path, link: &Path) -> Result<()> {
     }
 }
 
-fn ensure_source_exists(path: &Path) -> Result<()> {
-    if path.exists() || fs::symlink_metadata(path).is_ok() {
-        Ok(())
-    } else {
-        Err(GfmError::Io {
-            path: path.to_path_buf(),
-            message: "source does not exist".to_string(),
-        })
-    }
-}
-
-fn resolve_operation_conflicts(
-    operation: Operation,
-    conflict: ConflictPolicy,
-) -> Result<Operation> {
-    if conflict != ConflictPolicy::KeepBoth {
-        return Ok(operation);
-    }
-    match operation {
-        Operation::Copy { from, to } => Ok(Operation::Copy {
-            from,
-            to: keep_both_path(&to)?,
-        }),
-        Operation::Move { from, to } => Ok(Operation::Move {
-            from,
-            to: keep_both_path(&to)?,
-        }),
-        Operation::Rename { from, to } => Ok(Operation::Rename {
-            from,
-            to: keep_both_path(&to)?,
-        }),
-        Operation::Delete { path } => Ok(Operation::Delete { path }),
-        Operation::Trash { path } => Ok(Operation::Trash { path }),
-        Operation::EmptyTrash { path } => Ok(Operation::EmptyTrash { path }),
-        Operation::Restore { from, to } => Ok(Operation::Restore {
-            from,
-            to: keep_both_path(&to)?,
-        }),
-    }
-}
-
 fn should_skip_operation(operation: &Operation, conflict: ConflictPolicy) -> bool {
     conflict == ConflictPolicy::Skip && operation.target_path().is_some_and(path_exists_or_symlink)
-}
-
-fn prepare_destination(path: &Path, conflict: ConflictPolicy) -> Result<()> {
-    if !path_exists_or_symlink(path) {
-        return Ok(());
-    }
-
-    match conflict {
-        ConflictPolicy::Fail => Err(GfmError::Conflict {
-            path: path.to_path_buf(),
-            message: "destination already exists".to_string(),
-        }),
-        ConflictPolicy::Replace => delete_path_untracked(path),
-        ConflictPolicy::KeepBoth => Err(GfmError::Conflict {
-            path: path.to_path_buf(),
-            message: "keep-both destination still exists".to_string(),
-        }),
-        ConflictPolicy::Merge => Err(GfmError::Conflict {
-            path: path.to_path_buf(),
-            message: "merge requires source and destination directories".to_string(),
-        }),
-        ConflictPolicy::Skip => Err(GfmError::Conflict {
-            path: path.to_path_buf(),
-            message: "skip policy must be handled before mutation".to_string(),
-        }),
-    }
 }
 
 #[cfg(test)]

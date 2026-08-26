@@ -1,4 +1,6 @@
+use crate::target::keep_both_path;
 use crate::{Operation, OperationStatus};
+use gfm_types::Result;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -59,6 +61,36 @@ pub struct OperationBatchOutcome {
     pub status: OperationStatus,
     pub operation: Operation,
     pub message: Option<String>,
+}
+
+pub(crate) fn resolve_operation_conflicts(
+    operation: Operation,
+    conflict: ConflictPolicy,
+) -> Result<Operation> {
+    if conflict != ConflictPolicy::KeepBoth {
+        return Ok(operation);
+    }
+    match operation {
+        Operation::Copy { from, to } => Ok(Operation::Copy {
+            from,
+            to: keep_both_path(&to)?,
+        }),
+        Operation::Move { from, to } => Ok(Operation::Move {
+            from,
+            to: keep_both_path(&to)?,
+        }),
+        Operation::Rename { from, to } => Ok(Operation::Rename {
+            from,
+            to: keep_both_path(&to)?,
+        }),
+        Operation::Delete { path } => Ok(Operation::Delete { path }),
+        Operation::Trash { path } => Ok(Operation::Trash { path }),
+        Operation::EmptyTrash { path } => Ok(Operation::EmptyTrash { path }),
+        Operation::Restore { from, to } => Ok(Operation::Restore {
+            from,
+            to: keep_both_path(&to)?,
+        }),
+    }
 }
 
 #[cfg(test)]

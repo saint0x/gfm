@@ -1,4 +1,5 @@
 use crate::journal::now_nanos;
+use crate::ConflictPolicy;
 use gfm_types::{GfmError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -119,6 +120,47 @@ pub(crate) fn same_canonical_path(left: &Path, right: &Path) -> bool {
     match (fs::canonicalize(left), fs::canonicalize(right)) {
         (Ok(left), Ok(right)) => left == right,
         _ => left == right,
+    }
+}
+
+pub(crate) fn ensure_source_exists(path: &Path) -> Result<()> {
+    if path.exists() || fs::symlink_metadata(path).is_ok() {
+        Ok(())
+    } else {
+        Err(GfmError::Io {
+            path: path.to_path_buf(),
+            message: "source does not exist".to_string(),
+        })
+    }
+}
+
+pub(crate) fn prepare_destination(
+    path: &Path,
+    conflict: ConflictPolicy,
+    delete_existing: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    if !path_exists_or_symlink(path) {
+        return Ok(());
+    }
+
+    match conflict {
+        ConflictPolicy::Fail => Err(GfmError::Conflict {
+            path: path.to_path_buf(),
+            message: "destination already exists".to_string(),
+        }),
+        ConflictPolicy::Replace => delete_existing(path),
+        ConflictPolicy::KeepBoth => Err(GfmError::Conflict {
+            path: path.to_path_buf(),
+            message: "keep-both destination still exists".to_string(),
+        }),
+        ConflictPolicy::Merge => Err(GfmError::Conflict {
+            path: path.to_path_buf(),
+            message: "merge requires source and destination directories".to_string(),
+        }),
+        ConflictPolicy::Skip => Err(GfmError::Conflict {
+            path: path.to_path_buf(),
+            message: "skip policy must be handled before mutation".to_string(),
+        }),
     }
 }
 
