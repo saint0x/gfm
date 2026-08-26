@@ -461,6 +461,7 @@ cargo run -p gfm -- index-content . /tmp/gfm.gfmidx /tmp/gfm.gfmcontent
 cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent "performance-critical"
 cargo run -p gfm -- search-content-index-adaptive /tmp/gfm.gfmidx /tmp/gfm.gfmcontent "performance-critical" elevated serious low active
 cargo run -p gfm -- search-content-index-set /tmp/gfm.gfmidx "performance-critical" /tmp/gfm-hot.gfmcontent /tmp/gfm-warm.gfmcontent
+cargo run -p gfm -- search-content-index-set-session /tmp/gfm.gfmidx "performance-critical" /tmp/gfm-hot.gfmcontent /tmp/gfm-warm.gfmcontent
 cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent '"performance-critical systems"'
 cargo run -p gfm -- search-content-index /tmp/gfm.gfmidx /tmp/gfm.gfmcontent "near:8:performance,systems"
 cargo run -p gfm -- content-ids /tmp/gfm.gfmcontent "performance-critical"
@@ -485,6 +486,7 @@ cargo run -p gfm -- content-cleanup-plan /tmp/gfm.gfmmanifest 1 0 64 /tmp/gfm-ho
 cargo run -p gfm -- content-manifest-cleanup /tmp/gfm.gfmmanifest /tmp/gfm-hot.gfmcontent
 cargo run -p gfm -- content-maintain-segments-adaptive /tmp/gfm.gfmmanifest /tmp/gfm-next.gfmcontent saturated nominal ac idle /tmp/gfm-*.gfmseg
 cargo run -p gfm -- search-content-index-manifest /tmp/gfm.gfmidx /tmp/gfm.gfmmanifest "performance-critical"
+cargo run -p gfm -- search-content-index-manifest-session /tmp/gfm.gfmidx /tmp/gfm.gfmmanifest "performance-critical"
 ```
 
 Run the background content indexing pipeline:

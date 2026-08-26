@@ -146,6 +146,35 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
+        "search-content-index-set-session" => {
+            let records = required_path(
+                args.next(),
+                "search-content-index-set-session requires a records path",
+            )?;
+            let query = required_string(
+                args.next(),
+                "search-content-index-set-session requires a query string",
+            )?;
+            let content_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            if content_paths.is_empty() {
+                return Err(gfm_types::GfmError::Format(
+                    "search-content-index-set-session requires at least one content archive"
+                        .to_string(),
+                ));
+            }
+            let session =
+                Indexer::default().load_content_set_query_session(&records, &content_paths)?;
+            let first = session.search(&query, 50)?;
+            print_content_session_report("content-session-first", content_paths.len(), &first);
+            for hit in first.search.hits {
+                print_hit(&hit);
+            }
+            let second = session.search(&query, 50)?;
+            print_content_session_report("content-session-second", content_paths.len(), &second);
+            for hit in second.search.hits {
+                print_hit(&hit);
+            }
+        }
         "search-content-index-manifest" => {
             let records = required_path(
                 args.next(),
@@ -170,6 +199,40 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 report.full_hydration
             );
             for hit in live.search(&query, 50) {
+                print_hit(&hit);
+            }
+        }
+        "search-content-index-manifest-session" => {
+            let records = required_path(
+                args.next(),
+                "search-content-index-manifest-session requires a records path",
+            )?;
+            let manifest = required_path(
+                args.next(),
+                "search-content-index-manifest-session requires a manifest path",
+            )?;
+            let query = required_string(
+                args.next(),
+                "search-content-index-manifest-session requires a query string",
+            )?;
+            let session =
+                Indexer::default().load_content_manifest_query_session(&records, &manifest)?;
+            let first = session.search(&query, 50)?;
+            print_content_session_report(
+                "content-manifest-session-first",
+                session.archive_count(),
+                &first,
+            );
+            for hit in first.search.hits {
+                print_hit(&hit);
+            }
+            let second = session.search(&query, 50)?;
+            print_content_session_report(
+                "content-manifest-session-second",
+                session.archive_count(),
+                &second,
+            );
+            for hit in second.search.hits {
                 print_hit(&hit);
             }
         }
@@ -626,6 +689,25 @@ fn print_hit(hit: &SearchHit) {
         print!("\t{}", escape_output_field(&highlight_snippet(snippet)));
     }
     println!();
+}
+
+fn print_content_session_report(
+    label: &str,
+    content_archives: usize,
+    report: &gfm_index::ContentQuerySessionReport,
+) {
+    eprintln!(
+        "{label}\tcontent-archives={content_archives}\tcontent-keys={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tposting-cache-hits={}\tposting-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}",
+        report.load.content_keys,
+        report.load.records_loaded,
+        report.load.records_missing,
+        report.load.candidate_ids,
+        report.load.full_hydration,
+        report.posting_cache_hits,
+        report.posting_cache_misses,
+        report.record_cache_hits,
+        report.record_cache_misses
+    );
 }
 
 fn highlight_snippet(snippet: &gfm_types::SearchSnippet) -> String {

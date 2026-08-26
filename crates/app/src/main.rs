@@ -467,7 +467,9 @@ fn print_usage() {
   gfm search-content-index <records.gfmidx> <content.gfmcontent> <query>
   gfm search-content-index-adaptive <records.gfmidx> <content.gfmcontent> <query> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm search-content-index-set <records.gfmidx> <query> <content.gfmcontent...>
+  gfm search-content-index-set-session <records.gfmidx> <query> <content.gfmcontent...>
   gfm search-content-index-manifest <records.gfmidx> <manifest.gfmmanifest> <query>
+  gfm search-content-index-manifest-session <records.gfmidx> <manifest.gfmmanifest> <query>
   gfm content-ids <content.gfmcontent> <term>
   gfm content-ids-mmap <content.gfmcontent> <term>
   gfm content-ids-mmap-set <term> <content.gfmcontent...>

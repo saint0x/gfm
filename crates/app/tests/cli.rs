@@ -3633,6 +3633,65 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{manifest_stderr}"
     );
 
+    let session_search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index-set-session",
+            records.to_str().unwrap(),
+            "setneedle",
+            first_content.to_str().unwrap(),
+            second_content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        session_search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&session_search_output.stderr)
+    );
+    let session_stdout = String::from_utf8(session_search_output.stdout).unwrap();
+    assert!(session_stdout.contains("left.md"), "{session_stdout}");
+    assert!(session_stdout.contains("right.md"), "{session_stdout}");
+    let session_stderr = String::from_utf8(session_search_output.stderr).unwrap();
+    assert!(
+        session_stderr.contains(
+            "content-session-first\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
+        ) && session_stderr.contains("\tposting-cache-hits=0\tposting-cache-misses=1")
+            && session_stderr.contains("\trecord-cache-hits=0\trecord-cache-misses=2")
+            && session_stderr.contains(
+                "content-session-second\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
+            )
+            && session_stderr.contains("\tposting-cache-hits=1\tposting-cache-misses=0")
+            && session_stderr.contains("\trecord-cache-hits=2\trecord-cache-misses=0"),
+        "{session_stderr}"
+    );
+
+    let manifest_session_search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index-manifest-session",
+            records.to_str().unwrap(),
+            manifest.to_str().unwrap(),
+            "setneedle",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        manifest_session_search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&manifest_session_search_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(manifest_session_search_output.stdout).unwrap(),
+        session_stdout
+    );
+    let manifest_session_stderr = String::from_utf8(manifest_session_search_output.stderr).unwrap();
+    assert!(
+        manifest_session_stderr.contains(
+            "content-manifest-session-second\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
+        ) && manifest_session_stderr.contains("\tposting-cache-hits=1\tposting-cache-misses=0")
+            && manifest_session_stderr.contains("\trecord-cache-hits=2\trecord-cache-misses=0"),
+        "{manifest_session_stderr}"
+    );
+
     let promote_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "content-manifest-promote",
