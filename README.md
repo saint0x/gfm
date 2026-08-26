@@ -364,6 +364,14 @@ cargo run -p gfm -- derived-sidecar-rebuild-plan records.gfmidx prefixes prefixe
 cargo run -p gfm -- derived-sidecar-rebuild records.gfmidx prefixes prefixes.gfmprefix quarantine
 ```
 
+Versioned parity gate manifests carry capture provenance before their entries:
+
+```tsv
+manifest-version	1
+profile	macos-build=25A354	appearance=dark	scale=2x	color-profile=display-p3
+entry	toolbar	finder.png	gfm.png	3024	1890	governed-masks.tsv	1440	900	active	icon	/tmp/gfm-parity-fixture/icon
+```
+
 `macrobench-fixture` materializes real filesystem benchmark trees for developer projects, documents, media, iCloud-shaped files, external-volume-shaped files, network-volume-shaped files, huge directories, and nested trees, then writes a manifest with exact file and directory counts; the `million` scale materializes a one-million-file fixture without running the full benchmark loop.
 `regression-gate` materializes benchmark indexes and real prefix/substring/fuzzy sidecar archives, then fails on latency, index-density, prefix lookup, substring lookup, fuzzy lookup, cache-path, and sidecar-truncation drift.
 `large-sidecar-gate` synthesizes realistic record distributions, writes real prefix/substring/fuzzy sidecars, verifies bounded repeated lookup behavior at million-entry scale, skips digit-run-heavy tokens in fuzzy sidecars, probes full sidecars with a bounded live record set, and retains `thresholds.tsv` plus `gfm-large-sidecar-history.tsv` artifacts using the `production-macos-million-v1` calibration profile.

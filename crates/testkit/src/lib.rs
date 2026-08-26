@@ -22,8 +22,9 @@ pub use parity::{
 };
 pub use parity_gate::{
     parse_parity_gate_manifest, run_parity_gate, run_parity_gate_manifest,
-    write_parity_review_bundle, write_parity_review_bundle_manifest, ParityGateEntryReport,
-    ParityGateInput, ParityGateReport, ParityReviewBundle,
+    write_parity_review_bundle, write_parity_review_bundle_manifest, ParityCaptureProvenance,
+    ParityFocusState, ParityGateEntryReport, ParityGateInput, ParityGateReport, ParityReviewBundle,
+    ParityViewMode,
 };
 pub use parity_profile::{
     ColorProfile, DimensionToken, DisplayScale, MacOsParityProfile, MaterialToken,

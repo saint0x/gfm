@@ -1,6 +1,7 @@
 use crate::{
     diff_image_files, evaluate_pixel_threshold, read_governed_mask_file, write_visual_diff_png,
-    ParitySurface, PixelDiffReport, PixelDriftThreshold, PixelSize, PixelThresholdEvaluation,
+    ColorProfile, DisplayScale, ParityAppearance, ParitySurface, PixelDiffReport,
+    PixelDriftThreshold, PixelSize, PixelThresholdEvaluation,
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
@@ -14,6 +15,7 @@ pub struct ParityGateInput {
     pub actual_path: PathBuf,
     pub size: PixelSize,
     pub mask_path: Option<PathBuf>,
+    pub provenance: Option<ParityCaptureProvenance>,
 }
 
 impl ParityGateInput {
@@ -29,12 +31,111 @@ impl ParityGateInput {
             actual_path: actual_path.into(),
             size,
             mask_path: None,
+            provenance: None,
         }
     }
 
     pub fn with_mask(mut self, mask_path: impl Into<PathBuf>) -> Self {
         self.mask_path = Some(mask_path.into());
         self
+    }
+
+    pub fn with_provenance(mut self, provenance: ParityCaptureProvenance) -> Self {
+        self.provenance = Some(provenance);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParityCaptureProvenance {
+    pub macos_build: String,
+    pub appearance: ParityAppearance,
+    pub scale: DisplayScale,
+    pub color_profile: ColorProfile,
+    pub window_size: PixelSize,
+    pub focus: ParityFocusState,
+    pub view_mode: ParityViewMode,
+    pub fixture_root: PathBuf,
+}
+
+impl ParityCaptureProvenance {
+    pub fn validate(&self) -> Result<()> {
+        if self.macos_build.trim().is_empty() {
+            return Err(GfmError::Format(
+                "parity manifest macOS build cannot be empty".to_string(),
+            ));
+        }
+        if self.fixture_root.as_os_str().is_empty() {
+            return Err(GfmError::Format(
+                "parity manifest fixture root cannot be empty".to_string(),
+            ));
+        }
+        if self.window_size.width == 0 || self.window_size.height == 0 {
+            return Err(GfmError::Format(
+                "parity manifest window size must be positive".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParityFocusState {
+    Active,
+    Inactive,
+}
+
+impl ParityFocusState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Inactive => "inactive",
+        }
+    }
+}
+
+impl FromStr for ParityFocusState {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "active" => Ok(Self::Active),
+            "inactive" => Ok(Self::Inactive),
+            _ => Err(format!("unknown parity focus state: {value}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParityViewMode {
+    Icon,
+    List,
+    Column,
+    Gallery,
+}
+
+impl ParityViewMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Icon => "icon",
+            Self::List => "list",
+            Self::Column => "column",
+            Self::Gallery => "gallery",
+        }
+    }
+}
+
+impl FromStr for ParityViewMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "icon" => Ok(Self::Icon),
+            "list" => Ok(Self::List),
+            "column" => Ok(Self::Column),
+            "gallery" => Ok(Self::Gallery),
+            _ => Err(format!("unknown parity view mode: {value}")),
+        }
     }
 }
 
@@ -196,14 +297,51 @@ pub fn write_parity_review_bundle(
 }
 
 pub fn parse_parity_gate_manifest(content: &str, base: &Path) -> Result<Vec<ParityGateInput>> {
+    parse_parity_gate_manifest_with_provenance(content, base)
+}
+
+pub fn parse_parity_gate_manifest_with_provenance(
+    content: &str,
+    base: &Path,
+) -> Result<Vec<ParityGateInput>> {
     let mut inputs = Vec::new();
+    let mut profile: Option<ManifestProfile> = None;
     for (line_index, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.first() == Some(&"manifest-version") {
+            if fields.get(1) != Some(&"1") {
+                return Err(GfmError::Format(format!(
+                    "parity gate manifest line {} has unsupported manifest version",
+                    line_index + 1
+                )));
+            }
+            continue;
+        }
+        if fields.first() == Some(&"profile") {
+            profile = Some(parse_manifest_profile(line_index, &fields)?);
+            continue;
+        }
+        let fields = if fields.first() == Some(&"entry") {
+            &fields[1..]
+        } else {
+            &fields[..]
+        };
         if fields.len() != 5 && fields.len() != 6 {
+            if fields.len() == 11 {
+                let profile = profile.as_ref().ok_or_else(|| {
+                    GfmError::Format(format!(
+                        "parity gate manifest line {} has versioned entry without profile",
+                        line_index + 1
+                    ))
+                })?;
+                let input = parse_versioned_entry(line_index, fields, base, profile)?;
+                inputs.push(input);
+                continue;
+            }
             return Err(GfmError::Format(format!(
                 "parity gate manifest line {} must contain surface, expected, actual, width, height, and optional mask",
                 line_index + 1
@@ -231,6 +369,126 @@ pub fn parse_parity_gate_manifest(content: &str, base: &Path) -> Result<Vec<Pari
         ));
     }
     Ok(inputs)
+}
+
+fn parse_versioned_entry(
+    line_index: usize,
+    fields: &[&str],
+    base: &Path,
+    profile: &ManifestProfile,
+) -> Result<ParityGateInput> {
+    let surface = ParitySurface::from_str(fields[0]).map_err(GfmError::Format)?;
+    let expected_path = resolve_manifest_path(base, fields[1]);
+    let actual_path = resolve_manifest_path(base, fields[2]);
+    let width = parse_manifest_u32(line_index, "width", fields[3])?;
+    let height = parse_manifest_u32(line_index, "height", fields[4])?;
+    let window_width = parse_manifest_u32(line_index, "window-width", fields[6])?;
+    let window_height = parse_manifest_u32(line_index, "window-height", fields[7])?;
+    let focus = fields[8]
+        .parse::<ParityFocusState>()
+        .map_err(GfmError::Format)?;
+    let view_mode = fields[9]
+        .parse::<ParityViewMode>()
+        .map_err(GfmError::Format)?;
+    let fixture_root = resolve_manifest_path(base, fields[10]);
+    let provenance = ParityCaptureProvenance {
+        macos_build: profile.macos_build.clone(),
+        appearance: profile.appearance,
+        scale: profile.scale,
+        color_profile: profile.color_profile,
+        window_size: PixelSize::new(window_width, window_height),
+        focus,
+        view_mode,
+        fixture_root,
+    };
+    provenance.validate()?;
+    let mut input = ParityGateInput::new(
+        surface,
+        expected_path,
+        actual_path,
+        PixelSize::new(width, height),
+    )
+    .with_provenance(provenance);
+    if !fields[5].is_empty() {
+        input = input.with_mask(resolve_manifest_path(base, fields[5]));
+    }
+    Ok(input)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManifestProfile {
+    macos_build: String,
+    appearance: ParityAppearance,
+    scale: DisplayScale,
+    color_profile: ColorProfile,
+}
+
+fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<ManifestProfile> {
+    let mut macos_build = None;
+    let mut appearance = None;
+    let mut scale = None;
+    let mut color_profile = None;
+    for field in fields.iter().skip(1) {
+        let Some((key, value)) = field.split_once('=') else {
+            return Err(GfmError::Format(format!(
+                "parity gate manifest line {} has invalid profile field `{field}`",
+                line_index + 1
+            )));
+        };
+        match key {
+            "macos-build" => macos_build = Some(value.to_string()),
+            "appearance" => {
+                appearance = Some(
+                    value
+                        .parse::<ParityAppearance>()
+                        .map_err(GfmError::Format)?,
+                )
+            }
+            "scale" => scale = Some(value.parse::<DisplayScale>().map_err(GfmError::Format)?),
+            "color-profile" => {
+                color_profile = Some(value.parse::<ColorProfile>().map_err(GfmError::Format)?)
+            }
+            _ => {
+                return Err(GfmError::Format(format!(
+                    "parity gate manifest line {} has unknown profile key `{key}`",
+                    line_index + 1
+                )))
+            }
+        }
+    }
+    let profile = ManifestProfile {
+        macos_build: macos_build.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing macos-build",
+                line_index + 1
+            ))
+        })?,
+        appearance: appearance.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing appearance",
+                line_index + 1
+            ))
+        })?,
+        scale: scale.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing scale",
+                line_index + 1
+            ))
+        })?,
+        color_profile: color_profile.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing color-profile",
+                line_index + 1
+            ))
+        })?,
+    };
+    if profile.macos_build.trim().is_empty() {
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} has empty macos-build",
+            line_index + 1
+        )));
+    }
+    Ok(profile)
 }
 
 fn render_review_markdown(report: &ParityGateReport) -> String {
@@ -272,11 +530,12 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
 
 fn render_entries_tsv(report: &ParityGateReport) -> String {
     let mut text =
-        "surface\twidth\theight\texpected\tactual\tmask\tmismatched\tunmasked\tmasked\tmax-channel-delta\tpassed\n"
+        "surface\twidth\theight\texpected\tactual\tmask\tmacos-build\tappearance\tscale\tcolor-profile\twindow-width\twindow-height\tfocus\tview-mode\tfixture-root\tmismatched\tunmasked\tmasked\tmax-channel-delta\tpassed\n"
             .to_string();
     for entry in &report.entries {
+        let provenance = entry.input.provenance.as_ref();
         text.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             entry.input.surface.as_str(),
             entry.diff.size.width,
             entry.diff.size.height,
@@ -287,6 +546,33 @@ fn render_entries_tsv(report: &ParityGateReport) -> String {
                 .mask_path
                 .as_ref()
                 .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.macos_build.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.appearance.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.scale.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.color_profile.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.window_size.width.to_string())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.window_size.height.to_string())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.focus.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.view_mode.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.fixture_root.display().to_string())
                 .unwrap_or_default(),
             entry.diff.mismatched_pixels,
             entry.diff.unmasked_mismatches,
@@ -549,6 +835,48 @@ mod tests {
             .input
             .expected_path
             .ends_with("expected.rgba"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn versioned_parity_manifest_validates_capture_provenance() {
+        let root = unique_temp_dir("gfm-parity-gate-versioned");
+        fs::write(root.join("finder.png"), [1, 2, 3, 255]).unwrap();
+        fs::write(root.join("gfm.png"), [1, 2, 3, 255]).unwrap();
+        fs::write(
+            root.join("gate.tsv"),
+            "manifest-version\t1\nprofile\tmacos-build=25A354\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+        )
+        .unwrap();
+
+        let inputs =
+            parse_parity_gate_manifest(&fs::read_to_string(root.join("gate.tsv")).unwrap(), &root)
+                .unwrap();
+        let provenance = inputs[0].provenance.as_ref().unwrap();
+
+        assert_eq!(provenance.macos_build, "25A354");
+        assert_eq!(provenance.appearance, ParityAppearance::Dark);
+        assert_eq!(provenance.scale, DisplayScale::Two);
+        assert_eq!(provenance.color_profile, ColorProfile::DisplayP3);
+        assert_eq!(provenance.window_size, PixelSize::new(1440, 900));
+        assert_eq!(provenance.focus, ParityFocusState::Active);
+        assert_eq!(provenance.view_mode, ParityViewMode::Icon);
+        assert!(provenance.fixture_root.ends_with("fixtures/icon"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn versioned_parity_manifest_requires_profile_before_entries() {
+        let root = unique_temp_dir("gfm-parity-gate-versioned-missing-profile");
+        let err = parse_parity_gate_manifest(
+            "manifest-version\t1\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+            &root,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("versioned entry without profile"));
 
         fs::remove_dir_all(root).unwrap();
     }
