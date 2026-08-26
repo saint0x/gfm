@@ -345,10 +345,20 @@ impl LiveIndex {
     }
 
     pub fn index_content(&mut self, extractor: &Extractor) -> Result<usize> {
+        self.index_content_cancellable(extractor, &Cancellation::default())
+    }
+
+    pub fn index_content_cancellable(
+        &mut self,
+        extractor: &Extractor,
+        cancellation: &Cancellation,
+    ) -> Result<usize> {
         let records: Vec<_> = self.index.records().cloned().collect();
         let mut indexed = 0;
         for record in records {
+            cancellation.check()?;
             if let Some(document) = extractor.extract_record(&record)? {
+                cancellation.check()?;
                 self.index.insert_content(record.id, &document.text);
                 indexed += 1;
             }
@@ -361,15 +371,30 @@ impl LiveIndex {
         extractor: &Extractor,
         quarantine: &mut ExtractionQuarantine,
     ) -> Result<ContentIndexBatchReport> {
+        self.index_content_with_quarantine_cancellable(
+            extractor,
+            quarantine,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn index_content_with_quarantine_cancellable(
+        &mut self,
+        extractor: &Extractor,
+        quarantine: &mut ExtractionQuarantine,
+        cancellation: &Cancellation,
+    ) -> Result<ContentIndexBatchReport> {
         let records: Vec<_> = self.index.records().cloned().collect();
         let mut report = ContentIndexBatchReport::default();
         for record in records {
+            cancellation.check()?;
             if record.kind != FileKind::File {
                 report.skipped += 1;
                 continue;
             }
 
             let fingerprint = ExtractionFingerprint::for_path(&record.path)?;
+            cancellation.check()?;
             if matches!(
                 quarantine.before_extract(&record.path, &fingerprint),
                 QuarantineDecision::Quarantined(_)
@@ -380,6 +405,7 @@ impl LiveIndex {
             }
 
             let extraction = extractor.extract_path_report(&record.path)?;
+            cancellation.check()?;
             let status = extraction.status.clone();
             let decision = quarantine.record_report(&extraction);
             if let Some(document) = extraction.document {

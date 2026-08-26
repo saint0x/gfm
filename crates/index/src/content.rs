@@ -357,7 +357,7 @@ impl BackgroundContentIndexer {
                 self.options.segment_prefix, batch_index
             ));
             let mut live = LiveIndex::from_records(records.to_vec());
-            let indexed = live.index_content(&self.extractor)?;
+            let indexed = live.index_content_cancellable(&self.extractor, cancellation)?;
             report.indexed += indexed;
             report.skipped += records.len().saturating_sub(indexed);
             let postings = live.content_postings();
@@ -438,11 +438,13 @@ impl BackgroundContentIndexer {
             ));
             let mut live = LiveIndex::from_records(records.to_vec());
             let batch = match quarantine.as_deref_mut() {
-                Some(quarantine) => {
-                    live.index_content_with_quarantine(&self.extractor, quarantine)?
-                }
+                Some(quarantine) => live.index_content_with_quarantine_cancellable(
+                    &self.extractor,
+                    quarantine,
+                    cancellation,
+                )?,
                 None => {
-                    let indexed = live.index_content(&self.extractor)?;
+                    let indexed = live.index_content_cancellable(&self.extractor, cancellation)?;
                     ContentIndexBatchReport {
                         indexed,
                         skipped: records.len().saturating_sub(indexed),

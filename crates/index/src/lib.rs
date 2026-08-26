@@ -24,7 +24,7 @@ use gfm_store::write_content_segment;
 #[cfg(test)]
 use gfm_store::{MmapRecordColumns, MmapSubstringArchive};
 #[cfg(test)]
-use gfm_types::{FileEvent, FileEventKind, GfmError};
+use gfm_types::{FileEvent, FileEventKind};
 
 mod backpressure;
 mod content;

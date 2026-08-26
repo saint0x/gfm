@@ -1,6 +1,7 @@
 use super::*;
 use gfm_content::ExtractionQuarantine;
 use gfm_fs::FinderMetadataReport;
+use gfm_jobs::Cancellation;
 use gfm_store::{
     fuzzy_postings_from_records, metadata_postings_from_records, prefix_postings_from_records,
     substring_postings_from_records, write_content_postings, write_fuzzy_postings,
@@ -8,7 +9,8 @@ use gfm_store::{
     FuzzyPosting, MetadataField, MmapMetadataArchive, PrefixPosting, SubstringPosting,
 };
 use gfm_types::{
-    ContentPositions, ContentPosting, FileKind, MatchReason, SecondaryMetadataRecord, VolumeId,
+    ContentPositions, ContentPosting, FileKind, GfmError, MatchReason, SecondaryMetadataRecord,
+    VolumeId,
 };
 use std::collections::HashSet;
 use std::fs;
@@ -1949,6 +1951,23 @@ fn live_index_streams_hot_then_deep_results() {
         .hits
         .iter()
         .any(|hit| hit.record.name == "deep.md"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn live_content_indexing_honors_pre_cancelled_token_without_inserting_content() {
+    let root = unique_temp_dir("gfm-live-cancel-content-root");
+    fs::write(root.join("deep.md"), "cancelledtoken should never index").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let mut live = snapshot.into_live();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+    let result = live.index_content_cancellable(&Extractor::default(), &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(live.search("cancelledtoken", 10).is_empty());
 
     fs::remove_dir_all(root).unwrap();
 }
