@@ -1,8 +1,11 @@
 mod access;
 mod conflict;
+mod context;
 mod control;
 mod copy;
 mod journal;
+mod operation;
+mod operator;
 mod plan;
 mod preserve;
 mod progress;
@@ -15,24 +18,24 @@ mod trashmeta;
 mod verify;
 mod volume;
 
-use access::destination_probe_path;
 pub use access::{
     OperationAccessAction, OperationAccessDecision, OperationAccessGate,
     OperationAccessRequirement, OperationAccessRole,
 };
-use conflict::resolve_operation_conflicts;
 pub use conflict::{
     ConflictPolicy, OperationBatchOutcome, OperationBatchReport, OperationConflictPlan,
 };
+pub use context::OperationContext;
 pub use control::{OperationCancellation, OperationPause};
 #[cfg(test)]
 use copy::copy_file;
-use copy::copy_path;
 pub use copy::CopyMethod;
-use journal::{append_journal, now_nanos, operation_status_from_error};
+#[cfg(test)]
+use journal::{append_journal, now_nanos};
 pub use journal::{read_journal, JournalEntry, OperationStatus};
+pub use operation::Operation;
+pub use operator::Operator;
 pub use plan::plan_operation;
-use plan::plan_operation_checked;
 #[cfg(all(test, target_os = "macos"))]
 use preserve::acl_copy_unsupported;
 #[cfg(all(test, target_vendor = "apple"))]
@@ -41,15 +44,14 @@ use preserve::file_flag_preservation_unsupported;
 use preserve::time_preservation_unsupported;
 #[cfg(test)]
 use preserve::xattr_copy_unsupported;
+#[cfg(test)]
 use progress::ProgressTracker;
 pub use progress::{
     OperationProgress, OperationProgressEvent, OperationProgressPhase, OperationThroughputClass,
     OperationThroughputSnapshot,
 };
-use recovery::recoverable_operations;
 pub use recovery::{OperationRecoveryOutcome, OperationRecoveryPolicy, OperationRecoveryReport};
-use relocate::{move_path, restore_path};
-use removal::{delete_path, empty_trash_path, trash_path};
+#[cfg(test)]
 use target::path_exists_or_symlink;
 #[cfg(test)]
 use transfer::{
@@ -66,337 +68,16 @@ pub use volume::{OperationVolumeClass, OperationVolumeCopyPolicy};
 #[cfg(test)]
 use volume::{COPY_BUFFER_BYTES, SLOW_COPY_BUFFER_BYTES};
 
-use gfm_types::{GfmError, Result};
+#[cfg(test)]
+use gfm_types::GfmError;
 #[cfg(test)]
 use std::fs;
 #[cfg(test)]
 use std::fs::File;
 #[cfg(test)]
 use std::io::{self, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Operation {
-    Copy { from: PathBuf, to: PathBuf },
-    Move { from: PathBuf, to: PathBuf },
-    Rename { from: PathBuf, to: PathBuf },
-    Delete { path: PathBuf },
-    Trash { path: PathBuf },
-    EmptyTrash { path: PathBuf },
-    Restore { from: PathBuf, to: PathBuf },
-}
-
-impl Operation {
-    pub fn target_path(&self) -> Option<&Path> {
-        match self {
-            Self::Copy { to, .. }
-            | Self::Move { to, .. }
-            | Self::Rename { to, .. }
-            | Self::Restore { to, .. } => Some(to),
-            Self::Delete { .. } | Self::Trash { .. } | Self::EmptyTrash { .. } => None,
-        }
-    }
-
-    pub fn access_requirements(&self) -> Vec<OperationAccessRequirement> {
-        match self {
-            Self::Copy { from, to }
-            | Self::Move { from, to }
-            | Self::Rename { from, to }
-            | Self::Restore { from, to } => vec![
-                OperationAccessRequirement {
-                    path: from.clone(),
-                    role: OperationAccessRole::Source,
-                },
-                OperationAccessRequirement {
-                    path: destination_probe_path(to),
-                    role: OperationAccessRole::DestinationParent,
-                },
-            ],
-            Self::Delete { path } | Self::Trash { path } | Self::EmptyTrash { path } => {
-                vec![OperationAccessRequirement {
-                    path: path.clone(),
-                    role: OperationAccessRole::Target,
-                }]
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct OperationContext {
-    pub conflict: ConflictPolicy,
-    pub journal_path: PathBuf,
-    pub trash_metadata_path: Option<PathBuf>,
-    pub cancellation: OperationCancellation,
-    pub pause: OperationPause,
-    pub verification: VerificationPolicy,
-    pub access_gate: OperationAccessGate,
-    pub volume_copy_policy: OperationVolumeCopyPolicy,
-}
-
-impl OperationContext {
-    pub fn new(journal_path: impl Into<PathBuf>) -> Self {
-        Self {
-            conflict: ConflictPolicy::Fail,
-            journal_path: journal_path.into(),
-            trash_metadata_path: None,
-            cancellation: OperationCancellation::default(),
-            pause: OperationPause::default(),
-            verification: VerificationPolicy::Size,
-            access_gate: OperationAccessGate::default(),
-            volume_copy_policy: OperationVolumeCopyPolicy::default(),
-        }
-    }
-
-    pub fn with_conflict(mut self, conflict: ConflictPolicy) -> Self {
-        self.conflict = conflict;
-        self
-    }
-
-    pub fn with_trash_metadata_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.trash_metadata_path = Some(path.into());
-        self
-    }
-
-    pub fn with_cancellation(mut self, cancellation: OperationCancellation) -> Self {
-        self.cancellation = cancellation;
-        self
-    }
-
-    pub fn with_pause(mut self, pause: OperationPause) -> Self {
-        self.pause = pause;
-        self
-    }
-
-    pub fn with_verification(mut self, verification: VerificationPolicy) -> Self {
-        self.verification = verification;
-        self
-    }
-
-    pub fn with_access_gate(mut self, access_gate: OperationAccessGate) -> Self {
-        self.access_gate = access_gate;
-        self
-    }
-
-    pub fn with_volume_copy_policy(mut self, policy: OperationVolumeCopyPolicy) -> Self {
-        self.volume_copy_policy = policy;
-        self
-    }
-}
-
-pub struct Operator {
-    context: OperationContext,
-}
-
-impl Operator {
-    pub fn new(context: OperationContext) -> Self {
-        Self { context }
-    }
-
-    pub fn execute(&self, operation: Operation) -> Result<JournalEntry> {
-        self.execute_with_progress(operation, |_| {})
-    }
-
-    pub fn execute_with_progress(
-        &self,
-        operation: Operation,
-        mut on_progress: impl FnMut(OperationProgressEvent),
-    ) -> Result<JournalEntry> {
-        let operation = resolve_operation_conflicts(operation, self.context.conflict)?;
-        let id = now_nanos();
-        self.append(JournalEntry::started(id, operation.clone()))?;
-        self.execute_started(id, operation, &mut on_progress)
-    }
-
-    pub fn execute_batch_with_conflicts(
-        &self,
-        operations: impl IntoIterator<Item = Operation>,
-        plan: OperationConflictPlan,
-    ) -> Result<OperationBatchReport> {
-        let mut outcomes = Vec::new();
-        for operation in operations {
-            let conflict = plan.conflict_for(&operation);
-            let operator = Operator::new(self.context.clone().with_conflict(conflict));
-            match operator.execute(operation.clone()) {
-                Ok(entry) => outcomes.push(OperationBatchOutcome {
-                    conflict,
-                    status: entry.status,
-                    operation: entry.operation,
-                    message: entry.message,
-                }),
-                Err(err) => {
-                    let status = operation_status_from_error(&err);
-                    outcomes.push(OperationBatchOutcome {
-                        conflict,
-                        status,
-                        operation,
-                        message: (!matches!(err, GfmError::Cancelled | GfmError::Paused))
-                            .then(|| err.to_string()),
-                    });
-                    if matches!(status, OperationStatus::Cancelled | OperationStatus::Paused) {
-                        break;
-                    }
-                }
-            }
-        }
-        Ok(OperationBatchReport { outcomes })
-    }
-
-    pub fn recover_interrupted(&self) -> Result<OperationRecoveryReport> {
-        self.recover_with_policy(OperationRecoveryPolicy::default())
-    }
-
-    pub fn recover_with_policy(
-        &self,
-        policy: OperationRecoveryPolicy,
-    ) -> Result<OperationRecoveryReport> {
-        let recoverable = recoverable_operations(self.journal()?, policy);
-        let mut outcomes = Vec::with_capacity(recoverable.len());
-        for plan in recoverable {
-            let entry = plan.entry;
-            let operation = entry.operation;
-            if plan.append_started {
-                self.append(JournalEntry::started(entry.id, operation.clone()))?;
-            }
-            match self.execute_started_resuming(entry.id, operation.clone(), &mut |_| {}) {
-                Ok(completed) => outcomes.push(OperationRecoveryOutcome {
-                    id: completed.id,
-                    status: completed.status,
-                    operation: completed.operation,
-                    message: completed.message,
-                }),
-                Err(err) => outcomes.push(OperationRecoveryOutcome {
-                    id: entry.id,
-                    status: operation_status_from_error(&err),
-                    operation,
-                    message: (!matches!(err, GfmError::Cancelled | GfmError::Paused))
-                        .then(|| err.to_string()),
-                }),
-            }
-        }
-        Ok(OperationRecoveryReport { outcomes })
-    }
-
-    fn execute_started(
-        &self,
-        id: u128,
-        operation: Operation,
-        on_progress: &mut impl FnMut(OperationProgressEvent),
-    ) -> Result<JournalEntry> {
-        self.execute_started_inner(id, operation, false, on_progress)
-    }
-
-    fn execute_started_resuming(
-        &self,
-        id: u128,
-        operation: Operation,
-        on_progress: &mut impl FnMut(OperationProgressEvent),
-    ) -> Result<JournalEntry> {
-        self.execute_started_inner(id, operation, true, on_progress)
-    }
-
-    fn execute_started_inner(
-        &self,
-        id: u128,
-        operation: Operation,
-        resuming: bool,
-        on_progress: &mut impl FnMut(OperationProgressEvent),
-    ) -> Result<JournalEntry> {
-        if let Err(err) = self.context.access_gate.check(&operation) {
-            let entry = JournalEntry::from_error(id, operation, &err);
-            let _ = self.append(entry);
-            return Err(err);
-        }
-        if should_skip_operation(&operation, self.context.conflict) {
-            let entry = JournalEntry::skipped(id, operation);
-            self.append(entry.clone())?;
-            return Ok(entry);
-        }
-        let plan = match plan_operation_checked(&operation, &self.context.cancellation) {
-            Ok(plan) => plan,
-            Err(err) => {
-                let entry = JournalEntry::from_error(id, operation, &err);
-                let _ = self.append(entry);
-                return Err(err);
-            }
-        };
-        let mut progress = ProgressTracker::new(
-            plan,
-            &self.context.cancellation,
-            &self.context.pause,
-            on_progress,
-        );
-        match self.apply(&operation, resuming, &mut progress) {
-            Ok(()) => {
-                let entry = JournalEntry::completed(id, operation);
-                self.append(entry.clone())?;
-                Ok(entry)
-            }
-            Err(err) => {
-                let entry = JournalEntry::from_error(id, operation, &err);
-                let _ = self.append(entry);
-                Err(err)
-            }
-        }
-    }
-
-    pub fn journal(&self) -> Result<Vec<JournalEntry>> {
-        read_journal(&self.context.journal_path)
-    }
-
-    fn apply(
-        &self,
-        operation: &Operation,
-        resuming: bool,
-        progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
-    ) -> Result<()> {
-        match operation {
-            Operation::Copy { from, to } => copy_path(
-                from,
-                to,
-                self.context.conflict,
-                self.context.verification,
-                &self.context.volume_copy_policy,
-                resuming,
-                progress,
-            ),
-            Operation::Move { from, to } | Operation::Rename { from, to } => move_path(
-                from,
-                to,
-                self.context.conflict,
-                self.context.verification,
-                &self.context.volume_copy_policy,
-                resuming,
-                progress,
-            ),
-            Operation::Delete { path } => {
-                delete_path(path, self.context.trash_metadata_path.as_deref(), progress)
-            }
-            Operation::Trash { path } => {
-                trash_path(path, self.context.trash_metadata_path.as_deref(), progress)
-            }
-            Operation::EmptyTrash { path } => {
-                empty_trash_path(path, self.context.trash_metadata_path.as_deref(), progress)
-            }
-            Operation::Restore { from, to } => restore_path(
-                from,
-                to,
-                self.context.conflict,
-                &self.context.volume_copy_policy,
-                self.context.trash_metadata_path.as_deref(),
-                progress,
-            ),
-        }
-    }
-
-    fn append(&self, entry: JournalEntry) -> Result<()> {
-        append_journal(&self.context.journal_path, &entry)
-    }
-}
-
-fn should_skip_operation(operation: &Operation, conflict: ConflictPolicy) -> bool {
-    conflict == ConflictPolicy::Skip && operation.target_path().is_some_and(path_exists_or_symlink)
-}
+#[cfg(test)]
+use std::path::PathBuf;
 
 #[cfg(test)]
 mod tests {
