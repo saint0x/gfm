@@ -1,5 +1,6 @@
 mod archive;
 mod cache;
+mod kind;
 mod ooxml;
 mod pdf;
 mod policy;
@@ -8,15 +9,16 @@ mod report;
 mod rich;
 mod structured;
 
-use archive::{extract_archive_metadata, ArchiveExtractStatus, ArchiveKind};
+use archive::{extract_archive_metadata, ArchiveExtractStatus};
 pub use cache::{
     CachedExtractionReport, CachedExtractor, ExtractionCache, ExtractionCacheKey,
     ExtractionCacheStatus, ExtractionContentSignature,
 };
 use gfm_types::{FileKind, FileRecord, GfmError, Result, SearchSnippet, SnippetHighlight};
-use ooxml::{extract_ooxml, OoxmlExtractStatus, OoxmlKind};
+pub use kind::extractor_version_for_path;
+use kind::{archive_kind, extraction_format, office_kind, path_is_pdf, rich_kind, structured_kind};
+use ooxml::{extract_ooxml, OoxmlExtractStatus};
 use pdf::{extract_pdf, PdfExtractStatus};
-use policy::text_extension_is_known;
 pub use policy::{
     ExtractionBatteryState, ExtractionBudgetProfile, ExtractionPolicy, ExtractionThermalState,
     ExtractionUserActivity, ExtractionVolumeClass,
@@ -28,11 +30,11 @@ pub use quarantine::{
 pub use report::{
     ContentDocument, ExtractionFingerprint, ExtractionFormat, ExtractionReport, ExtractionStatus,
 };
-use rich::{extract_rich, RichKind};
+use rich::extract_rich;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use structured::{extract_structured, StructuredExtractStatus, StructuredKind};
+use structured::{extract_structured, StructuredExtractStatus};
 
 pub const TEXT_EXTRACTOR_VERSION: u32 = 4;
 pub const PDF_EXTRACTOR_VERSION: u32 = 3;
@@ -245,46 +247,6 @@ impl Extractor {
     }
 }
 
-pub fn extractor_version_for_path(path: &Path) -> u32 {
-    if path_is_pdf(path) {
-        PDF_EXTRACTOR_VERSION
-    } else if office_kind(path).is_some() {
-        OFFICE_EXTRACTOR_VERSION
-    } else if archive_kind(path).is_some() {
-        ARCHIVE_EXTRACTOR_VERSION
-    } else if rich_kind(path).is_some() {
-        RICH_EXTRACTOR_VERSION
-    } else if structured_kind(path).is_some() {
-        STRUCTURED_EXTRACTOR_VERSION
-    } else if path_is_known_text(path) {
-        TEXT_EXTRACTOR_VERSION
-    } else {
-        UNSUPPORTED_EXTRACTOR_VERSION
-    }
-}
-
-fn extraction_format(
-    is_pdf: bool,
-    office: Option<OoxmlKind>,
-    archive: Option<ArchiveKind>,
-    rich: Option<RichKind>,
-    structured: Option<StructuredKind>,
-) -> ExtractionFormat {
-    if is_pdf {
-        ExtractionFormat::Pdf
-    } else if office.is_some() {
-        ExtractionFormat::Office
-    } else if archive.is_some() {
-        ExtractionFormat::Archive
-    } else if rich.is_some() {
-        ExtractionFormat::Rich
-    } else if structured.is_some() {
-        ExtractionFormat::Structured
-    } else {
-        ExtractionFormat::Text
-    }
-}
-
 fn pdf_report_status(status: PdfExtractStatus) -> ExtractionStatus {
     match status {
         PdfExtractStatus::Extracted => ExtractionStatus::Extracted,
@@ -351,57 +313,6 @@ fn report_without_metadata(
         },
         document: None,
     }
-}
-
-fn structured_kind(path: &Path) -> Option<StructuredKind> {
-    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "json" => Some(StructuredKind::Json),
-        "csv" => Some(StructuredKind::Csv),
-        "plist" => Some(StructuredKind::Plist),
-        _ => None,
-    }
-}
-
-fn rich_kind(path: &Path) -> Option<RichKind> {
-    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "html" | "htm" => Some(RichKind::Html),
-        "rtf" => Some(RichKind::Rtf),
-        "eml" => Some(RichKind::Email),
-        _ => None,
-    }
-}
-
-fn archive_kind(path: &Path) -> Option<ArchiveKind> {
-    let file_name = path.file_name()?.to_str()?.to_ascii_lowercase();
-    if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
-        return Some(ArchiveKind::TarGz);
-    }
-    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "tar" => Some(ArchiveKind::Tar),
-        "zip" => Some(ArchiveKind::Zip),
-        _ => None,
-    }
-}
-
-fn office_kind(path: &Path) -> Option<OoxmlKind> {
-    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "docx" => Some(OoxmlKind::Docx),
-        "xlsx" => Some(OoxmlKind::Xlsx),
-        "pptx" => Some(OoxmlKind::Pptx),
-        _ => None,
-    }
-}
-
-fn path_is_pdf(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
-}
-
-fn path_is_known_text(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(text_extension_is_known)
 }
 
 fn build_snippet(
