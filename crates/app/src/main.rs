@@ -1,5 +1,6 @@
+use content::{run_content_job, run_content_search};
 use extract::{
-    extraction_budget_profile, read_extraction_quarantine, run_adaptive_extraction_worker,
+    extraction_budget_profile, run_adaptive_extraction_worker,
     run_adaptive_extraction_worker_cancellable, run_quarantined_adaptive_extraction_worker,
     ADAPTIVE_WORKER_TIMEOUT,
 };
@@ -15,19 +16,17 @@ use gfm_fs::{read_directory, record_for_path};
 use gfm_index::{
     query_sidecar_imports, BackgroundContentIndexer, BatteryState, CompactionPressure,
     ContentArchiveCleanupPolicy, ContentArchiveManifest, ContentArchiveManifestEntry,
-    ContentIndexJobSpec, ContentIndexReport, ContentMaintenanceOptions, ContentMaintenanceReport,
-    ContentMergePolicy, ContentMergeTier, EventBackpressureQueue, EventPriority, FseventsCursor,
-    FseventsCursorHealth, IndexFootprintSpec, IndexMountState, IndexVolumeClass,
-    IndexVolumeDescriptor, IndexVolumeState, Indexer, IoPressure, LiveIndex,
-    PersistentIndexRecovery, QuarantineContentIndexRequest, SearchArchiveLookup,
+    ContentIndexJobSpec, ContentMaintenanceOptions, ContentMaintenanceReport, ContentMergePolicy,
+    ContentMergeTier, EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
+    IndexFootprintSpec, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState,
+    Indexer, IoPressure, LiveIndex, PersistentIndexRecovery, SearchArchiveLookup,
     SearchLookupBudget, SearchRecordColumns, SearchStreamStage, ThermalState, UserActivity,
 };
 use gfm_jobs::{
     Cancellation, JobBatteryState, JobClass, JobFairnessPlanner, JobFairnessPolicy, JobIoPressure,
     JobJournal, JobPayloadCatalog, JobPayloadKind, JobPayloadRecord, JobProgressSnapshot,
     JobProgressState, JobProgressStore, JobThermalState, JobUserActivity, Priority, RecoveryReason,
-    RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, TaskStatus,
-    WorkerPool,
+    RetryPolicy, Scheduler, SchedulingPressure,
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, FileEventStream, MountState,
@@ -39,12 +38,12 @@ use gfm_store::{
     plan_archive_rebuilds, plan_columns_archive_rebuild, plan_content_archive_migration,
     plan_content_manifest_promotion_recovery, plan_content_manifest_recovery,
     plan_derived_sidecar_rebuild, plan_metadata_archive_migration, plan_record_archive_migration,
-    promote_content_archive_manifest, read_records, rebuild_columns_archive,
-    rebuild_derived_sidecar, recover_content_manifest, recover_content_manifest_promotion,
-    write_dictionary, write_metadata_postings, write_record_columns, ArchiveRebuildInputs,
-    ArchiveSchemaKind, ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive,
-    MmapContentSet, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
-    MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
+    promote_content_archive_manifest, rebuild_columns_archive, rebuild_derived_sidecar,
+    recover_content_manifest, recover_content_manifest_promotion, write_dictionary,
+    write_metadata_postings, write_record_columns, ArchiveRebuildInputs, ArchiveSchemaKind,
+    ContentArchive, ContentArchiveHealth, MetadataField, MmapContentArchive, MmapContentSet,
+    MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
+    MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_store::{
     fuzzy_postings_from_records, plan_sidecar_recovery, prefix_postings_from_records,
@@ -66,9 +65,9 @@ use gfm_types::{
 use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod content;
 mod extract;
 mod interface;
 mod operation;
@@ -77,8 +76,7 @@ mod platform;
 mod runtime;
 
 use runtime::{
-    default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
-    run_scheduled_volume_task, run_volume_task, RuntimeJobHandle,
+    default_content_job_path, default_job_journal_path, run_scheduled_volume_task, run_volume_task,
 };
 
 fn main() {
@@ -3194,163 +3192,6 @@ fn print_persistent_index_recovery_report(report: PersistentIndexRecovery) {
             .unwrap_or_else(|| "-".to_string())
     );
     println!("{}", report.after.as_tsv());
-}
-
-fn run_content_search(
-    root: PathBuf,
-    query: String,
-    extractor: Extractor,
-) -> Result<(usize, Vec<SearchHit>)> {
-    let volume = detect_volume_id(&root).ok();
-    run_volume_task(
-        volume,
-        Priority::Visible,
-        "content extraction search",
-        move || {
-            let snapshot = Indexer::default().build(root)?;
-            let mut live = snapshot.into_live();
-            let indexed = live.index_content(&extractor)?;
-            let hits = live.search_with_snippets(&query, 50, &extractor, 96)?;
-            Ok((indexed, hits))
-        },
-    )
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ContentJobOutcome {
-    report: Option<ContentIndexReport>,
-    inaccessible: usize,
-    scheduling_action: SchedulingAction,
-    deferred: bool,
-}
-
-fn run_content_job(
-    spec: &ContentIndexJobSpec,
-    journal: &JobJournal,
-    pressure: SchedulingPressure,
-) -> Result<ContentJobOutcome> {
-    let snapshot = Indexer::default().build(&spec.root)?;
-    let inaccessible = snapshot.inaccessible.len();
-    let previous_records = if spec.records_path.is_file() && spec.content_path.is_file() {
-        read_records(&spec.records_path)?
-    } else {
-        Vec::new()
-    };
-    let volume = spec
-        .volume
-        .or_else(|| snapshot.records.first().map(|record| record.id.volume))
-        .or_else(|| detect_volume_id(&spec.root).ok())
-        .ok_or_else(|| {
-            gfm_types::GfmError::Format(format!(
-                "could not determine content index volume for {}",
-                spec.root.display()
-            ))
-        })?;
-    snapshot.save(&spec.records_path)?;
-    let scheduling = pressure.decide(Priority::Background, 1, 1);
-    if scheduling.action == SchedulingAction::Defer {
-        return Ok(ContentJobOutcome {
-            report: None,
-            inaccessible,
-            scheduling_action: scheduling.action,
-            deferred: true,
-        });
-    }
-    let extractor = Extractor::with_budget_profile(extraction_budget_profile(&spec.root, pressure));
-    let worker = BackgroundContentIndexer::new(extractor, spec.options());
-    let quarantine_store = default_extraction_quarantine_path();
-    let extraction_quarantine = read_extraction_quarantine(&quarantine_store, 2)?;
-    let content_report = Arc::new(Mutex::new(None));
-    let content_report_task = Arc::clone(&content_report);
-    let mut scheduler = Scheduler::new();
-    let label = "background content index";
-    let job = scheduler.schedule_on_volume(Priority::Background, label, volume);
-    let runtime = RuntimeJobHandle::begin(
-        &job,
-        JobPayloadKind::Indexing,
-        label,
-        snapshot.records.len().max(1) as u64,
-        format!("index:{}", spec.root.display()),
-    )?;
-    let tasks: Vec<_> = scheduler
-        .drain_ready()
-        .into_iter()
-        .map(|scheduled| {
-            let snapshot = snapshot.clone();
-            let previous_records = previous_records.clone();
-            let segment_dir = spec.segment_dir.clone();
-            let content = spec.content_path.clone();
-            let quarantine_store = quarantine_store.clone();
-            let extraction_quarantine = extraction_quarantine.clone();
-            let worker = worker.clone();
-            let content_report_task = Arc::clone(&content_report_task);
-            let runtime = runtime.clone();
-            RetriableTask::new(scheduled, move |cancellation| {
-                runtime.running()?;
-                let mut extraction_quarantine = extraction_quarantine.clone();
-                let request = QuarantineContentIndexRequest {
-                    snapshot: &snapshot,
-                    previous_records: &previous_records,
-                    previous_content_path: Some(&content),
-                    segment_dir: &segment_dir,
-                    content_path: &content,
-                    cancellation: &cancellation,
-                };
-                let report = worker.run_incremental_and_compact_with_quarantine(
-                    request,
-                    &mut extraction_quarantine,
-                )?;
-                extraction_quarantine.write(&quarantine_store)?;
-                *content_report_task
-                    .lock()
-                    .expect("content index report lock poisoned") = Some(report);
-                Ok(())
-            })
-        })
-        .collect();
-    let worker_report = WorkerPool::new(scheduling.worker_threads).run_retriable_isolated(
-        tasks,
-        journal,
-        RetryPolicy { max_attempts: 2 },
-        scheduling.volume_policy,
-    );
-    let outcome = worker_report
-        .outcomes
-        .iter()
-        .find(|outcome| outcome.id == job.id)
-        .ok_or_else(|| {
-            gfm_types::GfmError::Format("background content index job did not run".to_string())
-        })?;
-    runtime.finish(&outcome.status)?;
-    match &outcome.status {
-        TaskStatus::Completed => {}
-        TaskStatus::Started => {
-            return Err(gfm_types::GfmError::Format(
-                "background content index is still running".to_string(),
-            ))
-        }
-        TaskStatus::Cancelled => return Err(gfm_types::GfmError::Cancelled),
-        TaskStatus::Failed(message) => {
-            return Err(gfm_types::GfmError::Format(format!(
-                "background content index failed: {message}"
-            )))
-        }
-    }
-    let report = content_report
-        .lock()
-        .expect("content index report lock poisoned")
-        .clone()
-        .ok_or_else(|| {
-            gfm_types::GfmError::Format(
-                "background content index completed without a report".to_string(),
-            )
-        })?;
-    Ok(ContentJobOutcome {
-        report: Some(report),
-        inaccessible,
-        scheduling_action: scheduling.action,
-        deferred: false,
-    })
 }
 
 pub(crate) fn detect_volume_id(path: &Path) -> Result<VolumeId> {
