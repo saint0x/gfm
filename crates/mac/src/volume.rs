@@ -156,7 +156,13 @@ impl VolumeDescriptor {
             .as_ref()
             .and_then(|native| native.volume_name.clone())
             .unwrap_or_else(|| volume_label(&path));
-        let kind = classify_volume(&path, marker.as_deref(), native.as_ref(), resource.as_ref());
+        let kind = classify_volume(
+            &path,
+            marker.as_deref(),
+            native.as_ref(),
+            resource.as_ref(),
+            mount_table.as_ref(),
+        );
         let mount_state = if path.exists() {
             MountState::Mounted
         } else {
@@ -661,6 +667,7 @@ fn classify_volume(
     marker: Option<&str>,
     native: Option<&gfm_mac_sys::NativeVolumeDescription>,
     resource: Option<&NativeVolumeResourceValues>,
+    mount_table: Option<&NativeVolumeMountTableEntry>,
 ) -> VolumeKind {
     match marker {
         Some("network") | Some("network-smb") | Some("network-afp") | Some("network-nfs") => {
@@ -674,7 +681,7 @@ fn classify_volume(
         _ => {}
     }
 
-    if let Some(kind) = classify_native_volume(path, native, resource) {
+    if let Some(kind) = classify_native_volume(path, native, resource, mount_table) {
         return kind;
     }
 
@@ -698,6 +705,7 @@ fn classify_native_volume(
     path: &Path,
     native: Option<&NativeVolumeDescription>,
     resource: Option<&NativeVolumeResourceValues>,
+    mount_table: Option<&NativeVolumeMountTableEntry>,
 ) -> Option<VolumeKind> {
     if path == Path::new("/") {
         return Some(VolumeKind::System);
@@ -744,6 +752,12 @@ fn classify_native_volume(
     }
     if resource.and_then(|resource| resource.is_internal) == Some(true) {
         return Some(VolumeKind::Internal);
+    }
+
+    let mount_table =
+        mount_table.filter(|mount_table| mount_table.status == NativeVolumeStatus::Available);
+    if mount_table.and_then(|mount_table| mount_table.is_local) == Some(false) {
+        return Some(VolumeKind::Network);
     }
 
     let native = native?;
@@ -1023,7 +1037,28 @@ mod tests {
             values.is_local = Some(false);
         });
 
-        let kind = classify_native_volume(Path::new("/Volumes/Team Share"), None, Some(&resource));
+        let kind = classify_native_volume(
+            Path::new("/Volumes/Team Share"),
+            None,
+            Some(&resource),
+            None,
+        );
+
+        assert_eq!(kind, Some(VolumeKind::Network));
+    }
+
+    #[test]
+    fn classify_native_volume_uses_mount_table_locality() {
+        let mount_table = mount_table_entry(|entry| {
+            entry.is_local = Some(false);
+        });
+
+        let kind = classify_native_volume(
+            Path::new("/Volumes/Team Share"),
+            None,
+            None,
+            Some(&mount_table),
+        );
 
         assert_eq!(kind, Some(VolumeKind::Network));
     }
@@ -1041,6 +1076,7 @@ mod tests {
             Path::new("/Volumes/Installer"),
             Some(&native),
             Some(&resource),
+            None,
         );
 
         assert_eq!(kind, Some(VolumeKind::DiskImage));
@@ -1176,6 +1212,23 @@ mod tests {
         };
         configure(&mut values);
         values
+    }
+
+    fn mount_table_entry(
+        configure: impl FnOnce(&mut NativeVolumeMountTableEntry),
+    ) -> NativeVolumeMountTableEntry {
+        let mut entry = NativeVolumeMountTableEntry {
+            status: NativeVolumeStatus::Available,
+            mount_point: None,
+            mounted_from: None,
+            filesystem_type: None,
+            flags: None,
+            is_read_only: None,
+            is_local: None,
+            reason: None,
+        };
+        configure(&mut entry);
+        entry
     }
 
     fn native_description(
