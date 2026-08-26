@@ -5051,6 +5051,39 @@ fn reports_restorable_job_progress_from_binary() {
 }
 
 #[test]
+fn normalizes_interrupted_job_progress_for_restore_from_binary() {
+    let progress = unique_temp_path("gfm-cli-job-progress-restore", "gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["jobs-progress-restore", progress.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("progress\t1\tforeground\tinteractive\tcopy selected files\t1\tpaused\t42\t100\tinterrupted:running:copy:/source->/target\t2000"), "{stdout}");
+    assert!(stdout.contains("progress\t2\tbackground\tbackground\tindex content\t1\tpaused\t128\t250\tpressure:throttled\t1001"), "{stdout}");
+    assert!(!stdout.contains("compact content segments"), "{stdout}");
+
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text
+            .contains("\tpaused\t42\t100\tinterrupted:running:copy:/source->/target\t2000"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("compact content segments"),
+        "{progress_text}"
+    );
+
+    fs::remove_file(progress).unwrap();
+}
+
+#[test]
 fn volume_producers_persist_runtime_payload_and_progress_from_binary() {
     let root = unique_temp_dir("gfm-cli-runtime-producer-root");
     let image = root.join("Image.png");

@@ -97,6 +97,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 println!("{}", snapshot.as_tsv());
             }
         }
+        "jobs-progress-restore" => {
+            let path = required_path(
+                args.next(),
+                "jobs-progress-restore requires a progress path",
+            )?;
+            let store = JobProgressStore::new(&path);
+            for snapshot in sample_progress_snapshots() {
+                store.upsert(snapshot)?;
+            }
+            for snapshot in store.restore_interrupted(2_000)? {
+                println!("{}", snapshot.as_tsv());
+            }
+        }
         "jobs-cancel-tree" => {
             for line in sample_cancellation_tree_report() {
                 println!("{line}");

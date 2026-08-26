@@ -221,6 +221,74 @@ fn progress_store_round_trips_and_restores_active_snapshots() {
 }
 
 #[test]
+fn progress_store_normalizes_interrupted_jobs_for_restore() {
+    let path = temp_path("gfm-job-progress-restore", "gfmprogress");
+    let store = JobProgressStore::new(&path);
+    let planned = JobProgressSnapshot::new(
+        JobId::from_raw(1),
+        JobClass::Background,
+        Priority::Background,
+        "pending thumbnail",
+        None,
+        4,
+    )
+    .with_progress(JobProgressState::Planned, 0, "", 10);
+    let running = JobProgressSnapshot::new(
+        JobId::from_raw(2),
+        JobClass::Foreground,
+        Priority::Interactive,
+        "copy selection",
+        Some(VolumeId(7)),
+        10,
+    )
+    .with_progress(JobProgressState::Running, 6, "copy:/a->/b", 11);
+    let paused = JobProgressSnapshot::new(
+        JobId::from_raw(3),
+        JobClass::Background,
+        Priority::Background,
+        "index content",
+        Some(VolumeId(7)),
+        20,
+    )
+    .with_progress(JobProgressState::Paused, 8, "pressure:throttled", 12);
+    let completed = JobProgressSnapshot::new(
+        JobId::from_raw(4),
+        JobClass::Repair,
+        Priority::Visible,
+        "repair sidecar",
+        None,
+        1,
+    )
+    .with_progress(JobProgressState::Completed, 1, "completed", 13);
+    store
+        .write_all(&[
+            planned.clone(),
+            running.clone(),
+            paused.clone(),
+            completed.clone(),
+        ])
+        .unwrap();
+
+    let restored = store.restore_interrupted(99).unwrap();
+
+    assert_eq!(restored.len(), 3);
+    assert_eq!(restored[0].state, JobProgressState::Paused);
+    assert_eq!(restored[0].detail, "interrupted:planned");
+    assert_eq!(restored[0].updated_ms, 99);
+    assert_eq!(restored[1].state, JobProgressState::Paused);
+    assert_eq!(restored[1].completed_units, running.completed_units);
+    assert_eq!(restored[1].detail, "interrupted:running:copy:/a->/b");
+    assert_eq!(restored[1].updated_ms, 99);
+    assert_eq!(restored[2], paused);
+
+    let snapshots = store.read().unwrap();
+    assert_eq!(snapshots.len(), 4);
+    assert_eq!(snapshots[3], completed);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn scheduling_pressure_defers_background_under_saturated_io() {
     let pressure = SchedulingPressure {
         io: JobIoPressure::Saturated,

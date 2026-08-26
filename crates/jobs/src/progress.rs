@@ -212,6 +212,30 @@ impl JobProgressStore {
             .collect())
     }
 
+    pub fn restore_interrupted(&self, updated_ms: u64) -> Result<Vec<JobProgressSnapshot>> {
+        let mut snapshots = self.read()?;
+        for snapshot in &mut snapshots {
+            if matches!(
+                snapshot.state,
+                JobProgressState::Planned | JobProgressState::Running
+            ) {
+                let previous_state = snapshot.state.as_str();
+                snapshot.state = JobProgressState::Paused;
+                snapshot.detail = if snapshot.detail.is_empty() {
+                    format!("interrupted:{previous_state}")
+                } else {
+                    format!("interrupted:{previous_state}:{}", snapshot.detail)
+                };
+                snapshot.updated_ms = updated_ms;
+            }
+        }
+        self.write_all(&snapshots)?;
+        Ok(snapshots
+            .into_iter()
+            .filter(|snapshot| snapshot.state.restorable())
+            .collect())
+    }
+
     fn temp_path(&self) -> PathBuf {
         let mut name = self
             .path
