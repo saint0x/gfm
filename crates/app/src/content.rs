@@ -1,19 +1,601 @@
-use crate::detect_volume_id;
-use crate::extract::{extraction_budget_profile, read_extraction_quarantine};
-use crate::runtime::{default_extraction_quarantine_path, run_volume_task, RuntimeJobHandle};
-use gfm_content::Extractor;
+use crate::extract::{
+    extraction_budget_profile, read_extraction_quarantine, run_adaptive_extraction_worker,
+    run_adaptive_extraction_worker_cancellable, run_quarantined_adaptive_extraction_worker,
+    ADAPTIVE_WORKER_TIMEOUT,
+};
+use crate::runtime::{
+    default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
+    run_scheduled_volume_task, run_volume_task, RuntimeJobHandle,
+};
+use crate::{
+    detect_volume_id, optional_path_arg, parent_volume, parse_battery_state, parse_io_pressure,
+    parse_optional_scheduling_pressure, parse_quarantine_failure_kind,
+    parse_required_scheduling_pressure, parse_thermal_state, parse_u32, parse_u64,
+    parse_user_activity, required_path, required_string,
+};
+use gfm_content::{CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor};
+use gfm_fs::record_for_path;
 use gfm_index::{
-    BackgroundContentIndexer, ContentIndexJobSpec, ContentIndexReport, Indexer,
-    QuarantineContentIndexRequest,
+    BackgroundContentIndexer, CompactionPressure, ContentIndexJobSpec, ContentIndexReport,
+    ContentMaintenanceOptions, ContentMaintenanceReport, ContentMergePolicy, IndexFootprintSpec,
+    Indexer, QuarantineContentIndexRequest,
 };
 use gfm_jobs::{
-    JobJournal, JobPayloadKind, Priority, RetriableTask, RetryPolicy, Scheduler, SchedulingAction,
-    SchedulingPressure, TaskStatus, WorkerPool,
+    Cancellation, JobJournal, JobPayloadKind, Priority, RetriableTask, RetryPolicy, Scheduler,
+    SchedulingAction, SchedulingPressure, TaskStatus, WorkerPool,
 };
 use gfm_store::read_records;
 use gfm_types::{GfmError, Result, SearchHit};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
+    match command {
+        "index-content" => {
+            let root = required_path(args.next(), "index-content requires a root path")?;
+            let records = required_path(args.next(), "index-content requires a records path")?;
+            let content = required_path(args.next(), "index-content requires a content path")?;
+            let snapshot = Indexer::default().build(root)?;
+            let indexed = snapshot.save_with_content(records, content, &Extractor::default())?;
+            eprintln!(
+                "indexed {} records; content-indexed {} files; {} inaccessible",
+                snapshot.records.len(),
+                indexed,
+                snapshot.inaccessible.len()
+            );
+        }
+        "extract-report" => {
+            let path = required_path(args.next(), "extract-report requires a path")?;
+            let extractor = Extractor::default();
+            let report = extractor.extract_path_report(&path)?;
+            let mut quarantine = ExtractionQuarantine::default();
+            let decision = quarantine.record_report(&report);
+            println!("{}", report.as_tsv());
+            println!("{}", decision.as_tsv());
+        }
+        "extract-report-adaptive" => {
+            let path = required_path(args.next(), "extract-report-adaptive requires a path")?;
+            let pressure = parse_required_scheduling_pressure(args, "extract report")?;
+            let root = path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let extractor =
+                Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
+            let report = extractor.extract_path_report(&path)?;
+            let mut quarantine = ExtractionQuarantine::default();
+            let decision = quarantine.record_report(&report);
+            println!("{}", report.as_tsv());
+            println!("{}", decision.as_tsv());
+        }
+        "extract-worker-adaptive" => {
+            let path = required_path(args.next(), "extract-worker-adaptive requires a path")?;
+            let pressure = parse_required_scheduling_pressure(args, "extract worker")?;
+            let volume = detect_volume_id(&path)
+                .ok()
+                .or_else(|| parent_volume(&path));
+            let report = run_volume_task(
+                volume,
+                Priority::Background,
+                "adaptive extraction",
+                move || run_adaptive_extraction_worker(&path, pressure),
+            )?;
+            print!("{}", report);
+        }
+        "extract-worker-cancel-adaptive" => {
+            let path = required_path(
+                args.next(),
+                "extract-worker-cancel-adaptive requires a path",
+            )?;
+            let pressure = parse_required_scheduling_pressure(args, "extract worker")?;
+            let cancellation = Cancellation::default();
+            cancellation.cancel();
+            match run_adaptive_extraction_worker_cancellable(
+                &path,
+                pressure,
+                ADAPTIVE_WORKER_TIMEOUT,
+                &cancellation,
+            ) {
+                Err(GfmError::Cancelled) => {
+                    println!("extract-worker\tstatus=cancelled\treason=cancelled-before-launch")
+                }
+                Ok(report) => print!("{report}"),
+                Err(err) => return Err(err),
+            }
+        }
+        "extract-worker-quarantine-adaptive" => {
+            let path = required_path(
+                args.next(),
+                "extract-worker-quarantine-adaptive requires a path",
+            )?;
+            let store = required_path(
+                args.next(),
+                "extract-worker-quarantine-adaptive requires a quarantine store path",
+            )?;
+            let pressure = parse_required_scheduling_pressure(args, "extract worker")?;
+            let timeout = args
+                .next()
+                .map(|value| parse_u64(&value, "timeout ms"))
+                .transpose()?
+                .map(Duration::from_millis)
+                .unwrap_or(ADAPTIVE_WORKER_TIMEOUT);
+            let threshold = args
+                .next()
+                .map(|value| parse_u32(&value, "failure threshold"))
+                .transpose()?
+                .unwrap_or(2);
+            let volume = detect_volume_id(&path)
+                .ok()
+                .or_else(|| parent_volume(&path));
+            let output = run_volume_task(
+                volume,
+                Priority::Background,
+                "quarantined adaptive extraction",
+                move || {
+                    run_quarantined_adaptive_extraction_worker(
+                        &path, &store, pressure, timeout, threshold,
+                    )
+                },
+            )?;
+            print!("{output}");
+        }
+        "extract-cache" => {
+            let path = required_path(args.next(), "extract-cache requires a path")?;
+            let record = record_for_path(&path, None, false)?;
+            let mut cached = CachedExtractor::default();
+            println!("{}", cached.extract_record_report(&record)?.as_tsv());
+            println!("{}", cached.extract_record_report(&record)?.as_tsv());
+        }
+        "extract-quarantine" => {
+            let path = required_path(args.next(), "extract-quarantine requires a path")?;
+            let store = required_path(
+                args.next(),
+                "extract-quarantine requires a quarantine store path",
+            )?;
+            let kind = parse_quarantine_failure_kind(
+                args.next().as_deref().unwrap_or("timeout"),
+                "failure kind",
+            )?;
+            let attempts = args
+                .next()
+                .map(|value| parse_u32(&value, "attempts"))
+                .transpose()?
+                .unwrap_or(2);
+            let fingerprint = ExtractionFingerprint::for_path(&path)?;
+            let mut quarantine = ExtractionQuarantine::new(2);
+            let mut decision = quarantine.before_extract(&path, &fingerprint);
+            for _ in 0..attempts {
+                decision = quarantine.record_failure(
+                    &path,
+                    &fingerprint,
+                    kind,
+                    format!("worker-{}", kind.as_str()),
+                );
+            }
+            quarantine.write(&store)?;
+            let reloaded = ExtractionQuarantine::read(&store)?;
+            println!("{}", decision.as_tsv());
+            println!("{}", reloaded.before_extract(&path, &fingerprint).as_tsv());
+        }
+        "index-content-segment" => {
+            let root = required_path(args.next(), "index-content-segment requires a root path")?;
+            let output = required_path(
+                args.next(),
+                "index-content-segment requires an output segment path",
+            )?;
+            let snapshot = Indexer::default().build(root)?;
+            let indexed =
+                snapshot.save_content_segment(output, &Extractor::default(), Vec::new())?;
+            eprintln!(
+                "content-segmented {} files; {} inaccessible",
+                indexed,
+                snapshot.inaccessible.len()
+            );
+        }
+        "compact-content" => {
+            let output = required_path(args.next(), "compact-content requires an output path")?;
+            let segments: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            if segments.is_empty() {
+                return Err(gfm_types::GfmError::Format(
+                    "compact-content requires at least one segment path".to_string(),
+                ));
+            }
+            let terms = Indexer::default().compact_content_segments(output, &segments)?;
+            eprintln!("compacted {terms} content terms");
+        }
+        "compact-content-tiered" => {
+            let output = required_path(
+                args.next(),
+                "compact-content-tiered requires an output path",
+            )?;
+            let segments: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            if segments.is_empty() {
+                return Err(gfm_types::GfmError::Format(
+                    "compact-content-tiered requires at least one segment path".to_string(),
+                ));
+            }
+            let outcome = Indexer::default().compact_content_segments_with_policy(
+                output,
+                &segments,
+                &ContentMergePolicy::default(),
+            )?;
+            eprintln!(
+                "tiered-compacted {} content terms; merged {}; retained {}; bytes {}; tombstone-segments {}; tier {:?}",
+                outcome.postings.len(),
+                outcome.merged_segments.len(),
+                outcome.retained_segments.len(),
+                outcome.merge_bytes,
+                outcome.tombstone_segments,
+                outcome.tier
+            );
+            for segment in outcome.retained_segments {
+                println!("retain\t{}", segment.display());
+            }
+        }
+        "content-maintain-segments" => {
+            let manifest_path = required_path(
+                args.next(),
+                "content-maintain-segments requires a manifest path",
+            )?;
+            let output_archive = required_path(
+                args.next(),
+                "content-maintain-segments requires an output archive path",
+            )?;
+            let segments = args.map(PathBuf::from).collect::<Vec<_>>();
+            if segments.is_empty() {
+                return Err(GfmError::Format(
+                    "content-maintain-segments requires at least one segment".to_string(),
+                ));
+            }
+            let worker = BackgroundContentIndexer::default();
+            let report = worker.maintain_segments(
+                &manifest_path,
+                &output_archive,
+                &segments,
+                &ContentMaintenanceOptions::default(),
+            )?;
+            print_content_maintenance_report(report);
+        }
+        "content-maintain-segments-adaptive" => {
+            let manifest_path = required_path(
+                args.next(),
+                "content-maintain-segments-adaptive requires a manifest path",
+            )?;
+            let output_archive = required_path(
+                args.next(),
+                "content-maintain-segments-adaptive requires an output archive path",
+            )?;
+            let pressure = parse_required_scheduling_pressure(args, "content maintenance")?;
+            let segments = args.map(PathBuf::from).collect::<Vec<_>>();
+            if segments.is_empty() {
+                return Err(GfmError::Format(
+                    "content-maintain-segments-adaptive requires at least one segment".to_string(),
+                ));
+            }
+            let volume = detect_volume_id(&manifest_path)
+                .ok()
+                .or_else(|| parent_volume(&output_archive));
+            let worker = BackgroundContentIndexer::default();
+            let outcome = run_scheduled_volume_task(
+                volume,
+                Priority::Background,
+                "content maintenance",
+                pressure,
+                move || {
+                    worker.maintain_segments(
+                        &manifest_path,
+                        &output_archive,
+                        &segments,
+                        &ContentMaintenanceOptions::default(),
+                    )
+                },
+            )?;
+            if outcome.deferred {
+                eprintln!(
+                    "content-maintenance-deferred\taction={:?}",
+                    outcome.scheduling_action
+                );
+            } else {
+                let report = outcome.result.ok_or_else(|| {
+                    GfmError::Format("content maintenance ran without a report".to_string())
+                })?;
+                eprintln!(
+                    "content-maintenance-action\t{:?}",
+                    outcome.scheduling_action
+                );
+                print_content_maintenance_report(report);
+            }
+        }
+        "index-content-background" => {
+            let root = required_path(args.next(), "index-content-background requires a root path")?;
+            let segment_dir = required_path(
+                args.next(),
+                "index-content-background requires a segment directory",
+            )?;
+            let records = required_path(
+                args.next(),
+                "index-content-background requires a records path",
+            )?;
+            let content = required_path(
+                args.next(),
+                "index-content-background requires a content path",
+            )?;
+            let pressure = parse_optional_scheduling_pressure(args)?;
+            let journal = JobJournal::new(default_job_journal_path());
+            let spec = ContentIndexJobSpec::new(&root, segment_dir, records, content)
+                .with_volume(detect_volume_id(&root)?);
+            spec.write(default_content_job_path())?;
+            let outcome = run_content_job(&spec, &journal, pressure)?;
+            if outcome.deferred {
+                eprintln!(
+                    "background-content-deferred action={:?}; journal {}; {} inaccessible",
+                    outcome.scheduling_action,
+                    journal.path().display(),
+                    outcome.inaccessible
+                );
+            } else {
+                let report = outcome.report.ok_or_else(|| {
+                    GfmError::Format("background content index ran without a report".to_string())
+                })?;
+                eprintln!(
+                    "background-content-indexed {} files; skipped {}; quarantined {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; journal {}; {} inaccessible",
+                    report.indexed,
+                    report.skipped,
+                    report.quarantined,
+                    report.unchanged,
+                    report.tombstoned,
+                    report.segments.len(),
+                    report.terms,
+                    outcome.scheduling_action,
+                    journal.path().display(),
+                    outcome.inaccessible
+                );
+            }
+        }
+        "resume-content-background" => {
+            let spec_path = args
+                .next()
+                .map(PathBuf::from)
+                .unwrap_or_else(default_content_job_path);
+            let journal = args
+                .next()
+                .map(PathBuf::from)
+                .unwrap_or_else(default_job_journal_path);
+            let journal = JobJournal::new(journal);
+            let recoverable = journal.recoverable(RetryPolicy { max_attempts: 2 })?;
+            if recoverable.is_empty() {
+                eprintln!("no recoverable background content jobs");
+            } else {
+                let spec = ContentIndexJobSpec::read(spec_path)?;
+                let outcome = run_content_job(&spec, &journal, SchedulingPressure::default())?;
+                if outcome.deferred {
+                    eprintln!(
+                        "resumed-background-content-deferred action={:?}; recoverable {}",
+                        outcome.scheduling_action,
+                        recoverable.len()
+                    );
+                } else {
+                    let report = outcome.report.ok_or_else(|| {
+                        GfmError::Format(
+                            "resumed background content index ran without a report".to_string(),
+                        )
+                    })?;
+                    eprintln!(
+                        "resumed-background-content-indexed {} files; skipped {}; quarantined {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; recoverable {}",
+                        report.indexed,
+                        report.skipped,
+                        report.quarantined,
+                        report.unchanged,
+                        report.tombstoned,
+                        report.segments.len(),
+                        report.terms,
+                        outcome.scheduling_action,
+                        recoverable.len()
+                    );
+                }
+            }
+        }
+        "resume-content-background-adaptive" => {
+            let spec_path = required_path(
+                args.next(),
+                "resume-content-background-adaptive requires a content job spec path",
+            )?;
+            let journal_path = required_path(
+                args.next(),
+                "resume-content-background-adaptive requires a job journal path",
+            )?;
+            let pressure = parse_required_scheduling_pressure(args, "resume content job")?;
+            let journal = JobJournal::new(journal_path);
+            let recoverable = journal.recoverable(RetryPolicy { max_attempts: 2 })?;
+            if recoverable.is_empty() {
+                eprintln!("no recoverable background content jobs");
+            } else {
+                let spec = ContentIndexJobSpec::read(spec_path)?;
+                let outcome = run_content_job(&spec, &journal, pressure)?;
+                if outcome.deferred {
+                    eprintln!(
+                        "resumed-background-content-deferred action={:?}; recoverable {}",
+                        outcome.scheduling_action,
+                        recoverable.len()
+                    );
+                } else {
+                    let report = outcome.report.ok_or_else(|| {
+                        GfmError::Format(
+                            "resumed background content index ran without a report".to_string(),
+                        )
+                    })?;
+                    eprintln!(
+                        "resumed-background-content-indexed {} files; skipped {}; quarantined {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; recoverable {}",
+                        report.indexed,
+                        report.skipped,
+                        report.quarantined,
+                        report.unchanged,
+                        report.tombstoned,
+                        report.segments.len(),
+                        report.terms,
+                        outcome.scheduling_action,
+                        recoverable.len()
+                    );
+                }
+            }
+        }
+        "index-footprint" => {
+            let records = required_path(args.next(), "index-footprint requires a records path")?;
+            let columns =
+                optional_path_arg(args.next(), "index-footprint requires a columns path or -")?;
+            let metadata =
+                optional_path_arg(args.next(), "index-footprint requires a metadata path or -")?;
+            let prefixes =
+                optional_path_arg(args.next(), "index-footprint requires a prefixes path or -")?;
+            let substrings = optional_path_arg(
+                args.next(),
+                "index-footprint requires a substrings path or -",
+            )?;
+            let fuzzy =
+                optional_path_arg(args.next(), "index-footprint requires a fuzzy path or -")?;
+            let content_manifest = optional_path_arg(
+                args.next(),
+                "index-footprint requires a content manifest path or -",
+            )?;
+            let mut spec = IndexFootprintSpec::new(records);
+            spec.columns = columns;
+            spec.metadata = metadata;
+            spec.prefixes = prefixes;
+            spec.substrings = substrings;
+            spec.fuzzy = fuzzy;
+            spec.content_manifest = content_manifest;
+            spec.content_segments = args.map(PathBuf::from).collect();
+            let report = gfm_index::inspect_index_footprint(&spec)?;
+            eprintln!(
+                "index-footprint\trecords={}\ttotal-bytes={}\tbytes-per-record={}\tsegments={}\tsegment-bytes={}\tcompaction-scheduled={}\treason={:?}",
+                report.record_count,
+                report.total_bytes,
+                report.bytes_per_record,
+                report.segment_count,
+                report.segment_bytes,
+                report.compaction.scheduled,
+                report.compaction.reason
+            );
+            println!(
+                "records\tcount={}\tbytes={}",
+                report.record_count, report.record_bytes
+            );
+            println!(
+                "columns\tcount={}\tbytes={}\tstring-pool-bytes={}",
+                report.column_count, report.column_bytes, report.column_string_pool_bytes
+            );
+            println!(
+                "metadata\tterms={}\tbytes={}",
+                report.metadata_terms, report.metadata_bytes
+            );
+            println!(
+                "prefixes\tkeys={}\tbytes={}",
+                report.prefix_keys, report.prefix_bytes
+            );
+            println!(
+                "substrings\tkeys={}\tbytes={}",
+                report.substring_keys, report.substring_bytes
+            );
+            println!(
+                "fuzzy\tkeys={}\tbytes={}",
+                report.fuzzy_keys, report.fuzzy_bytes
+            );
+            println!(
+                "content\tarchives={}\tterms={}\tbytes={}",
+                report.content_archives, report.content_terms, report.content_bytes
+            );
+            println!(
+                "segments\tcount={}\tbytes={}\tpostings={}\ttombstone-segments={}\ttombstones={}",
+                report.segment_count,
+                report.segment_bytes,
+                report.segment_postings,
+                report.tombstone_segments,
+                report.tombstones
+            );
+            println!(
+                "compaction\tscheduled={}\ttier={:?}\treason={:?}\tmerge-bytes={}\tmerge-segments={}\tretained-segments={}\ttombstone-segments={}",
+                report.compaction.scheduled,
+                report.compaction.tier,
+                report.compaction.reason,
+                report.compaction.merge_bytes,
+                report.compaction.merge_segments.len(),
+                report.compaction.retained_segments.len(),
+                report.compaction.tombstone_segments
+            );
+            for path in report.compaction.merge_segments {
+                println!("merge-segment\t{}", path.display());
+            }
+            for path in report.compaction.retained_segments {
+                println!("retain-segment\t{}", path.display());
+            }
+        }
+        "index-compaction-plan" => {
+            let records =
+                required_path(args.next(), "index-compaction-plan requires a records path")?;
+            let content_manifest = optional_path_arg(
+                args.next(),
+                "index-compaction-plan requires a content manifest path or -",
+            )?;
+            let io = parse_io_pressure(required_string(
+                args.next(),
+                "index-compaction-plan requires io pressure",
+            )?)?;
+            let thermal = parse_thermal_state(required_string(
+                args.next(),
+                "index-compaction-plan requires thermal state",
+            )?)?;
+            let battery = parse_battery_state(required_string(
+                args.next(),
+                "index-compaction-plan requires battery state",
+            )?)?;
+            let user_activity = parse_user_activity(required_string(
+                args.next(),
+                "index-compaction-plan requires user activity",
+            )?)?;
+            let mut spec = IndexFootprintSpec::new(records);
+            spec.content_manifest = content_manifest;
+            spec.content_segments = args.map(PathBuf::from).collect();
+            spec.compaction_pressure = CompactionPressure {
+                io,
+                thermal,
+                battery,
+                user_activity,
+            };
+            let report = gfm_index::inspect_index_footprint(&spec)?;
+            eprintln!(
+                "index-compaction-plan\taction={:?}\tscheduled={}\treason={:?}\tpressure={:?}\tmerge-bytes={}\teffective-max-bytes={}",
+                report.compaction.action,
+                report.compaction.scheduled,
+                report.compaction.reason,
+                report.compaction.pressure,
+                report.compaction.merge_bytes,
+                report.compaction.effective_max_merge_bytes
+            );
+            println!(
+                "compaction\taction={:?}\tscheduled={}\ttier={:?}\treason={:?}\tmerge-segments={}\tretained-segments={}\tmerge-bytes={}\teffective-max-bytes={}\tbytes-per-record={}",
+                report.compaction.action,
+                report.compaction.scheduled,
+                report.compaction.tier,
+                report.compaction.reason,
+                report.compaction.merge_segments.len(),
+                report.compaction.retained_segments.len(),
+                report.compaction.merge_bytes,
+                report.compaction.effective_max_merge_bytes,
+                report.bytes_per_record
+            );
+            for path in report.compaction.merge_segments {
+                println!("merge-segment\t{}", path.display());
+            }
+            for path in report.compaction.retained_segments {
+                println!("retain-segment\t{}", path.display());
+            }
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
 
 pub(crate) fn run_content_search(
     root: PathBuf,
@@ -166,4 +748,27 @@ pub(crate) fn run_content_job(
         scheduling_action: scheduling.action,
         deferred: false,
     })
+}
+
+fn print_content_maintenance_report(report: ContentMaintenanceReport) {
+    eprintln!(
+        "content-maintenance\tscheduled={}\tterms={}\tmerged={}\tretained={}\tmanifest-archives={}\ttier={:?}\tbytes={}\ttombstone-segments={}",
+        report.scheduled,
+        report.terms,
+        report.merged_segments.len(),
+        report.retained_segments.len(),
+        report.manifest_archives,
+        report.tier,
+        report.merge_bytes,
+        report.tombstone_segments
+    );
+    if let Some(path) = report.published_archive {
+        println!("published\t{}", path.display());
+    }
+    for path in report.merged_segments {
+        println!("merged-segment\t{}", path.display());
+    }
+    for path in report.retained_segments {
+        println!("retain-segment\t{}", path.display());
+    }
 }
