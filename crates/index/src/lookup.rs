@@ -8,12 +8,12 @@ use gfm_store::{
     MetadataField, MmapContentArchive, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
     MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
-use gfm_types::{ContentPosting, FileId, FileRecord, GfmError, Result};
+use gfm_types::{ContentPosting, FileId, FileRecord, Result};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Mutex,
+    Mutex, MutexGuard,
 };
 
 const SEARCH_ARCHIVE_LOOKUP_CACHE_CAPACITY: usize = 512;
@@ -228,9 +228,7 @@ impl SidecarIndexQuerySession {
         let mut postings = Vec::with_capacity(selected.len());
         let mut misses = Vec::new();
         {
-            let cache = self.content_cache.lock().map_err(|_| {
-                GfmError::Format("sidecar content posting cache lock poisoned".to_string())
-            })?;
+            let cache = self.content_cache_lock();
             for term in &selected {
                 let key = bounded_posting_cache_key(term, limit_per_term);
                 if let Some(cached) = cache.get(&key) {
@@ -257,9 +255,7 @@ impl SidecarIndexQuerySession {
             })
             .collect::<HashMap<_, _>>();
 
-        let mut cache = self.content_cache.lock().map_err(|_| {
-            GfmError::Format("sidecar content posting cache lock poisoned".to_string())
-        })?;
+        let mut cache = self.content_cache_lock();
         for term in misses {
             let (posting, truncated) = loaded.get(&term).cloned().unwrap_or((None, false));
             if !truncated {
@@ -333,10 +329,7 @@ impl SidecarIndexQuerySession {
         let mut hydrated_by_id = HashMap::new();
         let mut misses = Vec::new();
         {
-            let cache = self
-                .record_cache
-                .lock()
-                .map_err(|_| GfmError::Format("sidecar record cache lock poisoned".to_string()))?;
+            let cache = self.record_cache_lock();
             for id in &ids {
                 if let Some(record) = cache.get(*id) {
                     self.record_cache_hits.fetch_add(1, Ordering::Relaxed);
@@ -358,10 +351,7 @@ impl SidecarIndexQuerySession {
             loaded.push((id, self.hydrate_record(record)?));
         }
         {
-            let mut cache = self
-                .record_cache
-                .lock()
-                .map_err(|_| GfmError::Format("sidecar record cache lock poisoned".to_string()))?;
+            let mut cache = self.record_cache_lock();
             for (id, hydrated) in loaded {
                 cache.insert(id, hydrated.clone());
                 hydrated_by_id.insert(id, hydrated);
@@ -373,6 +363,18 @@ impl SidecarIndexQuerySession {
             .filter_map(|id| hydrated_by_id.remove(&id))
             .collect::<Vec<_>>();
         Ok((records, missing))
+    }
+
+    fn content_cache_lock(&self) -> MutexGuard<'_, LookupCache<Option<ContentPosting>>> {
+        self.content_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn record_cache_lock(&self) -> MutexGuard<'_, RecordCache> {
+        self.record_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn hydrate_record(&self, record: FileRecord) -> Result<HydratedRecord> {
@@ -479,21 +481,9 @@ impl SearchArchiveLookup {
 
     #[cfg(test)]
     pub(crate) fn cache_entry_counts(&self) -> Result<(usize, usize, usize)> {
-        let prefixes = self
-            .prefix_cache
-            .lock()
-            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
-            .len();
-        let substrings = self
-            .substring_cache
-            .lock()
-            .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
-            .len();
-        let fuzzy = self
-            .fuzzy_cache
-            .lock()
-            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
-            .len();
+        let prefixes = self.prefix_cache_lock().len();
+        let substrings = self.substring_cache_lock().len();
+        let fuzzy = self.fuzzy_cache_lock().len();
         Ok((prefixes, substrings, fuzzy))
     }
 
@@ -521,10 +511,7 @@ impl SearchArchiveLookup {
         let mut postings = Vec::with_capacity(selected.len());
         let mut misses = Vec::new();
         {
-            let cache = self
-                .prefix_cache
-                .lock()
-                .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?;
+            let cache = self.prefix_cache_lock();
             for prefix in &selected {
                 self.prefix_requests.fetch_add(1, Ordering::Relaxed);
                 if let Some(mut ids) = cache.get(prefix) {
@@ -553,10 +540,7 @@ impl SearchArchiveLookup {
             })
             .collect::<HashMap<_, _>>();
 
-        let mut cache = self
-            .prefix_cache
-            .lock()
-            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?;
+        let mut cache = self.prefix_cache_lock();
         for prefix in misses {
             let (ids, truncated) = loaded
                 .get(&prefix)
@@ -596,10 +580,7 @@ impl SearchArchiveLookup {
         let mut postings = Vec::with_capacity(selected.len());
         let mut misses = Vec::new();
         {
-            let cache = self
-                .fuzzy_cache
-                .lock()
-                .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?;
+            let cache = self.fuzzy_cache_lock();
             for key in &selected {
                 self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
                 if let Some(mut terms) = cache.get(key) {
@@ -628,10 +609,7 @@ impl SearchArchiveLookup {
             })
             .collect::<HashMap<_, _>>();
 
-        let mut cache = self
-            .fuzzy_cache
-            .lock()
-            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?;
+        let mut cache = self.fuzzy_cache_lock();
         for key in misses {
             let (terms, truncated) = loaded
                 .get(&key)
@@ -646,26 +624,37 @@ impl SearchArchiveLookup {
         postings.sort_by(|left, right| left.key.cmp(&right.key));
         Ok(postings)
     }
+
+    fn prefix_cache_lock(&self) -> MutexGuard<'_, LookupCache<Vec<FileId>>> {
+        self.prefix_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn substring_cache_lock(&self) -> MutexGuard<'_, LookupCache<Vec<FileId>>> {
+        self.substring_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn fuzzy_cache_lock(&self) -> MutexGuard<'_, LookupCache<Vec<String>>> {
+        self.fuzzy_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 impl SearchLookup for SearchArchiveLookup {
     fn prefix_ids(&self, prefix: &str) -> Result<Vec<FileId>> {
         self.prefix_requests.fetch_add(1, Ordering::Relaxed);
-        if let Some(ids) = self
-            .prefix_cache
-            .lock()
-            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
-            .get(prefix)
-        {
+        if let Some(ids) = self.prefix_cache_lock().get(prefix) {
             self.prefix_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(ids);
         }
 
         self.prefix_misses.fetch_add(1, Ordering::Relaxed);
         let ids = self.prefixes.ids_for(prefix)?;
-        self.prefix_cache
-            .lock()
-            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
+        self.prefix_cache_lock()
             .insert(prefix.to_string(), ids.clone());
         Ok(ids)
     }
@@ -675,12 +664,7 @@ impl SearchLookup for SearchArchiveLookup {
         if limit == 0 {
             return Ok(SearchLookupIds::new(Vec::new(), false));
         }
-        if let Some(mut ids) = self
-            .prefix_cache
-            .lock()
-            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
-            .get(prefix)
-        {
+        if let Some(mut ids) = self.prefix_cache_lock().get(prefix) {
             self.prefix_hits.fetch_add(1, Ordering::Relaxed);
             let truncated = ids.len() > limit;
             ids.truncate(limit);
@@ -690,9 +674,7 @@ impl SearchLookup for SearchArchiveLookup {
         self.prefix_misses.fetch_add(1, Ordering::Relaxed);
         let (ids, truncated) = self.prefixes.ids_for_limit(prefix, limit)?;
         if !truncated {
-            self.prefix_cache
-                .lock()
-                .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?
+            self.prefix_cache_lock()
                 .insert(prefix.to_string(), ids.clone());
         }
         Ok(SearchLookupIds::new(ids, truncated))
@@ -700,21 +682,14 @@ impl SearchLookup for SearchArchiveLookup {
 
     fn substring_ids(&self, gram: &str) -> Result<Vec<FileId>> {
         self.substring_requests.fetch_add(1, Ordering::Relaxed);
-        if let Some(ids) = self
-            .substring_cache
-            .lock()
-            .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
-            .get(gram)
-        {
+        if let Some(ids) = self.substring_cache_lock().get(gram) {
             self.substring_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(ids);
         }
 
         self.substring_misses.fetch_add(1, Ordering::Relaxed);
         let ids = self.substrings.ids_for(gram)?;
-        self.substring_cache
-            .lock()
-            .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
+        self.substring_cache_lock()
             .insert(gram.to_string(), ids.clone());
         Ok(ids)
     }
@@ -724,12 +699,7 @@ impl SearchLookup for SearchArchiveLookup {
         if limit == 0 {
             return Ok(SearchLookupIds::new(Vec::new(), false));
         }
-        if let Some(mut ids) = self
-            .substring_cache
-            .lock()
-            .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
-            .get(gram)
-        {
+        if let Some(mut ids) = self.substring_cache_lock().get(gram) {
             self.substring_hits.fetch_add(1, Ordering::Relaxed);
             let truncated = ids.len() > limit;
             ids.truncate(limit);
@@ -739,9 +709,7 @@ impl SearchLookup for SearchArchiveLookup {
         self.substring_misses.fetch_add(1, Ordering::Relaxed);
         let (ids, truncated) = self.substrings.ids_for_limit(gram, limit)?;
         if !truncated {
-            self.substring_cache
-                .lock()
-                .map_err(|_| GfmError::Format("substring lookup cache lock poisoned".to_string()))?
+            self.substring_cache_lock()
                 .insert(gram.to_string(), ids.clone());
         }
         Ok(SearchLookupIds::new(ids, truncated))
@@ -749,21 +717,14 @@ impl SearchLookup for SearchArchiveLookup {
 
     fn fuzzy_terms(&self, key: &str) -> Result<Vec<String>> {
         self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
-        if let Some(terms) = self
-            .fuzzy_cache
-            .lock()
-            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
-            .get(key)
-        {
+        if let Some(terms) = self.fuzzy_cache_lock().get(key) {
             self.fuzzy_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(terms);
         }
 
         self.fuzzy_misses.fetch_add(1, Ordering::Relaxed);
         let terms = self.fuzzy.terms_for(key)?;
-        self.fuzzy_cache
-            .lock()
-            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
+        self.fuzzy_cache_lock()
             .insert(key.to_string(), terms.clone());
         Ok(terms)
     }
@@ -773,12 +734,7 @@ impl SearchLookup for SearchArchiveLookup {
         if limit == 0 {
             return Ok(SearchLookupTerms::new(Vec::new(), false));
         }
-        if let Some(mut terms) = self
-            .fuzzy_cache
-            .lock()
-            .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
-            .get(key)
-        {
+        if let Some(mut terms) = self.fuzzy_cache_lock().get(key) {
             self.fuzzy_hits.fetch_add(1, Ordering::Relaxed);
             let truncated = terms.len() > limit;
             terms.truncate(limit);
@@ -788,9 +744,7 @@ impl SearchLookup for SearchArchiveLookup {
         self.fuzzy_misses.fetch_add(1, Ordering::Relaxed);
         let (terms, truncated) = self.fuzzy.terms_for_limit(key, limit)?;
         if !truncated {
-            self.fuzzy_cache
-                .lock()
-                .map_err(|_| GfmError::Format("fuzzy lookup cache lock poisoned".to_string()))?
+            self.fuzzy_cache_lock()
                 .insert(key.to_string(), terms.clone());
         }
         Ok(SearchLookupTerms::new(terms, truncated))
@@ -992,6 +946,247 @@ fn bounded_substring_grams(terms: &[String], budget: SearchLookupBudget) -> Vec<
 
 fn bounded_posting_cache_key(term: &str, limit: usize) -> String {
     format!("{limit}:{term}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gfm_search::SearchLookup;
+    use gfm_store::{
+        fuzzy_postings_from_records, metadata_postings_from_records, prefix_postings_from_records,
+        substring_postings_from_records, write_content_postings, write_fuzzy_postings,
+        write_metadata_postings, write_prefix_postings, write_record_columns, write_records,
+        write_substring_postings,
+    };
+    use gfm_types::{ContentPositions, FileKind, VolumeId};
+    use std::fs;
+    use std::panic::{self, AssertUnwindSafe};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn sidecar_session_recovers_poisoned_content_cache() {
+        let fixture = SidecarFixture::new("content-cache");
+        let session = fixture.session();
+
+        poison_sidecar_content_cache(&session);
+        let report = session.search("finderlatency", 5).unwrap();
+
+        assert_eq!(report.search.hits.len(), 1);
+        assert_eq!(report.search.hits[0].record.id, fixture.record.id);
+        assert_eq!(report.content_cache_misses, 1);
+        assert_eq!(report.record_cache_misses, 1);
+    }
+
+    #[test]
+    fn sidecar_session_recovers_poisoned_record_cache() {
+        let fixture = SidecarFixture::new("record-cache");
+        let session = fixture.session();
+        let first = session.search("finderlatency", 5).unwrap();
+        assert_eq!(first.search.hits.len(), 1);
+
+        poison_sidecar_record_cache(&session);
+        let second = session.search("finderlatency", 5).unwrap();
+
+        assert_eq!(second.search.hits.len(), 1);
+        assert_eq!(second.search.hits[0].record.id, fixture.record.id);
+        assert_eq!(second.content_cache_hits, 1);
+        assert_eq!(second.record_cache_hits, 1);
+    }
+
+    #[test]
+    fn search_archive_lookup_recovers_poisoned_prefix_cache() {
+        let fixture = SidecarFixture::new("prefix-cache");
+        let lookup = fixture.lookup();
+
+        poison_prefix_cache(&lookup);
+        let ids = lookup.prefix_ids("finder").unwrap();
+
+        assert_eq!(ids, vec![fixture.record.id]);
+    }
+
+    #[test]
+    fn search_archive_lookup_recovers_poisoned_substring_cache() {
+        let fixture = SidecarFixture::new("substring-cache");
+        let lookup = fixture.lookup();
+
+        poison_substring_cache(&lookup);
+        let ids = lookup.substring_ids("lat").unwrap();
+
+        assert_eq!(ids, vec![fixture.record.id]);
+    }
+
+    #[test]
+    fn search_archive_lookup_recovers_poisoned_fuzzy_cache() {
+        let fixture = SidecarFixture::new("fuzzy-cache");
+        let lookup = fixture.lookup();
+
+        poison_fuzzy_cache(&lookup);
+        let terms = lookup.fuzzy_terms("finderlatency").unwrap();
+
+        assert!(terms.contains(&"finderlatency".to_string()));
+    }
+
+    fn poison_sidecar_content_cache(session: &SidecarIndexQuerySession) {
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = session
+                .content_cache
+                .lock()
+                .expect("initial sidecar content cache lock");
+            panic!("poison sidecar content cache");
+        }));
+    }
+
+    fn poison_sidecar_record_cache(session: &SidecarIndexQuerySession) {
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = session
+                .record_cache
+                .lock()
+                .expect("initial sidecar record cache lock");
+            panic!("poison sidecar record cache");
+        }));
+    }
+
+    fn poison_prefix_cache(lookup: &SearchArchiveLookup) {
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = lookup
+                .prefix_cache
+                .lock()
+                .expect("initial prefix cache lock");
+            panic!("poison prefix cache");
+        }));
+    }
+
+    fn poison_substring_cache(lookup: &SearchArchiveLookup) {
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = lookup
+                .substring_cache
+                .lock()
+                .expect("initial substring cache lock");
+            panic!("poison substring cache");
+        }));
+    }
+
+    fn poison_fuzzy_cache(lookup: &SearchArchiveLookup) {
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = lookup.fuzzy_cache.lock().expect("initial fuzzy cache lock");
+            panic!("poison fuzzy cache");
+        }));
+    }
+
+    struct SidecarFixture {
+        root: PathBuf,
+        records: PathBuf,
+        columns: PathBuf,
+        metadata: PathBuf,
+        prefixes: PathBuf,
+        substrings: PathBuf,
+        fuzzy: PathBuf,
+        content: PathBuf,
+        record: FileRecord,
+    }
+
+    impl SidecarFixture {
+        fn new(name: &str) -> Self {
+            let root = temp_dir(&format!("gfm-sidecar-poison-{name}"));
+            let records = root.join("records.gfmidx");
+            let columns = root.join("columns.gfmcols");
+            let metadata = root.join("metadata.gfmmeta");
+            let prefixes = root.join("prefixes.gfmprefix");
+            let substrings = root.join("substrings.gfmsubstr");
+            let fuzzy = root.join("fuzzy.gfmfuzzy");
+            let content = root.join("content.gfmcontent");
+            let record = record(FileId::new(VolumeId(7), 42));
+            let record_set = vec![record.clone()];
+
+            write_records(&records, &record_set).unwrap();
+            write_record_columns(&columns, &record_set).unwrap();
+            write_metadata_postings(&metadata, &metadata_postings_from_records(&record_set))
+                .unwrap();
+            write_prefix_postings(&prefixes, &prefix_postings_from_records(&record_set)).unwrap();
+            write_substring_postings(&substrings, &substring_postings_from_records(&record_set))
+                .unwrap();
+            write_fuzzy_postings(&fuzzy, &fuzzy_postings_from_records(&record_set)).unwrap();
+            write_content_postings(
+                &content,
+                &[ContentPosting {
+                    term: "finderlatency".to_string(),
+                    ids: vec![record.id],
+                    positions: vec![ContentPositions {
+                        id: record.id,
+                        positions: vec![1],
+                    }],
+                }],
+            )
+            .unwrap();
+
+            Self {
+                root,
+                records,
+                columns,
+                metadata,
+                prefixes,
+                substrings,
+                fuzzy,
+                content,
+                record,
+            }
+        }
+
+        fn session(&self) -> SidecarIndexQuerySession {
+            SidecarIndexQuerySession::open(
+                &self.records,
+                &self.columns,
+                &self.metadata,
+                &self.prefixes,
+                &self.substrings,
+                &self.fuzzy,
+                &self.content,
+            )
+            .unwrap()
+        }
+
+        fn lookup(&self) -> SearchArchiveLookup {
+            SearchArchiveLookup::open(&self.prefixes, &self.substrings, &self.fuzzy).unwrap()
+        }
+    }
+
+    impl Drop for SidecarFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn record(id: FileId) -> FileRecord {
+        FileRecord {
+            id,
+            parent: None,
+            path: PathBuf::from("/tmp/FinderLatency.md"),
+            name: "FinderLatency.md".to_string(),
+            kind: FileKind::File,
+            len: 12,
+            mode: 0o100644,
+            owner: 501,
+            group: 20,
+            xattrs_digest: 0,
+            created: None,
+            modified: None,
+            changed: None,
+            hidden: false,
+            tags: vec!["Important".to_string()],
+            finder_comment: Some("instant search".to_string()),
+        }
+    }
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
 }
 
 #[derive(Debug)]
