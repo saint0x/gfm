@@ -803,3 +803,31 @@ fn reports_volume_index_policy_from_binary() {
 
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn reports_volume_operation_refusal_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-volume-operation-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-operation")
+        .arg("eject")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-operation\teject\t"));
+    assert!(stdout.contains("\tdisposition=refused\tnative-status=-\t"));
+    assert!(stdout.contains("\tvolume-kind=external\tmount=mounted\t"));
+    assert!(stdout.contains("\treason=fixture-volume-native-operation-disabled\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}

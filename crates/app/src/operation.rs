@@ -169,8 +169,9 @@ fn restore_destination_from_metadata(trashed_path: &Path) -> Result<PathBuf> {
 fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<()> {
     let journal = default_journal_path();
     let trash_metadata = default_trash_metadata_path();
-    let access_gate = operation_access_gate(&operation);
-    let volume_copy_policy = operation_volume_copy_policy(&operation);
+    let volume_report = VolumeDiscoveryReport::discover();
+    let access_gate = operation_access_gate(&operation, &volume_report);
+    let volume_copy_policy = operation_volume_copy_policy_from_report(&operation, &volume_report);
     let label = operation_kind(&operation);
     let volume = operation_volume(&operation);
     let entry = run_volume_task(volume, Priority::Interactive, label, move || {
@@ -188,7 +189,10 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     Ok(())
 }
 
-fn operation_access_gate(operation: &Operation) -> OperationAccessGate {
+fn operation_access_gate(
+    operation: &Operation,
+    volume_report: &VolumeDiscoveryReport,
+) -> OperationAccessGate {
     let mut gate = OperationAccessGate::new();
     let bookmark_store = SecurityScopedBookmarkStore::new(default_security_bookmarks_path());
     for requirement in operation.access_requirements() {
@@ -222,7 +226,44 @@ fn operation_access_gate(operation: &Operation) -> OperationAccessGate {
         });
         gate = gate.with_decision(requirement.path, decision);
     }
+    for requirement in operation.access_requirements() {
+        if !requirement_mutates_volume(operation, requirement.role) {
+            continue;
+        }
+        let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        let Some(volume) = read_only_volume_for_path(volume_report, &probe_path) else {
+            continue;
+        };
+        let reason = format!(
+            "read-only volume {}; label={}; root={}; stable-id={}; role={}",
+            volume.kind.as_str(),
+            volume.label,
+            volume.path.display(),
+            volume.stable_identity,
+            requirement.role.as_str()
+        );
+        gate = gate.with_decision(requirement.path, OperationAccessDecision::deny(reason));
+    }
     gate
+}
+
+fn requirement_mutates_volume(operation: &Operation, role: OperationAccessRole) -> bool {
+    match operation {
+        Operation::Copy { .. } => role == OperationAccessRole::DestinationParent,
+        Operation::Move { .. } | Operation::Rename { .. } | Operation::Restore { .. } => true,
+        Operation::Delete { .. } | Operation::Trash { .. } | Operation::EmptyTrash { .. } => true,
+    }
+}
+
+fn read_only_volume_for_path<'a>(
+    report: &'a VolumeDiscoveryReport,
+    path: &Path,
+) -> Option<&'a gfm_mac::VolumeDescriptor> {
+    report
+        .volumes
+        .iter()
+        .filter(|volume| volume.read_only && path.starts_with(&volume.path))
+        .max_by_key(|volume| volume.path.components().count())
 }
 
 fn operation_security_accesses(operation: &Operation) -> Result<Vec<SecurityScopedBookmarkAccess>> {
@@ -292,10 +333,6 @@ fn operation_access_probe_path(path: &Path, role: OperationAccessRole) -> PathBu
         candidate = parent.to_path_buf();
     }
     candidate
-}
-
-fn operation_volume_copy_policy(operation: &Operation) -> OperationVolumeCopyPolicy {
-    operation_volume_copy_policy_from_report(operation, &VolumeDiscoveryReport::discover())
 }
 
 fn operation_volume_copy_policy_from_report(
@@ -390,8 +427,12 @@ fn operation_kind(operation: &Operation) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_ops::{read_journal, OperationStatus};
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -451,6 +492,48 @@ mod tests {
             256 * 1024
         );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn operation_access_gate_refuses_write_into_read_only_volume() {
+        let root = unique_temp_dir("gfm-app-op-readonly-volume");
+        let source_root = root.join("Source");
+        let volume = root.join("ReadOnlyDrive");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&volume).unwrap();
+        fs::write(volume.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+        fs::set_permissions(&volume, fs::Permissions::from_mode(0o555)).unwrap();
+        let source = source_root.join("source.txt");
+        let destination = volume.join("copy.txt");
+        fs::write(&source, "content").unwrap();
+        let report = VolumeDiscoveryReport::from_paths(vec![volume.clone()]);
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let gate = operation_access_gate(&operation, &report);
+        let journal = root.join("journal.tsv");
+        let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
+            .execute(operation)
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err.to_string().contains("read-only volume external"));
+        assert!(!destination.exists());
+        let journal_entries = read_journal(&journal).unwrap();
+        assert_eq!(journal_entries.len(), 2);
+        assert_eq!(journal_entries[0].status, OperationStatus::Started);
+        assert_eq!(journal_entries[1].status, OperationStatus::Failed);
+        assert!(journal_entries[1]
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("read-only volume external"));
+
+        fs::set_permissions(&volume, fs::Permissions::from_mode(0o755)).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

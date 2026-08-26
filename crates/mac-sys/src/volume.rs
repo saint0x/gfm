@@ -15,6 +15,9 @@ use std::ptr;
 
 type DASessionRef = *const c_void;
 type DADiskRef = *const c_void;
+type DADissenterRef = *const c_void;
+type DADiskEjectCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef, *mut c_void)>;
+type DADiskUnmountCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef, *mut c_void)>;
 
 #[link(name = "DiskArbitration", kind = "framework")]
 extern "C" {
@@ -25,6 +28,18 @@ extern "C" {
         path: CFURLRef,
     ) -> DADiskRef;
     fn DADiskCopyDescription(disk: DADiskRef) -> CFDictionaryRef;
+    fn DADiskEject(
+        disk: DADiskRef,
+        options: u32,
+        callback: DADiskEjectCallback,
+        context: *mut c_void,
+    );
+    fn DADiskUnmount(
+        disk: DADiskRef,
+        options: u32,
+        callback: DADiskUnmountCallback,
+        context: *mut c_void,
+    );
 
     static kDADiskDescriptionDeviceInternalKey: CFStringRef;
     static kDADiskDescriptionDeviceModelKey: CFStringRef;
@@ -99,6 +114,45 @@ pub enum NativeVolumeStatus {
     Available,
     Missing,
     Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeVolumeOperation {
+    Eject,
+    Unmount,
+}
+
+impl NativeVolumeOperation {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Eject => "eject",
+            Self::Unmount => "unmount",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeVolumeOperationStatus {
+    Submitted,
+    Missing,
+    Unavailable,
+}
+
+impl NativeVolumeOperationStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Submitted => "submitted",
+            Self::Missing => "missing",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeVolumeOperationResult {
+    pub operation: NativeVolumeOperation,
+    pub status: NativeVolumeOperationStatus,
+    pub reason: Option<String>,
 }
 
 impl NativeVolumeStatus {
@@ -190,6 +244,71 @@ pub fn copy_volume_description_for_path(path: &Path) -> NativeVolumeDescription 
         device_vendor: string_value(&description, unsafe { kDADiskDescriptionDeviceVendorKey }),
         reason: None,
     }
+}
+
+pub fn submit_volume_operation(
+    path: &Path,
+    operation: NativeVolumeOperation,
+) -> NativeVolumeOperationResult {
+    let Some((session, disk)) = create_disk_for_volume_path(path) else {
+        return NativeVolumeOperationResult {
+            operation,
+            status: if path.exists() {
+                NativeVolumeOperationStatus::Unavailable
+            } else {
+                NativeVolumeOperationStatus::Missing
+            },
+            reason: Some(if path.exists() {
+                format!(
+                    "DiskArbitration did not return a disk for {}",
+                    path.display()
+                )
+            } else {
+                format!("volume path does not exist: {}", path.display())
+            }),
+        };
+    };
+
+    match operation {
+        NativeVolumeOperation::Eject => unsafe {
+            DADiskEject(disk, 0, None, ptr::null_mut());
+        },
+        NativeVolumeOperation::Unmount => unsafe {
+            DADiskUnmount(disk, 0, None, ptr::null_mut());
+        },
+    }
+
+    unsafe {
+        CFRelease(disk as CFTypeRef);
+        CFRelease(session as CFTypeRef);
+    }
+
+    NativeVolumeOperationResult {
+        operation,
+        status: NativeVolumeOperationStatus::Submitted,
+        reason: Some("submitted-to-diskarbitration".to_string()),
+    }
+}
+
+fn create_disk_for_volume_path(path: &Path) -> Option<(DASessionRef, DADiskRef)> {
+    if !path.exists() {
+        return None;
+    }
+    let url = CFURL::from_path(path, true)?;
+    let session = unsafe { DASessionCreate(kCFAllocatorDefault) };
+    if session.is_null() {
+        return None;
+    }
+    let disk = unsafe {
+        DADiskCreateFromVolumePath(kCFAllocatorDefault, session, url.as_concrete_TypeRef())
+    };
+    if disk.is_null() {
+        unsafe {
+            CFRelease(session as CFTypeRef);
+        }
+        return None;
+    }
+    Some((session, disk))
 }
 
 fn string_value(
@@ -331,5 +450,17 @@ mod tests {
 
         assert_eq!(description.status, NativeVolumeStatus::Missing);
         assert!(description.reason.unwrap().contains("does not exist"));
+    }
+
+    #[test]
+    fn missing_volume_operation_does_not_submit_to_diskarbitration() {
+        let result = submit_volume_operation(
+            Path::new("/tmp/gfm-native-volume-operation-missing"),
+            NativeVolumeOperation::Eject,
+        );
+
+        assert_eq!(result.operation, NativeVolumeOperation::Eject);
+        assert_eq!(result.status, NativeVolumeOperationStatus::Missing);
+        assert!(result.reason.unwrap().contains("does not exist"));
     }
 }

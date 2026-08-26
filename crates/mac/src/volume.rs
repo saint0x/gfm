@@ -1,4 +1,6 @@
-use gfm_mac_sys::{NativeVolumeDescription, NativeVolumeStatus};
+use gfm_mac_sys::{
+    NativeVolumeDescription, NativeVolumeOperation, NativeVolumeOperationStatus, NativeVolumeStatus,
+};
 use gfm_types::{GfmError, Result, VolumeId};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -323,6 +325,229 @@ impl VolumeDiscoveryReport {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolumeOperation {
+    Eject,
+    Unmount,
+    Mount,
+}
+
+impl VolumeOperation {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "eject" => Ok(Self::Eject),
+            "unmount" => Ok(Self::Unmount),
+            "mount" => Ok(Self::Mount),
+            other => Err(GfmError::Format(format!(
+                "invalid volume operation `{other}`; expected eject, unmount, or mount"
+            ))),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Eject => "eject",
+            Self::Unmount => "unmount",
+            Self::Mount => "mount",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolumeOperationDisposition {
+    Submitted,
+    Refused,
+    Unsupported,
+    Failed,
+}
+
+impl VolumeOperationDisposition {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Submitted => "submitted",
+            Self::Refused => "refused",
+            Self::Unsupported => "unsupported",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeOperationReport {
+    pub path: PathBuf,
+    pub operation: VolumeOperation,
+    pub disposition: VolumeOperationDisposition,
+    pub native_status: Option<NativeVolumeOperationStatus>,
+    pub volume: Option<VolumeDescriptor>,
+    pub reason: String,
+}
+
+impl VolumeOperationReport {
+    pub fn execute(path: impl AsRef<Path>, operation: VolumeOperation) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        if !path.exists() {
+            return Ok(Self::without_volume(
+                path,
+                operation,
+                VolumeOperationDisposition::Refused,
+                "volume-path-missing",
+            ));
+        }
+
+        let volume = VolumeDescriptor::for_path(&path)?;
+        if operation == VolumeOperation::Mount {
+            return Ok(Self::with_volume(
+                operation,
+                VolumeOperationDisposition::Unsupported,
+                None,
+                volume,
+                "native-mount-requires-unmounted-disk-identity",
+            ));
+        }
+        if volume.source.starts_with("fixture-marker:") {
+            return Ok(Self::with_volume(
+                operation,
+                VolumeOperationDisposition::Refused,
+                None,
+                volume,
+                "fixture-volume-native-operation-disabled",
+            ));
+        }
+        if path == Path::new("/") {
+            return Ok(Self::with_volume(
+                operation,
+                VolumeOperationDisposition::Refused,
+                None,
+                volume,
+                "system-volume-operation-refused",
+            ));
+        }
+        if !path.starts_with("/Volumes") {
+            return Ok(Self::with_volume(
+                operation,
+                VolumeOperationDisposition::Refused,
+                None,
+                volume,
+                "native-volume-operation-requires-volumes-root",
+            ));
+        }
+        if volume.native_status != Some(NativeVolumeStatus::Available) {
+            return Ok(Self::with_volume(
+                operation,
+                VolumeOperationDisposition::Refused,
+                None,
+                volume,
+                "diskarbitration-volume-unavailable",
+            ));
+        }
+        if let Some(reason) = disabled_command_reason(operation, &volume) {
+            return Ok(Self::with_volume(
+                operation,
+                VolumeOperationDisposition::Refused,
+                None,
+                volume,
+                reason,
+            ));
+        }
+
+        let native_operation = match operation {
+            VolumeOperation::Eject => NativeVolumeOperation::Eject,
+            VolumeOperation::Unmount => NativeVolumeOperation::Unmount,
+            VolumeOperation::Mount => unreachable!("mount is handled before native submission"),
+        };
+        let native = gfm_mac_sys::submit_volume_operation(&path, native_operation);
+        let disposition = match native.status {
+            NativeVolumeOperationStatus::Submitted => VolumeOperationDisposition::Submitted,
+            NativeVolumeOperationStatus::Missing | NativeVolumeOperationStatus::Unavailable => {
+                VolumeOperationDisposition::Failed
+            }
+        };
+        Ok(Self::with_volume(
+            operation,
+            disposition,
+            Some(native.status),
+            volume,
+            native.reason.as_deref().unwrap_or(native.status.as_str()),
+        ))
+    }
+
+    fn without_volume(
+        path: PathBuf,
+        operation: VolumeOperation,
+        disposition: VolumeOperationDisposition,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            path,
+            operation,
+            disposition,
+            native_status: None,
+            volume: None,
+            reason: reason.into(),
+        }
+    }
+
+    fn with_volume(
+        operation: VolumeOperation,
+        disposition: VolumeOperationDisposition,
+        native_status: Option<NativeVolumeOperationStatus>,
+        volume: VolumeDescriptor,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            path: volume.path.clone(),
+            operation,
+            disposition,
+            native_status,
+            volume: Some(volume),
+            reason: reason.into(),
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let (kind, mount, stable_identity) = self
+            .volume
+            .as_ref()
+            .map(|volume| {
+                (
+                    volume.kind.as_str(),
+                    volume.mount_state.as_str(),
+                    escape_field(&volume.stable_identity),
+                )
+            })
+            .unwrap_or(("-", "-", "-".to_string()));
+        format!(
+            "volume-operation\t{}\tpath={}\tdisposition={}\tnative-status={}\tvolume-kind={}\tmount={}\tstable-id={}\treason={}",
+            self.operation.as_str(),
+            self.path.display(),
+            self.disposition.as_str(),
+            self.native_status
+                .map(NativeVolumeOperationStatus::as_str)
+                .unwrap_or("-"),
+            kind,
+            mount,
+            stable_identity,
+            escape_field(&self.reason)
+        )
+    }
+}
+
+fn disabled_command_reason(
+    operation: VolumeOperation,
+    volume: &VolumeDescriptor,
+) -> Option<&'static str> {
+    let state = match operation {
+        VolumeOperation::Eject => volume.commands.eject,
+        VolumeOperation::Unmount => volume.commands.unmount,
+        VolumeOperation::Mount => volume.commands.mount,
+    };
+    (state != VolumeCommandState::Enabled).then_some(match operation {
+        VolumeOperation::Eject => "eject-command-disabled",
+        VolumeOperation::Unmount => "unmount-command-disabled",
+        VolumeOperation::Mount => "mount-command-disabled",
+    })
+}
+
 fn classify_volume(
     path: &Path,
     marker: Option<&str>,
@@ -579,6 +804,52 @@ mod tests {
     }
 
     #[test]
+    fn volume_operation_refuses_system_root() {
+        let report = VolumeOperationReport::execute("/", VolumeOperation::Unmount).unwrap();
+
+        assert_eq!(report.operation, VolumeOperation::Unmount);
+        assert_eq!(report.disposition, VolumeOperationDisposition::Refused);
+        assert_eq!(report.native_status, None);
+        assert_eq!(report.reason, "system-volume-operation-refused");
+        assert!(report.as_tsv().contains("\tdisposition=refused\t"));
+    }
+
+    #[test]
+    fn volume_operation_refuses_fixture_volume_before_native_call() {
+        let root = unique_temp_dir("gfm-volume-operation-fixture");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+
+        let report = VolumeOperationReport::execute(&root, VolumeOperation::Eject).unwrap();
+
+        assert_eq!(report.disposition, VolumeOperationDisposition::Refused);
+        assert_eq!(report.native_status, None);
+        assert_eq!(report.reason, "fixture-volume-native-operation-disabled");
+        assert!(report
+            .as_tsv()
+            .contains("\tvolume-kind=external\tmount=mounted\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_mount_operation_is_typed_unsupported() {
+        let root = unique_temp_dir("gfm-volume-operation-mount");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+
+        let report = VolumeOperationReport::execute(&root, VolumeOperation::Mount).unwrap();
+
+        assert_eq!(report.disposition, VolumeOperationDisposition::Unsupported);
+        assert_eq!(report.native_status, None);
+        assert_eq!(
+            report.reason,
+            "native-mount-requires-unmounted-disk-identity"
+        );
+        assert!(report.as_tsv().starts_with("volume-operation\tmount\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn discovery_report_orders_volumes_stably() {
         let first = unique_temp_dir("gfm-volume-a");
         let second = unique_temp_dir("gfm-volume-b");
@@ -596,6 +867,20 @@ mod tests {
 
         fs::remove_dir_all(first).unwrap();
         fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
+    fn volume_operation_refuses_missing_path_without_native_submission() {
+        let report = VolumeOperationReport::execute(
+            "/tmp/gfm-volume-operation-missing",
+            VolumeOperation::Eject,
+        )
+        .unwrap();
+
+        assert_eq!(report.disposition, VolumeOperationDisposition::Refused);
+        assert_eq!(report.native_status, None);
+        assert_eq!(report.reason, "volume-path-missing");
+        assert!(report.as_tsv().contains("\tdisposition=refused\t"));
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

@@ -22,4 +22,8 @@ pub use spotlight::{
     read_spotlight_attributes, read_spotlight_attributes_batch, NativeSpotlightSnapshot,
     NativeSpotlightStatus,
 };
-pub use volume::{copy_volume_description_for_path, NativeVolumeDescription, NativeVolumeStatus};
+pub use volume::{
+    copy_volume_description_for_path, submit_volume_operation, NativeVolumeDescription,
+    NativeVolumeOperation, NativeVolumeOperationResult, NativeVolumeOperationStatus,
+    NativeVolumeStatus,
+};
