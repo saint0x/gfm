@@ -5,8 +5,9 @@ use gfm_fs::{
 use gfm_index::Indexer;
 use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore};
 use gfm_mac::{
-    CloudCommandState, CloudStorageState, FileProviderConflictReport, FileProviderStateReport,
-    VolumeDescriptor, VolumeDiscoveryReport, VolumeKind,
+    current_permission_onboarding, CloudCommandState, CloudStorageState,
+    FileProviderConflictReport, FileProviderStateReport, VolumeDescriptor, VolumeDiscoveryReport,
+    VolumeKind,
 };
 use gfm_types::{FileKind, GfmError, Result};
 use gfm_ui::{
@@ -100,6 +101,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 DialogContract::finder_default(surface)
             };
             println!("{}", contract.as_tsv());
+        }
+        "ui-permission-onboarding-contract" => {
+            let plan = current_permission_onboarding()?;
+            print_permission_onboarding_contract(plan);
         }
         "ui-progress-job-contract" => {
             let path = required_path(
@@ -367,6 +372,29 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     Ok(true)
 }
 
+fn print_permission_onboarding_contract(plan: gfm_mac::PermissionOnboardingPlan) {
+    println!(
+        "{}",
+        DialogContract::finder_default(DialogSurface::Permission).as_tsv()
+    );
+    println!(
+        "permission-onboarding\taction={}\tprompt-mode={}\tfinder-parity-default={}\tmachine-search-ready={}",
+        plan.action.as_str(),
+        plan.policy.prompt_mode.as_str(),
+        plan.finder_parity_default,
+        plan.granted_for_machine_search()
+    );
+    for item in plan.readiness {
+        println!(
+            "permission-scope\t{}\tstate={}\tpath={}\treason={}",
+            item.scope.as_str(),
+            item.state.as_str(),
+            item.path.display(),
+            escape_interface_field(&item.reason)
+        );
+    }
+}
+
 fn native_sidebar_volumes() -> Vec<SidebarVolumeSpec> {
     VolumeDiscoveryReport::discover()
         .volumes
@@ -452,6 +480,16 @@ fn parse_bool(value: &str, name: &str) -> Result<bool> {
         "false" => Ok(false),
         _ => Err(GfmError::Format(format!("{name} must be true or false"))),
     }
+}
+
+fn escape_interface_field(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            '\t' | '\n' | '\r' => ' ',
+            other => other,
+        })
+        .collect()
 }
 
 fn parse_virtual_surface(value: Option<&str>) -> Result<VirtualSurface> {

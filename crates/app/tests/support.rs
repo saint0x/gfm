@@ -93,6 +93,42 @@ fn reports_ui_dialog_contract_from_binary() {
 }
 
 #[test]
+fn reports_permission_onboarding_dialog_contract_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-permission-onboarding-contract")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+    assert!(stdout.contains("button\topen-settings\tOpen Settings\tdefault\tenabled=true"));
+    assert!(stdout.contains("button\tnot-now\tNot Now\tcancel\tenabled=true"));
+    assert!(
+        stdout.contains("\npermission-onboarding\taction="),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tprompt-mode=defer-until-needed\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tfinder-parity-default="), "{stdout}");
+    assert!(stdout.contains("\tmachine-search-ready="), "{stdout}");
+    assert!(
+        stdout.contains("\npermission-scope\tdesktop\tstate="),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\npermission-scope\tfull-disk-access\tstate="),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn reports_progress_dialog_pause_resume_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-dialog-contract", "progress", "paused", "true"])
