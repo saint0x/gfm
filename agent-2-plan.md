@@ -2,247 +2,115 @@
 
 Date: 2026-08-26
 
-This is an undone-only handoff list. Do not use it to record completed work. When an item is fully implemented, verified at the stated scope, merged, and pushed, remove it from this file.
+This is an undone-only handoff. Remove an item only when the whole item is implemented in production code, verified at the stated scope, committed, pushed to `origin/main`, and followed by a clean `git status --branch --short`.
 
-GFM is macOS-only. It is a native Rust + GPUI file manager whose default UI must match Finder byte-for-byte for the supported macOS build/profile while replacing Finder internals with lower-latency, deterministic, recoverable systems. Do not build a web app. Do not build a product CLI. Existing `gfm <command>` paths are internal operator/test harness routes.
+GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GFM-owned performance-critical internals. Do not build cross-platform abstractions. Do not build a product CLI. Existing `gfm <command>` routes are internal operator/test harness surfaces only.
 
-## Verification Rule
+## Done Bar
 
-Do not mark anything done from code shape alone. Done requires current evidence:
+1. A claim is done only when the production path exists and is wired into the downstream system that depends on it.
+2. Tests must cover the exact claim being closed: pure mapping tests for deterministic policy, crate tests for domain behavior, binary/operator tests for public internal routes, and Fozzy for deterministic host scenarios.
+3. Host-backed macOS work must report unsupported, unavailable, denied, offline, and missing states honestly. Do not convert those states into ordinary success.
+4. Pixel-parity work is not done from a token, layout constant, or hand-built fixture alone. It requires captured Finder and captured GFM artifacts for the same macOS build/profile, a strict diff, and reviewed baseline provenance.
+5. UI-plumbing work is not done until the GPUI surface consumes the typed production state and has tests or captured artifacts proving the state appears in the right Finder-matched surface.
+6. Performance work is not done until it has measured latency, memory, cancellation, backpressure, and failure-path evidence for the relevant hot path.
+7. Keep `STATUS.md` as the source of truth for global unfinished work. Do not shrink it unless an entire numbered status item is production-complete.
 
-1. The implementation exists in production code, not only tests, fixtures, docs, or an isolated demo path.
-2. The implementation is wired into the downstream product path that users or production workers depend on.
-3. The relevant unit, integration, binary/operator, and deterministic scenario tests pass.
-4. The verification scope matches the claim. A narrow test cannot close a broad status item.
-5. Generated artifacts are reviewed or intentionally retained, then cleaned before commit if they are not source artifacts.
-6. The commit is pushed to `origin/main`.
-7. `git status --branch --short` is clean after push.
+## FileProvider And iCloud Remaining Work
 
-If any evidence is missing, leave the item on this list.
+1. Implement direct `NSFileProviderManager` or FileProvider-domain enumeration in the macOS bridge so provider/domain identity is not inferred only from URL resource keys, path shape, xattrs, or fixture names.
+2. Add a typed FileProvider domain/manager report that can distinguish iCloud Drive, third-party FileProvider domains, unavailable provider APIs, missing domains, permission-denied paths, and unsupported macOS hosts.
+3. Wire the provider/domain report into `FileProviderStateReport` without losing the existing stable TSV behavior for operator routes.
+4. Add provider progress observation for downloads, evictions, uploads, and waiting/materialization states. Prefer native progress/callback sources; if the API cannot provide percentage for a state, expose an explicit indeterminate progress state rather than fabricating numbers.
+5. Feed FileProvider progress into the job/runtime progress model so foreground preview, thumbnail, operation, and sidebar surfaces can display truthful live state without polling from the UI render path.
+6. Harden materialized-placeholder detection beyond filename and xattr heuristics. Use native resource values and FileProvider domain truth where available, and return a typed unknown/unsupported result when host data is not sufficient.
+7. Add conflict-resolution domain plumbing for FileProvider conflicts: typed conflict identity, affected path list where available, reveal/open command intent, and operation preflight refusal for unresolved conflicts.
+8. Wire FileProvider state into the GPUI sidebar row model for iCloud Drive and FileProvider-backed locations, including cloud-only, downloading, syncing, unavailable, waiting, and conflict presentation.
+9. Wire FileProvider state into live UI invalidation so icon, preview memory cache, preview disk cache, sidebar rows, and search metadata are invalidated from provider state transitions rather than manual refresh.
+10. Add captured Finder pixel baselines for FileProvider/iCloud icon badges, sidebar rows, progress states, conflict states, and unavailable/offline states.
+11. Verify FileProvider work with focused `gfm-mac-sys`, `gfm-mac`, `gfm-preview`, `gfm-ui`, `gfm`, and Fozzy coverage. Leave `STATUS.md` item 28 in place until every FileProvider sub-capability in that item is complete.
 
-## Primary Assignment: macOS FileProvider And iCloud State
+## DiskArbitration And Volume Remaining Work
 
-1. Inspect the existing FileProvider, iCloud, placeholder, badge, sidebar, preview, index, and operation policy code.
+1. Replace remaining marker/path-derived volume classification with direct DiskArbitration, URL resource, mount table, and APFS/container metadata where available.
+2. Implement a long-lived DiskArbitration session owned by the macOS/platform layer, with explicit lifecycle, callback threading, cancellation, and teardown behavior.
+3. Add native eject, unmount, and mount operations with typed disposition, refusal reasons, permission failures, busy-volume failures, and user-cancelled outcomes.
+4. Extend the volume descriptor to include APFS container identity, volume role, case sensitivity, read-only state, network reachability, removable media truth, stable identity, and unavailable API states.
+5. Feed real volume descriptors into sidebar location rows, operation copy/chunk fallback policy, and index scheduling invalidation for slow, network, external, offline, and read-only volumes.
+6. Add live volume invalidation so sidebar rows, operation policy, and index admission update when mount, unmount, eject, disconnect, reconnect, or reachability changes occur.
+7. Add captured Finder pixel baselines for mounted volumes, eject controls, network volumes, offline volumes, disk images, read-only volumes, and volume error sheets.
+8. Verify with pure descriptor mapping tests, host-backed operator tests, downstream policy tests, and Fozzy coverage. Leave `STATUS.md` item 29 in place until the full DiskArbitration scope is complete.
 
-   Start with:
+## Security, TCC, And Permission Remaining Work
 
-   ```sh
-   rg -n "FileProvider|iCloud|cloud|placeholder|materialize|evict|download|sync|provider|badge|sidebar|preview policy|thumbnail|index policy|operation policy" crates/mac crates/fs crates/preview crates/index crates/ops crates/ui crates/app/src crates/app/tests STATUS.md PLAN.md README.md
-   ```
+1. Wire the protected-path/security-scoped access contract into the GPUI first-run and just-in-time permission surfaces with Finder-matched sheet presentation.
+2. Implement prompt orchestration that separates Full Disk Access guidance, security-scoped bookmark acquisition, denied paths, promptable user-selected locations, and non-promptable failures.
+3. Ensure index workers, preview workers, thumbnail workers, extraction workers, and file operations all enforce the same typed permission contract before touching protected paths.
+4. Add a durable permission-state invalidation path so UI, workers, and operation preflight update when access is granted, denied, revoked, stale, repaired, or unavailable.
+5. Add Finder-parity captured baselines for first-run permission guidance, protected-path denial, bookmark acquisition, operation permission sheets, and Full Disk Access guidance.
+6. Verify with deterministic security-policy tests, binary/operator tests that do not trigger unwanted prompts, operation preflight tests, worker admission tests, GPUI contract tests, and Fozzy coverage. Leave `STATUS.md` items 30, 41, and 50 in place until the full UI and worker-enforcement scope is complete.
 
-2. Add a typed FileProvider state contract in `crates/mac`.
+## Finder Pixel-Parity Harness Remaining Work
 
-   Required states:
+1. Implement real Finder screenshot capture for each target macOS build/profile, including appearance, scale factor, color profile, focus state, view mode, window size, fixture root, and surface metadata.
+2. Implement deterministic GFM screenshot capture for the identical fixture matrix and profile metadata.
+3. Persist baseline artifacts with provenance: macOS build, hardware/display profile, app version, fixture manifest, capture command, timestamp, reviewer, and approved mask set.
+4. Fail CI on every unapproved Finder drift for layout, text, icons, toolbar, sidebar, selection, focus, hover, thumbnail, preview, sheet, and menu regions.
+5. Add baseline update review bundles containing Finder screenshot, GFM screenshot, visual diff, first unmasked mismatch, per-region summaries, mask justifications, and signer/reviewer metadata.
+6. Enforce per-build mask files with tight rectangles and durable reasons. Masks are allowed only for unavoidable OS-owned dynamic pixels, never for GFM-owned layout/text/icon drift.
+7. Add tests proving stale baselines, mismatched macOS profiles, missing provenance, empty mask reasons, loose masks, and unapproved drift all fail.
+8. Verify with crate tests, binary parity-gate tests, generated review artifacts, and Fozzy scenario coverage. Leave `STATUS.md` items 7 through 14 in place until the whole capture/baseline/diff/CI/review workflow is complete.
 
-   1. local materialized
-   2. remote placeholder
-   3. downloading or materializing
-   4. uploading or syncing
-   5. offline or unavailable
-   6. evictable local file
-   7. provider conflict
-   8. provider error
-   9. unsupported host or unavailable API
-   10. inaccessible path or permission denied
+## Performance-Critical Work Agent 2 Should Prefer
 
-3. Implement a safe path-based API that returns the typed FileProvider outcome for a real filesystem path.
+1. Prioritize code that removes latency from hot paths: provider state reads, volume classification, permission preflight, sidebar invalidation, preview/thumbnail admission, and operation scheduling.
+2. Do not spend time on cosmetic docs or broad refactors unless they unlock one of the latency-sensitive production paths above.
+3. Keep UI render/update paths free of disk, network, provider, TCC, DiskArbitration, Quick Look, and indexing work. Route those through typed background contracts with cancellation and backpressure.
+4. When introducing caches, define key ownership, invalidation source, memory budget, disk budget, eviction order, and corruption behavior in code and tests.
+5. When touching macOS bridges, keep unsafe Objective-C/CoreFoundation ownership isolated in `crates/mac-sys`, expose typed safe contracts through `crates/mac`, and test unsupported host behavior explicitly.
 
-   Requirements:
+## Required Verification
 
-   1. Keep Objective-C, CoreFoundation, and unsafe ownership at the narrow macOS bridge boundary.
-   2. Make thread-affinity requirements explicit.
-   3. Make host-version support explicit.
-   4. Do not silently coerce unsupported or denied states into ordinary local-file success.
-   5. Do not make Spotlight the source of truth for FileProvider state.
-
-4. Add deterministic pure mapping tests for every typed FileProvider state.
-
-5. Add a real app/operator route that prints stable TSV for one path.
-
-   Suggested route:
-
-   ```sh
-   cargo run -p gfm -- file-provider-state <path>
-   ```
-
-   The route is internal diagnostics only. Keep it thin; platform logic belongs in `crates/mac`.
-
-6. Add a binary test in `crates/app/tests/platform.rs` for the route.
-
-   The test must prove stable formatting and explicit unsupported/error handling. If the host cannot provide live FileProvider state in CI, test the unsupported outcome honestly rather than faking success.
-
-7. Wire FileProvider state into preview/thumbnail scheduling policy.
-
-   Required behavior:
-
-   1. Remote placeholders must not be treated as ordinary local bytes.
-   2. Offline/unavailable provider state must produce a typed skip/defer/fail policy.
-   3. Downloading/syncing state must be visible to scheduling priority and publication policy.
-   4. Foreground preview requests must remain cancellable and must not block the UI render/update path.
-
-8. Wire FileProvider state into icon or sidebar badge intent.
-
-   Required badge intents:
-
-   1. cloud-only
-   2. downloading
-   3. syncing
-   4. unavailable
-   5. conflict
-
-   Use typed values. Do not duplicate string parsing outside the macOS/platform layer.
-
-9. Add tests proving preview/thumbnail policy and badge policy for every important FileProvider state.
-
-10. Add Fozzy coverage for the operator route if the route is deterministic on the host.
-
-11. Do not remove `STATUS.md` item 28 unless the full item is complete: direct FileProvider.framework/NSFileProviderManager state reads, native download/evict operations, provider progress callbacks, placeholder detection, conflict-resolution UI plumbing, sidebar/icon badge propagation, live invalidation, and captured Finder pixel baselines.
-
-## Secondary Assignment: DiskArbitration Volume Truth
-
-1. Inspect current volume descriptor, copy policy, sidebar, and index scheduling code.
-
-   Start with:
+1. Run focused Rust verification for every crate touched:
 
    ```sh
-   rg -n "DiskArbitration|volume|mount|unmount|eject|APFS|network|external|removable|readonly|read-only|case-sensitive|slow volume|copy policy|sidebar location|index policy" crates/mac crates/fs crates/ops crates/index crates/ui crates/app/src crates/app/tests STATUS.md PLAN.md README.md
+   cargo fmt --all -- --check
+   cargo test -p <changed-crate> <focused-filter> -- --nocapture
+   cargo test -p gfm --test platform <focused-filter> -- --nocapture
+   cargo clippy -p <changed-crate> --tests -- -D warnings
+   git diff --check
    ```
 
-2. Add or extend a typed volume descriptor that can represent:
-
-   1. local internal APFS
-   2. external removable
-   3. network volume
-   4. read-only
-   5. ejectable
-   6. unmountable
-   7. offline or unreachable
-   8. case-sensitive
-   9. stable volume identity where available
-   10. unsupported host or unavailable API
-
-3. Implement real host-backed volume lookup for a path or mounted volume.
-
-4. Keep DiskArbitration session ownership isolated and documented at the unsafe/platform boundary.
-
-5. Add deterministic descriptor mapping tests independent from host enumeration.
-
-6. Add a stable app/operator route.
-
-   Suggested route:
+2. Run deterministic host/system verification when an operator route, app path, macOS bridge, or cross-crate policy changes:
 
    ```sh
-   cargo run -p gfm -- volume-state <path>
+   fozzy doctor --deep --scenario tests/scenarios/gfm-cli-host.fozzy.json --runs 5 --seed 424242 --json
+   fozzy test --det --strict-verify tests/scenarios/gfm-cli-host.fozzy.json --json
+   fozzy run tests/scenarios/gfm-cli-host.fozzy.json --det --record /tmp/gfm-cli-host.trace.fozzy --proc-backend host --fs-backend host --http-backend host --json
+   fozzy trace verify /tmp/gfm-cli-host.trace.fozzy --strict --json
+   fozzy replay /tmp/gfm-cli-host.trace.fozzy --json
+   fozzy ci /tmp/gfm-cli-host.trace.fozzy --json
+   fz doctor project . --strict
+   fz audit unsafe .
    ```
 
-7. Feed the descriptor into at least two downstream policies:
-
-   1. sidebar location row state
-   2. operation copy chunk/fallback policy
-   3. index scheduling policy for slow, network, external, or offline volumes
-
-8. Add binary/operator tests and focused downstream policy tests.
-
-9. Do not remove `STATUS.md` item 29 unless the full item is complete: long-lived DiskArbitration callbacks, native eject/unmount/mount operations, APFS/container metadata, network-volume reachability, sidebar propagation, live index policy invalidation, and captured Finder pixel baselines.
-
-## Tertiary Assignment: Security And TCC Readiness
-
-1. Inspect current security-scope, permission, protected-path, first-run onboarding, index admission, preview admission, and operation preflight code.
-
-   Start with:
+3. Clean verifier artifacts before committing unless the artifact is an intentional source artifact:
 
    ```sh
-   rg -n "Security|TCC|Full Disk|security-scoped|bookmark|permission|protected|privacy|onboarding|prompt|denied|operation preflight|index admission|preview admission" crates/mac crates/fs crates/ops crates/index crates/preview crates/ui crates/app/src crates/app/tests STATUS.md PLAN.md README.md
+   if [ -d .fz ]; then /bin/rm -r .fz; fi
+   if [ -d .fozzy ]; then /bin/rm -r .fozzy; fi
+   if [ -e /tmp/gfm-cli-host.trace.fozzy ]; then /bin/rm /tmp/gfm-cli-host.trace.fozzy; fi
+   if [ -e /tmp/gfm-cli-host.trace.1.fozzy ]; then /bin/rm /tmp/gfm-cli-host.trace.1.fozzy; fi
    ```
 
-2. Add or extend a typed protected-path readiness contract.
-
-   Required outcomes:
-
-   1. allowed
-   2. requires Full Disk Access
-   3. security-scoped access available
-   4. promptable
-   5. denied
-   6. unsupported host or unknown
-
-3. Feed the readiness contract into at least two downstream policies:
-
-   1. first-run permission onboarding
-   2. index worker admission
-   3. preview worker admission
-   4. operation preflight
-   5. GPUI permission sheet contract
-
-4. Add deterministic tests for every outcome.
-
-5. Add a stable app/operator route if it can report without triggering unwanted prompts.
-
-6. Do not remove `STATUS.md` item 30 or 50 unless the full GPUI shell, prompt behavior, worker enforcement, and captured Finder baselines are complete.
-
-## Parity Harness Remaining Work
-
-1. Connect the existing parity gate to real Finder screenshot capture.
-
-2. Connect the existing parity gate to deterministic GFM screenshot capture.
-
-3. Add baseline artifact storage keyed by macOS build, appearance, scale factor, color profile, focus state, view mode, fixture root, and surface.
-
-4. Add CI enforcement that fails on every unapproved drift.
-
-5. Add baseline update review artifacts with signer/reviewer metadata.
-
-6. Add per-build mask approval files with durable reason strings and tight rectangles only.
-
-7. Add tests proving stale or mismatched baseline provenance fails.
-
-8. Do not remove `STATUS.md` items 7 through 14 unless the entire capture, baseline, diff, CI, review, and per-build profile workflow is complete.
-
-## Required Verification Commands
-
-Run the focused commands for the crates you touch:
-
-```sh
-cargo fmt --all -- --check
-cargo test -p gfm-mac <filter> -- --nocapture
-cargo test -p gfm-preview <filter> -- --nocapture
-cargo test -p gfm-fs <filter> -- --nocapture
-cargo test -p gfm-index <filter> -- --nocapture
-cargo test -p gfm-ops <filter> -- --nocapture
-cargo test -p gfm-ui <filter> -- --nocapture
-cargo test -p gfm --test platform <filter> -- --nocapture
-cargo clippy -p <changed-crate> --tests -- -D warnings
-git diff --check
-```
-
-For app/operator/system behavior, also run:
-
-```sh
-fozzy doctor --deep --scenario tests/scenarios/gfm-cli-host.fozzy.json --runs 5 --seed 424242 --json
-fozzy test --det --strict-verify tests/scenarios/gfm-cli-host.fozzy.json --json
-fozzy run tests/scenarios/gfm-cli-host.fozzy.json --det --record /tmp/gfm-cli-host.trace.fozzy --proc-backend host --fs-backend host --http-backend host --json
-fozzy trace verify /tmp/gfm-cli-host.trace.fozzy --strict --json
-fozzy replay /tmp/gfm-cli-host.trace.fozzy --json
-fozzy ci /tmp/gfm-cli-host.trace.fozzy --json
-fz doctor project . --strict
-fz audit unsafe .
-```
-
-Clean verifier artifacts before committing:
-
-```sh
-if [ -d .fz ]; then /bin/rm -r .fz; fi
-if [ -d .fozzy ]; then /bin/rm -r .fozzy; fi
-if [ -e /tmp/gfm-cli-host.trace.fozzy ]; then /bin/rm /tmp/gfm-cli-host.trace.fozzy; fi
-if [ -e /tmp/gfm-cli-host.trace.1.fozzy ]; then /bin/rm /tmp/gfm-cli-host.trace.1.fozzy; fi
-```
+4. Before removing anything from this file or `STATUS.md`, cite the exact verification evidence in the commit body or PR notes: commands, changed crates, host assumptions, and why the evidence covers the full item.
 
 ## Commit Rules
 
 1. Keep each commit scoped to one production claim.
 2. Do not mix FileProvider, DiskArbitration, Security/TCC, and parity-capture work in one broad commit.
-3. Do not update `README.md` unless a real command, contract, or production behavior changed.
+3. Do not update `README.md` unless a real command, contract, or product behavior changed.
 4. Do not update `PLAN.md` unless an architectural decision changed.
-5. Do not shrink `STATUS.md` unless a full numbered item is production-complete and verified.
+5. Do not shrink `STATUS.md` unless a full numbered item is complete.
 6. Push every verified pass to `origin/main`.
 7. Leave the tree clean after push.
