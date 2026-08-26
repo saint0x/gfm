@@ -449,6 +449,35 @@ impl SearchArchiveLookup {
             .len();
         Ok((prefixes, substrings, fuzzy))
     }
+
+    fn prefix_postings_bounded<I, S>(
+        &self,
+        prefixes: I,
+        limit: usize,
+    ) -> Result<Vec<SearchPrefixPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut selected = BTreeSet::new();
+        for prefix in prefixes {
+            let prefix = prefix.as_ref();
+            if !prefix.is_empty() {
+                selected.insert(prefix.to_string());
+            }
+        }
+
+        selected
+            .into_iter()
+            .map(|prefix| {
+                let ids = self.prefix_ids_bounded(&prefix, limit)?;
+                Ok(SearchPrefixPosting {
+                    prefix,
+                    ids: ids.ids,
+                })
+            })
+            .collect()
+    }
 }
 
 impl SearchLookup for SearchArchiveLookup {
@@ -661,18 +690,6 @@ pub fn query_sidecar_imports(
         })
         .collect::<Vec<_>>();
 
-    let prefixes = prefix_terms
-        .into_iter()
-        .map(|prefix| {
-            let ids = lookup.prefix_ids_bounded(&prefix, budget.max_prefix_ids_per_term)?;
-            candidate_ids.extend(ids.ids.iter().copied());
-            Ok(SearchPrefixPosting {
-                prefix,
-                ids: ids.ids,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
     let substrings = substrings
         .postings_for_limit(substring_grams, budget.max_substring_ids_per_gram)?
         .into_iter()
@@ -685,7 +702,7 @@ pub fn query_sidecar_imports(
         })
         .collect::<Vec<_>>();
 
-    let mut fuzzy_prefixes = Vec::new();
+    let mut prefix_candidates = prefix_terms.clone();
     let mut fuzzy_candidate_terms = BTreeSet::new();
     let fuzzy = fuzzy_keys
         .into_iter()
@@ -700,19 +717,17 @@ pub fn query_sidecar_imports(
                 })
                 .collect::<Vec<_>>();
             for term in &terms {
-                let ids = lookup.prefix_ids_bounded(term, budget.max_prefix_ids_per_term)?;
-                candidate_ids.extend(ids.ids.iter().copied());
-                fuzzy_prefixes.push(SearchPrefixPosting {
-                    prefix: term.clone(),
-                    ids: ids.ids,
-                });
+                prefix_candidates.push(term.clone());
             }
             Ok(SearchFuzzyPosting { key, terms })
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut prefixes = prefixes;
-    prefixes.extend(fuzzy_prefixes);
+    let prefixes =
+        lookup.prefix_postings_bounded(prefix_candidates, budget.max_prefix_ids_per_term)?;
+    for posting in &prefixes {
+        candidate_ids.extend(posting.ids.iter().copied());
+    }
 
     let content =
         content.postings_for_terms_limit(content_terms.clone(), budget.max_content_ids_per_term)?;

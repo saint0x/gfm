@@ -542,6 +542,7 @@ fn query_sidecar_imports_enforce_query_level_lookup_budgets() {
     .unwrap();
 
     assert_eq!(import.report.substring_postings, 1);
+    assert_eq!(import.report.prefix_postings, 1);
     assert_eq!(import.report.fuzzy_postings, 1);
     assert_eq!(
         import
@@ -552,6 +553,7 @@ fn query_sidecar_imports_enforce_query_level_lookup_budgets() {
         1
     );
     assert_eq!(import.report.candidate_ids, 1);
+    assert_eq!(lookup.cache_telemetry().prefix_lookup_requests, 1);
 
     fs::remove_file(metadata_path).unwrap();
     fs::remove_file(prefixes_path).unwrap();
