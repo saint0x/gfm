@@ -7,6 +7,7 @@ mod intent;
 mod lookup;
 mod query;
 mod ranking;
+mod scoring;
 mod session;
 mod shard;
 mod terms;
@@ -33,11 +34,10 @@ pub use query::{
     SearchQuery, SizeComparison,
 };
 use ranking::{
-    capped_frequency, count_term, filter_kind_matches, kind_score, recency_score, RankAccumulator,
-    CONTENT, CONTENT_FREQUENCY, EXACT_NAME, EXTENSION, FUZZY_NAME, KIND_MATCH, NAME_FREQUENCY,
-    NAME_TOKEN, PATH_COMPONENT, PATH_FREQUENCY, PHRASE, PREFIX_NAME, PROXIMITY, SUBSTRING_NAME,
-    TAG, USER_PINNED,
+    RankAccumulator, CONTENT, EXACT_NAME, EXTENSION, FUZZY_NAME, NAME_TOKEN, PATH_COMPONENT,
+    PHRASE, PREFIX_NAME, PROXIMITY, SUBSTRING_NAME, TAG,
 };
+use scoring::{add_scores, seed_scores};
 pub use session::SearchSupersession;
 pub use shard::ShardedSearchIndex;
 use terms::{
@@ -1048,78 +1048,6 @@ impl SearchIndex {
         }))
     }
 
-    fn score_plain_multi_term_record(
-        &self,
-        record: &FileRecord,
-        query: &SearchQuery,
-        text: &str,
-        full_text_prefix_ids: &BTreeSet<FileId>,
-        fuzzy_by_term: &[BTreeSet<FileId>],
-        pass: SearchPass,
-    ) -> RankAccumulator {
-        let mut score = RankAccumulator::new(0, MatchReason::PathComponent);
-        if self
-            .name_exact
-            .get(text)
-            .is_some_and(|ids| ids.contains(&record.id))
-        {
-            score.add(EXACT_NAME, MatchReason::ExactName);
-        }
-        if full_text_prefix_ids.contains(&record.id) {
-            score.add(PREFIX_NAME, MatchReason::PrefixName);
-        }
-        for (index, term) in query.terms.iter().enumerate() {
-            if self
-                .name_terms
-                .get(term)
-                .is_some_and(|ids| ids.contains(&record.id))
-            {
-                score.add(NAME_TOKEN, MatchReason::SubstringName);
-            }
-            if self
-                .path_terms
-                .get(term)
-                .is_some_and(|ids| ids.contains(&record.id))
-            {
-                score.add(PATH_COMPONENT, MatchReason::PathComponent);
-            }
-            if self
-                .metadata_terms
-                .get(term)
-                .is_some_and(|ids| ids.contains(&record.id))
-            {
-                score.add(TAG, MatchReason::Tag);
-            }
-            if self
-                .extension
-                .get(term)
-                .is_some_and(|ids| ids.contains(&record.id))
-            {
-                score.add(EXTENSION, MatchReason::Extension);
-            }
-            if self
-                .tags
-                .get(term)
-                .is_some_and(|ids| ids.contains(&record.id))
-            {
-                score.add(TAG, MatchReason::Tag);
-            }
-            if pass.includes_deep() && self.content_has(record.id, term) {
-                score.add(CONTENT, MatchReason::Content);
-            }
-            if pass.includes_deep()
-                && fuzzy_by_term
-                    .get(index)
-                    .is_some_and(|ids| ids.contains(&record.id))
-                && !self.record_contains_term(record, term)
-                && self.record_fuzzy_matches_term(record, term)
-            {
-                score.add(FUZZY_NAME, MatchReason::FuzzyName);
-            }
-        }
-        score
-    }
-
     fn record_matches_query(
         &self,
         record: &FileRecord,
@@ -1187,32 +1115,6 @@ impl SearchIndex {
                 .iter()
                 .any(|expression| self.record_matches_expression(record, expression, pass)),
         }
-    }
-
-    fn composite_boosts(&self, record: &FileRecord, query: &SearchQuery, pass: SearchPass) -> i64 {
-        let mut score = recency_score(record);
-        let Some(columns) = self.columns.get(&record.id) else {
-            return score;
-        };
-        if self.pinned.contains(&record.id) {
-            score += USER_PINNED;
-        }
-        for filter in &query.filters {
-            if filter_kind_matches(filter, record.kind) {
-                score += kind_score(record.kind);
-            } else if filter_matches_columns(filter, record, columns) {
-                score += KIND_MATCH / 3;
-            }
-        }
-        for term in &query.terms {
-            score += capped_frequency(count_term(&columns.name, term), NAME_FREQUENCY);
-            score += capped_frequency(count_term(&columns.path, term), PATH_FREQUENCY);
-            if pass.includes_deep() {
-                score +=
-                    capped_frequency(self.content_frequency(record.id, term), CONTENT_FREQUENCY);
-            }
-        }
-        score
     }
 
     fn add_terms(&mut self, record: &FileRecord, columns: &RecordColumns) {
@@ -1400,28 +1302,6 @@ fn rarest_term_postings<'a>(
         .collect::<Option<Vec<_>>>()?
         .into_iter()
         .min_by_key(|ids| ids.len())
-}
-
-fn add_scores(
-    scores: &mut HashMap<FileId, RankAccumulator>,
-    ids: &BTreeSet<FileId>,
-    points: i64,
-    reason: MatchReason,
-) {
-    for id in ids {
-        scores
-            .entry(*id)
-            .and_modify(|score| score.add(points, reason.clone()))
-            .or_insert_with(|| RankAccumulator::new(points, reason.clone()));
-    }
-}
-
-fn seed_scores(scores: &mut HashMap<FileId, RankAccumulator>, ids: &BTreeSet<FileId>) {
-    for id in ids {
-        scores
-            .entry(*id)
-            .or_insert_with(|| RankAccumulator::new(0, MatchReason::PathComponent));
-    }
 }
 
 fn remove_id(map: &mut BTreeMap<String, BTreeSet<FileId>>, key: &str, id: FileId) {
