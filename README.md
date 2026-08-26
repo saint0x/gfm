@@ -103,7 +103,7 @@ The index is compact and incremental:
 - mmap-backed index footprint telemetry with adaptive run/throttle/defer compaction scheduling
 - hot mutable buffers
 - reusable `IndexQuerySession` instances that keep a `LiveIndex` hot across search-as-you-type query changes instead of rebuilding name/path/token postings per keystroke
-- superseded query cancellation for both single-index and full-machine sharded searches so stale keystroke work stops before competing with the newest UI query
+- superseded query cancellation for both single-index and full-machine sharded searches so stale keystroke work stops before competing with the newest UI query, with poisoned internal coordinator state recovered instead of panicking on the hot search path
 - progressive hot/deep result streaming with stable dedupe
 - dedicated simple-query hot-pass execution for immediate name/path/metadata batches before deep fuzzy/content retrieval
 - query-intent preclassification so ordinary searches skip full-record Finder-intent scoring passes
