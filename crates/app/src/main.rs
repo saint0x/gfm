@@ -425,6 +425,7 @@ fn print_usage() {
   gfm search-index-mmap <index.gfmidx> <query>
   gfm search-index-columns <index.gfmidx> <columns.gfmcols> <query>
   gfm search-index-sidecars <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <substrings.gfmsubstr> <fuzzy.gfmfuzzy> <content.gfmcontent> <query>
+  gfm search-index-sidecars-session <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <substrings.gfmsubstr> <fuzzy.gfmfuzzy> <content.gfmcontent> <query>
   gfm search-index-sidecars-budget <index.gfmidx> <columns.gfmcols> <metadata.gfmmeta> <prefixes.gfmprefix> <substrings.gfmsubstr> <fuzzy.gfmfuzzy> <content.gfmcontent> <max-prefix-ids> <max-substring-grams> <max-substring-ids> <max-fuzzy-keys> <max-fuzzy-terms> <max-fuzzy-candidates> <max-content-ids> <query>
   gfm index-footprint <index.gfmidx> <columns.gfmcols|-> <metadata.gfmmeta|-> <prefixes.gfmprefix|-> <substrings.gfmsubstr|-> <fuzzy.gfmfuzzy|-> <content-manifest.gfmmanifest|-> [segments.gfmseg...]
   gfm index-compaction-plan <index.gfmidx> <content-manifest.gfmmanifest|-> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active> [segments.gfmseg...]

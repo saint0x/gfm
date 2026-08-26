@@ -4,7 +4,7 @@ use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, 
 use gfm_content::Extractor;
 use gfm_index::{
     Indexer, LiveIndex, SearchLookupBudget, SearchRecordColumns, SearchStreamStage,
-    SidecarIndexQuerySession,
+    SidecarIndexQuerySession, SidecarQuerySessionReport,
 };
 use gfm_store::{
     ContentArchive, MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary,
@@ -331,6 +331,51 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 budget.max_content_ids_per_term
             );
             for hit in report.search.hits {
+                print_hit(&hit);
+            }
+        }
+        "search-index-sidecars-session" => {
+            let records = required_path(
+                args.next(),
+                "search-index-sidecars-session requires a records path",
+            )?;
+            let columns = required_path(
+                args.next(),
+                "search-index-sidecars-session requires a columns path",
+            )?;
+            let metadata = required_path(
+                args.next(),
+                "search-index-sidecars-session requires a metadata path",
+            )?;
+            let prefixes = required_path(
+                args.next(),
+                "search-index-sidecars-session requires a prefixes path",
+            )?;
+            let substrings = required_path(
+                args.next(),
+                "search-index-sidecars-session requires a substrings path",
+            )?;
+            let fuzzy = required_path(
+                args.next(),
+                "search-index-sidecars-session requires a fuzzy path",
+            )?;
+            let content = required_path(
+                args.next(),
+                "search-index-sidecars-session requires a content path",
+            )?;
+            let query = required_string(
+                args.next(),
+                "search-index-sidecars-session requires a query string",
+            )?;
+            let session = SidecarIndexQuerySession::open(
+                records, columns, metadata, prefixes, substrings, fuzzy, content,
+            )?;
+            let budget = SearchLookupBudget::default();
+            let first = session.search_with_budget(&query, 50, budget)?;
+            print_sidecar_session_report("sidecar-session-first", &session, &first, budget);
+            let second = session.search_with_budget(&query, 50, budget)?;
+            print_sidecar_session_report("sidecar-session-second", &session, &second, budget);
+            for hit in second.search.hits {
                 print_hit(&hit);
             }
         }
@@ -711,6 +756,55 @@ fn print_content_session_report(
         report.posting_cache_misses,
         report.record_cache_hits,
         report.record_cache_misses
+    );
+}
+
+fn print_sidecar_session_report(
+    label: &str,
+    session: &SidecarIndexQuerySession,
+    report: &SidecarQuerySessionReport,
+    budget: SearchLookupBudget,
+) {
+    let hydration = &report.hydration;
+    eprintln!(
+        "{label}\trecords-indexed={}\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tcontent-cache-hits={}\tcontent-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}\tmetadata-budget={}\tprefix-budget={}\tsubstring-budget={}\tfuzzy-key-budget={}\tfuzzy-term-budget={}\tfuzzy-candidate-budget={}\tcontent-budget={}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}",
+        session.indexed_records(),
+        hydration.columns_applied,
+        hydration.records_loaded,
+        hydration.records_missing,
+        hydration.import.candidate_ids,
+        hydration.import.requires_full_record_hydration,
+        hydration.metadata_keys,
+        hydration.prefix_keys,
+        hydration.substring_keys,
+        hydration.fuzzy_keys,
+        hydration.content_keys,
+        report.content_cache_hits,
+        report.content_cache_misses,
+        report.record_cache_hits,
+        report.record_cache_misses,
+        budget.max_metadata_ids_per_term,
+        budget.max_prefix_ids_per_term,
+        budget.max_substring_ids_per_gram,
+        budget.max_fuzzy_keys_per_term,
+        budget.max_fuzzy_terms_per_key,
+        budget.max_fuzzy_candidates_per_term,
+        budget.max_content_ids_per_term,
+        session.indexed_prefixes(),
+        session.indexed_substring_grams(),
+        session.indexed_fuzzy_keys(),
+        report.search.lookup.prefix_lookup_requests,
+        report.search.lookup.prefix_lookup_ids,
+        report.search.lookup.prefix_cache_hits,
+        report.search.lookup.prefix_cache_misses,
+        report.search.lookup.substring_lookup_requests,
+        report.search.lookup.substring_lookup_ids,
+        report.search.lookup.substring_cache_hits,
+        report.search.lookup.substring_cache_misses,
+        report.search.lookup.fuzzy_lookup_requests,
+        report.search.lookup.fuzzy_lookup_terms,
+        report.search.lookup.fuzzy_cache_hits,
+        report.search.lookup.fuzzy_cache_misses,
     );
 }
 

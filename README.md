@@ -419,6 +419,7 @@ cargo run -p gfm -- search-index /tmp/gfm.gfmidx PLAN
 cargo run -p gfm -- search-index-mmap /tmp/gfm.gfmidx PLAN
 cargo run -p gfm -- search-index-columns /tmp/gfm.gfmidx /tmp/gfm.gfmcols PLAN
 cargo run -p gfm -- search-index-sidecars /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmsubstr /tmp/gfm.gfmfuzzy /tmp/gfm.gfmcontent PLAN
+cargo run -p gfm -- search-index-sidecars-session /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmsubstr /tmp/gfm.gfmfuzzy /tmp/gfm.gfmcontent PLAN
 cargo run -p gfm -- search-index-sidecars-budget /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmsubstr /tmp/gfm.gfmfuzzy /tmp/gfm.gfmcontent 4096 16 4096 96 512 4096 4096 PLAN
 cargo run -p gfm -- index-footprint /tmp/gfm.gfmidx /tmp/gfm.gfmcols /tmp/gfm.gfmmeta /tmp/gfm.gfmprefix /tmp/gfm.gfmsubstr /tmp/gfm.gfmfuzzy /tmp/gfm.gfmmanifest /tmp/gfm-*.gfmseg
 cargo run -p gfm -- index-compaction-plan /tmp/gfm.gfmidx /tmp/gfm.gfmmanifest elevated serious battery active /tmp/gfm-*.gfmseg
