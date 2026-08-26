@@ -6,6 +6,7 @@ mod plan;
 mod progress;
 mod recovery;
 mod trashmeta;
+mod verify;
 mod volume;
 
 use access::destination_probe_path;
@@ -32,6 +33,8 @@ pub use recovery::{OperationRecoveryOutcome, OperationRecoveryPolicy, OperationR
 use trashmeta::append_trash_metadata_entry;
 use trashmeta::{append_trash_metadata, reconcile_empty_trash_metadata, remove_trash_metadata};
 pub use trashmeta::{read_trash_metadata, TrashRestoreMetadata};
+use verify::verify_copy;
+pub use verify::VerificationPolicy;
 pub use volume::{OperationVolumeClass, OperationVolumeCopyPolicy};
 #[cfg(test)]
 use volume::{COPY_BUFFER_BYTES, SLOW_COPY_BUFFER_BYTES};
@@ -102,13 +105,6 @@ enum CopyExistingMode {
     Fresh,
     Resume,
     Merge,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VerificationPolicy {
-    None,
-    Size,
-    Bytes,
 }
 
 #[derive(Debug, Clone)]
@@ -1506,74 +1502,6 @@ fn metadata_has_sparse_holes(metadata: &fs::Metadata) -> bool {
     {
         let _ = metadata;
         false
-    }
-}
-
-fn verify_copy(from: &Path, to: &Path, policy: VerificationPolicy) -> Result<()> {
-    match policy {
-        VerificationPolicy::None => Ok(()),
-        VerificationPolicy::Size => verify_copy_size(from, to),
-        VerificationPolicy::Bytes => {
-            verify_copy_size(from, to)?;
-            verify_copy_bytes(from, to)
-        }
-    }
-}
-
-fn verify_copy_size(from: &Path, to: &Path) -> Result<()> {
-    let source_len = fs::metadata(from)
-        .map_err(|err| GfmError::io(from, err))?
-        .len();
-    let destination_len = fs::metadata(to).map_err(|err| GfmError::io(to, err))?.len();
-    if source_len == destination_len {
-        Ok(())
-    } else {
-        Err(GfmError::Format(format!(
-            "copy verification failed for {} -> {}: source size {} != destination size {}",
-            from.display(),
-            to.display(),
-            source_len,
-            destination_len
-        )))
-    }
-}
-
-fn verify_copy_bytes(from: &Path, to: &Path) -> Result<()> {
-    const VERIFY_BUFFER_BYTES: usize = 128 * 1024;
-
-    let mut source = File::open(from).map_err(|err| GfmError::io(from, err))?;
-    let mut destination = File::open(to).map_err(|err| GfmError::io(to, err))?;
-    let mut source_buffer = vec![0; VERIFY_BUFFER_BYTES];
-    let mut destination_buffer = vec![0; VERIFY_BUFFER_BYTES];
-    let mut offset = 0_u64;
-
-    loop {
-        let source_read = source
-            .read(&mut source_buffer)
-            .map_err(|err| GfmError::io(from, err))?;
-        let destination_read = destination
-            .read(&mut destination_buffer)
-            .map_err(|err| GfmError::io(to, err))?;
-        if source_read != destination_read {
-            return Err(GfmError::Format(format!(
-                "copy verification failed for {} -> {}: read length drift at byte {}",
-                from.display(),
-                to.display(),
-                offset
-            )));
-        }
-        if source_read == 0 {
-            return Ok(());
-        }
-        if source_buffer[..source_read] != destination_buffer[..destination_read] {
-            return Err(GfmError::Format(format!(
-                "copy verification failed for {} -> {}: byte mismatch in block starting at {}",
-                from.display(),
-                to.display(),
-                offset
-            )));
-        }
-        offset += source_read as u64;
     }
 }
 
