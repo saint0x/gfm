@@ -7,6 +7,7 @@ mod ingest;
 mod intent;
 mod lookup;
 mod matchers;
+mod pass;
 mod query;
 mod ranking;
 mod scoring;
@@ -30,6 +31,7 @@ pub use lookup::{
     EmptySearchLookup, SearchLookup, SearchLookupBudget, SearchLookupIds, SearchLookupTelemetry,
     SearchLookupTerms,
 };
+pub(crate) use pass::{rarest_term_postings, SearchPass};
 use query::{normalize, tokenize};
 pub use query::{
     DateComparison, DateField, QueryExpr, QueryFilter, QueryKind, QueryProximity, QueryScope,
@@ -691,30 +693,6 @@ impl SearchIndex {
             lookup: telemetry,
         }))
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SearchPass {
-    Hot,
-    Full,
-}
-
-impl SearchPass {
-    fn includes_deep(self) -> bool {
-        self == Self::Full
-    }
-}
-
-fn rarest_term_postings<'a>(
-    terms: &[String],
-    postings: &'a BTreeMap<String, BTreeSet<FileId>>,
-) -> Option<&'a BTreeSet<FileId>> {
-    terms
-        .iter()
-        .map(|term| postings.get(term))
-        .collect::<Option<Vec<_>>>()?
-        .into_iter()
-        .min_by_key(|ids| ids.len())
 }
 
 #[cfg(test)]
