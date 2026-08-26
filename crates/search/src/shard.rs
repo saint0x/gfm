@@ -5,8 +5,10 @@ use crate::{
     SearchSubstringPosting,
 };
 use gfm_jobs::Cancellation;
-use gfm_types::{FileId, FileRecord, GfmError, Result, SearchHit, VolumeId};
-use std::collections::BTreeMap;
+use gfm_types::{
+    ContentPositions, ContentPosting, FileId, FileRecord, GfmError, Result, SearchHit, VolumeId,
+};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 #[derive(Debug, Clone, Default)]
@@ -94,24 +96,10 @@ impl ShardedSearchIndex {
     }
 
     pub fn import_prefix_postings(&mut self, postings: &[SearchPrefixPosting]) -> usize {
-        for (volume, shard) in &mut self.shards {
-            let volume_postings = postings
-                .iter()
-                .filter_map(|posting| {
-                    let ids = posting
-                        .ids
-                        .iter()
-                        .copied()
-                        .filter(|id| id.volume == *volume)
-                        .collect::<Vec<_>>();
-                    (!ids.is_empty()).then(|| SearchPrefixPosting {
-                        prefix: posting.prefix.clone(),
-                        ids,
-                    })
-                })
-                .collect::<Vec<_>>();
-            if !volume_postings.is_empty() {
-                shard.import_prefix_postings(&volume_postings);
+        let mut by_volume = partition_prefix_postings_by_volume(postings);
+        for (volume, volume_postings) in &mut by_volume {
+            if let Some(shard) = self.shards.get_mut(volume) {
+                shard.import_prefix_postings(volume_postings);
             }
         }
         self.shards
@@ -121,60 +109,25 @@ impl ShardedSearchIndex {
     }
 
     pub fn import_substring_postings(&mut self, postings: &[SearchSubstringPosting]) -> usize {
-        self.shards
-            .iter_mut()
-            .map(|(volume, shard)| {
-                let volume_postings = postings
-                    .iter()
-                    .filter_map(|posting| {
-                        let ids = posting
-                            .ids
-                            .iter()
-                            .copied()
-                            .filter(|id| id.volume == *volume)
-                            .collect::<Vec<_>>();
-                        (!ids.is_empty()).then(|| SearchSubstringPosting {
-                            gram: posting.gram.clone(),
-                            ids,
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                if volume_postings.is_empty() {
-                    0
-                } else {
-                    shard.import_substring_postings(&volume_postings)
-                }
-            })
-            .sum()
+        let mut imported = 0;
+        let mut by_volume = partition_substring_postings_by_volume(postings);
+        for (volume, volume_postings) in &mut by_volume {
+            if let Some(shard) = self.shards.get_mut(volume) {
+                imported += shard.import_substring_postings(volume_postings);
+            }
+        }
+        imported
     }
 
     pub fn import_metadata_postings(&mut self, postings: &[SearchMetadataPosting]) -> usize {
-        self.shards
-            .iter_mut()
-            .map(|(volume, shard)| {
-                let volume_postings = postings
-                    .iter()
-                    .filter_map(|posting| {
-                        let ids = posting
-                            .ids
-                            .iter()
-                            .copied()
-                            .filter(|id| id.volume == *volume)
-                            .collect::<Vec<_>>();
-                        (!ids.is_empty()).then(|| SearchMetadataPosting {
-                            field: posting.field,
-                            term: posting.term.clone(),
-                            ids,
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                if volume_postings.is_empty() {
-                    0
-                } else {
-                    shard.import_metadata_postings(&volume_postings)
-                }
-            })
-            .sum()
+        let mut imported = 0;
+        let mut by_volume = partition_metadata_postings_by_volume(postings);
+        for (volume, volume_postings) in &mut by_volume {
+            if let Some(shard) = self.shards.get_mut(volume) {
+                imported += shard.import_metadata_postings(volume_postings);
+            }
+        }
+        imported
     }
 
     pub fn apply_record_columns(&mut self, columns: SearchRecordColumns) -> bool {
@@ -224,32 +177,11 @@ impl ShardedSearchIndex {
         }
     }
 
-    pub fn import_content_postings(&mut self, postings: &[gfm_types::ContentPosting]) {
-        for (volume, shard) in &mut self.shards {
-            let volume_postings = postings
-                .iter()
-                .filter_map(|posting| {
-                    let ids = posting
-                        .ids
-                        .iter()
-                        .copied()
-                        .filter(|id| id.volume == *volume)
-                        .collect::<Vec<_>>();
-                    let positions = posting
-                        .positions
-                        .iter()
-                        .filter(|positions| positions.id.volume == *volume)
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    (!ids.is_empty() || !positions.is_empty()).then(|| gfm_types::ContentPosting {
-                        term: posting.term.clone(),
-                        ids,
-                        positions,
-                    })
-                })
-                .collect::<Vec<_>>();
-            if !volume_postings.is_empty() {
-                shard.import_content_postings(&volume_postings);
+    pub fn import_content_postings(&mut self, postings: &[ContentPosting]) {
+        let mut by_volume = partition_content_postings_by_volume(postings);
+        for (volume, volume_postings) in &mut by_volume {
+            if let Some(shard) = self.shards.get_mut(volume) {
+                shard.import_content_postings(volume_postings);
             }
         }
     }
@@ -474,5 +406,176 @@ impl ShardedSearchIndex {
         } else {
             None
         }
+    }
+}
+
+fn partition_prefix_postings_by_volume(
+    postings: &[SearchPrefixPosting],
+) -> BTreeMap<VolumeId, Vec<SearchPrefixPosting>> {
+    let mut by_volume: BTreeMap<VolumeId, Vec<SearchPrefixPosting>> = BTreeMap::new();
+    for posting in postings {
+        let mut ids_by_volume: BTreeMap<VolumeId, Vec<FileId>> = BTreeMap::new();
+        for id in &posting.ids {
+            ids_by_volume.entry(id.volume).or_default().push(*id);
+        }
+        for (volume, ids) in ids_by_volume {
+            by_volume
+                .entry(volume)
+                .or_default()
+                .push(SearchPrefixPosting {
+                    prefix: posting.prefix.clone(),
+                    ids,
+                });
+        }
+    }
+    by_volume
+}
+
+fn partition_substring_postings_by_volume(
+    postings: &[SearchSubstringPosting],
+) -> BTreeMap<VolumeId, Vec<SearchSubstringPosting>> {
+    let mut by_volume: BTreeMap<VolumeId, Vec<SearchSubstringPosting>> = BTreeMap::new();
+    for posting in postings {
+        let mut ids_by_volume: BTreeMap<VolumeId, Vec<FileId>> = BTreeMap::new();
+        for id in &posting.ids {
+            ids_by_volume.entry(id.volume).or_default().push(*id);
+        }
+        for (volume, ids) in ids_by_volume {
+            by_volume
+                .entry(volume)
+                .or_default()
+                .push(SearchSubstringPosting {
+                    gram: posting.gram.clone(),
+                    ids,
+                });
+        }
+    }
+    by_volume
+}
+
+fn partition_metadata_postings_by_volume(
+    postings: &[SearchMetadataPosting],
+) -> BTreeMap<VolumeId, Vec<SearchMetadataPosting>> {
+    let mut by_volume: BTreeMap<VolumeId, Vec<SearchMetadataPosting>> = BTreeMap::new();
+    for posting in postings {
+        let mut ids_by_volume: BTreeMap<VolumeId, Vec<FileId>> = BTreeMap::new();
+        for id in &posting.ids {
+            ids_by_volume.entry(id.volume).or_default().push(*id);
+        }
+        for (volume, ids) in ids_by_volume {
+            by_volume
+                .entry(volume)
+                .or_default()
+                .push(SearchMetadataPosting {
+                    field: posting.field,
+                    term: posting.term.clone(),
+                    ids,
+                });
+        }
+    }
+    by_volume
+}
+
+fn partition_content_postings_by_volume(
+    postings: &[ContentPosting],
+) -> BTreeMap<VolumeId, Vec<ContentPosting>> {
+    let mut by_volume: BTreeMap<VolumeId, Vec<ContentPosting>> = BTreeMap::new();
+    for posting in postings {
+        let mut ids_by_volume: BTreeMap<VolumeId, Vec<FileId>> = BTreeMap::new();
+        let mut positions_by_volume: BTreeMap<VolumeId, Vec<ContentPositions>> = BTreeMap::new();
+        for id in &posting.ids {
+            ids_by_volume.entry(id.volume).or_default().push(*id);
+        }
+        for positions in &posting.positions {
+            positions_by_volume
+                .entry(positions.id.volume)
+                .or_default()
+                .push(positions.clone());
+        }
+        let volumes = ids_by_volume
+            .keys()
+            .chain(positions_by_volume.keys())
+            .copied()
+            .collect::<BTreeSet<_>>();
+        for volume in volumes {
+            by_volume.entry(volume).or_default().push(ContentPosting {
+                term: posting.term.clone(),
+                ids: ids_by_volume.remove(&volume).unwrap_or_default(),
+                positions: positions_by_volume.remove(&volume).unwrap_or_default(),
+            });
+        }
+    }
+    by_volume
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SearchMetadataField;
+
+    #[test]
+    fn partitions_id_sidecar_postings_by_volume_in_one_pass_shape() {
+        let first = FileId::new(VolumeId(1), 11);
+        let second = FileId::new(VolumeId(2), 22);
+        let missing = FileId::new(VolumeId(9), 99);
+
+        let prefixes = partition_prefix_postings_by_volume(&[SearchPrefixPosting {
+            prefix: "proj".to_string(),
+            ids: vec![first, second, missing],
+        }]);
+        assert_eq!(
+            prefixes.keys().copied().collect::<Vec<_>>(),
+            vec![VolumeId(1), VolumeId(2), VolumeId(9),]
+        );
+        assert_eq!(prefixes[&VolumeId(1)][0].ids, vec![first]);
+        assert_eq!(prefixes[&VolumeId(2)][0].ids, vec![second]);
+
+        let substrings = partition_substring_postings_by_volume(&[SearchSubstringPosting {
+            gram: "roj".to_string(),
+            ids: vec![second, first],
+        }]);
+        assert_eq!(substrings[&VolumeId(1)][0].ids, vec![first]);
+        assert_eq!(substrings[&VolumeId(2)][0].ids, vec![second]);
+
+        let metadata = partition_metadata_postings_by_volume(&[SearchMetadataPosting {
+            field: SearchMetadataField::Tag,
+            term: "important".to_string(),
+            ids: vec![missing, first],
+        }]);
+        assert_eq!(metadata[&VolumeId(1)][0].ids, vec![first]);
+        assert_eq!(metadata[&VolumeId(9)][0].ids, vec![missing]);
+    }
+
+    #[test]
+    fn partitions_content_postings_by_ids_and_positions_volume() {
+        let first = FileId::new(VolumeId(1), 11);
+        let second = FileId::new(VolumeId(2), 22);
+        let positions_only = FileId::new(VolumeId(3), 33);
+
+        let content = partition_content_postings_by_volume(&[ContentPosting {
+            term: "bodymarker".to_string(),
+            ids: vec![first, second],
+            positions: vec![
+                ContentPositions {
+                    id: first,
+                    positions: vec![1, 3],
+                },
+                ContentPositions {
+                    id: positions_only,
+                    positions: vec![5],
+                },
+            ],
+        }]);
+
+        assert_eq!(
+            content.keys().copied().collect::<Vec<_>>(),
+            vec![VolumeId(1), VolumeId(2), VolumeId(3),]
+        );
+        assert_eq!(content[&VolumeId(1)][0].ids, vec![first]);
+        assert_eq!(content[&VolumeId(1)][0].positions[0].positions, vec![1, 3]);
+        assert_eq!(content[&VolumeId(2)][0].ids, vec![second]);
+        assert!(content[&VolumeId(2)][0].positions.is_empty());
+        assert!(content[&VolumeId(3)][0].ids.is_empty());
+        assert_eq!(content[&VolumeId(3)][0].positions[0].id, positions_only);
     }
 }
