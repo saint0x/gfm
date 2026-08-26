@@ -445,7 +445,7 @@ impl OperationContext {
             trash_metadata_path: None,
             cancellation: OperationCancellation::default(),
             pause: OperationPause::default(),
-            verification: VerificationPolicy::Bytes,
+            verification: VerificationPolicy::Size,
             access_gate: OperationAccessGate::default(),
             volume_copy_policy: OperationVolumeCopyPolicy::default(),
         }
@@ -3588,6 +3588,30 @@ mod tests {
     }
 
     #[test]
+    fn operation_context_defaults_to_size_verification_for_fast_local_copies() {
+        let root = unique_temp_dir("gfm-ops-default-verify-size");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "default verification").unwrap();
+        let context = OperationContext::new(&journal);
+
+        assert_eq!(context.verification, VerificationPolicy::Size);
+        Operator::new(context)
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&destination).unwrap(),
+            "default verification"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn copy_can_use_size_only_verification_policy() {
         let root = unique_temp_dir("gfm-ops-verify-size-policy");
         let journal = root.join("journal.log");
@@ -3603,6 +3627,25 @@ mod tests {
             .unwrap();
 
         assert_eq!(fs::read_to_string(&destination).unwrap(), "policy");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_can_opt_into_byte_verification_policy() {
+        let root = unique_temp_dir("gfm-ops-verify-bytes-policy");
+        let journal = root.join("journal.log");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "byte policy").unwrap();
+
+        Operator::new(OperationContext::new(&journal).with_verification(VerificationPolicy::Bytes))
+            .execute(Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "byte policy");
         fs::remove_dir_all(root).unwrap();
     }
 
