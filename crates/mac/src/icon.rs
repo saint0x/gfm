@@ -2,6 +2,10 @@ use crate::{MacBridgeThreadPolicy, MacFramework, SupportEvaluation, SupportMatri
 use gfm_types::{FileKind, FileRecord};
 use std::path::Path;
 
+const FINDER_INFO_XATTR: &str = "com.apple.FinderInfo";
+const FINDER_FLAG_CUSTOM_ICON: u16 = 0x0400;
+const CUSTOM_FOLDER_ICON_FILE: &str = "Icon\r";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeIconRole {
     Application,
@@ -27,6 +31,7 @@ impl NativeIconRole {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeIconProvider {
+    FinderCustomIcon,
     LaunchServicesApplicationIcon,
     LaunchServicesFolderIcon,
     LaunchServicesPackageIcon,
@@ -38,6 +43,7 @@ pub enum NativeIconProvider {
 impl NativeIconProvider {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::FinderCustomIcon => "finder-custom-icon",
             Self::LaunchServicesApplicationIcon => "launchservices-application-icon",
             Self::LaunchServicesFolderIcon => "launchservices-folder-icon",
             Self::LaunchServicesPackageIcon => "launchservices-package-icon",
@@ -157,12 +163,12 @@ impl NativeIconBridgeContract {
 impl NativeIconDescriptor {
     pub fn for_record(record: &FileRecord) -> Self {
         let role = role_for_record(record);
-        let provider = provider_for_role(role);
+        let provider = provider_for_record(record, role);
         let mut badges = badges_for_record(record);
         badges.sort();
         badges.dedup();
         let type_hint = type_hint_for_record(record);
-        let cache_key = cache_key(role, &type_hint, &badges);
+        let cache_key = cache_key(record, role, provider, &type_hint, &badges);
 
         Self {
             role,
@@ -204,6 +210,13 @@ fn role_for_record(record: &FileRecord) -> NativeIconRole {
             FileKind::Other => NativeIconRole::Other,
         }
     }
+}
+
+fn provider_for_record(record: &FileRecord, role: NativeIconRole) -> NativeIconProvider {
+    if has_finder_custom_icon(record) {
+        return NativeIconProvider::FinderCustomIcon;
+    }
+    provider_for_role(role)
 }
 
 fn provider_for_role(role: NativeIconRole) -> NativeIconProvider {
@@ -263,16 +276,53 @@ fn package_type_hint(path: &Path) -> String {
     }
 }
 
-fn cache_key(role: NativeIconRole, type_hint: &str, badges: &[NativeIconBadge]) -> String {
+fn cache_key(
+    record: &FileRecord,
+    role: NativeIconRole,
+    provider: NativeIconProvider,
+    type_hint: &str,
+    badges: &[NativeIconBadge],
+) -> String {
     let badges = badges
         .iter()
         .map(|badge| badge.as_str())
         .collect::<Vec<_>>()
         .join("+");
+    if provider == NativeIconProvider::FinderCustomIcon {
+        let identity = format!(
+            "{}:{}:{:016x}",
+            record.id.volume.0, record.id.node, record.xattrs_digest
+        );
+        if badges.is_empty() {
+            return format!("custom:{identity}:{}:{type_hint}", role.as_str());
+        }
+        return format!("custom:{identity}:{}:{type_hint}:{badges}", role.as_str());
+    }
     if badges.is_empty() {
         format!("{}:{type_hint}", role.as_str())
     } else {
         format!("{}:{type_hint}:{badges}", role.as_str())
+    }
+}
+
+fn has_finder_custom_icon(record: &FileRecord) -> bool {
+    finder_info_has_custom_icon(&record.path)
+        || (record.kind == FileKind::Directory
+            && record.path.join(CUSTOM_FOLDER_ICON_FILE).exists())
+}
+
+fn finder_info_has_custom_icon(path: &Path) -> bool {
+    let Some(raw) = xattr::get(path, FINDER_INFO_XATTR).ok().flatten() else {
+        return false;
+    };
+    finder_info_flags(&raw) & FINDER_FLAG_CUSTOM_ICON != 0
+}
+
+fn finder_info_flags(raw: &[u8]) -> u16 {
+    if raw.len() < 10 {
+        0
+    } else {
+        u16::from_be_bytes([raw[8], raw[9]])
     }
 }
 
@@ -311,7 +361,9 @@ fn extension(path: &Path) -> Option<String> {
 mod tests {
     use super::*;
     use gfm_types::{FileId, VolumeId};
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn resolves_application_icon_descriptor_with_package_badge() {
@@ -367,6 +419,48 @@ mod tests {
             descriptor.as_tsv(),
             "native-icon\tpackage\tlaunchservices-package-icon\tcom.apple.iwork.keynote.key\tpackage:com.apple.iwork.keynote.key:package\tbadges=package"
         );
+    }
+
+    #[test]
+    fn finderinfo_custom_icon_uses_per_file_custom_cache_key() {
+        let path = temp_path("gfm-native-custom-icon", "app");
+        fs::create_dir_all(&path).unwrap();
+        let mut finder_info = [0u8; 32];
+        finder_info[8..10].copy_from_slice(&FINDER_FLAG_CUSTOM_ICON.to_be_bytes());
+        xattr::set(&path, FINDER_INFO_XATTR, &finder_info).unwrap();
+        let mut record = record("Custom.app", FileKind::Directory);
+        record.path = path.clone();
+        record.xattrs_digest = 0x1234;
+
+        let descriptor = NativeIconDescriptor::for_record(&record);
+
+        assert_eq!(descriptor.provider, NativeIconProvider::FinderCustomIcon);
+        assert_eq!(descriptor.role, NativeIconRole::Application);
+        assert_eq!(
+            descriptor.cache_key,
+            "custom:1:1:0000000000001234:application:com.apple.application-bundle:package"
+        );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn folder_icon_resource_uses_custom_icon_provider() {
+        let path = temp_path("gfm-native-folder-icon", "folder");
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join(CUSTOM_FOLDER_ICON_FILE), b"icon").unwrap();
+        let mut record = record("CustomFolder", FileKind::Directory);
+        record.path = path.clone();
+        record.xattrs_digest = 0xabcd;
+
+        let descriptor = NativeIconDescriptor::for_record(&record);
+
+        assert_eq!(descriptor.provider, NativeIconProvider::FinderCustomIcon);
+        assert_eq!(descriptor.role, NativeIconRole::Folder);
+        assert_eq!(
+            descriptor.cache_key,
+            "custom:1:1:000000000000abcd:folder:public.folder"
+        );
+        fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
@@ -431,5 +525,16 @@ mod tests {
             tags: Vec::new(),
             finder_comment: None,
         }
+    }
+
+    fn temp_path(prefix: &str, extension: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}-{nanos}.{extension}",
+            std::process::id()
+        ))
     }
 }

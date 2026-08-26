@@ -188,6 +188,52 @@ fn reports_native_icon_descriptor_from_binary() {
 }
 
 #[test]
+fn reports_custom_finder_icon_descriptor_from_binary() {
+    const FINDER_INFO_XATTR: &str = "com.apple.FinderInfo";
+    const FINDER_FLAG_CUSTOM_ICON: u16 = 0x0400;
+
+    let root = std::env::temp_dir().join(format!("gfm-custom-native-icon-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let app = root.join("Custom.app");
+    std::fs::create_dir_all(&app).unwrap();
+    let mut finder_info = [0u8; 32];
+    finder_info[8..10].copy_from_slice(&FINDER_FLAG_CUSTOM_ICON.to_be_bytes());
+    xattr::set(&app, FINDER_INFO_XATTR, &finder_info).unwrap();
+
+    let native = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("native-icon")
+        .arg(&app)
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    let native_stdout = String::from_utf8(native.stdout).unwrap();
+    assert!(native_stdout.starts_with("native-icon\tapplication\tfinder-custom-icon\t"));
+    assert!(native_stdout.contains("\tbadges=package"));
+    assert!(native_stdout.contains("\tcustom:"));
+
+    let preview = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("icon-preview")
+        .arg(&app)
+        .output()
+        .unwrap();
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    let preview_stdout = String::from_utf8(preview.stdout).unwrap();
+    assert!(preview_stdout.contains("\tfinder-custom-icon\t"));
+    assert!(preview_stdout.contains("\tbadges=package\t"));
+    assert!(preview_stdout.contains("\tcache=refresh-memory-only\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_spotlight_reconciliation_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-spotlight-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
