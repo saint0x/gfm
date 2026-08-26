@@ -1,3 +1,7 @@
+use gfm_mac_sys::{
+    copy_fileprovider_resource_values, NativeFileProviderResourceValues,
+    NativeUbiquitousDownloadingStatus,
+};
 use gfm_types::{GfmError, Result};
 use std::path::{Path, PathBuf};
 
@@ -189,6 +193,7 @@ impl FileProviderStateReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CloudHints {
+    native: NativeFileProviderResourceValues,
     xattrs: Vec<String>,
     provider_identifier: Option<String>,
     source: String,
@@ -196,9 +201,14 @@ struct CloudHints {
 
 impl CloudHints {
     fn read(path: &Path) -> Self {
+        let native = copy_fileprovider_resource_values(path);
         let mut xattrs = Vec::new();
         let mut provider_identifier = None;
         let mut sources = Vec::new();
+
+        if native_has_fileprovider_values(&native) {
+            sources.push("native-url-resource".to_string());
+        }
 
         if let Ok(attrs) = xattr::list(path) {
             for attr in attrs {
@@ -233,6 +243,7 @@ impl CloudHints {
         }
 
         Self {
+            native,
             xattrs,
             provider_identifier,
             source: if sources.is_empty() {
@@ -247,9 +258,10 @@ impl CloudHints {
 }
 
 fn domain_for_path(path: &Path, hints: &CloudHints) -> FileProviderDomain {
-    if path_components(path)
-        .iter()
-        .any(|component| component == ICLOUD_DRIVE_COMPONENT)
+    if hints.native.is_ubiquitous == Some(true)
+        || path_components(path)
+            .iter()
+            .any(|component| component == ICLOUD_DRIVE_COMPONENT)
         || file_name_lower(path).contains("icloud")
         || hints
             .xattrs
@@ -278,6 +290,12 @@ fn storage_state_for_path(
         return CloudStorageState::LocalOnly;
     }
 
+    if hints.native.is_ubiquitous == Some(true) {
+        if let Some(state) = native_storage_state(&hints.native) {
+            return state;
+        }
+    }
+
     let name = file_name_lower(path);
     let attr_blob = hints.xattrs.join("\n").to_ascii_lowercase();
     if name.contains("conflict") || attr_blob.contains("conflict") {
@@ -300,6 +318,30 @@ fn storage_state_for_path(
         CloudStorageState::Downloaded
     } else {
         CloudStorageState::Unknown
+    }
+}
+
+fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<CloudStorageState> {
+    if values.has_unresolved_conflicts == Some(true) {
+        Some(CloudStorageState::Conflict)
+    } else if values.is_downloading == Some(true) {
+        Some(CloudStorageState::Downloading)
+    } else if values.is_uploading == Some(true) {
+        Some(CloudStorageState::Uploading)
+    } else {
+        match values.downloading_status {
+            Some(NativeUbiquitousDownloadingStatus::NotDownloaded) => {
+                Some(CloudStorageState::Evicted)
+            }
+            Some(NativeUbiquitousDownloadingStatus::Downloaded)
+            | Some(NativeUbiquitousDownloadingStatus::Current) => {
+                Some(CloudStorageState::Downloaded)
+            }
+            Some(NativeUbiquitousDownloadingStatus::Other) => Some(CloudStorageState::Unknown),
+            None if values.is_uploaded == Some(false) => Some(CloudStorageState::Waiting),
+            None if values.is_uploaded == Some(true) => Some(CloudStorageState::Downloaded),
+            None => None,
+        }
     }
 }
 
@@ -390,6 +432,15 @@ fn non_empty(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
+fn native_has_fileprovider_values(values: &NativeFileProviderResourceValues) -> bool {
+    values.is_ubiquitous.is_some()
+        || values.has_unresolved_conflicts.is_some()
+        || values.is_downloading.is_some()
+        || values.is_uploading.is_some()
+        || values.is_uploaded.is_some()
+        || values.downloading_status.is_some()
+}
+
 fn escape_field(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -400,6 +451,7 @@ fn escape_field(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_mac_sys::NativeFileProviderStatus;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -475,6 +527,54 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn native_ubiquitous_downloading_state_overrides_fixture_name() {
+        let path = PathBuf::from("/tmp/Downloaded.icloud.md");
+        let hints = CloudHints {
+            native: native_values(
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(NativeUbiquitousDownloadingStatus::Current),
+            ),
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+
+        assert_eq!(domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(state, CloudStorageState::Downloading);
+    }
+
+    #[test]
+    fn native_conflict_state_overrides_local_filename_fallbacks() {
+        let path = PathBuf::from("/tmp/Report.md");
+        let hints = CloudHints {
+            native: native_values(
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(NativeUbiquitousDownloadingStatus::Downloaded),
+            ),
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+
+        assert_eq!(domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(state, CloudStorageState::Conflict);
+    }
+
     fn unique_temp_dir() -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "gfm-fileprovider-{}-{}",
@@ -483,5 +583,25 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn native_values(
+        is_ubiquitous: Option<bool>,
+        has_unresolved_conflicts: Option<bool>,
+        is_downloading: Option<bool>,
+        is_uploading: Option<bool>,
+        is_uploaded: Option<bool>,
+        downloading_status: Option<NativeUbiquitousDownloadingStatus>,
+    ) -> NativeFileProviderResourceValues {
+        NativeFileProviderResourceValues {
+            is_ubiquitous,
+            has_unresolved_conflicts,
+            is_downloading,
+            is_uploading,
+            is_uploaded,
+            downloading_status,
+            status: NativeFileProviderStatus::Available,
+            reason: None,
+        }
     }
 }

@@ -1,4 +1,5 @@
 mod bookmark;
+mod fileprovider;
 mod finder;
 mod spotlight;
 mod volume;
@@ -7,6 +8,10 @@ pub use bookmark::{
     create_security_scoped_bookmark, resolve_security_scoped_bookmark,
     start_security_scoped_bookmark_access, NativeBookmarkData, NativeBookmarkResolution,
     NativeBookmarkStatus, NativeSecurityScopedAccess,
+};
+pub use fileprovider::{
+    copy_fileprovider_resource_values, NativeFileProviderResourceValues, NativeFileProviderStatus,
+    NativeUbiquitousDownloadingStatus,
 };
 pub use finder::{copy_kind_string_for_path, NativeFinderKind, NativeFinderKindStatus};
 pub use spotlight::{
