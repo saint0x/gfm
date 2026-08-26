@@ -6,10 +6,11 @@ use gfm_fs::record_for_path;
 use gfm_index::{parse_volume_indexing_policy, VolumeIndexPolicy};
 use gfm_jobs::{Cancellation, Priority, SchedulingAction};
 use gfm_mac::{
-    current_host_profile, parse_spotlight_fixture, AccessIntent, FileProviderOperation,
-    FileProviderOperationReport, FileProviderStateReport, MacBridgeContract,
-    NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
-    SpotlightMetadataReader, SpotlightReconciliationReport, VolumeDiscoveryReport,
+    current_host_profile, parse_spotlight_fixture, AccessIntent, CloudStorageState,
+    FileProviderInvalidationReport, FileProviderOperation, FileProviderOperationReport,
+    FileProviderStateReport, MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor,
+    SecurityScopedAccessReport, SpotlightMetadataReader, SpotlightReconciliationReport,
+    VolumeDiscoveryReport,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path, IconPreviewContract,
@@ -64,6 +65,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             println!(
                 "{}",
                 FileProviderOperationReport::execute(path, operation)?.as_tsv()
+            );
+        }
+        "fileprovider-invalidation" => {
+            let previous = CloudStorageState::parse(&required_string(
+                args.next(),
+                "fileprovider-invalidation requires a previous state",
+            )?)?;
+            let path = required_path(args.next(), "fileprovider-invalidation requires a path")?;
+            println!(
+                "{}",
+                FileProviderInvalidationReport::evaluate(path, previous)?.as_tsv()
             );
         }
         "volume-discovery" => {

@@ -52,6 +52,23 @@ impl CloudStorageState {
             Self::Unknown => "unknown",
         }
     }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "local-only" => Ok(Self::LocalOnly),
+            "downloaded" => Ok(Self::Downloaded),
+            "evicted" => Ok(Self::Evicted),
+            "downloading" => Ok(Self::Downloading),
+            "uploading" => Ok(Self::Uploading),
+            "waiting" => Ok(Self::Waiting),
+            "conflict" => Ok(Self::Conflict),
+            "offline" => Ok(Self::Offline),
+            "unknown" => Ok(Self::Unknown),
+            other => Err(GfmError::Format(format!(
+                "unsupported FileProvider storage state `{other}`"
+            ))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -178,6 +195,82 @@ pub struct FileProviderOperationReport {
     pub before: FileProviderStateReport,
     pub after: Option<FileProviderStateReport>,
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderInvalidationReport {
+    pub path: PathBuf,
+    pub previous: CloudStorageState,
+    pub current: FileProviderStateReport,
+    pub state_changed: bool,
+    pub invalidate_icon: bool,
+    pub invalidate_preview_memory: bool,
+    pub invalidate_preview_disk: bool,
+    pub invalidate_sidebar: bool,
+    pub reindex_metadata: bool,
+    pub reason: &'static str,
+}
+
+impl FileProviderInvalidationReport {
+    pub fn evaluate(
+        path: impl AsRef<Path>,
+        previous: CloudStorageState,
+    ) -> Result<FileProviderInvalidationReport> {
+        let path = path.as_ref().to_path_buf();
+        let current = FileProviderStateReport::read_path(&path)?;
+        let state_changed = previous != current.storage_state;
+        let provider_visible = current.domain != FileProviderDomain::Local
+            || previous != CloudStorageState::LocalOnly
+            || !current.badges.is_empty();
+        let invalidate_sidebar = provider_visible
+            && matches!(
+                current.storage_state,
+                CloudStorageState::Downloaded
+                    | CloudStorageState::Evicted
+                    | CloudStorageState::Downloading
+                    | CloudStorageState::Uploading
+                    | CloudStorageState::Waiting
+                    | CloudStorageState::Conflict
+                    | CloudStorageState::Offline
+                    | CloudStorageState::Unknown
+            );
+        let reason = if !provider_visible {
+            "not-provider-visible"
+        } else if state_changed {
+            "fileprovider-state-changed"
+        } else {
+            "fileprovider-state-unchanged"
+        };
+
+        Ok(FileProviderInvalidationReport {
+            path,
+            previous,
+            state_changed,
+            invalidate_icon: provider_visible && state_changed,
+            invalidate_preview_memory: provider_visible && state_changed,
+            invalidate_preview_disk: provider_visible && state_changed,
+            invalidate_sidebar,
+            reindex_metadata: provider_visible && state_changed,
+            current,
+            reason,
+        })
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "fileprovider-invalidation\t{}\tprevious={}\tcurrent={}\tchanged={}\ticon={}\tpreview-memory={}\tpreview-disk={}\tsidebar={}\treindex-metadata={}\treason={}",
+            self.path.display(),
+            self.previous.as_str(),
+            self.current.storage_state.as_str(),
+            self.state_changed,
+            self.invalidate_icon,
+            self.invalidate_preview_memory,
+            self.invalidate_preview_disk,
+            self.invalidate_sidebar,
+            self.reindex_metadata,
+            self.reason
+        )
+    }
 }
 
 impl FileProviderOperationReport {
@@ -726,6 +819,58 @@ mod tests {
         assert_eq!(report.before.storage_state, CloudStorageState::Downloading);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalidation_marks_provider_state_transitions() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&evicted, "placeholder").unwrap();
+
+        let report =
+            FileProviderInvalidationReport::evaluate(&evicted, CloudStorageState::Downloaded)
+                .unwrap();
+
+        assert!(report.state_changed);
+        assert!(report.invalidate_icon);
+        assert!(report.invalidate_preview_memory);
+        assert!(report.invalidate_preview_disk);
+        assert!(report.invalidate_sidebar);
+        assert!(report.reindex_metadata);
+        assert_eq!(report.reason, "fileprovider-state-changed");
+        assert_eq!(report.current.storage_state, CloudStorageState::Evicted);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalidation_does_not_churn_unchanged_provider_state() {
+        let root = unique_temp_dir();
+        let downloaded = root.join("Downloaded.icloud.md");
+        fs::write(&downloaded, "downloaded").unwrap();
+
+        let report =
+            FileProviderInvalidationReport::evaluate(&downloaded, CloudStorageState::Downloaded)
+                .unwrap();
+
+        assert!(!report.state_changed);
+        assert!(!report.invalidate_icon);
+        assert!(!report.invalidate_preview_memory);
+        assert!(!report.invalidate_preview_disk);
+        assert!(report.invalidate_sidebar);
+        assert!(!report.reindex_metadata);
+        assert_eq!(report.reason, "fileprovider-state-unchanged");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parses_cloud_storage_state_for_operator_surfaces() {
+        assert_eq!(
+            CloudStorageState::parse("downloading").unwrap(),
+            CloudStorageState::Downloading
+        );
+        assert!(CloudStorageState::parse("not-real").is_err());
     }
 
     #[test]
