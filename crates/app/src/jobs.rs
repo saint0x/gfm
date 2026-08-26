@@ -1,9 +1,9 @@
 use crate::runtime::{default_job_journal_path, run_scheduled_volume_task};
 use crate::{parent_volume, parse_optional_scheduling_pressure, parse_usize_arg, required_path};
 use gfm_jobs::{
-    Cancellation, JobClass, JobFairnessPlanner, JobFairnessPolicy, JobJournal, JobPayloadCatalog,
-    JobPayloadKind, JobPayloadRecord, JobProgressSnapshot, JobProgressState, JobProgressStore,
-    Priority, RecoveryReason, RetryPolicy, Scheduler,
+    Cancellation, JobClass, JobFairnessPolicy, JobJournal, JobPayloadCatalog, JobPayloadKind,
+    JobPayloadRecord, JobProgressSnapshot, JobProgressState, JobProgressStore, Priority,
+    RecoveryReason, RetryPolicy, Scheduler,
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::path::{Path, PathBuf};
@@ -228,15 +228,15 @@ fn sample_fairness_plan() -> gfm_jobs::JobFairnessPlan {
         [gfm_jobs::JobId::from_raw(999)],
     );
 
-    JobFairnessPlanner::new(
+    scheduler.drain_fair_ready(
         JobFairnessPolicy::new()
             .with_quota(JobClass::Foreground, 1)
             .with_quota(JobClass::Visible, 1)
             .with_quota(JobClass::Background, 1)
             .with_quota(JobClass::Maintenance, 1)
             .with_quota(JobClass::Repair, 1),
+        [],
     )
-    .plan(scheduler.drain_ready())
 }
 
 fn sample_progress_snapshots() -> Vec<JobProgressSnapshot> {

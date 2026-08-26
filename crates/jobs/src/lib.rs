@@ -295,6 +295,29 @@ impl Scheduler {
         }
         jobs
     }
+
+    pub fn drain_fair_ready(
+        &mut self,
+        policy: JobFairnessPolicy,
+        completed: impl IntoIterator<Item = JobId>,
+    ) -> JobFairnessPlan {
+        let drained = self.drain_ready();
+        let plan = JobFairnessPlanner::new(policy)
+            .with_completed(completed)
+            .plan(drained.clone());
+        let blocked_ids = plan
+            .blocked
+            .iter()
+            .map(|job| job.id)
+            .collect::<HashSet<_>>();
+        for job in drained
+            .into_iter()
+            .filter(|job| blocked_ids.contains(&job.id))
+        {
+            self.queue.push(QueuedJob(job));
+        }
+        plan
+    }
 }
 
 pub struct Task {

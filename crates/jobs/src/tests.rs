@@ -116,6 +116,68 @@ fn fairness_planner_honors_dependencies_and_reports_blocked_jobs() {
 }
 
 #[test]
+fn scheduler_fair_drain_retains_blocked_jobs_until_dependencies_complete() {
+    let mut scheduler = Scheduler::new();
+    let metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "rebuild metadata",
+    );
+    scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair search sidecars",
+        [metadata.id],
+    );
+    let thumbnail = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair missing thumbnail",
+        [JobId::from_raw(99)],
+    );
+
+    let first = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+
+    assert_eq!(
+        first.labels(),
+        ["rebuild metadata", "repair search sidecars"]
+    );
+    assert_eq!(first.blocked.len(), 1);
+    assert_eq!(first.blocked[0].id, thumbnail.id);
+    assert_eq!(first.blocked[0].missing_dependencies, [JobId::from_raw(99)]);
+
+    let still_blocked = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    assert!(still_blocked.ready.is_empty());
+    assert_eq!(still_blocked.blocked.len(), 1);
+    assert_eq!(still_blocked.blocked[0].id, thumbnail.id);
+
+    let released = scheduler.drain_fair_ready(JobFairnessPolicy::default(), [JobId::from_raw(99)]);
+    assert_eq!(released.labels(), ["repair missing thumbnail"]);
+    assert!(released.blocked.is_empty());
+}
+
+#[test]
+fn scheduler_fair_drain_drops_cancelled_jobs_before_planning() {
+    let mut scheduler = Scheduler::new();
+    scheduler.schedule_in_class(Priority::Visible, JobClass::Visible, "render visible rows");
+    let cancelled = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Background,
+        "obsolete content index",
+    );
+    scheduler.cancel(cancelled.id);
+
+    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+
+    assert_eq!(plan.labels(), ["render visible rows"]);
+    assert!(plan.blocked.is_empty());
+
+    let empty = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    assert!(empty.ready.is_empty());
+    assert!(empty.blocked.is_empty());
+}
+
+#[test]
 fn progress_store_round_trips_and_restores_active_snapshots() {
     let path = temp_path("gfm-job-progress", "gfmprogress");
     let store = JobProgressStore::new(&path);
