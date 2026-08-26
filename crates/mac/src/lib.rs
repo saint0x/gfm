@@ -28,8 +28,9 @@ pub use permissions::{
 };
 pub use security::{
     AccessIntent, AccessProbeState, ProtectedScope, SecurityAccessMode, SecurityDecisionAction,
-    SecurityScopedAccessReport, SecurityScopedBookmark, SecurityScopedBookmarkReport,
-    SecurityScopedBookmarkStatus,
+    SecurityScopedAccessReport, SecurityScopedBookmark, SecurityScopedBookmarkRecord,
+    SecurityScopedBookmarkReport, SecurityScopedBookmarkResolution, SecurityScopedBookmarkStatus,
+    SecurityScopedBookmarkStore, SecurityScopedBookmarkStoreReport,
 };
 pub use spotlight::{
     parse_spotlight_fixture, SpotlightField, SpotlightFieldDecision, SpotlightFieldReconciliation,

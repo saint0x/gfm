@@ -3,6 +3,14 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+mod bookmark;
+
+pub use bookmark::{
+    SecurityScopedBookmark, SecurityScopedBookmarkRecord, SecurityScopedBookmarkReport,
+    SecurityScopedBookmarkResolution, SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore,
+    SecurityScopedBookmarkStoreReport,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessIntent {
     Read,
@@ -140,46 +148,6 @@ pub struct SecurityScopedAccessReport {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SecurityScopedBookmark {
-    pub path: PathBuf,
-    pub read_only: bool,
-    pub data: Vec<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SecurityScopedBookmarkReport {
-    pub path: PathBuf,
-    pub status: SecurityScopedBookmarkStatus,
-    pub read_only: bool,
-    pub byte_len: usize,
-    pub resolved_path: Option<PathBuf>,
-    pub stale: bool,
-    pub access_started: bool,
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SecurityScopedBookmarkStatus {
-    Created,
-    Resolved,
-    Missing,
-    Unavailable,
-    NotRequired,
-}
-
-impl SecurityScopedBookmarkStatus {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Created => "created",
-            Self::Resolved => "resolved",
-            Self::Missing => "missing",
-            Self::Unavailable => "unavailable",
-            Self::NotRequired => "not-required",
-        }
-    }
-}
-
 impl SecurityScopedAccessReport {
     pub fn evaluate(path: impl AsRef<Path>, intent: AccessIntent) -> Self {
         let path = path.as_ref().to_path_buf();
@@ -206,25 +174,6 @@ impl SecurityScopedAccessReport {
         }
     }
 
-    pub fn create_bookmark(&self) -> SecurityScopedBookmarkReport {
-        if !self.bookmark_required {
-            return SecurityScopedBookmarkReport::not_required(self.path.clone(), false);
-        }
-        if self.action != SecurityDecisionAction::Allow {
-            return SecurityScopedBookmarkReport::unavailable(
-                self.path.clone(),
-                bookmark_read_only(self.intent),
-                format!(
-                    "bookmark creation requires allowed access; current action is {}",
-                    self.action.as_str()
-                ),
-            );
-        }
-        SecurityScopedBookmark::create(&self.path, bookmark_read_only(self.intent))
-            .map(SecurityScopedBookmarkReport::created)
-            .unwrap_or_else(|report| report)
-    }
-
     pub fn as_tsv(&self) -> String {
         format!(
             "security-scope\t{}\tintent={}\tscope={}\tprobe={}\tmode={}\taction={}\tbookmark-required={}\tcan-read={}\tcan-write={}\tleast-privilege={}\treason={}",
@@ -239,147 +188,6 @@ impl SecurityScopedAccessReport {
             self.can_write,
             self.least_privilege,
             escape_field(&self.reason),
-        )
-    }
-}
-
-impl SecurityScopedBookmark {
-    pub fn create(
-        path: impl AsRef<Path>,
-        read_only: bool,
-    ) -> std::result::Result<Self, SecurityScopedBookmarkReport> {
-        let path = path.as_ref().to_path_buf();
-        let native = gfm_mac_sys::create_security_scoped_bookmark(&path, read_only);
-        match native.status {
-            gfm_mac_sys::NativeBookmarkStatus::Available => Ok(Self {
-                path,
-                read_only,
-                data: native.data,
-            }),
-            gfm_mac_sys::NativeBookmarkStatus::Missing => {
-                Err(SecurityScopedBookmarkReport::missing(
-                    path,
-                    read_only,
-                    native
-                        .reason
-                        .unwrap_or_else(|| "bookmark target missing".to_string()),
-                ))
-            }
-            gfm_mac_sys::NativeBookmarkStatus::Unavailable => {
-                Err(SecurityScopedBookmarkReport::unavailable(
-                    path,
-                    read_only,
-                    native
-                        .reason
-                        .unwrap_or_else(|| "security-scoped bookmark unavailable".to_string()),
-                ))
-            }
-        }
-    }
-
-    pub fn resolve(&self, start_access: bool) -> SecurityScopedBookmarkReport {
-        let native = gfm_mac_sys::resolve_security_scoped_bookmark(&self.data, start_access);
-        match native.status {
-            gfm_mac_sys::NativeBookmarkStatus::Available => SecurityScopedBookmarkReport {
-                path: self.path.clone(),
-                status: SecurityScopedBookmarkStatus::Resolved,
-                read_only: self.read_only,
-                byte_len: self.data.len(),
-                resolved_path: native.path,
-                stale: native.stale,
-                access_started: native.access_started,
-                reason: None,
-            },
-            gfm_mac_sys::NativeBookmarkStatus::Missing => SecurityScopedBookmarkReport::missing(
-                self.path.clone(),
-                self.read_only,
-                native
-                    .reason
-                    .unwrap_or_else(|| "bookmark target missing".to_string()),
-            ),
-            gfm_mac_sys::NativeBookmarkStatus::Unavailable => {
-                SecurityScopedBookmarkReport::unavailable(
-                    self.path.clone(),
-                    self.read_only,
-                    native.reason.unwrap_or_else(|| {
-                        "security-scoped bookmark resolution unavailable".to_string()
-                    }),
-                )
-            }
-        }
-    }
-}
-
-impl SecurityScopedBookmarkReport {
-    fn created(bookmark: SecurityScopedBookmark) -> Self {
-        Self {
-            path: bookmark.path,
-            status: SecurityScopedBookmarkStatus::Created,
-            read_only: bookmark.read_only,
-            byte_len: bookmark.data.len(),
-            resolved_path: None,
-            stale: false,
-            access_started: false,
-            reason: None,
-        }
-    }
-
-    fn not_required(path: PathBuf, read_only: bool) -> Self {
-        Self {
-            path,
-            status: SecurityScopedBookmarkStatus::NotRequired,
-            read_only,
-            byte_len: 0,
-            resolved_path: None,
-            stale: false,
-            access_started: false,
-            reason: Some("path does not require a retained security-scoped bookmark".to_string()),
-        }
-    }
-
-    fn missing(path: PathBuf, read_only: bool, reason: String) -> Self {
-        Self {
-            path,
-            status: SecurityScopedBookmarkStatus::Missing,
-            read_only,
-            byte_len: 0,
-            resolved_path: None,
-            stale: false,
-            access_started: false,
-            reason: Some(reason),
-        }
-    }
-
-    fn unavailable(path: PathBuf, read_only: bool, reason: String) -> Self {
-        Self {
-            path,
-            status: SecurityScopedBookmarkStatus::Unavailable,
-            read_only,
-            byte_len: 0,
-            resolved_path: None,
-            stale: false,
-            access_started: false,
-            reason: Some(reason),
-        }
-    }
-
-    pub fn as_tsv(&self) -> String {
-        format!(
-            "security-bookmark\t{}\tstatus={}\tread-only={}\tbytes={}\tresolved={}\tstale={}\taccess-started={}\treason={}",
-            self.path.display(),
-            self.status.as_str(),
-            self.read_only,
-            self.byte_len,
-            self.resolved_path
-                .as_deref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            self.stale,
-            self.access_started,
-            self.reason
-                .as_deref()
-                .map(escape_field)
-                .unwrap_or_else(|| "-".to_string())
         )
     }
 }
@@ -553,13 +361,6 @@ fn least_privilege(mode: SecurityAccessMode, intent: AccessIntent) -> bool {
     }
 }
 
-fn bookmark_read_only(intent: AccessIntent) -> bool {
-    matches!(
-        intent,
-        AccessIntent::Read | AccessIntent::Index | AccessIntent::Preview
-    )
-}
-
 fn read_intent(intent: AccessIntent) -> bool {
     matches!(
         intent,
@@ -622,49 +423,6 @@ mod tests {
         assert_eq!(report.action, SecurityDecisionAction::Allow);
         assert!(report.bookmark_required);
         assert!(report.as_tsv().contains("bookmark-required=true"));
-
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn plain_paths_do_not_create_unnecessary_bookmarks() {
-        let root = temp_root("security-bookmark-plain");
-        let path = root.join("note.md");
-        fs::write(&path, "note").unwrap();
-        let report = SecurityScopedAccessReport::evaluate(&path, AccessIntent::Read);
-
-        let bookmark = report.create_bookmark();
-
-        assert_eq!(bookmark.status, SecurityScopedBookmarkStatus::NotRequired);
-        assert_eq!(bookmark.byte_len, 0);
-
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn protected_allowed_paths_create_and_resolve_bookmarks() {
-        let root = temp_root("security-bookmark-documents");
-        let path = root.join("Documents").join("Plan.md");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, "plan").unwrap();
-        let report = SecurityScopedAccessReport::evaluate(&path, AccessIntent::Read);
-
-        let bookmark = SecurityScopedBookmark::create(&path, true).unwrap();
-        let created = report.create_bookmark();
-        let resolved = bookmark.resolve(false);
-
-        assert_eq!(created.status, SecurityScopedBookmarkStatus::Created);
-        assert!(created.byte_len > 0);
-        assert_eq!(resolved.status, SecurityScopedBookmarkStatus::Resolved);
-        assert_eq!(
-            resolved
-                .resolved_path
-                .as_ref()
-                .and_then(|path| path.canonicalize().ok()),
-            Some(path.canonicalize().unwrap())
-        );
-        assert!(!resolved.stale);
-        assert!(resolved.as_tsv().contains("status=resolved"));
 
         fs::remove_dir_all(root).unwrap();
     }
