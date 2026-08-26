@@ -29,6 +29,9 @@ fn indexes_and_searches_real_files_from_binary() {
         "{}",
         String::from_utf8_lossy(&index_output.stderr)
     );
+    let index_stderr = String::from_utf8_lossy(&index_output.stderr);
+    assert!(index_stderr.contains("security-scope\t"), "{index_stderr}");
+    assert!(index_stderr.contains("\tintent=index\t"), "{index_stderr}");
 
     let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["search-index", index.to_str().unwrap(), "quarterly"])
@@ -71,6 +74,28 @@ fn indexes_and_searches_real_files_from_binary() {
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(index).unwrap();
+}
+
+#[test]
+fn index_refuses_missing_root_before_scan_from_binary() {
+    let root = unique_temp_path("gfm-cli-index-missing-root", "missing");
+    let index = unique_temp_path("gfm-cli-index-missing-output", "gfmidx");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), index.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=index\t"), "{stderr}");
+    assert!(stderr.contains("\taction=deny\t"), "{stderr}");
+    assert!(
+        stderr.contains("index access blocked: path is not present on this host"),
+        "{stderr}"
+    );
+    assert!(!index.exists());
 }
 
 #[test]

@@ -4,10 +4,12 @@ use gfm_index::{
     EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth, IndexVolumeState,
     Indexer, LiveIndex,
 };
-use gfm_mac::{FileEventStream, WatchRoot};
+use gfm_mac::{
+    AccessIntent, FileEventStream, SecurityDecisionAction, SecurityScopedAccessReport, WatchRoot,
+};
 use gfm_types::{FileEvent, FileEventKind, FileKind, GfmError, Result};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
@@ -32,6 +34,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "index" => {
             let root = required_path(args.next(), "index requires a root path")?;
             let output = required_path(args.next(), "index requires an output path")?;
+            enforce_index_access(&root)?;
             let snapshot = Indexer::default().build(root)?;
             snapshot.save(output)?;
             eprintln!(
@@ -44,6 +47,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "index-state requires a root path")?;
             let records = required_path(args.next(), "index-state requires a records path")?;
             let state = required_path(args.next(), "index-state requires a state path")?;
+            enforce_index_access(&root)?;
             let state = Indexer::default().build_persistent(root, records, state)?;
             println!("{}", state.as_tsv());
         }
@@ -61,6 +65,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "scan-progress requires a progress checkpoint path",
             )?;
+            enforce_index_access(&root)?;
             let checkpoint = Indexer::default().build_with_progress(root, records, progress)?;
             println!("{}", checkpoint.as_tsv());
         }
@@ -76,6 +81,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let visible_burst =
                 parse_usize_arg(args.next(), "fair-scan requires a visible burst size")?;
             let visible_roots = args.map(PathBuf::from).collect::<Vec<_>>();
+            enforce_index_access(&root)?;
+            for visible_root in &visible_roots {
+                enforce_index_access(visible_root)?;
+            }
             let report = Indexer::default().build_fair(root, &visible_roots, visible_burst)?;
             println!("{}", report.as_tsv());
         }
@@ -89,6 +98,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
+            enforce_index_access(&root)?;
             let snapshot = Indexer::default().build(root)?;
             std::fs::rename(&from, &to).map_err(|err| GfmError::io(&from, err))?;
             let mut live = LiveIndex::from_records(snapshot.records);
@@ -101,6 +111,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
+            enforce_index_access(&root)?;
             let snapshot = Indexer::default().build(root)?;
             if let Some(append) = args.next() {
                 let mut file = std::fs::OpenOptions::new()
@@ -248,6 +259,20 @@ fn parse_event_ids(value: &str) -> Result<Vec<u64>> {
             })
         })
         .collect()
+}
+
+fn enforce_index_access(root: &Path) -> Result<()> {
+    let report = SecurityScopedAccessReport::evaluate(root, AccessIntent::Index);
+    eprintln!("{}", report.as_tsv());
+    match report.action {
+        SecurityDecisionAction::Allow | SecurityDecisionAction::Degrade => Ok(()),
+        SecurityDecisionAction::Prompt | SecurityDecisionAction::Deny => {
+            Err(GfmError::Permission {
+                path: root.to_path_buf(),
+                message: format!("index access blocked: {}", report.reason),
+            })
+        }
+    }
 }
 
 fn parse_usize(value: &str, message: &str) -> Result<usize> {
