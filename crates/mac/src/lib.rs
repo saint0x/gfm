@@ -21,7 +21,10 @@ pub use host::{
     current_host_profile, CpuArchitecture, HardwareProfile, HostProfile, MacOsVersion,
     SupportEvaluation, SupportMatrix, SupportTier,
 };
-pub use icon::{NativeIconBadge, NativeIconDescriptor, NativeIconProvider, NativeIconRole};
+pub use icon::{
+    NativeIconBadge, NativeIconBridgeContract, NativeIconBridgeDecision, NativeIconDescriptor,
+    NativeIconProvider, NativeIconRole,
+};
 pub use permissions::{
     current_permission_onboarding, PermissionAction, PermissionOnboardingPlan, PermissionPolicy,
     PermissionPromptMode, PermissionReadiness, PermissionScope, PermissionState,

@@ -173,7 +173,7 @@ impl MacBridgeContract {
                 "crates/mac",
                 "native-icons-bundle-identities-package-classification",
                 MacBridgeThreadPolicy::BackgroundSafe,
-                MacBridgeStatus::Required,
+                MacBridgeStatus::Implemented,
             ),
             MacBridgeSpec::new(
                 "quicklook-preview",
@@ -255,7 +255,7 @@ mod tests {
             .bridges
             .iter()
             .any(|bridge| bridge.id == "launchservices-icons-and-packages"
-                && bridge.status == MacBridgeStatus::Required));
+                && bridge.status == MacBridgeStatus::Implemented));
         assert_eq!(
             contract.implemented_count() + contract.required_count(),
             contract.bridges.len()
@@ -267,12 +267,15 @@ mod tests {
         let contract = MacBridgeContract::finder_required();
         let tsv = contract.as_tsv();
 
-        assert!(tsv.starts_with("mac-bridges\timplemented=7\trequired=5\ttotal=12"));
+        assert!(tsv.starts_with("mac-bridges\timplemented=8\trequired=4\ttotal=12"));
         assert!(tsv.contains(
             "bridge\tappkit-window-shell\tappkit\tcrates/ui\tapplication-window-menu-activation\tmain-thread\timplemented"
         ));
         assert!(tsv.contains(
             "bridge\tcoreservices-kind-string\tcoreservices\tcrates/mac\tlaunchservices-localized-kind-string\tbackground-safe\timplemented"
+        ));
+        assert!(tsv.contains(
+            "bridge\tlaunchservices-icons-and-packages\tlaunchservices\tcrates/mac\tnative-icons-bundle-identities-package-classification\tbackground-safe\timplemented"
         ));
         assert!(tsv.contains(
             "bridge\tspotlight-metadata-reconciliation\tspotlight\tcrates/index\tmetadata-import-without-primary-correctness-dependency\tbackground-safe\timplemented"

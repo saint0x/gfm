@@ -117,7 +117,7 @@ fn reports_mac_bridge_contract_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    assert!(stdout.starts_with("mac-bridges\timplemented=7\trequired=5\ttotal=12"));
+    assert!(stdout.starts_with("mac-bridges\timplemented=8\trequired=4\ttotal=12"));
     assert!(stdout.contains(
         "bridge\tfoundation-host-profile\tfoundation\tcrates/mac\tsw-vers-uname-sysctl-host-profile\tbackground-safe\timplemented"
     ));
@@ -125,7 +125,7 @@ fn reports_mac_bridge_contract_from_binary() {
         "bridge\tfsevents-file-event-stream\tfile-events\tcrates/mac\ttyped-create-modify-remove-rename-rescan-events\tdedicated-worker\timplemented"
     ));
     assert!(stdout.contains(
-        "bridge\tquicklook-preview\tquicklook\tcrates/preview\tquicklook-preview-controller-thumbnail-generator\tmain-thread\trequired"
+        "bridge\tlaunchservices-icons-and-packages\tlaunchservices\tcrates/mac\tnative-icons-bundle-identities-package-classification\tbackground-safe\timplemented"
     ));
 }
 
@@ -168,6 +168,22 @@ fn reports_native_icon_descriptor_from_binary() {
         "native-icon\tdocument\tlaunchservices-document-icon\textension:pdf\tdocument:extension:pdf\tbadges="
     );
 
+    let bridge = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("native-icon-bridge")
+        .arg(root.join("Report.PDF"))
+        .output()
+        .unwrap();
+    assert!(
+        bridge.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bridge.stderr)
+    );
+    let bridge_stdout = String::from_utf8(bridge.stdout).unwrap();
+    assert!(bridge_stdout.starts_with(
+        "native-icon-bridge\tlaunchservices\tbackground-safe\tlaunchservices-document-icon\tdocument:extension:pdf\t"
+    ));
+    assert!(bridge_stdout.contains("\tdecision=use-native-bridge\t"));
+
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -207,6 +223,34 @@ fn reports_spotlight_reconciliation_from_binary() {
     assert!(stdout.contains(
         "field\tfinder-comment\tprimary=-\tspotlight=client handoff\tdecision=enrich-from-spotlight"
     ));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn reports_icon_preview_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-icon-preview-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("GFM.app")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("icon-preview")
+        .arg(root.join("GFM.app"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout.trim(),
+        format!(
+            "icon-preview\t{}\tapplication\tlaunchservices-application-icon\tcom.apple.application-bundle\tbadges=package\tcache=refresh-memory-only\tinvalidate-memory=true\tinvalidate-disk=false",
+            root.join("GFM.app").display()
+        )
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

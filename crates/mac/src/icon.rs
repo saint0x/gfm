@@ -1,3 +1,4 @@
+use crate::{MacBridgeThreadPolicy, MacFramework, SupportEvaluation, SupportMatrix, SupportTier};
 use gfm_types::{FileKind, FileRecord};
 use std::path::Path;
 
@@ -47,6 +48,21 @@ impl NativeIconProvider {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeIconBridgeDecision {
+    UseNativeBridge,
+    UseDescriptorFallback,
+}
+
+impl NativeIconBridgeDecision {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UseNativeBridge => "use-native-bridge",
+            Self::UseDescriptorFallback => "use-descriptor-fallback",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NativeIconBadge {
     Alias,
@@ -73,6 +89,69 @@ pub struct NativeIconDescriptor {
     pub badges: Vec<NativeIconBadge>,
     pub type_hint: String,
     pub cache_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeIconBridgeContract {
+    pub descriptor: NativeIconDescriptor,
+    pub framework: MacFramework,
+    pub thread_policy: MacBridgeThreadPolicy,
+    pub support_tier: SupportTier,
+    pub decision: NativeIconBridgeDecision,
+    pub reason: String,
+}
+
+impl NativeIconBridgeContract {
+    pub fn for_record(record: &FileRecord) -> Self {
+        Self::for_record_with_evaluation(
+            record,
+            &SupportEvaluation {
+                tier: SupportTier::Primary,
+                reasons: Vec::new(),
+            },
+        )
+    }
+
+    pub fn for_record_on_host(record: &FileRecord, host: &crate::HostProfile) -> Self {
+        let evaluation = SupportMatrix::default().evaluate(host);
+        Self::for_record_with_evaluation(record, &evaluation)
+    }
+
+    pub fn for_record_with_evaluation(record: &FileRecord, evaluation: &SupportEvaluation) -> Self {
+        let decision = match evaluation.tier {
+            SupportTier::Primary | SupportTier::Compatible => {
+                NativeIconBridgeDecision::UseNativeBridge
+            }
+            SupportTier::Unsupported => NativeIconBridgeDecision::UseDescriptorFallback,
+        };
+        let reason = if evaluation.reasons.is_empty() {
+            "host-supported".to_string()
+        } else {
+            evaluation.reasons.join("|")
+        };
+
+        Self {
+            descriptor: NativeIconDescriptor::for_record(record),
+            framework: MacFramework::LaunchServices,
+            thread_policy: MacBridgeThreadPolicy::BackgroundSafe,
+            support_tier: evaluation.tier,
+            decision,
+            reason,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "native-icon-bridge\t{}\t{}\t{}\t{}\ttier={}\tdecision={}\treason={}",
+            self.framework.as_str(),
+            self.thread_policy.as_str(),
+            self.descriptor.provider.as_str(),
+            self.descriptor.cache_key,
+            self.support_tier.as_str(),
+            self.decision.as_str(),
+            self.reason
+        )
+    }
 }
 
 impl NativeIconDescriptor {
@@ -288,6 +367,49 @@ mod tests {
             descriptor.as_tsv(),
             "native-icon\tpackage\tlaunchservices-package-icon\tcom.apple.iwork.keynote.key\tpackage:com.apple.iwork.keynote.key:package\tbadges=package"
         );
+    }
+
+    #[test]
+    fn bridge_contract_uses_native_launchservices_on_supported_hosts() {
+        let record = record("Report.PDF", FileKind::File);
+        let contract = NativeIconBridgeContract::for_record_with_evaluation(
+            &record,
+            &SupportEvaluation {
+                tier: SupportTier::Compatible,
+                reasons: Vec::new(),
+            },
+        );
+
+        assert_eq!(contract.framework, MacFramework::LaunchServices);
+        assert_eq!(
+            contract.thread_policy,
+            MacBridgeThreadPolicy::BackgroundSafe
+        );
+        assert_eq!(contract.decision, NativeIconBridgeDecision::UseNativeBridge);
+        assert_eq!(contract.reason, "host-supported");
+        assert_eq!(
+            contract.as_tsv(),
+            "native-icon-bridge\tlaunchservices\tbackground-safe\tlaunchservices-document-icon\tdocument:extension:pdf\ttier=compatible\tdecision=use-native-bridge\treason=host-supported"
+        );
+    }
+
+    #[test]
+    fn bridge_contract_falls_back_to_descriptor_on_unsupported_hosts() {
+        let record = record("GFM.app", FileKind::Directory);
+        let contract = NativeIconBridgeContract::for_record_with_evaluation(
+            &record,
+            &SupportEvaluation {
+                tier: SupportTier::Unsupported,
+                reasons: vec!["macOS 13.6.0 is below minimum 14.0.0".to_string()],
+            },
+        );
+
+        assert_eq!(
+            contract.decision,
+            NativeIconBridgeDecision::UseDescriptorFallback
+        );
+        assert_eq!(contract.descriptor.role, NativeIconRole::Application);
+        assert_eq!(contract.reason, "macOS 13.6.0 is below minimum 14.0.0");
     }
 
     fn record(name: &str, kind: FileKind) -> FileRecord {

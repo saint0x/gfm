@@ -79,7 +79,7 @@ fn batched_reader_preserves_request_order_for_missing_paths() {
     let first = PathBuf::from("/tmp/gfm-spotlight-missing-one");
     let second = PathBuf::from("/tmp/gfm-spotlight-missing-two");
 
-    let snapshots = SpotlightMetadataReader::default()
+    let snapshots = SpotlightMetadataReader
         .read_paths([first.as_path(), second.as_path()])
         .unwrap();
 

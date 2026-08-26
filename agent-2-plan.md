@@ -6,6 +6,21 @@ This document is for the second engineer joining GFM. The project goal is not to
 
 GFM means Good Fucking Manager. That is the product bar.
 
+## Mission Context
+
+The user wants the default experience to feel like opening Apple Finder, except every slow, opaque, frustrating part has been replaced by something we own, measure, and can make brutally fast. Do not interpret "better" as visual redesign. Interpret it as:
+
+1. Same visible Finder surface by default.
+2. Lower latency everywhere.
+3. Machine-wide search that is instant enough to feel unfair.
+4. Safer, more recoverable file operations.
+5. More transparent indexing, previews, permissions, and recovery.
+6. Zero hidden UI-thread blocking from filesystem, preview, extraction, search, or operation work.
+
+The project is Mac-only. Treat that as a simplifying constraint and a quality advantage. We do not need platform-neutral compromises. When macOS has real platform truth, bind it directly behind typed Rust APIs and keep unsafe, Objective-C, and CoreFoundation ownership at narrow boundaries.
+
+The other active engineer is in the trenches on latency-sensitive runtime/search/preview plumbing. Your job is to take adjacent high-leverage work that can proceed in parallel, land it in small verified passes, and make the whole project converge instead of creating a side universe.
+
 ## What You Are Joining
 
 GFM is already structured as a multi-crate Rust workspace. The architectural spine is intentionally split by production ownership:
@@ -43,6 +58,18 @@ Do not introduce a product CLI. Existing `gfm <command>` routes are internal ope
 11. `README.md` is written as the completed-product contract. Keep it true to the intended production standard.
 12. Push cleanly to `origin/main` after each verified pass.
 
+## Priority Order
+
+Prefer work in this order:
+
+1. Latency-sensitive production paths users will feel every second: search-as-you-type, listing, sorting, scrolling, preview scheduling, thumbnail/icon publication, operation progress, cancellation.
+2. Parity gates that make strict Finder matching enforceable instead of subjective.
+3. macOS bridges that feed real platform state into UI/search/preview/ops.
+4. Durability and recovery for any work that can outlive a single synchronous UI event.
+5. Documentation only when it captures a real architecture decision or helps the next engineer avoid a wrong turn.
+
+Avoid low-leverage polish that does not move one of those paths. This project is not short on ambition; the way to win is to keep cutting toward the hot path.
+
 ## Current Direction
 
 Agent 1 is currently deep in Jobs/Runtime durability and recovery plumbing:
@@ -55,8 +82,21 @@ Agent 1 is currently deep in Jobs/Runtime durability and recovery plumbing:
 - real content job spec recovery
 - Fozzy deterministic traces
 - Apple Metal/GPUI build-path verification
+- search typing/session hot path measurement
+- preview/icon native descriptor and cache-invalidation wiring
 
 Avoid duplicating that exact lane unless coordinated. Your highest-value offload is to take one of the adjacent large production surfaces and push it forward with the same rigor.
+
+## Immediate Best Offload
+
+Take Workstream A unless you have a strong reason not to. Pixel parity is the force multiplier. The user has made strict one-to-one Finder parity a hard requirement, and every GPUI visual surface needs an objective pass/fail loop.
+
+If Agent 1 is still working in `crates/preview`, `crates/jobs`, `crates/app/src/runtime.rs`, or search typing benchmarks, stay out of those files unless your slice requires a tiny route hook. Good parallel lanes are:
+
+1. Pure pixel diff and manifest hardening in `crates/testkit`.
+2. Deterministic fixture manifest expansion.
+3. `crates/ui` contract tests that emit deterministic surface descriptions without crossing into runtime plumbing.
+4. One isolated `crates/mac` bridge where the safe API can land with tests and not touch preview/runtime hot paths.
 
 ## Recommended Workstream A: Pixel Parity Harness
 
@@ -133,6 +173,19 @@ Prefer a small, explicit module split:
 
 Keep pure diffing independent from app/UI/macOS capture so it can be tested fast.
 
+### First Concrete Slice
+
+Do this as the first pass if you take parity:
+
+1. Inspect the existing manifest and pixel diff implementation.
+2. Add missing manifest fields only if they are required for real provenance.
+3. Add PNG ingestion around the existing RGBA diff core if it is absent.
+4. Add one operator route that reads a manifest and writes a deterministic review bundle.
+5. Add tests for pass, fail, dimension mismatch, and one explicit mask.
+6. Do not remove `STATUS.md` pixel items until the harness is connected to real Finder and real GFM screenshots.
+
+The first pass is valuable even if it does not complete all parity items. It should make later UI work objectively measurable.
+
 ## Recommended Workstream B: Finder UI Calibration Surface
 
 Take this if you are strongest in GPUI and native macOS surface fidelity.
@@ -178,6 +231,18 @@ For any single UI surface you take, done means:
 - Do not create a "nice but different" design.
 - Finder exactness beats personal taste in the default surface.
 - Extra GFM power features must be hidden behind explicit modes/settings.
+
+### First Concrete Slice
+
+Pick exactly one surface: toolbar, sidebar, titlebar, icon grid, list row, column view, gallery, search results, Trash, or operation sheet.
+
+For that one surface:
+
+1. Write down the current contract emitted by the UI crate.
+2. Compare it against Finder-derived tokens and screenshots already present in docs/tests.
+3. Tighten the GPUI contract and deterministic output.
+4. Add focused state tests for selection, focus, disabled/enabled controls, and appearance if applicable.
+5. Leave the broader visual item in `STATUS.md` unless captured screenshots and pixel harness prove production parity.
 
 ## Recommended Workstream C: macOS Integration Bridges
 
@@ -225,6 +290,18 @@ Pick one platform bridge and take it to production:
 - No dependency on Spotlight as the primary search engine.
 - No pretending FileProvider/iCloud placeholder state is a normal local file.
 
+### First Concrete Slice
+
+Pick one bridge and make it genuinely useful downstream. Good candidates:
+
+1. LaunchServices/AppKit icon raster extraction and badge composition.
+2. DiskArbitration long-lived volume observation and eject/unmount command policy.
+3. FileProvider placeholder/materialization state plus download/evict command policy.
+4. Security-scoped bookmark acquisition/resolution with typed diagnostics.
+5. Quick Look/thumbnail lifecycle events and cancellation-aware publication.
+
+For the first pass, prefer the smallest bridge that can produce a real app/operator route and a deterministic test. Document any unsafe ownership rule next to the unsafe code, not in a far-away essay.
+
 ## Recommended Workstream D: Search Latency And Memory
 
 Take this if you are strongest in indexing, data structures, memory mapping, ranking, and benchmark-driven tuning.
@@ -271,6 +348,18 @@ Pick a measurable hot path and improve it end to end:
 - No cache poisoning panics on foreground search paths.
 - No memory-heavy structures that duplicate mmap-resident indexes without a clear budget.
 
+### First Concrete Slice
+
+Coordinate before touching this stream because Agent 1 is likely active here. If free, take one measurable hot path:
+
+1. Repeated query/prefix refinement cache reuse.
+2. Short-query candidate bounding.
+3. Top-k heap/ranking allocation reduction.
+4. Sidecar lookup cache hit telemetry.
+5. Cancellation latency under superseded typing.
+
+Every search change needs a benchmark path and correctness tests. A faster search that reorders results nondeterministically is not acceptable.
+
 ## Recommended Workstream E: File Operations UI Binding
 
 Take this if you are strongest at marrying engine correctness to native UX.
@@ -313,6 +402,30 @@ rg -n "copy|move|rename|delete|trash|restore|conflict|journal|pause|resume|progr
 - No modal/sheet that diverges from Finder order, spacing, focus, or button semantics.
 - No conflict logic duplicated in UI.
 
+### First Concrete Slice
+
+Pick one visible operation surface and connect it to real state:
+
+1. Foreground copy progress sheet.
+2. Pause/resume/stop controls.
+3. Conflict review sheet.
+4. Trash Put Back confirmation/recovery.
+5. Protected-path permission sheet.
+
+The valuable outcome is not a prettier modal. The valuable outcome is native GPUI state driven by durable operation/job truth with deterministic tests.
+
+## Documentation Contract
+
+Docs are part of production, but they must not become fantasy architecture detached from code.
+
+`README.md` is intentionally written as if the product is complete. Treat it as the external promise and product contract.
+
+`PLAN.md` is the full architecture and research plan. Update it only when the intended architecture changes materially or when a major decision becomes concrete.
+
+`STATUS.md` is not a brag sheet. It is an undone-only numbered ledger. Remove an item only when the whole capability is implemented and verified at the production scope described by that item. Narrow crate tests do not retire broad production items.
+
+`agent-2-plan.md` is your handoff. Keep it useful for parallel work. If you discover a better offload lane, edit this file in the same commit as your first slice so the next joiner gets the sharpened map.
+
 ## Coordination Rules
 
 1. Work from `main`; pull before starting if needed.
@@ -325,6 +438,30 @@ rg -n "copy|move|rename|delete|trash|restore|conflict|journal|pause|resume|progr
 8. Use deterministic host tests when touching app/operator surfaces.
 9. Use Fozzy for scenario/system verification.
 10. Push clean commits to `origin/main` after each verified pass.
+
+## Merge Protocol
+
+Before you start:
+
+```sh
+git status --branch --short
+git fetch origin
+git log --oneline --decorate -5
+```
+
+If the working tree is dirty, identify whether the changed files belong to Agent 1's active lane. Do not revert them. Either choose a non-overlapping lane or coordinate.
+
+Before committing:
+
+1. Re-check `git status --branch --short`.
+2. Review `git diff` for accidental churn.
+3. Ensure generated artifacts are either intentionally committed or cleaned.
+4. Run the relevant verification commands.
+5. Commit with a concrete message.
+6. Push to `origin main`.
+7. Confirm the tree is clean.
+
+Use small commits. A good commit should be readable by another engineer in one sitting and should make one production claim.
 
 ## Verification Standard
 
@@ -363,13 +500,50 @@ if [ -e /tmp/gfm-cli-host.trace.fozzy ]; then /bin/rm /tmp/gfm-cli-host.trace.fo
 
 Run `cargo clean` after a pushed pass if disk is tight. This workspace has been operating with low free disk, so keep an eye on `df -h .`.
 
+## Performance Standard
+
+Any performance-oriented change should name:
+
+1. The hot path.
+2. The latency or memory budget.
+3. The pre-change behavior or missing measurement.
+4. The implementation mechanism.
+5. The verification command.
+6. The residual risk.
+
+Do not claim "fast" because code looks fast. Claims need measurement, deterministic benchmark output, or a narrowly scoped proof that removes an entire class of work from the hot path.
+
+For UI-visible latency, optimize for:
+
+1. Time to first visible result.
+2. Cancellation latency when user input supersedes old work.
+3. Render-thread isolation.
+4. Bounded allocations during repeated interactions.
+5. Stable tail latency, not just good medians.
+
+## Finder Parity Standard
+
+Finder parity means exact default behavior, not a close visual homage.
+
+For a UI surface, production parity requires:
+
+1. Captured Finder baseline for the supported macOS build/profile.
+2. Deterministic GFM render for the same fixture.
+3. Pixel diff with explicit masks only for OS-owned dynamic regions.
+4. Interaction state parity for focus, hover, selection, disabled controls, menus, sheets, rename fields, drag images, and keyboard navigation as applicable.
+5. Accessibility role/focus parity where the native surface exposes it.
+6. No visible "GFM flair" in the default Finder-matched surface.
+
+If a feature is better than Finder, it must not disturb default parity. Put power features behind explicit commands, settings, or modes.
+
 ## Merge-Friendly Slice Ideas
 
 These are good first slices because they are valuable, testable, and unlikely to collide with Agent 1:
 
-1. Harden one macOS bridge in `crates/mac` behind a typed safe API.
-2. Split an oversized file only when the split follows a real ownership boundary and all tests stay green.
-3. Wire one GPUI progress/operation surface to real job progress state.
+1. Split an oversized file only when the split follows a real ownership boundary and all tests stay green.
+2. Wire one GPUI progress/operation surface to real job progress state.
+4. Extend the pixel parity manifest and bundle writer without touching GPUI runtime paths.
+5. Add a deterministic fixture generator for one Finder view state.
 
 ## What Not To Do
 

@@ -291,6 +291,8 @@ cargo run -p gfm -- diagnostics-trace-export /tmp/gfm-diagnostics.json
 cargo run -p gfm -- diagnostics-parity-baseline ~/Library/Application\ Support/GFM/config.toml tests/parity/baselines 25A354
 cargo run -p gfm -- mac-bridges
 cargo run -p gfm -- native-icon ~/Desktop/GFM.app
+cargo run -p gfm -- native-icon-bridge ~/Desktop/GFM.app
+cargo run -p gfm -- icon-preview ~/Desktop/GFM.app
 cargo run -p gfm -- fileprovider-state ~/Library/Mobile\ Documents/com~apple~CloudDocs/Report.md
 cargo run -p gfm -- volume-discovery
 cargo run -p gfm -- volume-index-policy opt-in opt-in opt-in:/Volumes/Work /Volumes/Work /Volumes/TeamShare
@@ -314,6 +316,7 @@ Inspect preview security and invalidation policy:
 
 ```sh
 cargo run -p gfm -- preview-check /tmp/example.app quick-look
+cargo run -p gfm -- icon-preview /tmp/example.app
 cargo run -p gfm -- quicklook-session /tmp/example.pdf
 cargo run -p gfm -- thumbnail-generation /tmp/example.png
 cargo run -p gfm -- preview-schedule

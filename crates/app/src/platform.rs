@@ -6,13 +6,13 @@ use gfm_fs::record_for_path;
 use gfm_index::{parse_volume_indexing_policy, VolumeIndexPolicy};
 use gfm_jobs::{Cancellation, Priority, SchedulingAction};
 use gfm_mac::{
-    parse_spotlight_fixture, AccessIntent, FileProviderStateReport, MacBridgeContract,
-    NativeIconDescriptor, SecurityScopedAccessReport, SpotlightMetadataReader,
-    SpotlightReconciliationReport, VolumeDiscoveryReport,
+    current_host_profile, parse_spotlight_fixture, AccessIntent, FileProviderStateReport,
+    MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
+    SpotlightMetadataReader, SpotlightReconciliationReport, VolumeDiscoveryReport,
 };
 use gfm_preview::{
-    decide_invalidation, decide_preview_security, security_input_for_path,
-    PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
+    decide_invalidation, decide_preview_security, security_input_for_path, IconPreviewContract,
+    IconPreviewInput, PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
     PreviewSchedulingPolicy, PreviewSecurityPolicy, PreviewTask, QuickLookSessionContract,
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
@@ -40,6 +40,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = required_path(args.next(), "native-icon requires a path")?;
             let record = record_for_path(&path, None, false)?;
             println!("{}", NativeIconDescriptor::for_record(&record).as_tsv());
+        }
+        "native-icon-bridge" => {
+            let path = required_path(args.next(), "native-icon-bridge requires a path")?;
+            let record = record_for_path(&path, None, false)?;
+            let host = current_host_profile()?;
+            println!(
+                "{}",
+                NativeIconBridgeContract::for_record_on_host(&record, &host).as_tsv()
+            );
         }
         "fileprovider-state" => {
             let path = required_path(args.next(), "fileprovider-state requires a path")?;
@@ -112,6 +121,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 invalidation.invalidate_disk,
                 path.display()
             );
+        }
+        "icon-preview" => {
+            let path = required_path(args.next(), "icon-preview requires a path")?;
+            let record = record_for_path(&path, None, false)?;
+            let input = IconPreviewInput::new(
+                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Icon),
+                record,
+            )
+            .with_invalidation(PreviewInvalidationEvent {
+                tags_changed: true,
+                ..PreviewInvalidationEvent::default()
+            });
+            println!("{}", IconPreviewContract::from_input(input).as_tsv());
         }
         "quicklook-session" => {
             let path = required_path(args.next(), "quicklook-session requires a path")?;
