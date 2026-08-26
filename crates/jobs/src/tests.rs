@@ -774,6 +774,49 @@ fn payload_catalog_round_trips_all_job_families() {
     std::fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn payload_catalog_reads_requested_records_only() {
+    let path = temp_path("gfm-job-payload-catalog-filtered", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+    let records = vec![
+        JobPayloadRecord::new(
+            JobId::from_raw(1),
+            JobPayloadKind::Operation,
+            "copy",
+            "ops/copy.gfmjob",
+            Some(VolumeId(7)),
+            "copy source to target",
+        ),
+        JobPayloadRecord::new(
+            JobId::from_raw(2),
+            JobPayloadKind::Indexing,
+            "index",
+            "index/content.gfmjob",
+            Some(VolumeId(7)),
+            "index content",
+        ),
+        JobPayloadRecord::new(
+            JobId::from_raw(3),
+            JobPayloadKind::Repair,
+            "repair",
+            "repair/sidecar.gfmjob",
+            None,
+            "repair sidecar",
+        ),
+    ];
+    catalog.write_all(&records).unwrap();
+
+    assert_eq!(
+        catalog
+            .read_for_ids([JobId::from_raw(3), JobId::from_raw(1)])
+            .unwrap(),
+        vec![records[0].clone(), records[2].clone()]
+    );
+    assert!(catalog.read_for_ids([]).unwrap().is_empty());
+
+    std::fs::remove_file(path).unwrap();
+}
+
 fn temp_path(prefix: &str, extension: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "{}-{}.{}",

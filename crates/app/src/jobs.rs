@@ -6,6 +6,7 @@ use gfm_jobs::{
     RecoveryReason, RetryPolicy, Scheduler,
 };
 use gfm_types::{GfmError, Result, VolumeId};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -103,10 +104,40 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "jobs-progress-restore requires a progress path",
             )?;
-            let updated_ms = parse_optional_timestamp_ms(args.next())?;
+            let updated_ms = parse_optional_timestamp_ms("jobs-progress-restore", args.next())?;
             let store = JobProgressStore::new(&path);
             for snapshot in store.restore_interrupted(updated_ms)? {
                 println!("{}", snapshot.as_tsv());
+            }
+        }
+        "jobs-payload-restore-plan" => {
+            let catalog_path = required_path(
+                args.next(),
+                "jobs-payload-restore-plan requires a payload catalog path",
+            )?;
+            let progress_path = required_path(
+                args.next(),
+                "jobs-payload-restore-plan requires a progress path",
+            )?;
+            let updated_ms = parse_optional_timestamp_ms("jobs-payload-restore-plan", args.next())?;
+            let store = JobProgressStore::new(&progress_path);
+            let restored = store.restore_interrupted(updated_ms)?;
+            let payloads = JobPayloadCatalog::new(&catalog_path)
+                .read_for_ids(restored.iter().map(|snapshot| snapshot.id))?
+                .into_iter()
+                .map(|record| (record.id, record))
+                .collect::<HashMap<_, _>>();
+            for snapshot in restored {
+                if let Some(payload) = payloads.get(&snapshot.id) {
+                    println!("restore\t{}\t{}", snapshot.state.as_str(), payload.as_tsv());
+                } else {
+                    println!(
+                        "missing-payload\t{}\t{}\t{}",
+                        snapshot.id.value(),
+                        snapshot.state.as_str(),
+                        snapshot.label
+                    );
+                }
             }
         }
         "jobs-cancel-tree" => {
@@ -323,11 +354,11 @@ fn priority_name(priority: Priority) -> &'static str {
     priority.as_str()
 }
 
-fn parse_optional_timestamp_ms(value: Option<String>) -> Result<u64> {
+fn parse_optional_timestamp_ms(command: &str, value: Option<String>) -> Result<u64> {
     match value {
         Some(value) => value.parse().map_err(|_| {
             GfmError::Format(format!(
-                "jobs-progress-restore timestamp must be an unsigned millisecond value; got `{value}`"
+                "{command} timestamp must be an unsigned millisecond value; got `{value}`"
             ))
         }),
         None => Ok(SystemTime::now()

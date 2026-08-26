@@ -5094,6 +5094,72 @@ fn normalizes_interrupted_job_progress_for_restore_from_binary() {
 }
 
 #[test]
+fn reports_payload_restore_plan_from_existing_stores() {
+    let catalog = unique_temp_path("gfm-cli-job-payload-restore-plan", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-job-payload-restore-plan", "gfmprogress");
+
+    let payload_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["jobs-payload-catalog", catalog.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        payload_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&payload_output.stderr)
+    );
+    let progress_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["jobs-progress-snapshot", progress.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        progress_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&progress_output.stderr)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "jobs-payload-restore-plan",
+            catalog.to_str().unwrap(),
+            progress.to_str().unwrap(),
+            "2000",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(
+            "restore\tpaused\tpayload\t1\toperation\tcopy operation\toperations/copy.gfmjob\t1\tcopy:/source->/target"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "restore\tpaused\tpayload\t2\tindexing\tcontent indexing\tindex/content.gfmjob\t1\tindex:/workspace"
+        ),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("payload\t3\textraction"), "{stdout}");
+    assert!(!stdout.contains("missing-payload"), "{stdout}");
+
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text
+            .contains("\tpaused\t42\t100\tinterrupted:running:copy:/source->/target\t2000"),
+        "{progress_text}"
+    );
+
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+}
+
+#[test]
 fn volume_producers_persist_runtime_payload_and_progress_from_binary() {
     let root = unique_temp_dir("gfm-cli-runtime-producer-root");
     let image = root.join("Image.png");

@@ -509,6 +509,7 @@ cargo run -p gfm -- jobs-payload-catalog /tmp/gfm-jobs.gfmjobs
 cargo run -p gfm -- jobs-fairness-plan
 cargo run -p gfm -- jobs-progress-snapshot /tmp/gfm-jobs.gfmprogress
 cargo run -p gfm -- jobs-progress-restore /tmp/gfm-jobs.gfmprogress
+cargo run -p gfm -- jobs-payload-restore-plan /tmp/gfm-jobs.gfmjobs /tmp/gfm-jobs.gfmprogress
 cargo run -p gfm -- jobs-cancel-tree
 ```
 

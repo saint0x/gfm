@@ -1469,6 +1469,67 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-payload-catalog",
+        "/tmp/gfm-fozzy-jobs.gfmjobs"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-payload-catalog",
+        "/tmp/gfm-fozzy-jobs.gfmjobs"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-progress-snapshot",
+        "/tmp/gfm-fozzy-jobs.gfmprogress"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-progress-snapshot",
+        "/tmp/gfm-fozzy-jobs.gfmprogress"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-payload-restore-plan",
+        "/tmp/gfm-fozzy-jobs.gfmjobs",
+        "/tmp/gfm-fozzy-jobs.gfmprogress",
+        "2000"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-payload-restore-plan",
+        "/tmp/gfm-fozzy-jobs.gfmjobs",
+        "/tmp/gfm-fozzy-jobs.gfmprogress",
+        "2000"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-host.icns",
       "data": "icns-test"

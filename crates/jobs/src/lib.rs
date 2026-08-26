@@ -565,6 +565,21 @@ impl JobPayloadCatalog {
         }
         Ok(records)
     }
+
+    pub fn read_for_ids(
+        &self,
+        ids: impl IntoIterator<Item = JobId>,
+    ) -> Result<Vec<JobPayloadRecord>> {
+        let wanted = ids.into_iter().collect::<HashSet<_>>();
+        if wanted.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .read()?
+            .into_iter()
+            .filter(|record| wanted.contains(&record.id))
+            .collect())
+    }
 }
 
 #[derive(Debug, Clone)]
