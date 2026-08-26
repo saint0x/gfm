@@ -1,8 +1,8 @@
 use crate::{parse_u32_arg, parse_usize_arg, required_path};
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_macrobench_fixture_report,
-    materialize_parity_fixture, read_mask_file, run_large_sidecar_gate, run_macrobench,
-    run_parity_gate_manifest, run_regression_gate, run_search_typing_benchmark,
+    materialize_parity_fixture, read_governed_mask_file, read_mask_file, run_large_sidecar_gate,
+    run_macrobench, run_parity_gate_manifest, run_regression_gate, run_search_typing_benchmark,
     run_search_typing_session_benchmark, write_parity_review_bundle_manifest, ColorProfile,
     DisplayScale, LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions, MacrobenchScale,
     MacrobenchStage, ParityAppearance, ParityFixtureOptions, ParityFixtureScale, ParitySurface,
@@ -147,10 +147,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let size = PixelSize::new(width, height);
             let masks = args
                 .next()
-                .map(|path| read_mask_file(path, size))
+                .map(|path| read_governed_mask_file(path, size))
                 .transpose()?
                 .unwrap_or_default();
-            let options = PixelDiffOptions::strict(size).with_masks(masks);
+            let options = PixelDiffOptions::strict(size).with_governed_masks(masks);
             let report = diff_rgba_files(expected, actual, &options)?;
             let threshold = PixelDriftThreshold::finder_strict(surface);
             let evaluation = evaluate_pixel_threshold(&report, threshold);

@@ -905,7 +905,7 @@ mod tests {
         )])
         .unwrap_err();
 
-        assert!(err.to_string().contains("image dimensions differ"));
+        assert!(err.to_string().contains("do not match declared 1x1"));
 
         fs::remove_dir_all(root).unwrap();
     }

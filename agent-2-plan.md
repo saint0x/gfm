@@ -1,485 +1,223 @@
-# Agent 2 Production Plan
+# Agent 2 Remaining Work
 
 Date: 2026-08-26
 
-This document is for the second engineer joining GFM. The project goal is not to build a Finder-inspired demo. The goal is a macOS-only native Rust + GPUI file manager that preserves Finder's familiar surface with strict byte-for-byte UI parity while replacing Finder's opaque and slow internals with a deliberately engineered low-latency filesystem, search, preview, operation, and recovery engine.
+This is an undone-only handoff list. Do not use it to record completed work. When an item is fully implemented, verified at the stated scope, merged, and pushed, remove it from this file.
 
-GFM means Good Fucking Manager. That is the product bar.
+GFM is macOS-only. It is a native Rust + GPUI file manager whose default UI must match Finder byte-for-byte for the supported macOS build/profile while replacing Finder internals with lower-latency, deterministic, recoverable systems. Do not build a web app. Do not build a product CLI. Existing `gfm <command>` paths are internal operator/test harness routes.
 
-## Mission Context
+## Verification Rule
 
-The user wants the default experience to feel like opening Apple Finder, except every slow, opaque, frustrating part has been replaced by something we own, measure, and can make brutally fast. Do not interpret "better" as visual redesign. Interpret it as:
+Do not mark anything done from code shape alone. Done requires current evidence:
 
-1. Same visible Finder surface by default.
-2. Lower latency everywhere.
-3. Machine-wide search that is instant enough to feel unfair.
-4. Safer, more recoverable file operations.
-5. More transparent indexing, previews, permissions, and recovery.
-6. Zero hidden UI-thread blocking from filesystem, preview, extraction, search, or operation work.
+1. The implementation exists in production code, not only tests, fixtures, docs, or an isolated demo path.
+2. The implementation is wired into the downstream product path that users or production workers depend on.
+3. The relevant unit, integration, binary/operator, and deterministic scenario tests pass.
+4. The verification scope matches the claim. A narrow test cannot close a broad status item.
+5. Generated artifacts are reviewed or intentionally retained, then cleaned before commit if they are not source artifacts.
+6. The commit is pushed to `origin/main`.
+7. `git status --branch --short` is clean after push.
 
-The project is Mac-only. Treat that as a simplifying constraint and a quality advantage. We do not need platform-neutral compromises. When macOS has real platform truth, bind it directly behind typed Rust APIs and keep unsafe, Objective-C, and CoreFoundation ownership at narrow boundaries.
+If any evidence is missing, leave the item on this list.
 
-The other active engineer is in the trenches on latency-sensitive runtime/search/preview plumbing. Your job is to take adjacent high-leverage work that can proceed in parallel, land it in small verified passes, and make the whole project converge instead of creating a side universe.
+## Primary Assignment: macOS FileProvider And iCloud State
 
-## What You Are Joining
+1. Inspect the existing FileProvider, iCloud, placeholder, badge, sidebar, preview, index, and operation policy code.
 
-GFM is already structured as a multi-crate Rust workspace. The architectural spine is intentionally split by production ownership:
+   Start with:
 
-- `crates/app`: native app entrypoint and internal operator/test harness routes.
-- `crates/ui`: GPUI shell, Finder-parity surfaces, view models, visual tokens, and screenshot surfaces.
-- `crates/mac`: typed macOS integration contracts and direct platform bridges.
-- `crates/fs`: filesystem enumeration, identity, metadata, package detection, aliases, symlinks, hidden files, and permission-aware record building.
-- `crates/ops`: file operations, copy/move/delete/trash/recovery, journaling, conflict handling, and verification.
-- `crates/index`: filesystem crawling, FSEvents state, indexing policy, content indexing, incremental updates, and repair scheduling.
-- `crates/search`: query parsing, candidate generation, ranking, cancellation, sessions, and streaming result behavior.
-- `crates/store`: mmap archives, compressed postings, dictionaries, sidecars, manifests, compaction, and recovery.
-- `crates/preview`: icons, thumbnails, Quick Look contracts, scheduling, invalidation, and preview cache behavior.
-- `crates/jobs`: scheduling, fairness, retries, progress, cancellation, worker admission, and durable job metadata.
-- `crates/config`: versioned config and Finder parity profiles.
-- `crates/telemetry`: local-only telemetry, latency budgets, histograms, frame timing, traces, and diagnostics exports.
-- `crates/diagnostics`: operator-grade recovery, inspection, parity, and storage verification surfaces.
-- `crates/testkit`: fixtures, benchmarks, screenshot/pixel tooling, and production test helpers.
-- `crates/packaging`: app bundle construction, signing/notarization policy, toolchain validation, release checks, and update policy.
+   ```sh
+   rg -n "FileProvider|iCloud|cloud|placeholder|materialize|evict|download|sync|provider|badge|sidebar|preview policy|thumbnail|index policy|operation policy" crates/mac crates/fs crates/preview crates/index crates/ops crates/ui crates/app/src crates/app/tests STATUS.md PLAN.md README.md
+   ```
 
-Do not introduce a product CLI. Existing `gfm <command>` routes are internal operator and deterministic-test harness surfaces. The user-facing product is the native macOS app.
+2. Add a typed FileProvider state contract in `crates/mac`.
 
-## Non-Negotiable Product Requirements
+   Required states:
 
-1. Mac only. Do not spend time on Windows, Linux, web, Electron, Tauri, cross-platform abstractions, or browser UI.
-2. Rust and GPUI. The native binary and UI shell are part of the product definition.
-3. Finder parity is strict. The default UI must be a byte-for-byte Finder match on the supported target macOS build/profile.
-4. Better than Finder must be mostly inside the engine, not sprayed across the default surface.
-5. Search must be machine-wide, low-latency, compact, cancellable, incremental, and progressive.
-6. No blocking filesystem, search, extraction, preview, or operation work on the UI render/update path.
-7. Performance-critical internals should be owned by GFM from scratch where the project needs control over layout, latency, cancellation, recovery, ranking, scheduling, compaction, or failure semantics.
-8. macOS-native integration is required where users can observe the difference: AppKit, Foundation, LaunchServices, Quick Look, Security/TCC, DiskArbitration, FileProvider, Spotlight metadata reconciliation, FSEvents, icons, tags, FinderInfo, packages, aliases, iCloud placeholders, and volumes.
-9. Long-running work must be durable, inspectable, cancellable, retryable where appropriate, and recoverable after crash/restart.
-10. `STATUS.md` is a numbered living list of unfinished work only. Remove an item only when the entire numbered capability is implemented and verified at production scope.
-11. `README.md` is written as the completed-product contract. Keep it true to the intended production standard.
-12. Push cleanly to `origin/main` after each verified pass.
+   1. local materialized
+   2. remote placeholder
+   3. downloading or materializing
+   4. uploading or syncing
+   5. offline or unavailable
+   6. evictable local file
+   7. provider conflict
+   8. provider error
+   9. unsupported host or unavailable API
+   10. inaccessible path or permission denied
 
-## Priority Order
+3. Implement a safe path-based API that returns the typed FileProvider outcome for a real filesystem path.
 
-Prefer work in this order:
+   Requirements:
 
-1. Latency-sensitive production paths users will feel every second: search-as-you-type, listing, sorting, scrolling, preview scheduling, thumbnail/icon publication, operation progress, cancellation.
-2. Parity gates that make strict Finder matching enforceable instead of subjective.
-3. macOS bridges that feed real platform state into UI/search/preview/ops.
-4. Durability and recovery for any work that can outlive a single synchronous UI event.
-5. Documentation only when it captures a real architecture decision or helps the next engineer avoid a wrong turn.
+   1. Keep Objective-C, CoreFoundation, and unsafe ownership at the narrow macOS bridge boundary.
+   2. Make thread-affinity requirements explicit.
+   3. Make host-version support explicit.
+   4. Do not silently coerce unsupported or denied states into ordinary local-file success.
+   5. Do not make Spotlight the source of truth for FileProvider state.
 
-Avoid low-leverage polish that does not move one of those paths. This project is not short on ambition; the way to win is to keep cutting toward the hot path.
+4. Add deterministic pure mapping tests for every typed FileProvider state.
 
-## Current Direction
+5. Add a real app/operator route that prints stable TSV for one path.
 
-Agent 1 is currently deep in Jobs/Runtime durability and recovery plumbing:
+   Suggested route:
 
-- durable payload catalog integration
-- persistent progress snapshots
-- restart planning
-- fair scheduling
-- adaptive pressure deferral
-- real content job spec recovery
-- Fozzy deterministic traces
-- Apple Metal/GPUI build-path verification
-- search typing/session hot path measurement
-- preview/icon native descriptor and cache-invalidation wiring
+   ```sh
+   cargo run -p gfm -- file-provider-state <path>
+   ```
 
-Avoid duplicating that exact lane unless coordinated. Your highest-value offload is to take one of the adjacent large production surfaces and push it forward with the same rigor.
+   The route is internal diagnostics only. Keep it thin; platform logic belongs in `crates/mac`.
 
-## Immediate Best Offload
+6. Add a binary test in `crates/app/tests/platform.rs` for the route.
 
-Take Workstream A unless you have a strong reason not to. Pixel parity is the force multiplier. The user has made strict one-to-one Finder parity a hard requirement, and every GPUI visual surface needs an objective pass/fail loop.
+   The test must prove stable formatting and explicit unsupported/error handling. If the host cannot provide live FileProvider state in CI, test the unsupported outcome honestly rather than faking success.
 
-If Agent 1 is still working in `crates/preview`, `crates/jobs`, `crates/app/src/runtime.rs`, or search typing benchmarks, stay out of those files unless your slice requires a tiny route hook. Good parallel lanes are:
+7. Wire FileProvider state into preview/thumbnail scheduling policy.
 
-1. Pure pixel diff and manifest hardening in `crates/testkit`.
-2. Deterministic fixture manifest expansion.
-3. `crates/ui` contract tests that emit deterministic surface descriptions without crossing into runtime plumbing.
-4. One isolated `crates/mac` bridge where the safe API can land with tests and not touch preview/runtime hot paths.
+   Required behavior:
 
-## Recommended Workstream A: Pixel Parity Harness
+   1. Remote placeholders must not be treated as ordinary local bytes.
+   2. Offline/unavailable provider state must produce a typed skip/defer/fail policy.
+   3. Downloading/syncing state must be visible to scheduling priority and publication policy.
+   4. Foreground preview requests must remain cancellable and must not block the UI render/update path.
 
-This is the cleanest offload because it can coalesce with all UI work later and does not collide much with runtime plumbing.
+8. Wire FileProvider state into icon or sidebar badge intent.
 
-### Goal
+   Required badge intents:
 
-Build the production pixel parity harness that can compare Finder and GFM screenshots from the same deterministic fixture matrix, with explicit baseline manifests, RGBA diffing, masks for OS-owned dynamic pixels, and review artifacts.
+   1. cloud-only
+   2. downloading
+   3. syncing
+   4. unavailable
+   5. conflict
 
-### Why It Matters
+   Use typed values. Do not duplicate string parsing outside the macOS/platform layer.
 
-The user explicitly requires byte-for-byte Finder UI parity with zero deviation. That cannot be managed by eyeballing. We need a ruthless, automated, baseline-governed parity loop:
+9. Add tests proving preview/thumbnail policy and badge policy for every important FileProvider state.
 
-- capture Finder
-- render GFM
-- diff pixels
-- fail on unapproved drift
-- publish artifacts humans can review
-- keep per-macOS-build profiles separate
+10. Add Fozzy coverage for the operator route if the route is deterministic on the host.
 
-Without this, UI parity becomes vibes. That is not acceptable here.
+11. Do not remove `STATUS.md` item 28 unless the full item is complete: direct FileProvider.framework/NSFileProviderManager state reads, native download/evict operations, provider progress callbacks, placeholder detection, conflict-resolution UI plumbing, sidebar/icon badge propagation, live invalidation, and captured Finder pixel baselines.
 
-### Authoritative Existing Anchors
+## Secondary Assignment: DiskArbitration Volume Truth
 
-Start by inspecting:
+1. Inspect current volume descriptor, copy policy, sidebar, and index scheduling code.
 
-- `STATUS.md`, items 7 through 14
-- `PLAN.md`, pixel parity and Finder UI sections
-- `crates/testkit`
-- `crates/config`
-- `crates/ui`
-- `crates/app` parity-related routes
-- any existing pixel diff, threshold, baseline, screenshot, fixture, or manifest code
+   Start with:
 
-Use `rg` first:
+   ```sh
+   rg -n "DiskArbitration|volume|mount|unmount|eject|APFS|network|external|removable|readonly|read-only|case-sensitive|slow volume|copy policy|sidebar location|index policy" crates/mac crates/fs crates/ops crates/index crates/ui crates/app/src crates/app/tests STATUS.md PLAN.md README.md
+   ```
 
-```sh
-rg -n "pixel|parity|baseline|screenshot|rgba|mask|threshold|Finder|fixture" crates tests PLAN.md STATUS.md README.md
-```
+2. Add or extend a typed volume descriptor that can represent:
 
-### Done Looks Like
+   1. local internal APFS
+   2. external removable
+   3. network volume
+   4. read-only
+   5. ejectable
+   6. unmountable
+   7. offline or unreachable
+   8. case-sensitive
+   9. stable volume identity where available
+   10. unsupported host or unavailable API
 
-This workstream is done only when all of these are true:
+3. Implement real host-backed volume lookup for a path or mounted volume.
 
-1. A deterministic Finder/GFM fixture manifest format exists and is versioned.
-2. The manifest encodes target macOS build/profile, appearance, scale factor, window size, focus state, view mode, fixture root, and allowed dynamic masks.
-3. The harness can ingest captured Finder PNGs and GFM PNGs for the same fixture.
-4. RGBA diffing operates on real image bytes, not placeholder text.
-5. Diff output includes exact dimensions, changed-pixel counts, max channel delta, per-region summaries, and failure thresholds.
-6. Masks are explicit and governed. No broad fuzzy masks.
-7. Review artifacts are generated in a stable directory structure.
-8. CI/operator route exits nonzero for unapproved drift.
-9. Tests cover at least one pass, one fail, one dimension mismatch, and one masked dynamic region.
-10. `STATUS.md` items should shrink only if the entire relevant numbered item is finished and verified at the broad scope stated there.
+4. Keep DiskArbitration session ownership isolated and documented at the unsafe/platform boundary.
 
-### Quality Bar
+5. Add deterministic descriptor mapping tests independent from host enumeration.
 
-- No fake screenshots.
-- No tolerance-based hand-waving that would hide real layout drift.
-- No "close enough" thresholds for surfaces where byte parity is required.
-- No generated SVG approximations of Finder icons as production proof.
-- No UI screenshots without manifest provenance.
-- No masks without a durable reason string and region.
-- No test that only checks that a file was created.
+6. Add a stable app/operator route.
 
-### Suggested Implementation Shape
+   Suggested route:
 
-Prefer a small, explicit module split:
+   ```sh
+   cargo run -p gfm -- volume-state <path>
+   ```
 
-- `crates/testkit/src/parity.rs` for manifest/report orchestration.
-- `crates/testkit/src/pixel.rs` for pure RGBA diff logic if not already present.
-- `crates/testkit/src/artifact.rs` for review bundle writing if needed.
-- `crates/app/src` route only as a thin operator/test harness entrypoint.
+7. Feed the descriptor into at least two downstream policies:
 
-Keep pure diffing independent from app/UI/macOS capture so it can be tested fast.
+   1. sidebar location row state
+   2. operation copy chunk/fallback policy
+   3. index scheduling policy for slow, network, external, or offline volumes
 
-### First Concrete Slice
+8. Add binary/operator tests and focused downstream policy tests.
 
-Do this as the first pass if you take parity:
+9. Do not remove `STATUS.md` item 29 unless the full item is complete: long-lived DiskArbitration callbacks, native eject/unmount/mount operations, APFS/container metadata, network-volume reachability, sidebar propagation, live index policy invalidation, and captured Finder pixel baselines.
 
-1. Inspect the existing manifest and pixel diff implementation.
-2. Add missing manifest fields only if they are required for real provenance.
-3. Add PNG ingestion around the existing RGBA diff core if it is absent.
-4. Add one operator route that reads a manifest and writes a deterministic review bundle.
-5. Add tests for pass, fail, dimension mismatch, and one explicit mask.
-6. Do not remove `STATUS.md` pixel items until the harness is connected to real Finder and real GFM screenshots.
+## Tertiary Assignment: Security And TCC Readiness
 
-The first pass is valuable even if it does not complete all parity items. It should make later UI work objectively measurable.
+1. Inspect current security-scope, permission, protected-path, first-run onboarding, index admission, preview admission, and operation preflight code.
 
-## Recommended Workstream B: Finder UI Calibration Surface
+   Start with:
 
-Take this if you are strongest in GPUI and native macOS surface fidelity.
+   ```sh
+   rg -n "Security|TCC|Full Disk|security-scoped|bookmark|permission|protected|privacy|onboarding|prompt|denied|operation preflight|index admission|preview admission" crates/mac crates/fs crates/ops crates/index crates/preview crates/ui crates/app/src crates/app/tests STATUS.md PLAN.md README.md
+   ```
 
-### Goal
+2. Add or extend a typed protected-path readiness contract.
 
-Turn the current native shell pieces into a calibrated Finder-parity surface that can be driven by the pixel harness.
+   Required outcomes:
 
-### Start Here
+   1. allowed
+   2. requires Full Disk Access
+   3. security-scoped access available
+   4. promptable
+   5. denied
+   6. unsupported host or unknown
 
-Inspect:
+3. Feed the readiness contract into at least two downstream policies:
 
-- `crates/ui/src`
-- `crates/config/src`
-- `crates/mac/src`
-- `STATUS.md`, items 1 through 6 and 15 through 22
-- the attached Finder screenshot from the original request as a human reference, but treat captured baselines as authoritative once the harness exists
+   1. first-run permission onboarding
+   2. index worker admission
+   3. preview worker admission
+   4. operation preflight
+   5. GPUI permission sheet contract
 
-Use:
+4. Add deterministic tests for every outcome.
 
-```sh
-find crates/ui/src -type f -maxdepth 2 -print | sort
-rg -n "toolbar|sidebar|titlebar|icon|list|column|gallery|Finder|parity|token|vibrancy|selection|rename|context" crates/ui/src crates/config/src crates/mac/src
-```
+5. Add a stable app/operator route if it can report without triggering unwanted prompts.
 
-### Done Looks Like
+6. Do not remove `STATUS.md` item 30 or 50 unless the full GPUI shell, prompt behavior, worker enforcement, and captured Finder baselines are complete.
 
-For any single UI surface you take, done means:
+## Parity Harness Remaining Work
 
-1. It is implemented in GPUI as a real native app surface.
-2. It uses Finder-calibrated tokens/profiles, not invented spacing or colors.
-3. It has deterministic screenshot fixtures.
-4. It passes the pixel harness for the target profile, or produces explicit failing artifacts documenting remaining drift.
-5. Interaction behavior is wired, not just drawn.
-6. Accessibility roles/focus behavior are present where applicable.
-7. Tests cover state changes, not just construction.
+1. Connect the existing parity gate to real Finder screenshot capture.
 
-### Quality Bar
+2. Connect the existing parity gate to deterministic GFM screenshot capture.
 
-- The first viewport must look like Finder, not a redesigned file manager.
-- Do not add decorative product flourishes.
-- Do not make a marketing page.
-- Do not create a "nice but different" design.
-- Finder exactness beats personal taste in the default surface.
-- Extra GFM power features must be hidden behind explicit modes/settings.
+3. Add baseline artifact storage keyed by macOS build, appearance, scale factor, color profile, focus state, view mode, fixture root, and surface.
 
-### First Concrete Slice
+4. Add CI enforcement that fails on every unapproved drift.
 
-Pick exactly one surface: toolbar, sidebar, titlebar, icon grid, list row, column view, gallery, search results, Trash, or operation sheet.
+5. Add baseline update review artifacts with signer/reviewer metadata.
 
-For that one surface:
+6. Add per-build mask approval files with durable reason strings and tight rectangles only.
 
-1. Write down the current contract emitted by the UI crate.
-2. Compare it against Finder-derived tokens and screenshots already present in docs/tests.
-3. Tighten the GPUI contract and deterministic output.
-4. Add focused state tests for selection, focus, disabled/enabled controls, and appearance if applicable.
-5. Leave the broader visual item in `STATUS.md` unless captured screenshots and pixel harness prove production parity.
+7. Add tests proving stale or mismatched baseline provenance fails.
 
-## Recommended Workstream C: macOS Integration Bridges
+8. Do not remove `STATUS.md` items 7 through 14 unless the entire capture, baseline, diff, CI, review, and per-build profile workflow is complete.
 
-Take this if you are strongest in Objective-C/runtime, CoreFoundation ownership, and unsafe boundary design.
+## Required Verification Commands
 
-### Goal
-
-Harden direct macOS bridges so the app can read and act on the same platform truth Finder uses: icons, UTTypes, FileProvider state, volumes, security-scoped access, Quick Look, Spotlight metadata, FSEvents, and FinderInfo.
-
-### Start Here
-
-Inspect:
-
-- `crates/mac`
-- `crates/mac-sys`
-- `crates/fs`
-- `crates/preview`
-- `crates/packaging`
-- `STATUS.md`, items 23 through 30 and 49 through 50
-
-Use:
-
-```sh
-rg -n "AppKit|Foundation|CoreServices|LaunchServices|QuickLook|FileProvider|DiskArbitration|Security|Spotlight|FSEvents|FinderInfo|NS|CF|objc|unsafe" crates/mac crates/mac-sys crates/fs crates/preview crates/packaging
-```
-
-### Done Looks Like
-
-Pick one platform bridge and take it to production:
-
-1. The bridge is isolated behind a narrow safe Rust API.
-2. All unsafe/CoreFoundation/Objective-C ownership rules are documented near the boundary.
-3. Thread-affinity requirements are explicit and enforced.
-4. Host-version gates exist where APIs differ by macOS version.
-5. Errors map into typed GFM outcomes.
-6. Tests use real macOS host behavior where feasible and deterministic fixtures where host state is unstable.
-7. The app/operator route proves the bridge with real paths.
-8. The bridge feeds downstream UI/search/preview/operation state, not just a standalone report.
-
-### Quality Bar
-
-- No broad unsafe in app/UI code.
-- No stringly typed platform state when a typed enum is feasible.
-- No silent fallback that hides missing permissions or unsupported host behavior.
-- No dependency on Spotlight as the primary search engine.
-- No pretending FileProvider/iCloud placeholder state is a normal local file.
-
-### First Concrete Slice
-
-Pick one bridge and make it genuinely useful downstream. Good candidates:
-
-1. LaunchServices/AppKit icon raster extraction and badge composition.
-2. DiskArbitration long-lived volume observation and eject/unmount command policy.
-3. FileProvider placeholder/materialization state plus download/evict command policy.
-4. Security-scoped bookmark acquisition/resolution with typed diagnostics.
-5. Quick Look/thumbnail lifecycle events and cancellation-aware publication.
-
-For the first pass, prefer the smallest bridge that can produce a real app/operator route and a deterministic test. Document any unsafe ownership rule next to the unsafe code, not in a far-away essay.
-
-## Recommended Workstream D: Search Latency And Memory
-
-Take this if you are strongest in indexing, data structures, memory mapping, ranking, and benchmark-driven tuning.
-
-### Goal
-
-Push the machine-wide search engine toward the user's core demand: instant search across the Mac with compact indexes and deterministic low-latency behavior.
-
-### Start Here
-
-Inspect:
-
-- `crates/search`
-- `crates/store`
-- `crates/index`
-- `crates/content`
-- `crates/telemetry`
-- `STATUS.md`, items 31 through 36 and search sections in `PLAN.md`/`README.md`
-
-Use:
-
-```sh
-rg -n "QuerySession|Sidecar|mmap|posting|candidate|rank|top-k|cancel|budget|telemetry|latency|compact|content|phrase|fuzzy|substring|metadata" crates/search crates/store crates/index crates/content crates/telemetry
-```
-
-### Done Looks Like
-
-Pick a measurable hot path and improve it end to end:
-
-1. Identify the target query path and current data flow.
-2. Add or use an existing latency budget.
-3. Remove avoidable allocations, scans, duplicate hydration, or lock contention.
-4. Preserve deterministic ranking.
-5. Preserve cancellation and supersession behavior.
-6. Add focused tests for correctness and a benchmark/telemetry path for latency.
-7. Validate on a materialized fixture large enough to make the improvement meaningful.
-
-### Quality Bar
-
-- No "fast" claims without measurement.
-- No unbounded candidate expansion for short or fuzzy queries.
-- No full-record scans when an indexed candidate source can bound the work.
-- No global locks around search-as-you-type hot paths.
-- No cache poisoning panics on foreground search paths.
-- No memory-heavy structures that duplicate mmap-resident indexes without a clear budget.
-
-### First Concrete Slice
-
-Coordinate before touching this stream because Agent 1 is likely active here. If free, take one measurable hot path:
-
-1. Repeated query/prefix refinement cache reuse.
-2. Short-query candidate bounding.
-3. Top-k heap/ranking allocation reduction.
-4. Sidecar lookup cache hit telemetry.
-5. Cancellation latency under superseded typing.
-
-Every search change needs a benchmark path and correctness tests. A faster search that reorders results nondeterministically is not acceptable.
-
-## Recommended Workstream E: File Operations UI Binding
-
-Take this if you are strongest at marrying engine correctness to native UX.
-
-### Goal
-
-Bind operation engine state into Finder-parity GPUI progress surfaces, conflict sheets, pause/resume/stop controls, Trash restore flows, and permission prompts.
-
-### Start Here
-
-Inspect:
-
-- `crates/ops`
-- `crates/jobs`
-- `crates/ui`
-- `crates/mac`
-- `crates/app/src/operation.rs`
-- `STATUS.md`, items 37 through 42
-
-Use:
-
-```sh
-rg -n "copy|move|rename|delete|trash|restore|conflict|journal|pause|resume|progress|permission|security|sheet|operation" crates/ops crates/jobs crates/ui crates/mac crates/app/src
-```
-
-### Done Looks Like
-
-1. UI surfaces subscribe to real operation/job progress, not fake local state.
-2. Pause/resume/stop actions call the real operation/job control path.
-3. Conflict sheets are backed by the actual conflict state machine.
-4. Permission prompts are driven by macOS security-scope outcomes.
-5. Trash/Put Back flows preserve platform identity and metadata.
-6. Failure and cancellation states remain recoverable after restart.
-7. Pixel parity harness covers the visible sheets/progress surfaces.
-
-### Quality Bar
-
-- No optimistic UI that says an operation succeeded before durable completion.
-- No destructive operation without a recoverable journal/state path.
-- No modal/sheet that diverges from Finder order, spacing, focus, or button semantics.
-- No conflict logic duplicated in UI.
-
-### First Concrete Slice
-
-Pick one visible operation surface and connect it to real state:
-
-1. Foreground copy progress sheet.
-2. Pause/resume/stop controls.
-3. Conflict review sheet.
-4. Trash Put Back confirmation/recovery.
-5. Protected-path permission sheet.
-
-The valuable outcome is not a prettier modal. The valuable outcome is native GPUI state driven by durable operation/job truth with deterministic tests.
-
-## Documentation Contract
-
-Docs are part of production, but they must not become fantasy architecture detached from code.
-
-`README.md` is intentionally written as if the product is complete. Treat it as the external promise and product contract.
-
-`PLAN.md` is the full architecture and research plan. Update it only when the intended architecture changes materially or when a major decision becomes concrete.
-
-`STATUS.md` is not a brag sheet. It is an undone-only numbered ledger. Remove an item only when the whole capability is implemented and verified at the production scope described by that item. Narrow crate tests do not retire broad production items.
-
-`agent-2-plan.md` is your handoff. Keep it useful for parallel work. If you discover a better offload lane, edit this file in the same commit as your first slice so the next joiner gets the sharpened map.
-
-## Coordination Rules
-
-1. Work from `main`; pull before starting if needed.
-2. Keep changes scoped to one production slice.
-3. Do not rewrite Agent 1's runtime plumbing unless you coordinate first.
-4. Do not remove `STATUS.md` entries unless the whole numbered item is complete and verified.
-5. Keep `PLAN.md` and `README.md` aligned only when architectural truth changes.
-6. Avoid broad refactors unless they unlock a real production path.
-7. Add tests at the layer where the behavior lives.
-8. Use deterministic host tests when touching app/operator surfaces.
-9. Use Fozzy for scenario/system verification.
-10. Push clean commits to `origin/main` after each verified pass.
-
-## Merge Protocol
-
-Before you start:
-
-```sh
-git status --branch --short
-git fetch origin
-git log --oneline --decorate -5
-```
-
-If the working tree is dirty, identify whether the changed files belong to Agent 1's active lane. Do not revert them. Either choose a non-overlapping lane or coordinate.
-
-Before committing:
-
-1. Re-check `git status --branch --short`.
-2. Review `git diff` for accidental churn.
-3. Ensure generated artifacts are either intentionally committed or cleaned.
-4. Run the relevant verification commands.
-5. Commit with a concrete message.
-6. Push to `origin main`.
-7. Confirm the tree is clean.
-
-Use small commits. A good commit should be readable by another engineer in one sitting and should make one production claim.
-
-## Verification Standard
-
-Use the narrowest meaningful Cargo tests first, then broaden.
-
-Expected baseline commands for most Rust code passes:
+Run the focused commands for the crates you touch:
 
 ```sh
 cargo fmt --all -- --check
-cargo test -p <changed-crate> <focused-filter> -- --nocapture
+cargo test -p gfm-mac <filter> -- --nocapture
+cargo test -p gfm-preview <filter> -- --nocapture
+cargo test -p gfm-fs <filter> -- --nocapture
+cargo test -p gfm-index <filter> -- --nocapture
+cargo test -p gfm-ops <filter> -- --nocapture
+cargo test -p gfm-ui <filter> -- --nocapture
+cargo test -p gfm --test platform <filter> -- --nocapture
 cargo clippy -p <changed-crate> --tests -- -D warnings
 git diff --check
 ```
 
-For app/operator/system behavior, include:
+For app/operator/system behavior, also run:
 
 ```sh
-cargo test -p gfm --test cli <focused-filter> -- --nocapture
 fozzy doctor --deep --scenario tests/scenarios/gfm-cli-host.fozzy.json --runs 5 --seed 424242 --json
 fozzy test --det --strict-verify tests/scenarios/gfm-cli-host.fozzy.json --json
 fozzy run tests/scenarios/gfm-cli-host.fozzy.json --det --record /tmp/gfm-cli-host.trace.fozzy --proc-backend host --fs-backend host --http-backend host --json
@@ -490,78 +228,21 @@ fz doctor project . --strict
 fz audit unsafe .
 ```
 
-Clean generated verifier artifacts before committing:
+Clean verifier artifacts before committing:
 
 ```sh
 if [ -d .fz ]; then /bin/rm -r .fz; fi
 if [ -d .fozzy ]; then /bin/rm -r .fozzy; fi
 if [ -e /tmp/gfm-cli-host.trace.fozzy ]; then /bin/rm /tmp/gfm-cli-host.trace.fozzy; fi
+if [ -e /tmp/gfm-cli-host.trace.1.fozzy ]; then /bin/rm /tmp/gfm-cli-host.trace.1.fozzy; fi
 ```
 
-Run `cargo clean` after a pushed pass if disk is tight. This workspace has been operating with low free disk, so keep an eye on `df -h .`.
+## Commit Rules
 
-## Performance Standard
-
-Any performance-oriented change should name:
-
-1. The hot path.
-2. The latency or memory budget.
-3. The pre-change behavior or missing measurement.
-4. The implementation mechanism.
-5. The verification command.
-6. The residual risk.
-
-Do not claim "fast" because code looks fast. Claims need measurement, deterministic benchmark output, or a narrowly scoped proof that removes an entire class of work from the hot path.
-
-For UI-visible latency, optimize for:
-
-1. Time to first visible result.
-2. Cancellation latency when user input supersedes old work.
-3. Render-thread isolation.
-4. Bounded allocations during repeated interactions.
-5. Stable tail latency, not just good medians.
-
-## Finder Parity Standard
-
-Finder parity means exact default behavior, not a close visual homage.
-
-For a UI surface, production parity requires:
-
-1. Captured Finder baseline for the supported macOS build/profile.
-2. Deterministic GFM render for the same fixture.
-3. Pixel diff with explicit masks only for OS-owned dynamic regions.
-4. Interaction state parity for focus, hover, selection, disabled controls, menus, sheets, rename fields, drag images, and keyboard navigation as applicable.
-5. Accessibility role/focus parity where the native surface exposes it.
-6. No visible "GFM flair" in the default Finder-matched surface.
-
-If a feature is better than Finder, it must not disturb default parity. Put power features behind explicit commands, settings, or modes.
-
-## What Not To Do
-
-- Do not build a web UI.
-- Do not add a product CLI.
-- Do not create mock business paths and call them architecture.
-- Do not depend on Spotlight as the real search engine.
-- Do not hide performance work behind generic libraries where GFM needs ownership.
-- Do not create placeholder screenshots or fake Finder baselines.
-- Do not use "close enough" UI language.
-- Do not delete or soften requirements in `STATUS.md`.
-- Do not claim an item is complete because a narrow test passed.
-- Do not introduce new broad dependencies unless the production tradeoff is explicit.
-
-## Final Definition Of High-Quality Engineering
-
-High-quality GFM work has these properties:
-
-1. It makes the final requested product more true.
-2. It is macOS-native where user-observable behavior depends on macOS truth.
-3. It is deterministic under test.
-4. It has bounded latency, memory, IO, and failure behavior.
-5. It is crash/restart aware when it touches long-running work.
-6. It keeps UI rendering free of blocking filesystem work.
-7. It separates platform bridges, domain logic, persistence, scheduling, and UI.
-8. It is measurable when it claims performance.
-9. It is pixel-verifiable when it claims Finder parity.
-10. It can be understood and extended by another strong engineer without a rewrite.
-
-If you are unsure what to take, take Workstream A: Pixel Parity Harness. It is the leverage point that lets all Finder UI work become objectively shippable.
+1. Keep each commit scoped to one production claim.
+2. Do not mix FileProvider, DiskArbitration, Security/TCC, and parity-capture work in one broad commit.
+3. Do not update `README.md` unless a real command, contract, or production behavior changed.
+4. Do not update `PLAN.md` unless an architectural decision changed.
+5. Do not shrink `STATUS.md` unless a full numbered item is production-complete and verified.
+6. Push every verified pass to `origin/main`.
+7. Leave the tree clean after push.

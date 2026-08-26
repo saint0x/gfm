@@ -467,6 +467,20 @@ pub fn diff_image_files(
 ) -> Result<(PixelDiffReport, RgbaImage, RgbaImage)> {
     let expected = read_rgba_image_file(expected_path, raw_size)?;
     let actual = read_rgba_image_file(actual_path, raw_size)?;
+    if let Some(declared) = raw_size {
+        if expected.size != declared {
+            return Err(GfmError::Format(format!(
+                "expected image dimensions {}x{} do not match declared {}x{}",
+                expected.size.width, expected.size.height, declared.width, declared.height
+            )));
+        }
+        if actual.size != declared {
+            return Err(GfmError::Format(format!(
+                "actual image dimensions {}x{} do not match declared {}x{}",
+                actual.size.width, actual.size.height, declared.width, declared.height
+            )));
+        }
+    }
     if expected.size != actual.size {
         return Err(GfmError::Format(format!(
             "image dimensions differ: expected {}x{} actual {}x{}",
@@ -851,6 +865,39 @@ mod tests {
         assert_eq!(decoded.size, PixelSize::new(1, 1));
         assert_eq!(decoded.bytes, vec![255, 32, 48, 255]);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn png_diff_rejects_manifest_declared_size_drift() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-png-declared-size-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let image = RgbaImage {
+            size: PixelSize::new(1, 1),
+            bytes: vec![0, 0, 0, 255],
+        };
+        let expected = root.join("expected.png");
+        let actual = root.join("actual.png");
+        let report = diff_rgba(
+            &image.bytes,
+            &image.bytes,
+            &PixelDiffOptions::strict(image.size),
+        )
+        .unwrap();
+        write_visual_diff_png(&expected, &image, &image, &report).unwrap();
+        write_visual_diff_png(&actual, &image, &image, &report).unwrap();
+
+        let err = diff_image_files(&expected, &actual, Some(PixelSize::new(2, 1)), Vec::new())
+            .unwrap_err();
+
+        assert!(err.to_string().contains("do not match declared 2x1"));
         fs::remove_dir_all(root).unwrap();
     }
 }

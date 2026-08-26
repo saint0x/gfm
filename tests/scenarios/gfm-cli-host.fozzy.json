@@ -2565,6 +2565,11 @@
       "data": "1\t0\t1\t1\n"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-pixel-governed-mask.tsv",
+      "data": "1\t0\t1\t1\tOS-owned toolbar repaint\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -2601,7 +2606,7 @@
         "tmp/gfm-pixel-actual.rgba",
         "3",
         "1",
-        "tmp/gfm-pixel-mask.tsv"
+        "tmp/gfm-pixel-governed-mask.tsv"
       ],
       "exit_code": 0,
       "times": 1
@@ -2616,14 +2621,14 @@
         "tmp/gfm-pixel-actual.rgba",
         "3",
         "1",
-        "tmp/gfm-pixel-mask.tsv"
+        "tmp/gfm-pixel-governed-mask.tsv"
       ],
       "expect_exit": 0
     },
     {
       "type": "fs_write",
       "path": "tmp/gfm-parity-gate.tsv",
-      "data": "toolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-mask.tsv\n"
+      "data": "toolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\n"
     },
     {
       "type": "proc_when",
