@@ -279,13 +279,30 @@ impl LiveIndex {
         lookup: &dyn SearchLookup,
         budget: SearchLookupBudget,
     ) -> Result<SearchQueryReport> {
+        self.search_with_lookup_budget_cancellable(
+            query,
+            limit,
+            lookup,
+            budget,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn search_with_lookup_budget_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<SearchQueryReport> {
         let cache_before = lookup.cache_telemetry();
         let mut report = self.index.query_structured_with_lookup_budget_cancellable(
             &SearchQuery::parse(query),
             limit,
             lookup,
             budget,
-            &Cancellation::default(),
+            cancellation,
         )?;
         let cache_after = lookup.cache_telemetry();
         report.lookup.merge_cache_delta(&cache_before, &cache_after);

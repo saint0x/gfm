@@ -1,4 +1,5 @@
 use crate::{content_query_terms, ContentQueryLoadReport, LiveIndex};
+use gfm_jobs::Cancellation;
 use gfm_search::{SearchLookupBudget, SearchLookupTelemetry, SearchQueryReport};
 use gfm_store::{MmapContentSet, MmapRecordArchive};
 use gfm_types::{ContentPosting, FileId, FileRecord, Result};
@@ -105,15 +106,41 @@ impl ContentIndexQuerySession {
         limit: usize,
         budget: SearchLookupBudget,
     ) -> Result<ContentQuerySessionReport> {
+        self.search_with_budget_cancellable(query, limit, budget, &Cancellation::default())
+    }
+
+    pub fn search_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<ContentQuerySessionReport> {
+        self.search_with_budget_cancellable(
+            query,
+            limit,
+            SearchLookupBudget::default(),
+            cancellation,
+        )
+    }
+
+    pub fn search_with_budget_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<ContentQuerySessionReport> {
+        cancellation.check()?;
         let posting_hits_before = self.posting_cache_hits.load(Ordering::Relaxed);
         let posting_misses_before = self.posting_cache_misses.load(Ordering::Relaxed);
         let content_terms = content_query_terms(query);
         let has_content_terms = !content_terms.is_empty();
-        let postings = self.postings_for_terms(content_terms, budget)?;
+        let postings = self.postings_for_terms(content_terms, budget, cancellation)?;
+        cancellation.check()?;
         let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
-        let (live, load) = self.live_from_postings(postings, has_content_terms)?;
-        let hits = live.search(query, limit);
+        let (live, load) = self.live_from_postings(postings, has_content_terms, cancellation)?;
+        let hits = live.search_cancellable(query, limit, cancellation)?;
         Ok(ContentQuerySessionReport {
             load,
             search: SearchQueryReport {
@@ -143,9 +170,11 @@ impl ContentIndexQuerySession {
         &self,
         terms: Vec<String>,
         budget: SearchLookupBudget,
+        cancellation: &Cancellation,
     ) -> Result<Vec<ContentPosting>> {
         let mut selected = BTreeSet::new();
         for term in terms {
+            cancellation.check()?;
             let term = term.trim().to_lowercase();
             if !term.is_empty() {
                 selected.insert(term);
@@ -160,6 +189,7 @@ impl ContentIndexQuerySession {
         {
             let cache = self.posting_cache_lock();
             for term in &selected {
+                cancellation.check()?;
                 let key = posting_cache_key(term, budget.max_content_ids_per_term);
                 if let Some(cached) = cache.get(&key) {
                     self.posting_cache_hits.fetch_add(1, Ordering::Relaxed);
@@ -174,6 +204,7 @@ impl ContentIndexQuerySession {
         }
 
         for term in misses {
+            cancellation.check()?;
             let (posting, truncated) = self
                 .content
                 .posting_for_term_limit(&term, budget.max_content_ids_per_term)?;
@@ -202,17 +233,20 @@ impl ContentIndexQuerySession {
         &self,
         postings: Vec<ContentPosting>,
         has_content_terms: bool,
+        cancellation: &Cancellation,
     ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
+        cancellation.check()?;
         let candidate_ids = content_candidate_ids(&postings);
         let has_content_postings = !postings.is_empty();
         let full_hydration =
             !has_content_terms || (has_content_postings && candidate_ids.is_empty());
         let candidate_count = candidate_ids.len();
         let (records, missing) = if full_hydration {
-            self.hydrate_all_records()?
+            self.hydrate_all_records(cancellation)?
         } else {
-            self.hydrate_record_ids(candidate_ids)?
+            self.hydrate_record_ids(candidate_ids, cancellation)?
         };
+        cancellation.check()?;
 
         let content_keys = postings.len();
         let (live, _, _, _, _, _, _) = LiveIndex::from_records_with_sidecars(
@@ -237,15 +271,20 @@ impl ContentIndexQuerySession {
         ))
     }
 
-    fn hydrate_all_records(&self) -> Result<(Vec<FileRecord>, usize)> {
+    fn hydrate_all_records(&self, cancellation: &Cancellation) -> Result<(Vec<FileRecord>, usize)> {
         let mut records = Vec::with_capacity(self.records.len());
         for index in 0..self.records.len() {
+            cancellation.check()?;
             records.push(self.records.record(index)?);
         }
         Ok((records, 0))
     }
 
-    fn hydrate_record_ids(&self, ids: BTreeSet<FileId>) -> Result<(Vec<FileRecord>, usize)> {
+    fn hydrate_record_ids(
+        &self,
+        ids: BTreeSet<FileId>,
+        cancellation: &Cancellation,
+    ) -> Result<(Vec<FileRecord>, usize)> {
         if ids.is_empty() {
             return Ok((Vec::new(), 0));
         }
@@ -255,6 +294,7 @@ impl ContentIndexQuerySession {
         {
             let cache = self.record_cache_lock();
             for id in &ids {
+                cancellation.check()?;
                 if let Some(record) = cache.get(*id) {
                     self.record_cache_hits.fetch_add(1, Ordering::Relaxed);
                     records_by_id.insert(*id, record);
@@ -265,6 +305,7 @@ impl ContentIndexQuerySession {
             }
         }
 
+        cancellation.check()?;
         let batch = self
             .records
             .records_for_sorted_ids(misses.iter().copied())?;
@@ -272,6 +313,7 @@ impl ContentIndexQuerySession {
         {
             let mut cache = self.record_cache_lock();
             for record in batch.records {
+                cancellation.check()?;
                 cache.insert(record.id, record.clone());
                 records_by_id.insert(record.id, record);
             }
@@ -381,8 +423,9 @@ impl ContentRecordCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_jobs::Cancellation;
     use gfm_store::{write_content_postings, write_records};
-    use gfm_types::{ContentPositions, FileKind, VolumeId};
+    use gfm_types::{ContentPositions, FileKind, GfmError, VolumeId};
     use std::fs;
     use std::panic::{self, AssertUnwindSafe};
     use std::path::PathBuf;
@@ -416,6 +459,20 @@ mod tests {
         assert_eq!(second.search.hits[0].record.name, "Needle.md");
         assert_eq!(second.posting_cache_hits, 1);
         assert_eq!(second.record_cache_hits, 1);
+    }
+
+    #[test]
+    fn content_session_honors_pre_cancelled_queries_without_cache_work() {
+        let fixture = ContentSessionFixture::new("pre-cancelled");
+        let session = fixture.session();
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = session.search_cancellable("needle", 5, &cancellation);
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(session.posting_cache_telemetry(), (0, 0));
+        assert_eq!(session.record_cache_telemetry(), (0, 0));
     }
 
     fn poison_posting_cache(session: &ContentIndexQuerySession) {

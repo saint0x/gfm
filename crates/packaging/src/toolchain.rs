@@ -1,6 +1,6 @@
 use gfm_types::{GfmError, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -38,6 +38,11 @@ fn require_toolchain(
     xcrun_utilities: &[&str],
 ) -> Result<AppleToolchainReport> {
     let developer_dir = selected_developer_dir()?;
+    let metal_smoke_required =
+        xcrun_utilities.contains(&"metal") && xcrun_utilities.contains(&"metallib");
+    if metal_smoke_required {
+        require_full_xcode_developer_dir(&developer_dir, label)?;
+    }
     let mut utilities = Vec::with_capacity(path_utilities.len() + xcrun_utilities.len() + 1);
     utilities.push(AppleToolchainUtility {
         name: "xcrun".to_string(),
@@ -55,8 +60,6 @@ fn require_toolchain(
             path: require_xcrun_utility(utility, &developer_dir, label)?,
         });
     }
-    let metal_smoke_required =
-        xcrun_utilities.contains(&"metal") && xcrun_utilities.contains(&"metallib");
     if metal_smoke_required {
         validate_metal_toolchain(&developer_dir, label)?;
     }
@@ -65,6 +68,34 @@ fn require_toolchain(
         utilities,
         metal_smoke_tested: metal_smoke_required,
     })
+}
+
+fn require_full_xcode_developer_dir(developer_dir: &Path, label: &str) -> Result<()> {
+    if is_full_xcode_developer_dir(developer_dir) {
+        return Ok(());
+    }
+
+    Err(GfmError::Format(format!(
+        "{label} requires Apple's full Xcode Metal toolchain; selected developer directory is {}. Command Line Tools do not ship the production `metal` and `metallib` tools required for release validation. Install full Xcode and select it with `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`",
+        developer_dir.display()
+    )))
+}
+
+fn is_full_xcode_developer_dir(developer_dir: &Path) -> bool {
+    let Some(contents_dir) = developer_dir.parent() else {
+        return false;
+    };
+    if developer_dir.file_name().and_then(|name| name.to_str()) != Some("Developer") {
+        return false;
+    }
+    if contents_dir.file_name().and_then(|name| name.to_str()) != Some("Contents") {
+        return false;
+    }
+    contents_dir
+        .parent()
+        .and_then(|bundle| bundle.extension())
+        .and_then(|extension| extension.to_str())
+        == Some("app")
 }
 
 fn selected_developer_dir() -> Result<PathBuf> {
@@ -281,6 +312,33 @@ mod tests {
         assert!(message.contains("production release requires Apple's full release toolchain"));
         assert!(message.contains("xcrun --find gfm-definitely-missing-apple-tool"));
         assert!(message.contains("xcode-select --switch"));
+    }
+
+    #[test]
+    fn rejects_command_line_tools_for_release_metal_validation() {
+        let developer_dir = PathBuf::from("/Library/Developer/CommandLineTools");
+        let err = require_full_xcode_developer_dir(&developer_dir, "production release")
+            .expect_err("CLT-only developer dir cannot release Metal builds");
+        let message = err.to_string();
+
+        assert!(message.contains("production release requires Apple's full Xcode Metal toolchain"));
+        assert!(message.contains("/Library/Developer/CommandLineTools"));
+        assert!(message.contains("metal"));
+        assert!(message.contains("metallib"));
+        assert!(message.contains("xcode-select --switch"));
+    }
+
+    #[test]
+    fn accepts_full_xcode_developer_directories() {
+        assert!(is_full_xcode_developer_dir(&PathBuf::from(
+            "/Applications/Xcode.app/Contents/Developer"
+        )));
+        assert!(is_full_xcode_developer_dir(&PathBuf::from(
+            "/Volumes/Tools/Xcode-Beta.app/Contents/Developer"
+        )));
+        assert!(!is_full_xcode_developer_dir(&PathBuf::from(
+            "/Library/Developer/CommandLineTools"
+        )));
     }
 
     #[test]

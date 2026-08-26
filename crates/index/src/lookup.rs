@@ -1,3 +1,4 @@
+use gfm_jobs::Cancellation;
 use gfm_search::substring_candidate_grams;
 use gfm_search::{
     SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupIds, SearchLookupTelemetry,
@@ -164,12 +165,42 @@ impl SidecarIndexQuerySession {
         limit: usize,
         budget: SearchLookupBudget,
     ) -> Result<SidecarQuerySessionReport> {
+        self.search_with_budget_cancellable(query, limit, budget, &Cancellation::default())
+    }
+
+    pub fn search_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SidecarQuerySessionReport> {
+        self.search_with_budget_cancellable(
+            query,
+            limit,
+            SearchLookupBudget::default(),
+            cancellation,
+        )
+    }
+
+    pub fn search_with_budget_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<SidecarQuerySessionReport> {
+        cancellation.check()?;
         let content_hits_before = self.content_cache_hits.load(Ordering::Relaxed);
         let content_misses_before = self.content_cache_misses.load(Ordering::Relaxed);
         let parsed = gfm_search::SearchQuery::parse(query);
+        cancellation.check()?;
         let content_terms = parsed.content_candidate_terms();
-        let content_postings = self
-            .content_postings_for_terms(content_terms.clone(), budget.max_content_ids_per_term)?;
+        let content_postings = self.content_postings_for_terms(
+            content_terms.clone(),
+            budget.max_content_ids_per_term,
+            cancellation,
+        )?;
+        cancellation.check()?;
         let import = query_sidecar_imports_with_content_postings(
             &self.metadata,
             &self.lookup,
@@ -179,10 +210,17 @@ impl SidecarIndexQuerySession {
             content_postings,
             budget,
         )?;
+        cancellation.check()?;
         let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
-        let (live, hydration) = self.live_from_import(import)?;
-        let search = live.search_with_lookup_budget(query, limit, &self.lookup, budget)?;
+        let (live, hydration) = self.live_from_import(import, cancellation)?;
+        let search = live.search_with_lookup_budget_cancellable(
+            query,
+            limit,
+            &self.lookup,
+            budget,
+            cancellation,
+        )?;
         Ok(SidecarQuerySessionReport {
             hydration,
             search,
@@ -209,6 +247,7 @@ impl SidecarIndexQuerySession {
         &self,
         terms: Vec<String>,
         limit_per_term: usize,
+        cancellation: &Cancellation,
     ) -> Result<Vec<ContentPosting>> {
         if limit_per_term == 0 {
             return Ok(Vec::new());
@@ -216,6 +255,7 @@ impl SidecarIndexQuerySession {
 
         let mut selected = BTreeSet::new();
         for term in terms {
+            cancellation.check()?;
             let term = term.trim().to_lowercase();
             if !term.is_empty() {
                 selected.insert(term);
@@ -230,6 +270,7 @@ impl SidecarIndexQuerySession {
         {
             let cache = self.content_cache_lock();
             for term in &selected {
+                cancellation.check()?;
                 let key = bounded_posting_cache_key(term, limit_per_term);
                 if let Some(cached) = cache.get(&key) {
                     self.content_cache_hits.fetch_add(1, Ordering::Relaxed);
@@ -243,6 +284,7 @@ impl SidecarIndexQuerySession {
             }
         }
 
+        cancellation.check()?;
         let loaded = self
             .content
             .postings_for_sorted_terms_limit(&misses, limit_per_term)?
@@ -257,6 +299,7 @@ impl SidecarIndexQuerySession {
 
         let mut cache = self.content_cache_lock();
         for term in misses {
+            cancellation.check()?;
             let (posting, truncated) = loaded.get(&term).cloned().unwrap_or((None, false));
             if !truncated {
                 cache.insert(
@@ -276,12 +319,15 @@ impl SidecarIndexQuerySession {
     fn live_from_import(
         &self,
         import: SidecarQueryImport,
+        cancellation: &Cancellation,
     ) -> Result<(crate::LiveIndex, SidecarRecordHydrationReport)> {
+        cancellation.check()?;
         let (records, missing) = if import.report.requires_full_record_hydration {
-            self.hydrate_all_records()?
+            self.hydrate_all_records(cancellation)?
         } else {
-            self.hydrate_record_ids(sidecar_candidate_ids(&import))?
+            self.hydrate_record_ids(sidecar_candidate_ids(&import), cancellation)?
         };
+        cancellation.check()?;
         let (live, applied, metadata_keys, prefix_keys, substring_keys, fuzzy_keys, content_keys) =
             crate::LiveIndex::from_records_with_sidecars(
                 records
@@ -312,16 +358,24 @@ impl SidecarIndexQuerySession {
         Ok((live, report))
     }
 
-    fn hydrate_all_records(&self) -> Result<(Vec<HydratedRecord>, usize)> {
+    fn hydrate_all_records(
+        &self,
+        cancellation: &Cancellation,
+    ) -> Result<(Vec<HydratedRecord>, usize)> {
         let mut records = Vec::with_capacity(self.records.len());
         for index in 0..self.records.len() {
+            cancellation.check()?;
             let record = self.records.record(index)?;
             records.push(self.hydrate_record(record)?);
         }
         Ok((records, 0))
     }
 
-    fn hydrate_record_ids(&self, ids: BTreeSet<FileId>) -> Result<(Vec<HydratedRecord>, usize)> {
+    fn hydrate_record_ids(
+        &self,
+        ids: BTreeSet<FileId>,
+        cancellation: &Cancellation,
+    ) -> Result<(Vec<HydratedRecord>, usize)> {
         if ids.is_empty() {
             return Ok((Vec::new(), 0));
         }
@@ -331,6 +385,7 @@ impl SidecarIndexQuerySession {
         {
             let cache = self.record_cache_lock();
             for id in &ids {
+                cancellation.check()?;
                 if let Some(record) = cache.get(*id) {
                     self.record_cache_hits.fetch_add(1, Ordering::Relaxed);
                     hydrated_by_id.insert(*id, record);
@@ -341,12 +396,14 @@ impl SidecarIndexQuerySession {
             }
         }
 
+        cancellation.check()?;
         let batch = self
             .records
             .records_for_sorted_ids(misses.iter().copied())?;
         let missing = batch.missing;
         let mut loaded = Vec::with_capacity(batch.records.len());
         for record in batch.records {
+            cancellation.check()?;
             let id = record.id;
             loaded.push((id, self.hydrate_record(record)?));
         }
@@ -951,6 +1008,7 @@ fn bounded_posting_cache_key(term: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_jobs::Cancellation;
     use gfm_search::SearchLookup;
     use gfm_store::{
         fuzzy_postings_from_records, metadata_postings_from_records, prefix_postings_from_records,
@@ -958,7 +1016,7 @@ mod tests {
         write_metadata_postings, write_prefix_postings, write_record_columns, write_records,
         write_substring_postings,
     };
-    use gfm_types::{ContentPositions, FileKind, VolumeId};
+    use gfm_types::{ContentPositions, FileKind, GfmError, VolumeId};
     use std::fs;
     use std::panic::{self, AssertUnwindSafe};
     use std::path::PathBuf;
@@ -992,6 +1050,20 @@ mod tests {
         assert_eq!(second.search.hits[0].record.id, fixture.record.id);
         assert_eq!(second.content_cache_hits, 1);
         assert_eq!(second.record_cache_hits, 1);
+    }
+
+    #[test]
+    fn sidecar_session_honors_pre_cancelled_queries_without_cache_work() {
+        let fixture = SidecarFixture::new("pre-cancelled");
+        let session = fixture.session();
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = session.search_cancellable("finderlatency", 5, &cancellation);
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(session.content_cache_telemetry(), (0, 0));
+        assert_eq!(session.record_cache_telemetry(), (0, 0));
     }
 
     #[test]
