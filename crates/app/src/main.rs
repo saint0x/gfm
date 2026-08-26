@@ -1,17 +1,15 @@
 use gfm_config::ConfigStore;
 use gfm_content::QuarantineFailureKind;
-use gfm_fs::read_directory;
 use gfm_index::{
-    BatteryState, EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth,
-    IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IndexVolumeState, Indexer,
-    IoPressure, LiveIndex, ThermalState, UserActivity,
+    BatteryState, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IoPressure,
+    ThermalState, UserActivity,
 };
 use gfm_jobs::{
     JobBatteryState, JobIoPressure, JobThermalState, JobUserActivity, Priority, SchedulingPressure,
 };
 use gfm_mac::{
-    current_host_profile, current_permission_onboarding, FileEventStream, MountState,
-    SupportMatrix, VolumeDescriptor, VolumeKind, WatchRoot,
+    current_host_profile, current_permission_onboarding, MountState, SupportMatrix,
+    VolumeDescriptor, VolumeKind,
 };
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_macrobench_fixture_report,
@@ -21,15 +19,15 @@ use gfm_testkit::{
     MacrobenchScale, MacrobenchStage, ParityAppearance, ParityFixtureOptions, ParityFixtureScale,
     ParitySurface, PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
 };
-use gfm_types::{FileEvent, FileEventKind, FileKind, GfmError, Result, VolumeId};
+use gfm_types::{GfmError, Result, VolumeId};
 use std::env;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 mod archive;
 mod content;
 mod diagnostics;
 mod extract;
+mod index;
 mod interface;
 mod jobs;
 mod manifest;
@@ -55,223 +53,10 @@ fn run() -> Result<()> {
         Some(command) if search::run(command, &mut args)? => {}
         Some(command) if archive::run(command, &mut args)? => {}
         Some(command) if content::run(command, &mut args)? => {}
+        Some(command) if index::run(command, &mut args)? => {}
         Some(command) if manifest::run(command, &mut args)? => {}
         Some(command) if diagnostics::run(command, &mut args)? => {}
         Some(command) if jobs::run(command, &mut args)? => {}
-        Some("list") => {
-            let path = args
-                .next()
-                .map(PathBuf::from)
-                .unwrap_or(env::current_dir().unwrap());
-            let page = read_directory(path)?;
-            for record in page.entries {
-                println!(
-                    "{}\t{}\t{}",
-                    marker(record.kind),
-                    record.len,
-                    record.path.display()
-                );
-            }
-            for issue in page.inaccessible {
-                eprintln!("inaccessible\t{}\t{}", issue.path.display(), issue.reason);
-            }
-        }
-        Some("index") => {
-            let root = required_path(args.next(), "index requires a root path")?;
-            let output = required_path(args.next(), "index requires an output path")?;
-            let snapshot = Indexer::default().build(root)?;
-            snapshot.save(output)?;
-            eprintln!(
-                "indexed {} records; {} inaccessible",
-                snapshot.records.len(),
-                snapshot.inaccessible.len()
-            );
-        }
-        Some("index-state") => {
-            let root = required_path(args.next(), "index-state requires a root path")?;
-            let records = required_path(args.next(), "index-state requires a records path")?;
-            let state = required_path(args.next(), "index-state requires a state path")?;
-            let state = Indexer::default().build_persistent(root, records, state)?;
-            println!("{}", state.as_tsv());
-        }
-        Some("index-state-inspect") => {
-            let state = required_path(
-                args.next(),
-                "index-state-inspect requires an index state path",
-            )?;
-            println!("{}", IndexVolumeState::read(state)?.as_tsv());
-        }
-        Some("scan-progress") => {
-            let root = required_path(args.next(), "scan-progress requires a root path")?;
-            let records = required_path(args.next(), "scan-progress requires a records path")?;
-            let progress = required_path(
-                args.next(),
-                "scan-progress requires a progress checkpoint path",
-            )?;
-            let checkpoint = Indexer::default().build_with_progress(root, records, progress)?;
-            println!("{}", checkpoint.as_tsv());
-        }
-        Some("scan-progress-inspect") => {
-            let progress = required_path(
-                args.next(),
-                "scan-progress-inspect requires a progress checkpoint path",
-            )?;
-            println!("{}", Indexer::default().scan_progress(progress)?.as_tsv());
-        }
-        Some("fair-scan") => {
-            let root = required_path(args.next(), "fair-scan requires a root path")?;
-            let visible_burst =
-                parse_usize_arg(args.next(), "fair-scan requires a visible burst size")?;
-            let visible_roots = args.map(PathBuf::from).collect::<Vec<_>>();
-            let report = Indexer::default().build_fair(root, &visible_roots, visible_burst)?;
-            println!("{}", report.as_tsv());
-        }
-        Some("rename-correlation") => {
-            let from = required_path(args.next(), "rename-correlation requires a source path")?;
-            let to = required_path(
-                args.next(),
-                "rename-correlation requires a destination path",
-            )?;
-            let root = from
-                .parent()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("."));
-            let snapshot = Indexer::default().build(root)?;
-            std::fs::rename(&from, &to).map_err(|err| GfmError::io(&from, err))?;
-            let mut live = LiveIndex::from_records(snapshot.records);
-            let report = live.apply_rename(&from, &to)?;
-            println!("{}", report.as_tsv());
-        }
-        Some("metadata-update") => {
-            let path = required_path(args.next(), "metadata-update requires a path")?;
-            let root = path
-                .parent()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("."));
-            let snapshot = Indexer::default().build(root)?;
-            if let Some(append) = args.next() {
-                let mut file = std::fs::OpenOptions::new()
-                    .append(true)
-                    .open(&path)
-                    .map_err(|err| GfmError::io(&path, err))?;
-                file.write_all(append.as_bytes())
-                    .map_err(|err| GfmError::io(&path, err))?;
-            }
-            let mut live = LiveIndex::from_records(snapshot.records);
-            let report = live.apply_metadata_update(&path)?;
-            println!("{}", report.as_tsv());
-        }
-        Some("event-backpressure") => {
-            let capacity = parse_usize_arg(args.next(), "event-backpressure requires a capacity")?;
-            let visible_burst = parse_usize_arg(
-                args.next(),
-                "event-backpressure requires a visible burst size",
-            )?;
-            let background = parse_usize_arg(
-                args.next(),
-                "event-backpressure requires a background event count",
-            )?;
-            let visible = args
-                .next()
-                .map(|value| parse_usize(&value, "visible event count"))
-                .transpose()?
-                .unwrap_or(1);
-            let mut queue = EventBackpressureQueue::new(capacity, visible_burst);
-            for index in 0..background {
-                queue.enqueue(
-                    EventPriority::Background,
-                    FileEvent::new(
-                        format!("/tmp/gfm-background-{index}.md"),
-                        FileEventKind::Modify,
-                    ),
-                );
-            }
-            for index in 0..visible {
-                queue.enqueue(
-                    EventPriority::Visible,
-                    FileEvent::new(
-                        format!("/tmp/gfm-visible-{index}.md"),
-                        FileEventKind::Modify,
-                    ),
-                );
-            }
-            println!("{}", queue.snapshot().as_tsv());
-        }
-        Some("fsevents-cursor-checkpoint") => {
-            let state = required_path(
-                args.next(),
-                "fsevents-cursor-checkpoint requires an index state path",
-            )?;
-            let cursor = required_path(
-                args.next(),
-                "fsevents-cursor-checkpoint requires a cursor path",
-            )?;
-            let event_id = parse_u64_arg(
-                args.next(),
-                "fsevents-cursor-checkpoint requires a last event id",
-            )?;
-            let health = args
-                .next()
-                .map(|value| FseventsCursorHealth::parse(&value))
-                .transpose()?
-                .unwrap_or(FseventsCursorHealth::Clean);
-            let cursor =
-                Indexer::default().checkpoint_fsevents_cursor(state, cursor, event_id, health)?;
-            println!("{}", cursor.as_tsv());
-        }
-        Some("fsevents-cursor-inspect") => {
-            let cursor = required_path(
-                args.next(),
-                "fsevents-cursor-inspect requires a cursor path",
-            )?;
-            println!("{}", FseventsCursor::read(cursor)?.as_tsv());
-        }
-        Some("fsevents-cursor-resume") => {
-            let state = required_path(
-                args.next(),
-                "fsevents-cursor-resume requires an index state path",
-            )?;
-            let cursor =
-                required_path(args.next(), "fsevents-cursor-resume requires a cursor path")?;
-            println!(
-                "{}",
-                Indexer::default()
-                    .fsevents_resume_plan(state, cursor)?
-                    .as_tsv()
-            );
-        }
-        Some("fsevents-repair-schedule") => {
-            let state = required_path(
-                args.next(),
-                "fsevents-repair-schedule requires an index state path",
-            )?;
-            let cursor = required_path(
-                args.next(),
-                "fsevents-repair-schedule requires a cursor path",
-            )?;
-            let event_ids = args.next().ok_or_else(|| {
-                GfmError::Format(
-                    "fsevents-repair-schedule requires observed event ids or `-`".to_string(),
-                )
-            })?;
-            let observed_event_ids = parse_event_ids(&event_ids)?;
-            let reason = args
-                .next()
-                .and_then(|value| (value != "-").then_some(value));
-            let dropped_roots: Vec<PathBuf> = args.map(PathBuf::from).collect();
-            println!(
-                "{}",
-                Indexer::default()
-                    .repair_schedule(
-                        state,
-                        cursor,
-                        &observed_event_ids,
-                        &dropped_roots,
-                        reason.as_deref(),
-                    )?
-                    .as_tsv()
-            );
-        }
         Some("config-path") => {
             println!("{}", ConfigStore::platform_default()?.path().display());
         }
@@ -643,12 +428,6 @@ fn run() -> Result<()> {
         Some("register-app") => packaging::register_app(&mut args)?,
         Some("notarize-app") => packaging::notarize_app(&mut args)?,
         Some(command) if operation::run(command, &mut args)? => {}
-        Some("watch-once") => {
-            let root = required_path(args.next(), "watch-once requires a root path")?;
-            let stream = FileEventStream::watch(&[WatchRoot::tree(root)])?;
-            let event = stream.recv()?;
-            println!("{}\t{}", event_marker(&event.kind), event.path.display());
-        }
         _ => print_usage(),
     }
     Ok(())
@@ -837,20 +616,6 @@ pub(crate) fn parse_u64_arg(value: Option<String>, message: &str) -> Result<u64>
         .map_err(|_| GfmError::Format(format!("{message}; got `{value}`")))
 }
 
-fn parse_event_ids(value: &str) -> Result<Vec<u64>> {
-    if value == "-" || value.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    value
-        .split(',')
-        .map(|part| {
-            part.parse().map_err(|_| {
-                GfmError::Format(format!("observed event id `{part}` must be unsigned"))
-            })
-        })
-        .collect()
-}
-
 pub(crate) fn parse_usize_arg(value: Option<String>, message: &str) -> Result<usize> {
     let value = value.ok_or_else(|| GfmError::Format(message.to_string()))?;
     parse_usize(&value, message)
@@ -962,15 +727,6 @@ fn volume_id_from_metadata(_metadata: &std::fs::Metadata) -> Result<VolumeId> {
     Ok(VolumeId(0))
 }
 
-fn marker(kind: FileKind) -> &'static str {
-    match kind {
-        FileKind::Directory => "dir",
-        FileKind::File => "file",
-        FileKind::Symlink => "link",
-        FileKind::Other => "other",
-    }
-}
-
 fn escape_output_field(input: &str) -> String {
     input
         .chars()
@@ -979,17 +735,6 @@ fn escape_output_field(input: &str) -> String {
             other => other,
         })
         .collect()
-}
-
-fn event_marker(kind: &gfm_types::FileEventKind) -> &'static str {
-    match kind {
-        gfm_types::FileEventKind::Create => "create",
-        gfm_types::FileEventKind::Modify => "modify",
-        gfm_types::FileEventKind::Remove => "remove",
-        gfm_types::FileEventKind::Rename { .. } => "rename",
-        gfm_types::FileEventKind::Rescan => "rescan",
-        gfm_types::FileEventKind::Other => "other",
-    }
 }
 
 fn macrobench_stage(stage: MacrobenchStage) -> &'static str {
