@@ -3,11 +3,11 @@ use gfm_search::substring_candidate_grams;
 use gfm_search::{
     SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupIds, SearchLookupTelemetry,
     SearchLookupTerms, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
-    SearchQueryReport, SearchRecordColumns, SearchSubstringPosting,
+    SearchQueryReport, SearchRecordColumns, SearchSubstringPosting, SearchVolumeScope,
 };
 use gfm_store::{
-    MetadataField, MmapContentArchive, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
-    MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
+    MetadataField, MetadataPosting, MmapContentArchive, MmapFuzzyArchive, MmapMetadataArchive,
+    MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_types::{ContentPosting, FileId, FileRecord, Result, VolumeId};
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -165,7 +165,13 @@ impl SidecarIndexQuerySession {
         limit: usize,
         budget: SearchLookupBudget,
     ) -> Result<SidecarQuerySessionReport> {
-        self.search_with_budget_cancellable(query, limit, budget, &Cancellation::default())
+        self.search_with_volume_scope_budget_cancellable(
+            query,
+            limit,
+            &SearchVolumeScope::All,
+            budget,
+            &Cancellation::default(),
+        )
     }
 
     pub fn search_cancellable(
@@ -174,9 +180,10 @@ impl SidecarIndexQuerySession {
         limit: usize,
         cancellation: &Cancellation,
     ) -> Result<SidecarQuerySessionReport> {
-        self.search_with_budget_cancellable(
+        self.search_with_volume_scope_budget_cancellable(
             query,
             limit,
+            &SearchVolumeScope::All,
             SearchLookupBudget::default(),
             cancellation,
         )
@@ -189,37 +196,74 @@ impl SidecarIndexQuerySession {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<SidecarQuerySessionReport> {
+        self.search_with_volume_scope_budget_cancellable(
+            query,
+            limit,
+            &SearchVolumeScope::All,
+            budget,
+            cancellation,
+        )
+    }
+
+    pub fn search_with_volume_scope(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+    ) -> Result<SidecarQuerySessionReport> {
+        self.search_with_volume_scope_budget_cancellable(
+            query,
+            limit,
+            scope,
+            SearchLookupBudget::default(),
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn search_with_volume_scope_budget_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<SidecarQuerySessionReport> {
         cancellation.check()?;
         let content_hits_before = self.content_cache_hits.load(Ordering::Relaxed);
         let content_misses_before = self.content_cache_misses.load(Ordering::Relaxed);
         let parsed = gfm_search::SearchQuery::parse(query);
         cancellation.check()?;
         let content_terms = parsed.content_candidate_terms();
-        let content_postings = self.content_postings_for_terms(
+        let content_postings = self.scoped_content_postings_for_terms(
             content_terms.clone(),
             budget.max_content_ids_per_term,
+            scope,
             cancellation,
         )?;
         cancellation.check()?;
-        let import = query_sidecar_imports_with_content_postings(
-            &self.metadata,
-            &self.lookup,
-            &self.substrings,
+        let import = query_sidecar_imports_with_content_postings_scoped(
+            SidecarImportSources {
+                metadata: &self.metadata,
+                lookup: &self.lookup,
+                substrings: &self.substrings,
+            },
             &parsed,
             SidecarContentImport {
                 terms: content_terms,
                 postings: content_postings,
             },
             budget,
+            scope,
             cancellation,
         )?;
         cancellation.check()?;
         let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
         let (live, hydration) = self.live_from_import(import, cancellation)?;
-        let search = live.search_with_lookup_budget_cancellable(
+        let search = live.search_with_volume_scope_lookup_budget_cancellable(
             query,
             limit,
+            scope,
             &self.lookup,
             budget,
             cancellation,
@@ -317,6 +361,20 @@ impl SidecarIndexQuerySession {
 
         postings.sort_by(|left, right| left.term.cmp(&right.term));
         Ok(postings)
+    }
+
+    fn scoped_content_postings_for_terms(
+        &self,
+        terms: Vec<String>,
+        limit_per_term: usize,
+        scope: &SearchVolumeScope,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<ContentPosting>> {
+        if scope_excludes_all(scope) {
+            return Ok(Vec::new());
+        }
+        let postings = self.content_postings_for_terms(terms, limit_per_term, cancellation)?;
+        Ok(scope_content_postings(postings, scope))
     }
 
     fn live_from_import(
@@ -982,6 +1040,12 @@ struct SidecarContentImport {
     postings: Vec<ContentPosting>,
 }
 
+struct SidecarImportSources<'a> {
+    metadata: &'a MmapMetadataArchive,
+    lookup: &'a SearchArchiveLookup,
+    substrings: &'a MmapSubstringArchive,
+}
+
 fn query_sidecar_imports_with_content_postings(
     metadata: &MmapMetadataArchive,
     lookup: &SearchArchiveLookup,
@@ -991,7 +1055,32 @@ fn query_sidecar_imports_with_content_postings(
     budget: SearchLookupBudget,
     cancellation: &Cancellation,
 ) -> Result<SidecarQueryImport> {
+    query_sidecar_imports_with_content_postings_scoped(
+        SidecarImportSources {
+            metadata,
+            lookup,
+            substrings,
+        },
+        parsed,
+        content,
+        budget,
+        &SearchVolumeScope::All,
+        cancellation,
+    )
+}
+
+fn query_sidecar_imports_with_content_postings_scoped(
+    sources: SidecarImportSources<'_>,
+    parsed: &gfm_search::SearchQuery,
+    content: SidecarContentImport,
+    budget: SearchLookupBudget,
+    scope: &SearchVolumeScope,
+    cancellation: &Cancellation,
+) -> Result<SidecarQueryImport> {
     cancellation.check()?;
+    if scope_excludes_all(scope) {
+        return Ok(SidecarQueryImport::default());
+    }
     let comment_terms = parsed.comment_candidate_terms();
     let tag_terms = parsed.tag_candidate_terms();
     let prefix_terms = parsed.prefix_candidate_terms();
@@ -1004,19 +1093,20 @@ fn query_sidecar_imports_with_content_postings(
     let mut candidate_ids = BTreeSet::new();
 
     cancellation.check()?;
-    let mut selected_metadata = metadata.postings_for_limit(
+    let mut selected_metadata = sources.metadata.postings_for_limit(
         MetadataField::Comment,
         comment_terms,
         budget.max_metadata_ids_per_term,
     )?;
     cancellation.check()?;
-    selected_metadata.extend(metadata.postings_for_limit(
+    selected_metadata.extend(sources.metadata.postings_for_limit(
         MetadataField::Tag,
         tag_terms.clone(),
         budget.max_metadata_ids_per_term,
     )?);
     let metadata = selected_metadata
         .into_iter()
+        .filter_map(|posting| scope_metadata_posting(posting, scope))
         .map(|posting| {
             candidate_ids.extend(posting.ids.iter().copied());
             SearchMetadataPosting {
@@ -1031,22 +1121,23 @@ fn query_sidecar_imports_with_content_postings(
         .collect::<Vec<_>>();
 
     cancellation.check()?;
-    let substrings = substrings
-        .postings_for_limit(substring_grams, budget.max_substring_ids_per_gram)?
-        .into_iter()
-        .map(|posting| {
-            candidate_ids.extend(posting.ids.iter().copied());
-            SearchSubstringPosting {
-                gram: posting.gram,
-                ids: posting.ids,
-            }
-        })
-        .collect::<Vec<_>>();
+    let substrings = scoped_substring_postings(
+        sources.substrings,
+        substring_grams,
+        budget.max_substring_ids_per_gram,
+        scope,
+        cancellation,
+    )?;
+    for posting in &substrings {
+        cancellation.check()?;
+        candidate_ids.extend(posting.ids.iter().copied());
+    }
 
     let mut prefix_candidates = prefix_terms.clone();
     let mut fuzzy_candidate_terms = BTreeSet::new();
     cancellation.check()?;
-    let fuzzy = lookup
+    let fuzzy = sources
+        .lookup
         .fuzzy_postings_bounded_cancellable(
             fuzzy_keys,
             budget.max_fuzzy_terms_per_key,
@@ -1073,9 +1164,11 @@ fn query_sidecar_imports_with_content_postings(
         .collect::<Vec<_>>();
 
     cancellation.check()?;
-    let prefixes = lookup.prefix_postings_bounded_cancellable(
+    let prefixes = scoped_prefix_postings(
+        sources.lookup,
         prefix_candidates,
         budget.max_prefix_ids_per_term,
+        scope,
         cancellation,
     )?;
     for posting in &prefixes {
@@ -1083,7 +1176,8 @@ fn query_sidecar_imports_with_content_postings(
         candidate_ids.extend(posting.ids.iter().copied());
     }
 
-    for posting in &content.postings {
+    let content_postings = scope_content_postings(content.postings, scope);
+    for posting in &content_postings {
         cancellation.check()?;
         candidate_ids.extend(posting.ids.iter().copied());
         candidate_ids.extend(posting.positions.iter().map(|positions| positions.id));
@@ -1095,7 +1189,7 @@ fn query_sidecar_imports_with_content_postings(
         || !prefixes.is_empty()
         || !substrings.is_empty()
         || !fuzzy.is_empty()
-        || !content.postings.is_empty();
+        || !content_postings.is_empty();
     let has_any_query = !parsed.terms.is_empty()
         || !parsed.excluded_terms.is_empty()
         || !parsed.phrases.is_empty()
@@ -1110,7 +1204,7 @@ fn query_sidecar_imports_with_content_postings(
             prefix_postings: prefixes.len(),
             substring_postings: substrings.len(),
             fuzzy_postings: fuzzy.len(),
-            content_postings: content.postings.len(),
+            content_postings: content_postings.len(),
             candidate_ids: candidate_ids.len(),
             requires_full_record_hydration,
         },
@@ -1118,8 +1212,121 @@ fn query_sidecar_imports_with_content_postings(
         prefixes,
         substrings,
         fuzzy,
-        content: content.postings,
+        content: content_postings,
     })
+}
+
+fn scope_excludes_all(scope: &SearchVolumeScope) -> bool {
+    matches!(scope, SearchVolumeScope::Only(volumes) if volumes.is_empty())
+}
+
+fn scope_metadata_posting(
+    mut posting: MetadataPosting,
+    scope: &SearchVolumeScope,
+) -> Option<MetadataPosting> {
+    posting.ids.retain(|id| scope.allows(id.volume));
+    (!posting.ids.is_empty()).then_some(posting)
+}
+
+fn scope_content_postings(
+    postings: Vec<ContentPosting>,
+    scope: &SearchVolumeScope,
+) -> Vec<ContentPosting> {
+    postings
+        .into_iter()
+        .filter_map(|mut posting| {
+            posting.ids.retain(|id| scope.allows(id.volume));
+            posting
+                .positions
+                .retain(|positions| scope.allows(positions.id.volume));
+            (!posting.ids.is_empty() || !posting.positions.is_empty()).then_some(posting)
+        })
+        .collect()
+}
+
+fn scoped_prefix_postings(
+    lookup: &SearchArchiveLookup,
+    prefixes: Vec<String>,
+    limit: usize,
+    scope: &SearchVolumeScope,
+    cancellation: &Cancellation,
+) -> Result<Vec<SearchPrefixPosting>> {
+    match scope {
+        SearchVolumeScope::All => {
+            lookup.prefix_postings_bounded_cancellable(prefixes, limit, cancellation)
+        }
+        SearchVolumeScope::Only(volumes) if volumes.is_empty() || limit == 0 => Ok(Vec::new()),
+        SearchVolumeScope::Only(volumes) => {
+            let mut selected = BTreeSet::new();
+            for prefix in prefixes {
+                cancellation.check()?;
+                if !prefix.is_empty() {
+                    selected.insert(prefix);
+                }
+            }
+            let mut postings = Vec::with_capacity(selected.len());
+            for prefix in selected {
+                cancellation.check()?;
+                let mut ids = Vec::new();
+                for volume in volumes {
+                    cancellation.check()?;
+                    ids.extend(
+                        lookup
+                            .prefix_ids_for_volume_bounded(&prefix, *volume, limit)?
+                            .ids,
+                    );
+                }
+                ids.sort();
+                ids.dedup();
+                ids.truncate(limit.saturating_mul(volumes.len()));
+                postings.push(SearchPrefixPosting { prefix, ids });
+            }
+            Ok(postings)
+        }
+    }
+}
+
+fn scoped_substring_postings(
+    substrings: &MmapSubstringArchive,
+    grams: Vec<String>,
+    limit: usize,
+    scope: &SearchVolumeScope,
+    cancellation: &Cancellation,
+) -> Result<Vec<SearchSubstringPosting>> {
+    match scope {
+        SearchVolumeScope::All => Ok(substrings
+            .postings_for_limit(grams, limit)?
+            .into_iter()
+            .map(|posting| SearchSubstringPosting {
+                gram: posting.gram,
+                ids: posting.ids,
+            })
+            .collect()),
+        SearchVolumeScope::Only(volumes) if volumes.is_empty() || limit == 0 => Ok(Vec::new()),
+        SearchVolumeScope::Only(volumes) => {
+            let mut selected = BTreeSet::new();
+            for gram in grams {
+                cancellation.check()?;
+                if !gram.is_empty() {
+                    selected.insert(gram);
+                }
+            }
+            let mut postings = Vec::with_capacity(selected.len());
+            for gram in selected {
+                cancellation.check()?;
+                let mut ids = Vec::new();
+                for volume in volumes {
+                    cancellation.check()?;
+                    ids.extend(substrings.ids_for_volume_limit(&gram, *volume, limit)?.0);
+                }
+                ids.sort();
+                ids.dedup();
+                ids.truncate(limit.saturating_mul(volumes.len()));
+                postings.push(SearchSubstringPosting { gram, ids });
+            }
+            Ok(postings)
+        }
+    }
 }
 
 pub(crate) fn sidecar_candidate_ids(import: &SidecarQueryImport) -> BTreeSet<FileId> {
@@ -1275,6 +1482,49 @@ mod tests {
         assert!(terms.contains(&"finderlatency".to_string()));
     }
 
+    #[test]
+    fn sidecar_session_searches_and_hydrates_only_admitted_volume_scope() {
+        let primary = record(FileId::new(VolumeId(7), 42));
+        let mut secondary = record(FileId::new(VolumeId(8), 43));
+        secondary.path = PathBuf::from("/Volumes/Fast/FinderLatency.md");
+        secondary.tags = vec!["Fast".to_string()];
+        secondary.finder_comment = Some("instant search".to_string());
+        let fixture = SidecarFixture::from_records("scoped-volume", vec![primary, secondary]);
+        let session = fixture.session();
+
+        let report = session
+            .search_with_volume_scope("finderlatency", 10, &SearchVolumeScope::only([VolumeId(8)]))
+            .unwrap();
+
+        assert_eq!(report.search.hits.len(), 1);
+        assert_eq!(report.search.hits[0].record.id.volume, VolumeId(8));
+        assert_eq!(report.hydration.records_loaded, 1);
+        assert_eq!(report.hydration.import.candidate_ids, 1);
+        assert!(report.hydration.import.prefix_postings > 0);
+        assert!(report.hydration.import.substring_postings > 0);
+        assert_eq!(report.hydration.import.content_postings, 1);
+    }
+
+    #[test]
+    fn sidecar_session_empty_volume_scope_hydrates_no_records_or_sidecars() {
+        let fixture = SidecarFixture::new("empty-scoped-volume");
+        let session = fixture.session();
+
+        let report = session
+            .search_with_volume_scope("finderlatency", 10, &SearchVolumeScope::only([]))
+            .unwrap();
+
+        assert!(report.search.hits.is_empty());
+        assert_eq!(report.hydration.records_loaded, 0);
+        assert_eq!(report.hydration.import, SidecarQueryImportReport::default());
+        assert_eq!(report.content_cache_misses, 0);
+        assert_eq!(report.record_cache_misses, 0);
+        assert_eq!(
+            session.lookup.cache_telemetry(),
+            SearchLookupTelemetry::default()
+        );
+    }
+
     fn poison_sidecar_content_cache(session: &SidecarIndexQuerySession) {
         let _ = panic::catch_unwind(AssertUnwindSafe(|| {
             let _guard = session
@@ -1336,6 +1586,10 @@ mod tests {
 
     impl SidecarFixture {
         fn new(name: &str) -> Self {
+            Self::from_records(name, vec![record(FileId::new(VolumeId(7), 42))])
+        }
+
+        fn from_records(name: &str, record_set: Vec<FileRecord>) -> Self {
             let root = temp_dir(&format!("gfm-sidecar-poison-{name}"));
             let records = root.join("records.gfmidx");
             let columns = root.join("columns.gfmcols");
@@ -1344,8 +1598,7 @@ mod tests {
             let substrings = root.join("substrings.gfmsubstr");
             let fuzzy = root.join("fuzzy.gfmfuzzy");
             let content = root.join("content.gfmcontent");
-            let record = record(FileId::new(VolumeId(7), 42));
-            let record_set = vec![record.clone()];
+            let record = record_set.first().expect("sidecar fixture record").clone();
 
             write_records(&records, &record_set).unwrap();
             write_record_columns(&columns, &record_set).unwrap();
@@ -1357,14 +1610,7 @@ mod tests {
             write_fuzzy_postings(&fuzzy, &fuzzy_postings_from_records(&record_set)).unwrap();
             write_content_postings(
                 &content,
-                &[ContentPosting {
-                    term: "finderlatency".to_string(),
-                    ids: vec![record.id],
-                    positions: vec![ContentPositions {
-                        id: record.id,
-                        positions: vec![1],
-                    }],
-                }],
+                &[content_posting_from_records("finderlatency", &record_set)],
             )
             .unwrap();
 
@@ -1423,6 +1669,20 @@ mod tests {
             hidden: false,
             tags: vec!["Important".to_string()],
             finder_comment: Some("instant search".to_string()),
+        }
+    }
+
+    fn content_posting_from_records(term: &str, records: &[FileRecord]) -> ContentPosting {
+        ContentPosting {
+            term: term.to_string(),
+            ids: records.iter().map(|record| record.id).collect(),
+            positions: records
+                .iter()
+                .map(|record| ContentPositions {
+                    id: record.id,
+                    positions: vec![1],
+                })
+                .collect(),
         }
     }
 
