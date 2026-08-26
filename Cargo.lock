@@ -1697,6 +1697,7 @@ dependencies = [
  "gfm-config",
  "gfm-content",
  "gfm-index",
+ "gfm-jobs",
  "gfm-store",
  "gfm-telemetry",
  "gfm-types",

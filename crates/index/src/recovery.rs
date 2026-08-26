@@ -262,12 +262,13 @@ fn state_rebuild_plan(
     }
 }
 
-pub(crate) fn recover_persistent_index<F>(
+pub(crate) fn recover_persistent_index_checked<F>(
     root: impl AsRef<Path>,
     records_path: impl AsRef<Path>,
     state_path: impl AsRef<Path>,
     quarantine_dir: impl AsRef<Path>,
     rebuild_records: F,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<PersistentIndexRecovery>
 where
     F: FnOnce() -> Result<IndexVolumeState>,
@@ -276,7 +277,9 @@ where
     let records_path = records_path.as_ref();
     let state_path = state_path.as_ref();
     let quarantine_dir = quarantine_dir.as_ref();
+    check_control()?;
     let before = plan_persistent_index_recovery(root, records_path, state_path);
+    check_control()?;
     let mut rebuilt_records = false;
     let mut rebuilt_state = false;
     let mut quarantined_records_path = None;
@@ -284,24 +287,33 @@ where
     match before.action {
         PersistentIndexAction::Ready => {}
         PersistentIndexAction::RebuildState | PersistentIndexAction::MigrateState => {
+            check_control()?;
             write_state_from_records(root, records_path, state_path)?;
+            check_control()?;
             rebuilt_state = true;
         }
         PersistentIndexAction::RebuildRecordsAndState => {
+            check_control()?;
             rebuild_records()?;
+            check_control()?;
             rebuilt_records = true;
             rebuilt_state = true;
         }
         PersistentIndexAction::QuarantineRecordsAndRebuild => {
+            check_control()?;
             let quarantine_path = quarantine_records(records_path, quarantine_dir)?;
+            check_control()?;
             quarantined_records_path = Some(quarantine_path);
             rebuild_records()?;
+            check_control()?;
             rebuilt_records = true;
             rebuilt_state = true;
         }
     }
 
+    check_control()?;
     let after = plan_persistent_index_recovery(root, records_path, state_path);
+    check_control()?;
     Ok(PersistentIndexRecovery {
         before,
         after,

@@ -1,6 +1,7 @@
 use gfm_config::ConfigStore;
 use gfm_content::Extractor;
 use gfm_index::{Indexer, PersistentIndexPlan, PersistentIndexRecovery};
+use gfm_jobs::Cancellation;
 use gfm_store::{read_records, ContentArchive};
 use gfm_telemetry::{export_diagnostics, DiagnosticPrivacy, IoSample, LatencyMetric, Telemetry};
 use gfm_types::{FileKind, GfmError, Result};
@@ -48,15 +49,31 @@ pub struct RebuildReport {
 }
 
 pub fn rebuild_index(spec: &RebuildSpec) -> Result<RebuildReport> {
-    let snapshot = Indexer::default().build(&spec.root)?;
+    rebuild_index_cancellable(spec, &Cancellation::default())
+}
+
+pub fn rebuild_index_cancellable(
+    spec: &RebuildSpec,
+    cancellation: &Cancellation,
+) -> Result<RebuildReport> {
+    cancellation.check()?;
+    let snapshot = Indexer::default().build_cancellable(&spec.root, cancellation)?;
+    cancellation.check()?;
     let inaccessible = snapshot.inaccessible.len();
     let records = snapshot.records.len();
     let content_indexed = if let Some(content_path) = &spec.content_path {
-        snapshot.save_with_content(&spec.records_path, content_path, &Extractor::default())?
+        snapshot.save(&spec.records_path)?;
+        cancellation.check()?;
+        let mut live = snapshot.into_live();
+        let indexed = live.index_content_cancellable(&Extractor::default(), cancellation)?;
+        cancellation.check()?;
+        live.save_content_postings(content_path)?;
+        indexed
     } else {
         snapshot.save(&spec.records_path)?;
         0
     };
+    cancellation.check()?;
     Ok(RebuildReport {
         root: spec.root.clone(),
         records_path: spec.records_path.clone(),
@@ -96,11 +113,20 @@ pub fn plan_index_recovery(spec: &PersistentIndexRecoverySpec) -> PersistentInde
 }
 
 pub fn recover_index(spec: &PersistentIndexRecoverySpec) -> Result<PersistentIndexRecovery> {
-    Indexer::default().recover_persistent(
+    recover_index_cancellable(spec, &Cancellation::default())
+}
+
+pub fn recover_index_cancellable(
+    spec: &PersistentIndexRecoverySpec,
+    cancellation: &Cancellation,
+) -> Result<PersistentIndexRecovery> {
+    cancellation.check()?;
+    Indexer::default().recover_persistent_cancellable(
         &spec.root,
         &spec.records_path,
         &spec.state_path,
         &spec.quarantine_dir,
+        cancellation,
     )
 }
 
@@ -290,6 +316,47 @@ mod tests {
             panic!("expected content inspection");
         };
         assert!(inspection.terms > 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellable_rebuild_stops_before_publishing_records() {
+        let root = unique_temp_dir("gfm-diagnostics-rebuild-cancel");
+        let records = root.join("records.gfmidx");
+        fs::write(root.join("needle.md"), "needle").unwrap();
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result =
+            rebuild_index_cancellable(&RebuildSpec::records(&root, &records), &cancellation);
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!records.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellable_recovery_stops_before_publishing_state() {
+        let root = unique_temp_dir("gfm-diagnostics-recovery-cancel");
+        let records = root.join("records.gfmidx");
+        let state = root.join("state.gfmstate");
+        let quarantine = root.join("quarantine");
+        fs::write(root.join("needle.md"), "needle").unwrap();
+        Indexer::default()
+            .build_persistent(&root, &records, &state)
+            .unwrap();
+        fs::remove_file(&state).unwrap();
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = recover_index_cancellable(
+            &PersistentIndexRecoverySpec::new(&root, &records, &state, &quarantine),
+            &cancellation,
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!state.exists());
+        assert!(!quarantine.exists());
         fs::remove_dir_all(root).unwrap();
     }
 

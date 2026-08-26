@@ -8,6 +8,7 @@ license.workspace = true
 gfm-config = { path = "../config" }
 gfm-content = { path = "../content" }
 gfm-index = { path = "../index" }
+gfm-jobs = { path = "../jobs" }
 gfm-store = { path = "../store" }
 gfm-telemetry = { path = "../telemetry" }
 gfm-types = { path = "../types" }

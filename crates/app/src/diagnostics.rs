@@ -1,11 +1,12 @@
-use crate::runtime::{run_scheduled_volume_task, run_volume_task};
+use crate::runtime::{run_scheduled_volume_task_cancellable, run_volume_task_cancellable};
 use crate::{
     config_store, detect_volume_id, parent_volume, parse_required_scheduling_pressure,
     required_path,
 };
 use gfm_diagnostics::{
-    export_operator_trace, inspect_storage, plan_index_recovery, rebuild_index, recover_index,
-    select_parity_baseline, PersistentIndexRecoverySpec, RebuildSpec, StorageInspection,
+    export_operator_trace, inspect_storage, plan_index_recovery, rebuild_index_cancellable,
+    recover_index_cancellable, select_parity_baseline, PersistentIndexRecoverySpec, RebuildSpec,
+    StorageInspection,
 };
 use gfm_index::PersistentIndexRecovery;
 use gfm_jobs::Priority;
@@ -30,9 +31,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&spec.root)
                 .ok()
                 .or_else(|| parent_volume(&spec.records_path));
-            let report = run_volume_task(volume, Priority::Visible, "index rebuild", move || {
-                rebuild_index(&spec)
-            })?;
+            let report = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "index rebuild",
+                move |cancellation| rebuild_index_cancellable(&spec, &cancellation),
+            )?;
             print_index_rebuild_report(report);
         }
         "diagnostics-index-rebuild-adaptive" => {
@@ -52,12 +56,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&spec.root)
                 .ok()
                 .or_else(|| parent_volume(&spec.records_path));
-            let outcome = run_scheduled_volume_task(
+            let outcome = run_scheduled_volume_task_cancellable(
                 volume,
                 Priority::Background,
                 "index rebuild",
                 pressure,
-                move || rebuild_index(&spec),
+                move |cancellation| rebuild_index_cancellable(&spec, &cancellation),
             )?;
             if outcome.deferred {
                 eprintln!(
@@ -113,11 +117,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&spec.root)
                 .ok()
                 .or_else(|| parent_volume(&spec.records_path));
-            let report = run_volume_task(
+            let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "persistent index repair",
-                move || recover_index(&spec),
+                move |cancellation| recover_index_cancellable(&spec, &cancellation),
             )?;
             print_persistent_index_recovery_report(report);
         }
@@ -143,12 +147,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&spec.root)
                 .ok()
                 .or_else(|| parent_volume(&spec.records_path));
-            let outcome = run_scheduled_volume_task(
+            let outcome = run_scheduled_volume_task_cancellable(
                 volume,
                 Priority::Background,
                 "persistent index repair",
                 pressure,
-                move || recover_index(&spec),
+                move |cancellation| recover_index_cancellable(&spec, &cancellation),
             )?;
             if outcome.deferred {
                 eprintln!(

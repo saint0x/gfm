@@ -397,15 +397,34 @@ impl Indexer {
         state_path: impl AsRef<Path>,
         quarantine_dir: impl AsRef<Path>,
     ) -> Result<PersistentIndexRecovery> {
+        self.recover_persistent_cancellable(
+            root,
+            records_path,
+            state_path,
+            quarantine_dir,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn recover_persistent_cancellable(
+        &self,
+        root: impl AsRef<Path>,
+        records_path: impl AsRef<Path>,
+        state_path: impl AsRef<Path>,
+        quarantine_dir: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<PersistentIndexRecovery> {
         let root = root.as_ref().to_path_buf();
         let records_path = records_path.as_ref().to_path_buf();
         let state_path = state_path.as_ref().to_path_buf();
-        recovery::recover_persistent_index(
+        cancellation.check()?;
+        recovery::recover_persistent_index_checked(
             &root,
             &records_path,
             &state_path,
             quarantine_dir,
-            || self.build_persistent(&root, &records_path, &state_path),
+            || self.build_persistent_cancellable(&root, &records_path, &state_path, cancellation),
+            || cancellation.check(),
         )
     }
 
