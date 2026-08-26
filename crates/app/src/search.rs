@@ -3,8 +3,8 @@ use crate::extract::extraction_budget_profile;
 use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, required_string};
 use gfm_content::Extractor;
 use gfm_index::{
-    query_sidecar_imports, Indexer, LiveIndex, SearchArchiveLookup, SearchLookupBudget,
-    SearchRecordColumns, SearchStreamStage,
+    Indexer, LiveIndex, SearchArchiveLookup, SearchLookupBudget, SearchRecordColumns,
+    SearchStreamStage, SidecarIndexQuerySession,
 };
 use gfm_store::{
     ContentArchive, MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary,
@@ -240,23 +240,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 required_path(args.next(), "search-index-sidecars requires a content path")?;
             let query =
                 required_string(args.next(), "search-index-sidecars requires a query string")?;
-            let records = MmapRecordArchive::open(records)?;
-            let columns = MmapRecordColumns::open(columns)?;
-            let metadata = MmapMetadataArchive::open(metadata)?;
-            let substrings_archive = MmapSubstringArchive::open(&substrings)?;
-            let lookup = SearchArchiveLookup::open(prefixes, substrings, fuzzy)?;
-            let content = MmapContentArchive::open(content)?;
-            let budget = SearchLookupBudget::default();
-            let import = query_sidecar_imports(
-                &metadata,
-                &lookup,
-                &substrings_archive,
-                &content,
-                &query,
-                budget,
+            let session = SidecarIndexQuerySession::open(
+                records, columns, metadata, prefixes, substrings, fuzzy, content,
             )?;
-            let (live, hydration) =
-                LiveIndex::from_mmap_records_with_sidecar_import(&records, &columns, import)?;
+            let budget = SearchLookupBudget::default();
+            let report = session.search_with_budget(&query, 50, budget)?;
+            let hydration = &report.hydration;
             eprintln!(
                 "columns-indexed {} records-loaded {} records-missing {} candidate-ids {} full-hydration {} metadata-keys {} prefix-keys {} substring-keys {} fuzzy-keys {} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {} metadata-budget {} substring-budget {} content-budget {}",
                 hydration.columns_applied,
@@ -268,16 +257,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 hydration.prefix_keys,
                 hydration.substring_keys,
                 hydration.fuzzy_keys,
-                lookup.indexed_prefixes(),
-                lookup.indexed_substring_grams(),
-                lookup.indexed_fuzzy_keys(),
+                session.indexed_prefixes(),
+                session.indexed_substring_grams(),
+                session.indexed_fuzzy_keys(),
                 hydration.content_keys,
                 budget.max_metadata_ids_per_term,
                 budget.max_substring_ids_per_gram,
                 budget.max_content_ids_per_term
             );
-            let report = live.search_with_lookup_budget(&query, 50, &lookup, budget)?;
-            for hit in report.hits {
+            for hit in report.search.hits {
                 print_hit(&hit);
             }
         }
@@ -342,12 +330,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-index-sidecars-budget requires a query string",
             )?;
-            let records = MmapRecordArchive::open(records)?;
-            let columns = MmapRecordColumns::open(columns)?;
-            let metadata = MmapMetadataArchive::open(metadata)?;
-            let substrings_archive = MmapSubstringArchive::open(&substrings)?;
-            let lookup = SearchArchiveLookup::open(prefixes, substrings, fuzzy)?;
-            let content = MmapContentArchive::open(content)?;
+            let session = SidecarIndexQuerySession::open(
+                records, columns, metadata, prefixes, substrings, fuzzy, content,
+            )?;
             let budget = SearchLookupBudget {
                 max_prefix_ids_per_term: max_prefix_ids,
                 min_archive_prefix_chars: SearchLookupBudget::default().min_archive_prefix_chars,
@@ -359,17 +344,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 max_metadata_ids_per_term: max_content_ids,
                 max_content_ids_per_term: max_content_ids,
             };
-            let import = query_sidecar_imports(
-                &metadata,
-                &lookup,
-                &substrings_archive,
-                &content,
-                &query,
-                budget,
-            )?;
-            let (live, hydration) =
-                LiveIndex::from_mmap_records_with_sidecar_import(&records, &columns, import)?;
-            let report = live.search_with_lookup_budget(&query, 50, &lookup, budget)?;
+            let report = session.search_with_budget(&query, 50, budget)?;
+            let hydration = &report.hydration;
             eprintln!(
                 "sidecar-budget\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tmetadata-budget={max_content_ids}\tcontent-budget={max_content_ids}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
                 hydration.columns_applied,
@@ -382,40 +358,40 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 hydration.substring_keys,
                 hydration.fuzzy_keys,
                 hydration.content_keys,
-                lookup.indexed_prefixes(),
-                lookup.indexed_substring_grams(),
-                lookup.indexed_fuzzy_keys(),
-                report.lookup.prefix_terms,
-                report.lookup.prefix_lookup_requests,
-                report.lookup.prefix_lookup_ids,
-                report.lookup.prefix_candidate_ids,
-                report.lookup.prefix_cache_hits,
-                report.lookup.prefix_cache_misses,
-                report.lookup.prefix_cutoff_terms,
-                report.lookup.prefix_truncated_terms,
-                report.lookup.substring_terms,
-                report.lookup.substring_grams,
-                report.lookup.substring_lookup_requests,
-                report.lookup.substring_lookup_ids,
-                report.lookup.substring_candidate_ids,
-                report.lookup.substring_cache_hits,
-                report.lookup.substring_cache_misses,
-                report.lookup.substring_cutoff_terms,
-                report.lookup.substring_term_truncated_grams,
-                report.lookup.substring_truncated_grams,
-                report.lookup.fuzzy_terms,
-                report.lookup.fuzzy_keys,
-                report.lookup.fuzzy_lookup_requests,
-                report.lookup.fuzzy_lookup_terms,
-                report.lookup.fuzzy_candidate_terms,
-                report.lookup.fuzzy_verified_candidates,
-                report.lookup.fuzzy_cache_hits,
-                report.lookup.fuzzy_cache_misses,
-                report.lookup.fuzzy_key_truncated_terms,
-                report.lookup.fuzzy_term_truncated_keys,
-                report.lookup.fuzzy_candidate_truncated_terms
+                session.indexed_prefixes(),
+                session.indexed_substring_grams(),
+                session.indexed_fuzzy_keys(),
+                report.search.lookup.prefix_terms,
+                report.search.lookup.prefix_lookup_requests,
+                report.search.lookup.prefix_lookup_ids,
+                report.search.lookup.prefix_candidate_ids,
+                report.search.lookup.prefix_cache_hits,
+                report.search.lookup.prefix_cache_misses,
+                report.search.lookup.prefix_cutoff_terms,
+                report.search.lookup.prefix_truncated_terms,
+                report.search.lookup.substring_terms,
+                report.search.lookup.substring_grams,
+                report.search.lookup.substring_lookup_requests,
+                report.search.lookup.substring_lookup_ids,
+                report.search.lookup.substring_candidate_ids,
+                report.search.lookup.substring_cache_hits,
+                report.search.lookup.substring_cache_misses,
+                report.search.lookup.substring_cutoff_terms,
+                report.search.lookup.substring_term_truncated_grams,
+                report.search.lookup.substring_truncated_grams,
+                report.search.lookup.fuzzy_terms,
+                report.search.lookup.fuzzy_keys,
+                report.search.lookup.fuzzy_lookup_requests,
+                report.search.lookup.fuzzy_lookup_terms,
+                report.search.lookup.fuzzy_candidate_terms,
+                report.search.lookup.fuzzy_verified_candidates,
+                report.search.lookup.fuzzy_cache_hits,
+                report.search.lookup.fuzzy_cache_misses,
+                report.search.lookup.fuzzy_key_truncated_terms,
+                report.search.lookup.fuzzy_term_truncated_keys,
+                report.search.lookup.fuzzy_candidate_truncated_terms
             );
-            for hit in report.hits {
+            for hit in report.search.hits {
                 print_hit(&hit);
             }
         }

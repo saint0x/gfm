@@ -2,11 +2,11 @@ use gfm_search::substring_candidate_grams;
 use gfm_search::{
     SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupIds, SearchLookupTelemetry,
     SearchLookupTerms, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
-    SearchSubstringPosting,
+    SearchQueryReport, SearchSubstringPosting,
 };
 use gfm_store::{
     MetadataField, MmapContentArchive, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
-    MmapSubstringArchive,
+    MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_types::{ContentPosting, FileId, GfmError, Result};
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -59,6 +59,95 @@ pub struct ContentQueryLoadReport {
     pub records_loaded: usize,
     pub records_missing: usize,
     pub full_hydration: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidecarQuerySessionReport {
+    pub hydration: SidecarRecordHydrationReport,
+    pub search: SearchQueryReport,
+}
+
+#[derive(Debug)]
+pub struct SidecarIndexQuerySession {
+    records: MmapRecordArchive,
+    columns: MmapRecordColumns,
+    metadata: MmapMetadataArchive,
+    lookup: SearchArchiveLookup,
+    substrings: MmapSubstringArchive,
+    content: MmapContentArchive,
+}
+
+impl SidecarIndexQuerySession {
+    pub fn open(
+        records: impl AsRef<Path>,
+        columns: impl AsRef<Path>,
+        metadata: impl AsRef<Path>,
+        prefixes: impl AsRef<Path>,
+        substrings: impl AsRef<Path>,
+        fuzzy: impl AsRef<Path>,
+        content: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let substrings = substrings.as_ref();
+        Ok(Self {
+            records: MmapRecordArchive::open(records)?,
+            columns: MmapRecordColumns::open(columns)?,
+            metadata: MmapMetadataArchive::open(metadata)?,
+            lookup: SearchArchiveLookup::open(prefixes, substrings, fuzzy)?,
+            substrings: MmapSubstringArchive::open(substrings)?,
+            content: MmapContentArchive::open(content)?,
+        })
+    }
+
+    pub fn indexed_records(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn indexed_columns(&self) -> usize {
+        self.columns.len()
+    }
+
+    pub fn indexed_prefixes(&self) -> usize {
+        self.lookup.indexed_prefixes()
+    }
+
+    pub fn indexed_substring_grams(&self) -> usize {
+        self.lookup.indexed_substring_grams()
+    }
+
+    pub fn indexed_fuzzy_keys(&self) -> usize {
+        self.lookup.indexed_fuzzy_keys()
+    }
+
+    pub fn lookup_telemetry(&self) -> SearchLookupTelemetry {
+        self.lookup.cache_telemetry()
+    }
+
+    pub fn search(&self, query: &str, limit: usize) -> Result<SidecarQuerySessionReport> {
+        self.search_with_budget(query, limit, SearchLookupBudget::default())
+    }
+
+    pub fn search_with_budget(
+        &self,
+        query: &str,
+        limit: usize,
+        budget: SearchLookupBudget,
+    ) -> Result<SidecarQuerySessionReport> {
+        let import = query_sidecar_imports(
+            &self.metadata,
+            &self.lookup,
+            &self.substrings,
+            &self.content,
+            query,
+            budget,
+        )?;
+        let (live, hydration) = crate::LiveIndex::from_mmap_records_with_sidecar_import(
+            &self.records,
+            &self.columns,
+            import,
+        )?;
+        let search = live.search_with_lookup_budget(query, limit, &self.lookup, budget)?;
+        Ok(SidecarQuerySessionReport { hydration, search })
+    }
 }
 
 #[derive(Debug)]

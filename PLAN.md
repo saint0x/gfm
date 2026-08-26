@@ -481,6 +481,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - positive `name:`, `path:`, `ext:`, `tag:`, and `kind:` filters seed boolean expression candidates from maintained posting maps before final expression evaluation, so indexed filter `AND`/`OR` branches do not force a full-record universe scan;
   - sharded search fans out the same archive lookup across volume shards and filters candidate ids per shard;
   - archive-backed lookup avoids importing large metadata/prefix/substring/fuzzy candidate maps into heap memory for each machine-wide query session;
+  - sidecar-backed UI search opens record, column, metadata, prefix, substring, fuzzy, and content mmap archives once per `SidecarIndexQuerySession`, retaining lookup caches across repeated query changes while hydrating only the current query's candidate records;
   - default sidecar-backed search imports only budgeted query-matching metadata, prefix, substring, fuzzy-term, and content postings before ranking; explicit operator budget commands can lower or raise those caps for diagnostics;
   - query metadata imports resolve tag/comment terms through one sorted pass per field over the mmap metadata directory, decoding only bounded ID heads and avoiding one binary archive lookup per selected term;
   - direct prefix terms and fuzzy-expanded prefix terms are deduplicated into one bounded prefix-posting import set before mmap prefix lookup, preventing repeated cache probes and duplicate prefix postings for the same query candidate;

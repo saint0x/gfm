@@ -615,6 +615,74 @@ fn query_sidecar_loader_hydrates_only_candidate_records() {
 }
 
 #[test]
+fn sidecar_query_session_reuses_mmap_archives_and_lookup_cache() {
+    let records_path = unique_temp_path("gfm-index-sidecar-session", "gfmidx");
+    let columns_path = unique_temp_path("gfm-index-sidecar-session", "gfmcols");
+    let metadata_path = unique_temp_path("gfm-index-sidecar-session", "gfmmeta");
+    let prefixes_path = unique_temp_path("gfm-index-sidecar-session", "gfmprefix");
+    let substrings_path = unique_temp_path("gfm-index-sidecar-session", "gfmsubstr");
+    let fuzzy_path = unique_temp_path("gfm-index-sidecar-session", "gfmfuzzy");
+    let content_path = unique_temp_path("gfm-index-sidecar-session", "gfmcontent");
+    let record = FileRecord {
+        id: FileId::new(VolumeId(2), 7),
+        parent: None,
+        path: PathBuf::from("/tmp/session/FinderLatency.md"),
+        name: "FinderLatency.md".to_string(),
+        kind: FileKind::File,
+        len: 12,
+        created: Some(UNIX_EPOCH),
+        modified: Some(UNIX_EPOCH),
+        changed: Some(UNIX_EPOCH),
+        mode: 0o644,
+        owner: 501,
+        group: 20,
+        hidden: false,
+        tags: vec!["Important".to_string()],
+        finder_comment: Some("instant search".to_string()),
+        xattrs_digest: 0,
+    };
+    let records = vec![record.clone()];
+    write_records(&records_path, &records).unwrap();
+    write_record_columns(&columns_path, &records).unwrap();
+    write_metadata_postings(&metadata_path, &metadata_postings_from_records(&records)).unwrap();
+    write_prefix_postings(&prefixes_path, &prefix_postings_from_records(&records)).unwrap();
+    write_substring_postings(&substrings_path, &substring_postings_from_records(&records)).unwrap();
+    write_fuzzy_postings(&fuzzy_path, &fuzzy_postings_from_records(&records)).unwrap();
+    write_content_postings(&content_path, &[]).unwrap();
+
+    let session = SidecarIndexQuerySession::open(
+        &records_path,
+        &columns_path,
+        &metadata_path,
+        &prefixes_path,
+        &substrings_path,
+        &fuzzy_path,
+        &content_path,
+    )
+    .unwrap();
+
+    let first = session.search("finderlatency", 5).unwrap();
+    let before_second = session.lookup_telemetry();
+    let second = session.search("finderlatency", 5).unwrap();
+    let after_second = session.lookup_telemetry();
+
+    assert_eq!(session.indexed_records(), 1);
+    assert_eq!(session.indexed_columns(), 1);
+    assert_eq!(first.search.hits[0].record.id, record.id);
+    assert_eq!(second.search.hits[0].record.id, record.id);
+    assert_eq!(second.hydration.records_loaded, 1);
+    assert!(after_second.prefix_cache_hits > before_second.prefix_cache_hits);
+
+    fs::remove_file(records_path).unwrap();
+    fs::remove_file(columns_path).unwrap();
+    fs::remove_file(metadata_path).unwrap();
+    fs::remove_file(prefixes_path).unwrap();
+    fs::remove_file(substrings_path).unwrap();
+    fs::remove_file(fuzzy_path).unwrap();
+    fs::remove_file(content_path).unwrap();
+}
+
+#[test]
 fn query_sidecar_imports_enforce_query_level_lookup_budgets() {
     let metadata_path = unique_temp_path("gfm-index-sidecar-budget", "gfmmeta");
     let prefixes_path = unique_temp_path("gfm-index-sidecar-budget", "gfmprefix");
