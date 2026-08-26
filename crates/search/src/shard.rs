@@ -326,6 +326,15 @@ impl ShardedSearchIndex {
                 lookup: SearchLookupTelemetry::default(),
             });
         }
+        if let Some(shard) = self.single_shard() {
+            return shard.query_structured_with_lookup_budget_cancellable(
+                query,
+                limit,
+                lookup,
+                budget,
+                cancellation,
+            );
+        }
 
         let mut merged = BoundedHitMerge::new(limit);
         let mut telemetry = SearchLookupTelemetry::default();
@@ -395,6 +404,9 @@ impl ShardedSearchIndex {
         if query.is_empty() || limit == 0 || self.shards.is_empty() {
             return Ok(Vec::new());
         }
+        if let Some(shard) = self.single_shard() {
+            return shard.stream_structured_cancellable(query, limit, cancellation);
+        }
 
         let mut hot = BoundedHitMerge::new(limit);
         let mut deep = BoundedHitMerge::new(limit.saturating_mul(2));
@@ -454,5 +466,13 @@ impl ShardedSearchIndex {
 
     fn prune_empty_shards(&mut self) {
         self.shards.retain(|_, shard| !shard.is_empty());
+    }
+
+    fn single_shard(&self) -> Option<&SearchIndex> {
+        if self.shards.len() == 1 {
+            self.shards.values().next()
+        } else {
+            None
+        }
     }
 }

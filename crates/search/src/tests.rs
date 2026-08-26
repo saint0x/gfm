@@ -1916,6 +1916,32 @@ fn sharded_search_merges_volume_results_deterministically() {
 }
 
 #[test]
+fn single_shard_search_dispatches_directly_with_query_report() {
+    let mut index = ShardedSearchIndex::new();
+    let record = volume_record(1, 1, "/Volumes/A/report.md", "report.md");
+    index.insert(record.clone());
+
+    let report = index
+        .query_structured_with_lookup_budget_cancellable(
+            &SearchQuery::parse("report"),
+            10,
+            &StaticLookup {
+                prefix_ids: Vec::new(),
+                substring_ids: Vec::new(),
+                fuzzy_terms: Vec::new(),
+            },
+            SearchLookupBudget::default(),
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(index.shard_count(), 1);
+    assert_eq!(report.hits.len(), 1);
+    assert_eq!(report.hits[0].record.path, record.path);
+    assert_eq!(report.hits[0].reason, MatchReason::PrefixName);
+}
+
+#[test]
 fn sharded_prefix_sidecar_import_partitions_ids_by_volume() {
     let mut index = ShardedSearchIndex::new();
     index.insert_with_columns_deferred_sidecars(
@@ -2214,6 +2240,25 @@ fn sharded_stream_merges_stages_across_volumes() {
         batches[1].hits[0].record.path,
         PathBuf::from("/Volumes/B/deep.md")
     );
+}
+
+#[test]
+fn single_shard_stream_dispatches_directly_with_hot_and_deep_batches() {
+    let mut index = ShardedSearchIndex::new();
+    let hot = volume_record(1, 1, "/Volumes/A/needle.md", "needle.md");
+    let deep = volume_record(1, 2, "/Volumes/A/deep.md", "deep.md");
+    index.insert(hot.clone());
+    index.insert(deep.clone());
+    index.insert_content(deep.id, "needle exists in content");
+
+    let batches = index.stream("needle", 10).unwrap();
+
+    assert_eq!(index.shard_count(), 1);
+    assert_eq!(batches.len(), 2);
+    assert_eq!(batches[0].stage, SearchStreamStage::Hot);
+    assert_eq!(batches[0].hits[0].record.path, hot.path);
+    assert_eq!(batches[1].stage, SearchStreamStage::Deep);
+    assert_eq!(batches[1].hits[0].record.path, deep.path);
 }
 
 #[test]
