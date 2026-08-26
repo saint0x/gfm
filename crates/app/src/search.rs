@@ -310,7 +310,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let report = session.search_with_budget(&query, 50, budget)?;
             let hydration = &report.hydration;
             eprintln!(
-                "columns-indexed {} records-loaded {} records-missing {} candidate-ids {} full-hydration {} metadata-keys {} prefix-keys {} substring-keys {} fuzzy-keys {} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {} metadata-budget {} substring-budget {} content-budget {}",
+                "columns-indexed {} records-loaded {} records-missing {} candidate-ids {} full-hydration {} metadata-keys {} prefix-keys {} substring-keys {} fuzzy-keys {} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {} content-cache-hits {} content-cache-misses {} metadata-budget {} substring-budget {} content-budget {}",
                 hydration.columns_applied,
                 hydration.records_loaded,
                 hydration.records_missing,
@@ -324,6 +324,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 session.indexed_substring_grams(),
                 session.indexed_fuzzy_keys(),
                 hydration.content_keys,
+                report.content_cache_hits,
+                report.content_cache_misses,
                 budget.max_metadata_ids_per_term,
                 budget.max_substring_ids_per_gram,
                 budget.max_content_ids_per_term
@@ -410,7 +412,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let report = session.search_with_budget(&query, 50, budget)?;
             let hydration = &report.hydration;
             eprintln!(
-                "sidecar-budget\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tmetadata-budget={max_content_ids}\tcontent-budget={max_content_ids}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
+                "sidecar-budget\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tcontent-cache-hits={}\tcontent-cache-misses={}\tmetadata-budget={max_content_ids}\tcontent-budget={max_content_ids}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
                 hydration.columns_applied,
                 hydration.records_loaded,
                 hydration.records_missing,
@@ -421,6 +423,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 hydration.substring_keys,
                 hydration.fuzzy_keys,
                 hydration.content_keys,
+                report.content_cache_hits,
+                report.content_cache_misses,
                 session.indexed_prefixes(),
                 session.indexed_substring_grams(),
                 session.indexed_fuzzy_keys(),

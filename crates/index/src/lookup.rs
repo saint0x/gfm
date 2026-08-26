@@ -18,6 +18,7 @@ use std::sync::{
 
 const SEARCH_ARCHIVE_LOOKUP_CACHE_CAPACITY: usize = 512;
 const SIDECAR_RECORD_CACHE_CAPACITY: usize = 8192;
+const SIDECAR_CONTENT_POSTING_CACHE_CAPACITY: usize = 512;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SidecarQueryImport {
@@ -66,6 +67,8 @@ pub struct ContentQueryLoadReport {
 pub struct SidecarQuerySessionReport {
     pub hydration: SidecarRecordHydrationReport,
     pub search: SearchQueryReport,
+    pub content_cache_hits: usize,
+    pub content_cache_misses: usize,
     pub record_cache_hits: usize,
     pub record_cache_misses: usize,
 }
@@ -78,6 +81,9 @@ pub struct SidecarIndexQuerySession {
     lookup: SearchArchiveLookup,
     substrings: MmapSubstringArchive,
     content: MmapContentArchive,
+    content_cache: Mutex<LookupCache<Option<ContentPosting>>>,
+    content_cache_hits: AtomicUsize,
+    content_cache_misses: AtomicUsize,
     record_cache: Mutex<RecordCache>,
     record_cache_hits: AtomicUsize,
     record_cache_misses: AtomicUsize,
@@ -101,6 +107,9 @@ impl SidecarIndexQuerySession {
             lookup: SearchArchiveLookup::open(prefixes, substrings, fuzzy)?,
             substrings: MmapSubstringArchive::open(substrings)?,
             content: MmapContentArchive::open(content)?,
+            content_cache: Mutex::new(LookupCache::new(SIDECAR_CONTENT_POSTING_CACHE_CAPACITY)),
+            content_cache_hits: AtomicUsize::new(0),
+            content_cache_misses: AtomicUsize::new(0),
             record_cache: Mutex::new(RecordCache::new(SIDECAR_RECORD_CACHE_CAPACITY)),
             record_cache_hits: AtomicUsize::new(0),
             record_cache_misses: AtomicUsize::new(0),
@@ -138,6 +147,13 @@ impl SidecarIndexQuerySession {
         )
     }
 
+    pub fn content_cache_telemetry(&self) -> (usize, usize) {
+        (
+            self.content_cache_hits.load(Ordering::Relaxed),
+            self.content_cache_misses.load(Ordering::Relaxed),
+        )
+    }
+
     pub fn search(&self, query: &str, limit: usize) -> Result<SidecarQuerySessionReport> {
         self.search_with_budget(query, limit, SearchLookupBudget::default())
     }
@@ -148,12 +164,19 @@ impl SidecarIndexQuerySession {
         limit: usize,
         budget: SearchLookupBudget,
     ) -> Result<SidecarQuerySessionReport> {
-        let import = query_sidecar_imports(
+        let content_hits_before = self.content_cache_hits.load(Ordering::Relaxed);
+        let content_misses_before = self.content_cache_misses.load(Ordering::Relaxed);
+        let parsed = gfm_search::SearchQuery::parse(query);
+        let content_terms = parsed.content_candidate_terms();
+        let content_postings = self
+            .content_postings_for_terms(content_terms.clone(), budget.max_content_ids_per_term)?;
+        let import = query_sidecar_imports_with_content_postings(
             &self.metadata,
             &self.lookup,
             &self.substrings,
-            &self.content,
-            query,
+            &parsed,
+            content_terms,
+            content_postings,
             budget,
         )?;
         let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
@@ -163,6 +186,14 @@ impl SidecarIndexQuerySession {
         Ok(SidecarQuerySessionReport {
             hydration,
             search,
+            content_cache_hits: self
+                .content_cache_hits
+                .load(Ordering::Relaxed)
+                .saturating_sub(content_hits_before),
+            content_cache_misses: self
+                .content_cache_misses
+                .load(Ordering::Relaxed)
+                .saturating_sub(content_misses_before),
             record_cache_hits: self
                 .record_cache_hits
                 .load(Ordering::Relaxed)
@@ -172,6 +203,78 @@ impl SidecarIndexQuerySession {
                 .load(Ordering::Relaxed)
                 .saturating_sub(cache_misses_before),
         })
+    }
+
+    fn content_postings_for_terms(
+        &self,
+        terms: Vec<String>,
+        limit_per_term: usize,
+    ) -> Result<Vec<ContentPosting>> {
+        if limit_per_term == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut selected = BTreeSet::new();
+        for term in terms {
+            let term = term.trim().to_lowercase();
+            if !term.is_empty() {
+                selected.insert(term);
+            }
+        }
+        if selected.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut postings = Vec::with_capacity(selected.len());
+        let mut misses = Vec::new();
+        {
+            let cache = self.content_cache.lock().map_err(|_| {
+                GfmError::Format("sidecar content posting cache lock poisoned".to_string())
+            })?;
+            for term in &selected {
+                let key = bounded_posting_cache_key(term, limit_per_term);
+                if let Some(cached) = cache.get(&key) {
+                    self.content_cache_hits.fetch_add(1, Ordering::Relaxed);
+                    if let Some(posting) = cached {
+                        postings.push(posting);
+                    }
+                } else {
+                    self.content_cache_misses.fetch_add(1, Ordering::Relaxed);
+                    misses.push(term.clone());
+                }
+            }
+        }
+
+        let loaded = self
+            .content
+            .postings_for_sorted_terms_limit(&misses, limit_per_term)?
+            .into_iter()
+            .map(|limited| {
+                (
+                    limited.posting.term.clone(),
+                    (Some(limited.posting), limited.truncated),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        let mut cache = self.content_cache.lock().map_err(|_| {
+            GfmError::Format("sidecar content posting cache lock poisoned".to_string())
+        })?;
+        for term in misses {
+            let (posting, truncated) = loaded.get(&term).cloned().unwrap_or((None, false));
+            if !truncated {
+                cache.insert(
+                    bounded_posting_cache_key(&term, limit_per_term),
+                    posting.clone(),
+                );
+            }
+            if let Some(posting) = posting {
+                postings.push(posting);
+            }
+        }
+
+        postings.sort_by(|left, right| left.term.cmp(&right.term));
+        Ok(postings)
     }
 
     fn live_from_import(
@@ -719,6 +822,28 @@ pub fn query_sidecar_imports(
 ) -> Result<SidecarQueryImport> {
     let parsed = gfm_search::SearchQuery::parse(query);
     let content_terms = parsed.content_candidate_terms();
+    let content =
+        content.postings_for_terms_limit(content_terms.clone(), budget.max_content_ids_per_term)?;
+    query_sidecar_imports_with_content_postings(
+        metadata,
+        lookup,
+        substrings,
+        &parsed,
+        content_terms,
+        content,
+        budget,
+    )
+}
+
+fn query_sidecar_imports_with_content_postings(
+    metadata: &MmapMetadataArchive,
+    lookup: &SearchArchiveLookup,
+    substrings: &MmapSubstringArchive,
+    parsed: &gfm_search::SearchQuery,
+    content_terms: Vec<String>,
+    content: Vec<ContentPosting>,
+    budget: SearchLookupBudget,
+) -> Result<SidecarQueryImport> {
     let comment_terms = parsed.comment_candidate_terms();
     let tag_terms = parsed.tag_candidate_terms();
     let prefix_terms = parsed.prefix_candidate_terms();
@@ -797,8 +922,6 @@ pub fn query_sidecar_imports(
         candidate_ids.extend(posting.ids.iter().copied());
     }
 
-    let content =
-        content.postings_for_terms_limit(content_terms.clone(), budget.max_content_ids_per_term)?;
     for posting in &content {
         candidate_ids.extend(posting.ids.iter().copied());
         candidate_ids.extend(posting.positions.iter().map(|positions| positions.id));
@@ -865,6 +988,10 @@ fn bounded_substring_grams(terms: &[String], budget: SearchLookupBudget) -> Vec<
         );
     }
     grams.into_iter().collect()
+}
+
+fn bounded_posting_cache_key(term: &str, limit: usize) -> String {
+    format!("{limit}:{term}")
 }
 
 #[derive(Debug)]

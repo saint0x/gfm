@@ -1737,6 +1737,8 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_search_stderr.contains("substring-archive-keys")
             && sidecar_search_stderr.contains("fuzzy-archive-keys")
             && sidecar_search_stderr.contains("content-keys 0")
+            && sidecar_search_stderr.contains("content-cache-hits 0")
+            && sidecar_search_stderr.contains("content-cache-misses 0")
             && sidecar_search_stderr.contains("metadata-budget 4096")
             && sidecar_search_stderr.contains("substring-budget 4096")
             && sidecar_search_stderr.contains("content-budget 4096"),
@@ -1811,6 +1813,8 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_budget_stderr.contains("\tfull-hydration=false")
             && sidecar_budget_stderr.contains("\tprefix-keys=1")
             && sidecar_budget_stderr.contains("\tsubstring-keys=1")
+            && sidecar_budget_stderr.contains("\tcontent-cache-hits=0")
+            && sidecar_budget_stderr.contains("\tcontent-cache-misses=1")
             && sidecar_budget_stderr.contains("\tprefix-terms=1")
             && sidecar_budget_stderr.contains("\tprefix-lookup-requests=")
             && sidecar_budget_stderr.contains("\tprefix-lookup-ids=")
@@ -1854,7 +1858,9 @@ fn searches_persisted_tags_from_binary() {
     );
     let sidecar_content_stderr = String::from_utf8(sidecar_content_search.stderr).unwrap();
     assert!(
-        sidecar_content_stderr.contains("content-keys 1"),
+        sidecar_content_stderr.contains("content-keys 1")
+            && sidecar_content_stderr.contains("content-cache-hits 0")
+            && sidecar_content_stderr.contains("content-cache-misses 1"),
         "{sidecar_content_stderr}"
     );
 

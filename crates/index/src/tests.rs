@@ -648,7 +648,18 @@ fn sidecar_query_session_reuses_mmap_archives_and_lookup_cache() {
     write_prefix_postings(&prefixes_path, &prefix_postings_from_records(&records)).unwrap();
     write_substring_postings(&substrings_path, &substring_postings_from_records(&records)).unwrap();
     write_fuzzy_postings(&fuzzy_path, &fuzzy_postings_from_records(&records)).unwrap();
-    write_content_postings(&content_path, &[]).unwrap();
+    write_content_postings(
+        &content_path,
+        &[ContentPosting {
+            term: "finderlatency".to_string(),
+            ids: vec![record.id],
+            positions: vec![ContentPositions {
+                id: record.id,
+                positions: vec![0],
+            }],
+        }],
+    )
+    .unwrap();
 
     let session = SidecarIndexQuerySession::open(
         &records_path,
@@ -677,8 +688,30 @@ fn sidecar_query_session_reuses_mmap_archives_and_lookup_cache() {
     assert_eq!(first.record_cache_misses, 1);
     assert_eq!(second.record_cache_hits, 1);
     assert_eq!(second.record_cache_misses, 0);
+    assert_eq!(first.content_cache_hits, 0);
+    assert_eq!(first.content_cache_misses, 1);
+    assert_eq!(second.content_cache_hits, 1);
+    assert_eq!(second.content_cache_misses, 0);
     assert!(record_cache_after_second.0 > record_cache_before_second.0);
     assert!(lookup_after_second.prefix_cache_hits > lookup_before_second.prefix_cache_hits);
+
+    let absent_first = session.search("absentsidecarcontentneedle", 5).unwrap();
+    let absent_content_before_second = session.content_cache_telemetry();
+    let absent_record_before_second = session.record_cache_telemetry();
+    let absent_second = session.search("absentsidecarcontentneedle", 5).unwrap();
+    let absent_content_after_second = session.content_cache_telemetry();
+    let absent_record_after_second = session.record_cache_telemetry();
+
+    assert!(absent_first.search.hits.is_empty());
+    assert!(absent_second.search.hits.is_empty());
+    assert_eq!(absent_first.hydration.records_loaded, 0);
+    assert_eq!(absent_second.hydration.records_loaded, 0);
+    assert_eq!(absent_first.content_cache_hits, 0);
+    assert_eq!(absent_first.content_cache_misses, 1);
+    assert_eq!(absent_second.content_cache_hits, 1);
+    assert_eq!(absent_second.content_cache_misses, 0);
+    assert_eq!(absent_record_after_second, absent_record_before_second);
+    assert!(absent_content_after_second.0 > absent_content_before_second.0);
 
     fs::remove_file(records_path).unwrap();
     fs::remove_file(columns_path).unwrap();
