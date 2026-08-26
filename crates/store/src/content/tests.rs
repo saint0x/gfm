@@ -2,6 +2,7 @@ use super::*;
 use crate::contentmerge::{
     compact_content_segments, compact_content_segments_with_policy, ContentMergePolicy,
 };
+use gfm_types::{ContentPositions, VolumeId};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
