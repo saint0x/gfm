@@ -510,6 +510,7 @@ fn print_usage() {
   gfm native-icon-bridge <path>
   gfm fileprovider-state <path>
   gfm fileprovider-progress <path>
+  gfm fileprovider-progress-job <path>
   gfm fileprovider-operation <download|evict> <path>
   gfm fileprovider-invalidation <previous-state> <path>
   gfm volume-discovery [paths...]

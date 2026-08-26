@@ -280,6 +280,23 @@ impl RuntimeJobHandle {
         Ok(())
     }
 
+    pub(crate) fn progress(
+        &self,
+        state: JobProgressState,
+        completed_units: u64,
+        detail: impl Into<String>,
+    ) -> Result<()> {
+        if let Some(store) = &self.progress_store {
+            store.upsert(self.snapshot.clone().with_progress(
+                state,
+                completed_units,
+                detail,
+                job_timestamp_ms(),
+            ))?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn finish(&self, status: &TaskStatus) -> Result<()> {
         if let Some(store) = &self.progress_store {
             let (completed_units, detail) = match status {

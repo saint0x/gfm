@@ -438,6 +438,70 @@ fn reports_fileprovider_progress_from_binary() {
 }
 
 #[test]
+fn publishes_fileprovider_progress_to_runtime_job_store_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-progress-job-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let downloading = root.join("Downloading.icloud-downloading.md");
+    let progress = root.join("progress.gfmprogress");
+    let catalog = root.join("payloads.gfmjobs");
+    std::fs::write(&downloading, "downloading").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .arg("fileprovider-progress-job")
+        .arg(&downloading)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("fileprovider-progress\t"));
+    assert!(stdout.contains("\tstate=downloading\t"));
+
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tfileprovider download"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\trunning\t0\t1\tfileprovider:icloud-drive:downloading:download:provider-progress-unavailable\t"),
+        "{progress_text}"
+    );
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains("payload\t1\toperation\tfileprovider download"),
+        "{catalog_text}"
+    );
+
+    let ui_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-progress-job-contract")
+        .arg(&progress)
+        .arg("1")
+        .output()
+        .unwrap();
+    assert!(
+        ui_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ui_output.stderr)
+    );
+    let ui_stdout = String::from_utf8(ui_output.stdout).unwrap();
+    assert!(ui_stdout.starts_with("dialog\tsurface=progress\tpresentation=progress-sheet"));
+    assert!(ui_stdout.contains(
+        "operation-progress\tlabel=fileprovider download\tstate=running\tcompleted=0\ttotal=1"
+    ));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_state_controls_preview_generation_from_binary() {
     let root =
         std::env::temp_dir().join(format!("gfm-fileprovider-preview-{}", std::process::id()));

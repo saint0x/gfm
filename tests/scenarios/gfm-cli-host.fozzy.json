@@ -1808,6 +1808,31 @@
     },
     {
       "type": "proc_when",
+      "cmd": "/usr/bin/env",
+      "args": [
+        "GFM_JOB_PROGRESS_STORE=/tmp/gfm-fozzy-fileprovider-progress.gfmprogress",
+        "GFM_JOB_PAYLOAD_CATALOG=/tmp/gfm-fozzy-fileprovider-progress.gfmjobs",
+        "target/aarch64-apple-darwin/debug/gfm",
+        "fileprovider-progress-job",
+        "tmp/gfm-fozzy-downloaded.icloud.md"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "/usr/bin/env",
+      "args": [
+        "GFM_JOB_PROGRESS_STORE=/tmp/gfm-fozzy-fileprovider-progress.gfmprogress",
+        "GFM_JOB_PAYLOAD_CATALOG=/tmp/gfm-fozzy-fileprovider-progress.gfmjobs",
+        "target/aarch64-apple-darwin/debug/gfm",
+        "fileprovider-progress-job",
+        "tmp/gfm-fozzy-downloaded.icloud.md"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
         "fileprovider-operation",

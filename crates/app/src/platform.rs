@@ -1,15 +1,17 @@
 use crate::{
     detect_volume_id, index_volume_descriptor, parse_required_scheduling_pressure,
-    run_preview_contract_adaptive, run_preview_contract_cancellable,
+    run_preview_contract_adaptive, run_preview_contract_cancellable, runtime::RuntimeJobHandle,
 };
 use gfm_fs::record_for_path;
 use gfm_index::{parse_volume_indexing_policy, VolumeIndexPolicy};
-use gfm_jobs::{Cancellation, Priority, SchedulingAction};
+use gfm_jobs::{
+    Cancellation, JobClass, JobPayloadKind, JobProgressState, Priority, Scheduler, SchedulingAction,
+};
 use gfm_mac::{
     current_host_profile, parse_spotlight_fixture, AccessIntent, CloudStorageState,
-    FileProviderInvalidationReport, FileProviderOperation, FileProviderOperationReport,
-    FileProviderProgressReport, FileProviderStateReport, MacBridgeContract,
-    NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
+    CloudTransferDirection, FileProviderInvalidationReport, FileProviderOperation,
+    FileProviderOperationReport, FileProviderProgressReport, FileProviderStateReport,
+    MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
     SpotlightMetadataReader, SpotlightReconciliationReport, VolumeDiscoveryReport,
 };
 use gfm_preview::{
@@ -59,6 +61,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "fileprovider-progress" => {
             let path = required_path(args.next(), "fileprovider-progress requires a path")?;
             println!("{}", FileProviderProgressReport::read_path(path)?.as_tsv());
+        }
+        "fileprovider-progress-job" => {
+            let path = required_path(args.next(), "fileprovider-progress-job requires a path")?;
+            println!("{}", publish_fileprovider_progress_job(path)?.as_tsv());
         }
         "fileprovider-operation" => {
             let operation = FileProviderOperation::parse(&required_string(
@@ -417,6 +423,84 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn publish_fileprovider_progress_job(path: PathBuf) -> Result<FileProviderProgressReport> {
+    let report = FileProviderProgressReport::read_path(&path)?;
+    let mut scheduler = Scheduler::new();
+    let label = fileprovider_progress_label(report.state.progress.direction);
+    let volume = detect_volume_id(&path).ok();
+    let job = if let Some(volume) = volume {
+        scheduler.schedule_on_volume_in_class(Priority::Visible, JobClass::Visible, label, volume)
+    } else {
+        scheduler.schedule_in_class(Priority::Visible, JobClass::Visible, label)
+    };
+    let detail = fileprovider_progress_detail(&report);
+    let runtime = RuntimeJobHandle::begin(
+        &job,
+        JobPayloadKind::Operation,
+        label,
+        fileprovider_progress_total_units(&report),
+        detail.clone(),
+    )?;
+    runtime.progress(
+        fileprovider_progress_job_state(&report),
+        u64::from(report.state.progress.percent_milli.unwrap_or(0)),
+        detail,
+    )?;
+    Ok(report)
+}
+
+fn fileprovider_progress_label(direction: CloudTransferDirection) -> &'static str {
+    match direction {
+        CloudTransferDirection::Idle => "fileprovider transfer",
+        CloudTransferDirection::Download => "fileprovider download",
+        CloudTransferDirection::Upload => "fileprovider upload",
+        CloudTransferDirection::Materialize => "fileprovider materialize",
+    }
+}
+
+fn fileprovider_progress_total_units(report: &FileProviderProgressReport) -> u64 {
+    if report.state.progress.indeterminate {
+        1
+    } else {
+        100_000
+    }
+}
+
+fn fileprovider_progress_job_state(report: &FileProviderProgressReport) -> JobProgressState {
+    if report.state.progress.complete {
+        JobProgressState::Completed
+    } else if report.state.progress.indeterminate {
+        JobProgressState::Running
+    } else {
+        match report.state.storage_state {
+            CloudStorageState::Downloading
+            | CloudStorageState::Uploading
+            | CloudStorageState::Waiting => JobProgressState::Running,
+            CloudStorageState::Downloaded => JobProgressState::Completed,
+            CloudStorageState::LocalOnly
+            | CloudStorageState::Evicted
+            | CloudStorageState::Conflict
+            | CloudStorageState::Offline
+            | CloudStorageState::Unknown => JobProgressState::Paused,
+        }
+    }
+}
+
+fn fileprovider_progress_detail(report: &FileProviderProgressReport) -> String {
+    format!(
+        "fileprovider:{}:{}:{}:{}",
+        report.state.domain.as_str(),
+        report.state.storage_state.as_str(),
+        report.state.progress.direction.as_str(),
+        report
+            .state
+            .progress
+            .reason
+            .as_deref()
+            .unwrap_or("native-progress")
+    )
 }
 
 fn volume_discovery_report(paths: Vec<PathBuf>) -> VolumeDiscoveryReport {
