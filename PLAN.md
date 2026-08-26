@@ -206,7 +206,7 @@ gfm/
 - GPUI is built with its supported `runtime_shaders` feature for development and CI so the native app does not fail on machines that have Apple's Command Line Tools but lack full Xcode's build-time `metal` and `metallib` executables.
 - Runtime shaders are not a renderer fallback: the app still uses Metal and GPUI; only shader compilation moves from Cargo build time to Metal runtime library creation.
 - Production release hosts must still pass an explicit Xcode toolchain check for signing, notarization, hardened-runtime validation, bundle inspection, and any later offline `.metallib` release mode.
-- The `release-toolchain` route validates the selected developer directory plus required Apple tools, including `metal` and `metallib`, before production release validation or notarization proceeds.
+- The `release-toolchain` route validates the selected developer directory plus required Apple tools, including `metal` and `metallib`, then compiles and links a real Metal smoke-test kernel before production release validation or notarization proceeds.
 
 ### Crate Responsibilities
 
@@ -341,7 +341,7 @@ gfm/
 - Copies the native binary and icon resources into the canonical app bundle layout.
 - Generates signing entitlements as release inputs and signs bundles with ad-hoc or Developer ID identities.
 - Enables hardened runtime during signing and verifies the signature after bundle creation.
-- Validates the production release host with an explicit Apple toolchain preflight so CLT-only machines fail with actionable `xcode-select` guidance instead of an opaque `metal`/`metallib` failure.
+- Validates the production release host with an explicit Apple toolchain preflight and Metal compile/link smoke test so CLT-only or broken-Xcode machines fail with actionable `xcode-select` guidance instead of an opaque `metal`/`metallib` failure.
 - Archives signed bundles through `xcrun ditto`, submits notarization through `xcrun notarytool`, waits for Apple acceptance, staples the ticket through `xcrun stapler`, and validates the stapled app.
 - Supports keychain-profile, Apple ID, and App Store Connect API key credential modes without storing secrets in project files.
 - Exposes Launch Services registration as an explicit operator command so release/install flows can register GFM without hiding host mutation inside validation.

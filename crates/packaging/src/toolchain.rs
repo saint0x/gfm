@@ -1,6 +1,8 @@
 use gfm_types::{GfmError, Result};
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const RELEASE_XCRUN_UTILITIES: &[&str] = &["ditto", "notarytool", "stapler", "metal", "metallib"];
 const CODESIGN_UTILITIES: &[&str] = &["codesign"];
@@ -9,6 +11,7 @@ const CODESIGN_UTILITIES: &[&str] = &["codesign"];
 pub struct AppleToolchainReport {
     pub developer_dir: PathBuf,
     pub utilities: Vec<AppleToolchainUtility>,
+    pub metal_smoke_tested: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,9 +55,15 @@ fn require_toolchain(
             path: require_xcrun_utility(utility, &developer_dir, label)?,
         });
     }
+    let metal_smoke_required =
+        xcrun_utilities.contains(&"metal") && xcrun_utilities.contains(&"metallib");
+    if metal_smoke_required {
+        validate_metal_toolchain(&developer_dir, label)?;
+    }
     Ok(AppleToolchainReport {
         developer_dir,
         utilities,
+        metal_smoke_tested: metal_smoke_required,
     })
 }
 
@@ -127,6 +136,96 @@ fn require_xcrun_utility(name: &str, developer_dir: &PathBuf, label: &str) -> Re
     path_from_stdout(name, label, output.stdout)
 }
 
+fn validate_metal_toolchain(developer_dir: &PathBuf, label: &str) -> Result<()> {
+    let root = unique_temp_dir("gfm-metal-toolchain")?;
+    let source = root.join("gfm_toolchain_probe.metal");
+    let air = root.join("gfm_toolchain_probe.air");
+    let metallib = root.join("gfm_toolchain_probe.metallib");
+
+    let result = (|| {
+        fs::write(&source, metal_probe_source()).map_err(|err| GfmError::io(&source, err))?;
+
+        let metal = Command::new("xcrun")
+            .args(["-sdk", "macosx", "metal", "-c"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&air)
+            .output()
+            .map_err(|err| {
+                GfmError::Format(format!("failed to execute Apple Metal compiler: {err}"))
+            })?;
+        if !metal.status.success() {
+            return Err(command_failure(
+                label,
+                "xcrun -sdk macosx metal -c <probe.metal> -o <probe.air>",
+                metal,
+                Some(developer_dir),
+            ));
+        }
+
+        let link = Command::new("xcrun")
+            .args(["-sdk", "macosx", "metallib"])
+            .arg(&air)
+            .arg("-o")
+            .arg(&metallib)
+            .output()
+            .map_err(|err| {
+                GfmError::Format(format!(
+                    "failed to execute Apple Metal library linker: {err}"
+                ))
+            })?;
+        if !link.status.success() {
+            return Err(command_failure(
+                label,
+                "xcrun -sdk macosx metallib <probe.air> -o <probe.metallib>",
+                link,
+                Some(developer_dir),
+            ));
+        }
+
+        let metadata = fs::metadata(&metallib).map_err(|err| GfmError::io(&metallib, err))?;
+        if metadata.len() == 0 {
+            return Err(GfmError::Format(format!(
+                "{label} Apple Metal smoke test produced an empty metallib at {}",
+                metallib.display()
+            )));
+        }
+        Ok(())
+    })();
+
+    let cleanup = fs::remove_dir_all(&root);
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(err)) => Err(GfmError::io(&root, err)),
+        (Err(err), _) => Err(err),
+    }
+}
+
+fn unique_temp_dir(prefix: &str) -> Result<PathBuf> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| {
+            GfmError::Format(format!(
+                "failed to allocate Metal toolchain temp path: {err}"
+            ))
+        })?
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
+    fs::create_dir_all(&path).map_err(|err| GfmError::io(&path, err))?;
+    Ok(path)
+}
+
+fn metal_probe_source() -> &'static str {
+    r#"#include <metal_stdlib>
+using namespace metal;
+
+kernel void gfm_toolchain_probe(device uint *values [[buffer(0)]],
+                                uint index [[thread_position_in_grid]]) {
+    values[index] = values[index] + 1u;
+}
+"#
+}
+
 fn path_from_stdout(name: &str, label: &str, stdout: Vec<u8>) -> Result<PathBuf> {
     let stdout = String::from_utf8(stdout).map_err(|err| {
         GfmError::Format(format!("{label} `{name}` lookup returned non-UTF-8: {err}"))
@@ -188,5 +287,14 @@ mod tests {
     fn validates_shell_quote_for_path_lookup_fallback() {
         assert_eq!(shell_quote("codesign"), "'codesign'");
         assert_eq!(shell_quote("weird'tool"), "'weird'\\''tool'");
+    }
+
+    #[test]
+    fn metal_probe_source_is_a_real_kernel() {
+        let source = metal_probe_source();
+
+        assert!(source.contains("#include <metal_stdlib>"));
+        assert!(source.contains("kernel void gfm_toolchain_probe"));
+        assert!(source.contains("thread_position_in_grid"));
     }
 }

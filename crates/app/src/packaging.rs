@@ -134,6 +134,7 @@ fn print_toolchain_report(report: &AppleToolchainReport) {
     for utility in &report.utilities {
         println!("tool\t{}\t{}", utility.name, utility.path.display());
     }
+    println!("metal-smoke-test\t{}", report.metal_smoke_tested);
 }
 
 fn notarization_credentials(

@@ -71,7 +71,7 @@ No UI render/update path performs blocking filesystem work. No performance-criti
 
 GFM is macOS-only. Development and CI builds use GPUI's supported runtime-shader path, so the native app compiles on machines with Apple's Command Line Tools even when the standalone `metal` and `metallib` executables from full Xcode are not installed. The app still renders through Metal; this only changes when GPUI shader source is compiled.
 
-Release packaging keeps Xcode as part of the production host contract for signing, notarization, hardened-runtime validation, bundle inspection, and any future offline `.metallib` build mode. The `release-toolchain` operator route validates the selected developer directory and fails loudly when production release work is attempted from a Command Line Tools-only host.
+Release packaging keeps Xcode as part of the production host contract for signing, notarization, hardened-runtime validation, bundle inspection, and any future offline `.metallib` build mode. The `release-toolchain` operator route validates the selected developer directory, locates every required Apple utility, compiles a real Metal probe with `xcrun metal`, links it with `xcrun metallib`, and fails loudly when production release work is attempted from a Command Line Tools-only or broken Xcode host.
 
 ## Search
 
