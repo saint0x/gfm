@@ -1,8 +1,8 @@
 use gfm_jobs::{
-    Cancellation, Job, JobJournal, JobPayloadCatalog, JobPayloadKind, JobPayloadRecord,
-    JobProgressSnapshot, JobProgressState, JobProgressStore, Priority, RetriableTask, RetryPolicy,
-    Scheduler, SchedulingAction, SchedulingPressure, Task, TaskStatus, VolumeConcurrencyPolicy,
-    WorkerPool,
+    Cancellation, Job, JobFairnessPolicy, JobJournal, JobPayloadCatalog, JobPayloadKind,
+    JobPayloadRecord, JobProgressSnapshot, JobProgressState, JobProgressStore, Priority,
+    RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, Task, TaskStatus,
+    VolumeConcurrencyPolicy, WorkerPool,
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::env;
@@ -39,6 +39,7 @@ where
     } else {
         scheduler.schedule(priority, label)
     };
+    let job = drain_single_runtime_job(&mut scheduler, job, label)?;
     let runtime = RuntimeJobHandle::begin(
         &job,
         payload_kind_for_label(label),
@@ -127,6 +128,7 @@ where
     } else {
         scheduler.schedule(priority, label)
     };
+    let job = drain_single_runtime_job(&mut scheduler, job, label)?;
     let runtime = RuntimeJobHandle::begin(
         &job,
         payload_kind_for_label(label),
@@ -176,6 +178,20 @@ where
         scheduling_action: scheduling.action,
         deferred: false,
     })
+}
+
+fn drain_single_runtime_job(scheduler: &mut Scheduler, job: Job, label: &str) -> Result<Job> {
+    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    if let Some(blocked) = plan.blocked.first() {
+        return Err(GfmError::Format(format!(
+            "{label} job {} is blocked by missing dependencies",
+            blocked.label
+        )));
+    }
+    plan.ready
+        .into_iter()
+        .find(|candidate| candidate.id == job.id)
+        .ok_or_else(|| GfmError::Format(format!("{label} job did not become ready")))
 }
 
 #[derive(Clone)]
