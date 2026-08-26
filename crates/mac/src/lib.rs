@@ -13,11 +13,12 @@ pub use bridge::{
     MacBridgeContract, MacBridgeSpec, MacBridgeStatus, MacBridgeThreadPolicy, MacFramework,
 };
 pub use fileprovider::{
-    CloudBadge, CloudCommandPolicy, CloudCommandState, CloudMaterialization, CloudStorageState,
-    CloudTransferDirection, CloudTransferProgress, FileProviderConflictReport, FileProviderDomain,
-    FileProviderDomainEnumerationReport, FileProviderDomainReport, FileProviderInvalidationReport,
-    FileProviderOperation, FileProviderOperationDisposition, FileProviderOperationReport,
-    FileProviderProgressReport, FileProviderRegisteredDomain, FileProviderStateReport,
+    CloudBadge, CloudCommandPolicy, CloudCommandState, CloudMaterialization,
+    CloudMaterializationSource, CloudStorageState, CloudTransferDirection, CloudTransferProgress,
+    FileProviderConflictReport, FileProviderDomain, FileProviderDomainEnumerationReport,
+    FileProviderDomainReport, FileProviderInvalidationReport, FileProviderOperation,
+    FileProviderOperationDisposition, FileProviderOperationReport, FileProviderProgressReport,
+    FileProviderRegisteredDomain, FileProviderStateReport,
 };
 pub use finder::{FinderKindSource, NativeFinderKindReport};
 pub use host::{

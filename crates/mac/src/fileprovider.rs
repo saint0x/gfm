@@ -99,6 +99,29 @@ impl CloudMaterialization {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudMaterializationSource {
+    NativeUrlResource,
+    NativeFileProviderIdentityUnknown,
+    XattrFallback,
+    PathFallback,
+    Filesystem,
+    StateFallback,
+}
+
+impl CloudMaterializationSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NativeUrlResource => "native-url-resource",
+            Self::NativeFileProviderIdentityUnknown => "nsfileprovidermanager:unknown",
+            Self::XattrFallback => "xattr-fallback",
+            Self::PathFallback => "path-fallback",
+            Self::Filesystem => "filesystem",
+            Self::StateFallback => "state-fallback",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CloudBadge {
     AvailableOffline,
@@ -166,7 +189,7 @@ pub struct FileProviderStateReport {
     pub domain: FileProviderDomain,
     pub storage_state: CloudStorageState,
     pub materialization: CloudMaterialization,
-    pub materialization_source: String,
+    pub materialization_source: CloudMaterializationSource,
     pub progress: CloudTransferProgress,
     pub badges: Vec<CloudBadge>,
     pub commands: CloudCommandPolicy,
@@ -822,7 +845,7 @@ impl FileProviderStateReport {
             self.domain.as_str(),
             self.storage_state.as_str(),
             self.materialization.as_str(),
-            escape_field(&self.materialization_source),
+            self.materialization_source.as_str(),
             self.offline,
             self.conflict,
             self.badges
@@ -1068,21 +1091,24 @@ fn materialization_for_state(state: CloudStorageState) -> CloudMaterialization {
     }
 }
 
-fn materialization_source_for_state(state: CloudStorageState, hints: &CloudHints) -> String {
+fn materialization_source_for_state(
+    state: CloudStorageState,
+    hints: &CloudHints,
+) -> CloudMaterializationSource {
     if hints.native.is_ubiquitous == Some(true) && native_storage_state(&hints.native).is_some() {
-        "native-url-resource".to_string()
+        CloudMaterializationSource::NativeUrlResource
     } else if hints.native_identity.status == NativeFileProviderIdentityStatus::Available
         && state == CloudStorageState::Unknown
     {
-        "nsfileprovidermanager:unknown".to_string()
+        CloudMaterializationSource::NativeFileProviderIdentityUnknown
     } else if !hints.xattrs.is_empty() {
-        "xattr-fallback".to_string()
+        CloudMaterializationSource::XattrFallback
     } else if hints.source.contains("fixture-name") || hints.source.contains("icloud-extension") {
-        "path-fallback".to_string()
+        CloudMaterializationSource::PathFallback
     } else if hints.source == "filesystem" {
-        "filesystem".to_string()
+        CloudMaterializationSource::Filesystem
     } else {
-        "state-fallback".to_string()
+        CloudMaterializationSource::StateFallback
     }
 }
 
@@ -1749,7 +1775,7 @@ mod tests {
         );
         assert_eq!(
             materialization_source_for_state(state, &hints),
-            "native-url-resource"
+            CloudMaterializationSource::NativeUrlResource
         );
     }
 
@@ -1817,7 +1843,7 @@ mod tests {
         );
         assert_eq!(
             materialization_source_for_state(state, &hints),
-            "path-fallback"
+            CloudMaterializationSource::PathFallback
         );
     }
 
