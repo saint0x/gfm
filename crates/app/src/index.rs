@@ -268,6 +268,7 @@ fn marker(kind: FileKind) -> &'static str {
 fn event_marker(kind: &FileEventKind) -> &'static str {
     match kind {
         FileEventKind::Create => "create",
+        FileEventKind::Metadata => "metadata",
         FileEventKind::Modify => "modify",
         FileEventKind::Remove => "remove",
         FileEventKind::Rename { .. } => "rename",

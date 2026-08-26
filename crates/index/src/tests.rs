@@ -918,6 +918,29 @@ fn live_index_applies_incremental_metadata_updates() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn live_index_applies_finder_xattr_metadata_events() {
+    let root = unique_temp_dir("gfm-xattr-metadata-update-root");
+    let target = root.join("Tagged.md");
+    fs::write(&target, "tagged").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let mut live = snapshot.into_live();
+    assert!(live.search("tag:important", 5).is_empty());
+
+    set_finder_tags(&target, &["Important\n6"]);
+    let event = FileEvent::new(&target, FileEventKind::Metadata);
+    let outcome = live.apply_event(&event).unwrap();
+
+    assert!(matches!(
+        outcome,
+        UpdateOutcome::MetadataUpdated { changed } if changed > 0
+    ));
+    assert_eq!(live.search("tag:important", 5).len(), 1);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn live_index_applies_chmod_metadata_updates() {
@@ -2442,6 +2465,17 @@ fn unique_temp_path(prefix: &str, extension: &str) -> PathBuf {
         name.push_str(extension);
     }
     std::env::temp_dir().join(name)
+}
+
+fn set_finder_tags(path: &Path, tags: &[&str]) {
+    let value = plist::Value::Array(
+        tags.iter()
+            .map(|tag| plist::Value::String((*tag).to_string()))
+            .collect(),
+    );
+    let mut payload = Vec::new();
+    value.to_writer_binary(&mut payload).unwrap();
+    xattr::set(path, "com.apple.metadata:_kMDItemUserTags", &payload).unwrap();
 }
 
 fn corrupt_pdf() -> Vec<u8> {

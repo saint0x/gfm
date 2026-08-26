@@ -13,5 +13,9 @@ gfm-search = { path = "../search" }
 gfm-store = { path = "../store" }
 gfm-types = { path = "../types" }
 
+[dev-dependencies]
+plist = "1.7"
+xattr = "1.3"
+
 [lints]
 workspace = true

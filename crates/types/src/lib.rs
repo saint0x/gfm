@@ -146,6 +146,7 @@ impl FileEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileEventKind {
     Create,
+    Metadata,
     Modify,
     Remove,
     Rename { from: PathBuf, to: PathBuf },

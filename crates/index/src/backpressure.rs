@@ -220,7 +220,11 @@ fn rename_key(from: &Path, to: &Path) -> PathBuf {
 
 fn coalesced_event(existing: &FileEvent, incoming: &FileEvent) -> FileEvent {
     let kind = match (&existing.kind, &incoming.kind) {
-        (FileEventKind::Create, FileEventKind::Modify) => FileEventKind::Create,
+        (FileEventKind::Create, FileEventKind::Metadata | FileEventKind::Modify) => {
+            FileEventKind::Create
+        }
+        (FileEventKind::Metadata, FileEventKind::Modify)
+        | (FileEventKind::Modify, FileEventKind::Metadata) => FileEventKind::Modify,
         (_, FileEventKind::Remove) => FileEventKind::Remove,
         _ => incoming.kind.clone(),
     };

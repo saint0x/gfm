@@ -1,5 +1,5 @@
 use gfm_types::{FileEvent, FileEventKind, GfmError, Result};
-use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
+use notify::event::{CreateKind, MetadataKind, ModifyKind, RemoveKind, RenameMode};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -105,6 +105,19 @@ pub fn map_notify_event(event: Event) -> Vec<FileEvent> {
             .into_iter()
             .map(|path| FileEvent::new(path, FileEventKind::Create))
             .collect(),
+        EventKind::Modify(ModifyKind::Metadata(
+            MetadataKind::Any
+            | MetadataKind::AccessTime
+            | MetadataKind::WriteTime
+            | MetadataKind::Permissions
+            | MetadataKind::Ownership
+            | MetadataKind::Extended
+            | MetadataKind::Other,
+        )) => event
+            .paths
+            .into_iter()
+            .map(|path| FileEvent::new(path, FileEventKind::Metadata))
+            .collect(),
         EventKind::Modify(_) => event
             .paths
             .into_iter()
@@ -188,6 +201,19 @@ mod tests {
 
         assert_eq!(mapped.len(), 1);
         assert_eq!(mapped[0].kind, FileEventKind::Modify);
+    }
+
+    #[test]
+    fn maps_extended_attribute_change_to_metadata_events() {
+        let event = Event::new(EventKind::Modify(ModifyKind::Metadata(
+            MetadataKind::Extended,
+        )))
+        .add_path(PathBuf::from("/tmp/file.txt"));
+
+        let mapped = map_notify_event(event);
+
+        assert_eq!(mapped.len(), 1);
+        assert_eq!(mapped[0].kind, FileEventKind::Metadata);
     }
 
     #[test]

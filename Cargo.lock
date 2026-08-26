@@ -1722,6 +1722,8 @@ dependencies = [
  "gfm-search",
  "gfm-store",
  "gfm-types",
+ "plist",
+ "xattr 1.6.1",
 ]
 
 [[package]]

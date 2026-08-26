@@ -470,7 +470,7 @@ impl LiveIndex {
     pub fn apply_event(&mut self, event: &FileEvent) -> Result<UpdateOutcome> {
         match &event.kind {
             FileEventKind::Create | FileEventKind::Other => self.upsert_path(&event.path),
-            FileEventKind::Modify => {
+            FileEventKind::Metadata | FileEventKind::Modify => {
                 let report = self.apply_metadata_update(&event.path)?;
                 Ok(UpdateOutcome::MetadataUpdated {
                     changed: report.changed.len(),
