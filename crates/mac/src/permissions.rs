@@ -1,7 +1,8 @@
 use gfm_types::{GfmError, Result};
-use std::fs;
-use std::io::ErrorKind;
+use std::fs::{self, File};
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionPromptMode {
@@ -245,7 +246,7 @@ impl PermissionStateSnapshot {
                 escape_field(&item.reason)
             ));
         }
-        fs::write(path, output).map_err(|err| GfmError::io(path, err))
+        atomic_write_text(path, &output)
     }
 }
 
@@ -449,10 +450,52 @@ fn unescape_field(value: &str) -> String {
     output
 }
 
+fn atomic_write_text(path: &Path, text: &str) -> Result<()> {
+    let temporary = temporary_path(path);
+    let mut file = File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
+    if let Err(err) = file.write_all(text.as_bytes()) {
+        let _ = fs::remove_file(&temporary);
+        return Err(GfmError::io(&temporary, err));
+    }
+    if let Err(err) = file.sync_all() {
+        let _ = fs::remove_file(&temporary);
+        return Err(GfmError::io(&temporary, err));
+    }
+    drop(file);
+    if let Err(err) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(GfmError::io(path, err));
+    }
+    let _ = sync_parent(path);
+    Ok(())
+}
+
+fn sync_parent(path: &Path) -> Result<bool> {
+    let Some(parent) = path.parent() else {
+        return Ok(false);
+    };
+    match File::open(parent) {
+        Ok(file) => Ok(file.sync_all().is_ok()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(parent, err)),
+    }
+}
+
+fn temporary_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("permission-state");
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    path.with_file_name(format!(".{file_name}.{}.{nonce}.tmp", std::process::id()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn default_policy_preserves_finder_parity_and_degraded_search() {
@@ -557,6 +600,46 @@ mod tests {
         let reloaded = PermissionStateSnapshot::read(&path).unwrap();
 
         assert_eq!(reloaded, snapshot);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permission_state_snapshot_replaces_existing_state_atomically() {
+        let root = temp_root("permissions-snapshot-atomic");
+        let path = root.join("permission-state.tsv");
+        let previous = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Desktop,
+                path: root.join("Desktop"),
+                state: PermissionState::Denied,
+                reason: "old denial".to_string(),
+            }],
+        };
+        let current = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Desktop,
+                path: root.join("Desktop"),
+                state: PermissionState::Granted,
+                reason: "readable after grant".to_string(),
+            }],
+        };
+
+        previous.write(&path).unwrap();
+        current.write(&path).unwrap();
+        let reloaded = PermissionStateSnapshot::read(&path).unwrap();
+        let leftovers = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".permission-state")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(reloaded, current);
+        assert!(leftovers.is_empty(), "{leftovers:?}");
         fs::remove_dir_all(root).unwrap();
     }
 
