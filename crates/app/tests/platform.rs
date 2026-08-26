@@ -408,6 +408,36 @@ fn reports_fileprovider_state_from_binary() {
 }
 
 #[test]
+fn reports_fileprovider_progress_from_binary() {
+    let root =
+        std::env::temp_dir().join(format!("gfm-fileprovider-progress-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let downloading = root.join("Downloading.icloud-downloading.md");
+    std::fs::write(&downloading, "downloading").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-progress")
+        .arg(&downloading)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("fileprovider-progress\t"));
+    assert!(stdout.contains("\tstate=downloading\t"));
+    assert!(stdout.contains("\tprogress-direction=download\tprogress-milli=-\t"));
+    assert!(stdout.contains("\tprogress-requested=true\t"));
+    assert!(stdout.contains("\tprogress-indeterminate=true\t"));
+    assert!(stdout.ends_with("progress-reason=provider-progress-unavailable\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_state_controls_preview_generation_from_binary() {
     let root =
         std::env::temp_dir().join(format!("gfm-fileprovider-preview-{}", std::process::id()));

@@ -137,12 +137,132 @@ pub struct FileProviderStateReport {
     pub path: PathBuf,
     pub domain: FileProviderDomain,
     pub storage_state: CloudStorageState,
+    pub progress: CloudTransferProgress,
     pub badges: Vec<CloudBadge>,
     pub commands: CloudCommandPolicy,
     pub offline: bool,
     pub conflict: bool,
     pub provider_identifier: Option<String>,
     pub source: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudTransferDirection {
+    Idle,
+    Download,
+    Upload,
+    Materialize,
+}
+
+impl CloudTransferDirection {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Download => "download",
+            Self::Upload => "upload",
+            Self::Materialize => "materialize",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloudTransferProgress {
+    pub direction: CloudTransferDirection,
+    pub percent_milli: Option<u32>,
+    pub requested: bool,
+    pub complete: bool,
+    pub indeterminate: bool,
+    pub source: &'static str,
+    pub reason: Option<String>,
+}
+
+impl CloudTransferProgress {
+    fn idle(reason: impl Into<String>) -> Self {
+        Self {
+            direction: CloudTransferDirection::Idle,
+            percent_milli: None,
+            requested: false,
+            complete: false,
+            indeterminate: false,
+            source: "state",
+            reason: Some(reason.into()),
+        }
+    }
+
+    fn complete(direction: CloudTransferDirection, reason: impl Into<String>) -> Self {
+        Self {
+            direction,
+            percent_milli: Some(100_000),
+            requested: false,
+            complete: true,
+            indeterminate: false,
+            source: "state",
+            reason: Some(reason.into()),
+        }
+    }
+
+    fn from_native(
+        direction: CloudTransferDirection,
+        percent_milli: Option<u32>,
+        requested: bool,
+    ) -> Self {
+        Self {
+            direction,
+            percent_milli,
+            requested,
+            complete: percent_milli == Some(100_000),
+            indeterminate: percent_milli.is_none(),
+            source: if percent_milli.is_some() {
+                "native-url-resource"
+            } else {
+                "state"
+            },
+            reason: percent_milli
+                .is_none()
+                .then(|| "provider-progress-unavailable".to_string()),
+        }
+    }
+
+    fn as_tsv_fields(&self) -> String {
+        format!(
+            "progress-direction={}\tprogress-milli={}\tprogress-requested={}\tprogress-complete={}\tprogress-indeterminate={}\tprogress-source={}\tprogress-reason={}",
+            self.direction.as_str(),
+            self.percent_milli
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.requested,
+            self.complete,
+            self.indeterminate,
+            self.source,
+            self.reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderProgressReport {
+    pub path: PathBuf,
+    pub state: FileProviderStateReport,
+}
+
+impl FileProviderProgressReport {
+    pub fn read_path(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let state = FileProviderStateReport::read_path(&path)?;
+        Ok(Self { path, state })
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "fileprovider-progress\t{}\tstate={}\t{}",
+            self.path.display(),
+            self.state.storage_state.as_str(),
+            self.state.progress.as_tsv_fields()
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -375,6 +495,7 @@ impl FileProviderStateReport {
         let hints = CloudHints::read(&path);
         let domain = domain_for_path(&path, &hints);
         let storage_state = storage_state_for_path(&path, domain, &hints);
+        let progress = progress_for_state(storage_state, &hints);
         let mut badges = badges_for_state(storage_state);
         badges.sort();
         badges.dedup();
@@ -384,6 +505,7 @@ impl FileProviderStateReport {
             path,
             domain,
             storage_state,
+            progress,
             badges,
             commands,
             offline: matches!(
@@ -398,7 +520,7 @@ impl FileProviderStateReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "fileprovider-state\t{}\tdomain={}\tstate={}\toffline={}\tconflict={}\tbadges={}\tdownload={}\tevict={}\treveal-conflict={}\tprovider={}\tsource={}\treason={}",
+            "fileprovider-state\t{}\tdomain={}\tstate={}\toffline={}\tconflict={}\tbadges={}\t{}\tdownload={}\tevict={}\treveal-conflict={}\tprovider={}\tsource={}\treason={}",
             self.path.display(),
             self.domain.as_str(),
             self.storage_state.as_str(),
@@ -409,6 +531,7 @@ impl FileProviderStateReport {
                 .map(|badge| badge.as_str())
                 .collect::<Vec<_>>()
                 .join(","),
+            self.progress.as_tsv_fields(),
             self.commands.download.as_str(),
             self.commands.evict.as_str(),
             self.commands.reveal_conflict.as_str(),
@@ -586,6 +709,46 @@ fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<Clo
     }
 }
 
+fn progress_for_state(state: CloudStorageState, hints: &CloudHints) -> CloudTransferProgress {
+    match state {
+        CloudStorageState::LocalOnly => CloudTransferProgress::idle("not-fileprovider-backed"),
+        CloudStorageState::Downloaded => {
+            CloudTransferProgress::complete(CloudTransferDirection::Download, "materialized")
+        }
+        CloudStorageState::Evicted => CloudTransferProgress {
+            direction: CloudTransferDirection::Download,
+            percent_milli: hints.native.percent_downloaded_milli.or(Some(0)),
+            requested: hints.native.download_requested.unwrap_or(false),
+            complete: false,
+            indeterminate: false,
+            source: if hints.native.percent_downloaded_milli.is_some() {
+                "native-url-resource"
+            } else {
+                "state"
+            },
+            reason: Some("remote-placeholder".to_string()),
+        },
+        CloudStorageState::Downloading => CloudTransferProgress::from_native(
+            CloudTransferDirection::Download,
+            hints.native.percent_downloaded_milli,
+            hints.native.download_requested.unwrap_or(true),
+        ),
+        CloudStorageState::Uploading => CloudTransferProgress::from_native(
+            CloudTransferDirection::Upload,
+            hints.native.percent_uploaded_milli,
+            false,
+        ),
+        CloudStorageState::Waiting => CloudTransferProgress::from_native(
+            CloudTransferDirection::Materialize,
+            hints.native.percent_downloaded_milli,
+            hints.native.download_requested.unwrap_or(false),
+        ),
+        CloudStorageState::Conflict => CloudTransferProgress::idle("conflict-requires-resolution"),
+        CloudStorageState::Offline => CloudTransferProgress::idle("provider-offline"),
+        CloudStorageState::Unknown => CloudTransferProgress::idle("unknown-provider-state"),
+    }
+}
+
 fn badges_for_state(state: CloudStorageState) -> Vec<CloudBadge> {
     match state {
         CloudStorageState::LocalOnly => Vec::new(),
@@ -679,6 +842,9 @@ fn native_has_fileprovider_values(values: &NativeFileProviderResourceValues) -> 
         || values.is_downloading.is_some()
         || values.is_uploading.is_some()
         || values.is_uploaded.is_some()
+        || values.download_requested.is_some()
+        || values.percent_downloaded_milli.is_some()
+        || values.percent_uploaded_milli.is_some()
         || values.downloading_status.is_some()
 }
 
@@ -708,6 +874,9 @@ mod tests {
 
         assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
         assert_eq!(report.storage_state, CloudStorageState::Downloaded);
+        assert_eq!(report.progress.direction, CloudTransferDirection::Download);
+        assert_eq!(report.progress.percent_milli, Some(100_000));
+        assert!(report.progress.complete);
         assert_eq!(report.badges, vec![CloudBadge::AvailableOffline]);
         assert_eq!(report.commands.evict, CloudCommandState::Enabled);
         assert_eq!(report.commands.download, CloudCommandState::Disabled);
@@ -724,6 +893,10 @@ mod tests {
         let report = FileProviderStateReport::read_path(&path).unwrap();
 
         assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(report.progress.direction, CloudTransferDirection::Download);
+        assert_eq!(report.progress.percent_milli, Some(0));
+        assert!(!report.progress.requested);
+        assert!(!report.progress.indeterminate);
         assert_eq!(report.badges, vec![CloudBadge::Cloud]);
         assert!(report.offline);
         assert_eq!(report.commands.download, CloudCommandState::Enabled);
@@ -822,6 +995,33 @@ mod tests {
     }
 
     #[test]
+    fn progress_reports_indeterminate_in_fallback_in_flight_states() {
+        let root = unique_temp_dir();
+        let downloading = root.join("Downloading.icloud-downloading.md");
+        fs::write(&downloading, "downloading").unwrap();
+
+        let report = FileProviderProgressReport::read_path(&downloading).unwrap();
+
+        assert_eq!(report.state.storage_state, CloudStorageState::Downloading);
+        assert_eq!(
+            report.state.progress.direction,
+            CloudTransferDirection::Download
+        );
+        assert_eq!(report.state.progress.percent_milli, None);
+        assert!(report.state.progress.requested);
+        assert!(report.state.progress.indeterminate);
+        assert_eq!(
+            report.state.progress.reason.as_deref(),
+            Some("provider-progress-unavailable")
+        );
+        assert!(report
+            .as_tsv()
+            .contains("\tprogress-direction=download\tprogress-milli=-\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn invalidation_marks_provider_state_transitions() {
         let root = unique_temp_dir();
         let evicted = root.join("Remote.icloud-placeholder");
@@ -876,15 +1076,18 @@ mod tests {
     #[test]
     fn native_ubiquitous_downloading_state_overrides_fixture_name() {
         let path = PathBuf::from("/tmp/Downloaded.icloud.md");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(true);
+        native.is_uploading = Some(false);
+        native.is_uploaded = Some(true);
+        native.download_requested = Some(true);
+        native.percent_downloaded_milli = Some(12_500);
+        native.percent_uploaded_milli = Some(100_000);
+        native.downloading_status = Some(NativeUbiquitousDownloadingStatus::Current);
         let hints = CloudHints {
-            native: native_values(
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(NativeUbiquitousDownloadingStatus::Current),
-            ),
+            native,
             xattrs: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
@@ -895,20 +1098,28 @@ mod tests {
 
         assert_eq!(domain, FileProviderDomain::ICloudDrive);
         assert_eq!(state, CloudStorageState::Downloading);
+        let progress = progress_for_state(state, &hints);
+        assert_eq!(progress.direction, CloudTransferDirection::Download);
+        assert_eq!(progress.percent_milli, Some(12_500));
+        assert!(progress.requested);
+        assert!(!progress.indeterminate);
     }
 
     #[test]
     fn native_conflict_state_overrides_local_filename_fallbacks() {
         let path = PathBuf::from("/tmp/Report.md");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(true);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.is_uploaded = Some(true);
+        native.download_requested = Some(false);
+        native.percent_downloaded_milli = Some(100_000);
+        native.percent_uploaded_milli = Some(100_000);
+        native.downloading_status = Some(NativeUbiquitousDownloadingStatus::Downloaded);
         let hints = CloudHints {
-            native: native_values(
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(NativeUbiquitousDownloadingStatus::Downloaded),
-            ),
+            native,
             xattrs: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
@@ -931,21 +1142,17 @@ mod tests {
         path
     }
 
-    fn native_values(
-        is_ubiquitous: Option<bool>,
-        has_unresolved_conflicts: Option<bool>,
-        is_downloading: Option<bool>,
-        is_uploading: Option<bool>,
-        is_uploaded: Option<bool>,
-        downloading_status: Option<NativeUbiquitousDownloadingStatus>,
-    ) -> NativeFileProviderResourceValues {
+    fn native_values() -> NativeFileProviderResourceValues {
         NativeFileProviderResourceValues {
-            is_ubiquitous,
-            has_unresolved_conflicts,
-            is_downloading,
-            is_uploading,
-            is_uploaded,
-            downloading_status,
+            is_ubiquitous: None,
+            has_unresolved_conflicts: None,
+            is_downloading: None,
+            is_uploading: None,
+            is_uploaded: None,
+            download_requested: None,
+            percent_downloaded_milli: None,
+            percent_uploaded_milli: None,
+            downloading_status: None,
             status: NativeFileProviderStatus::Available,
             reason: None,
         }

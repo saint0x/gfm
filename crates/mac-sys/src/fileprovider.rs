@@ -4,6 +4,9 @@ use core_foundation::string::{CFString, CFStringRef};
 use core_foundation::url::CFURL;
 use core_foundation_sys::base::{Boolean, CFGetTypeID, CFTypeRef};
 use core_foundation_sys::error::CFErrorRef;
+use core_foundation_sys::number::{
+    kCFNumberDoubleType, CFNumberGetTypeID, CFNumberGetValue, CFNumberRef,
+};
 use core_foundation_sys::url::CFURLRef;
 use libc::c_void;
 use objc::runtime::{Class, Object, Sel};
@@ -17,6 +20,9 @@ extern "C" {
     static NSURLUbiquitousItemIsDownloadingKey: CFStringRef;
     static NSURLUbiquitousItemIsUploadingKey: CFStringRef;
     static NSURLUbiquitousItemIsUploadedKey: CFStringRef;
+    static NSURLUbiquitousItemDownloadRequestedKey: CFStringRef;
+    static NSURLUbiquitousItemPercentDownloadedKey: CFStringRef;
+    static NSURLUbiquitousItemPercentUploadedKey: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusKey: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusNotDownloaded: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusDownloaded: CFStringRef;
@@ -47,6 +53,9 @@ pub struct NativeFileProviderResourceValues {
     pub is_downloading: Option<bool>,
     pub is_uploading: Option<bool>,
     pub is_uploaded: Option<bool>,
+    pub download_requested: Option<bool>,
+    pub percent_downloaded_milli: Option<u32>,
+    pub percent_uploaded_milli: Option<u32>,
     pub downloading_status: Option<NativeUbiquitousDownloadingStatus>,
     pub status: NativeFileProviderStatus,
     pub reason: Option<String>,
@@ -118,6 +127,15 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
     let is_uploaded = copy_bool(url.as_concrete_TypeRef(), unsafe {
         NSURLUbiquitousItemIsUploadedKey
     });
+    let download_requested = copy_bool(url.as_concrete_TypeRef(), unsafe {
+        NSURLUbiquitousItemDownloadRequestedKey
+    });
+    let percent_downloaded_milli = copy_percent_milli(url.as_concrete_TypeRef(), unsafe {
+        NSURLUbiquitousItemPercentDownloadedKey
+    });
+    let percent_uploaded_milli = copy_percent_milli(url.as_concrete_TypeRef(), unsafe {
+        NSURLUbiquitousItemPercentUploadedKey
+    });
     let downloading_status = copy_downloading_status(url.as_concrete_TypeRef());
 
     NativeFileProviderResourceValues {
@@ -126,6 +144,9 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
         is_downloading,
         is_uploading,
         is_uploaded,
+        download_requested,
+        percent_downloaded_milli,
+        percent_uploaded_milli,
         downloading_status,
         status: NativeFileProviderStatus::Available,
         reason: None,
@@ -164,6 +185,26 @@ fn copy_downloading_status(url: CFURLRef) -> Option<NativeUbiquitousDownloadingS
     } else {
         Some(NativeUbiquitousDownloadingStatus::Other)
     }
+}
+
+fn copy_percent_milli(url: CFURLRef, key: CFStringRef) -> Option<u32> {
+    let value = copy_resource_value(url, key)?;
+    if unsafe { CFGetTypeID(value.as_CFTypeRef()) } != unsafe { CFNumberGetTypeID() } {
+        return None;
+    }
+    let mut percent = 0.0f64;
+    let copied = unsafe {
+        CFNumberGetValue(
+            value.as_CFTypeRef() as CFNumberRef,
+            kCFNumberDoubleType,
+            &mut percent as *mut f64 as *mut c_void,
+        )
+    };
+    if !copied || !percent.is_finite() {
+        return None;
+    }
+    let bounded = percent.clamp(0.0, 100.0);
+    Some((bounded * 1_000.0).round() as u32)
 }
 
 fn copy_resource_value(url: CFURLRef, key: CFStringRef) -> Option<CFType> {
@@ -293,6 +334,9 @@ fn missing_values(reason: String) -> NativeFileProviderResourceValues {
         is_downloading: None,
         is_uploading: None,
         is_uploaded: None,
+        download_requested: None,
+        percent_downloaded_milli: None,
+        percent_uploaded_milli: None,
         downloading_status: None,
         status: NativeFileProviderStatus::Missing,
         reason: Some(reason),
@@ -306,6 +350,9 @@ fn unsupported(reason: String) -> NativeFileProviderResourceValues {
         is_downloading: None,
         is_uploading: None,
         is_uploaded: None,
+        download_requested: None,
+        percent_downloaded_milli: None,
+        percent_uploaded_milli: None,
         downloading_status: None,
         status: NativeFileProviderStatus::UnsupportedPath,
         reason: Some(reason),
@@ -333,6 +380,12 @@ mod tests {
 
         assert_eq!(values.status, NativeFileProviderStatus::Available);
         assert_ne!(values.is_ubiquitous, Some(true));
+        assert!(values
+            .percent_downloaded_milli
+            .is_none_or(|value| value <= 100_000));
+        assert!(values
+            .percent_uploaded_milli
+            .is_none_or(|value| value <= 100_000));
         fs::remove_file(path).unwrap();
     }
 
