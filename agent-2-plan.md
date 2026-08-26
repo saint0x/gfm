@@ -368,9 +368,8 @@ Run `cargo clean` after a pushed pass if disk is tight. This workspace has been 
 These are good first slices because they are valuable, testable, and unlikely to collide with Agent 1:
 
 1. Harden one macOS bridge in `crates/mac` behind a typed safe API.
-2. Add Finder custom icon or badge descriptor tests feeding `crates/preview`.
-3. Split an oversized file only when the split follows a real ownership boundary and all tests stay green.
-4. Wire one GPUI progress/operation surface to real job progress state.
+2. Split an oversized file only when the split follows a real ownership boundary and all tests stay green.
+3. Wire one GPUI progress/operation surface to real job progress state.
 
 ## What Not To Do
 

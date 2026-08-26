@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 gfm-jobs = { path = "../jobs" }
+gfm-mac = { path = "../mac" }
 gfm-types = { path = "../types" }
 
 [lints]

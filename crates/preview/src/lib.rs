@@ -5,10 +5,12 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+mod icon;
 mod quicklook;
 mod schedule;
 mod thumbnail;
 
+pub use icon::{IconCacheDisposition, IconPreviewContract, IconPreviewInput};
 pub use quicklook::{QuickLookControllerMode, QuickLookSessionContract, QuickLookSessionInput};
 pub use schedule::{
     PreviewPriority, PreviewScheduler, PreviewSchedulingPolicy, PreviewTask, PreviewTaskDecision,
