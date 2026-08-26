@@ -481,6 +481,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - default sidecar-backed search imports only budgeted query-matching metadata, prefix, substring, fuzzy-term, and content postings before ranking; explicit operator budget commands can lower or raise those caps for diagnostics;
   - direct prefix terms and fuzzy-expanded prefix terms are deduplicated into one bounded prefix-posting import set before mmap prefix lookup, preventing repeated cache probes and duplicate prefix postings for the same query candidate;
   - uncached query prefix imports resolve through one sorted pass over the mmap prefix directory, decoding only bounded ID heads, preserving per-prefix cache telemetry, and avoiding one binary archive lookup per prefix candidate;
+  - query substring gram imports resolve through one sorted pass over the mmap substring directory, decoding only bounded ID heads and avoiding one binary archive lookup per selected gram;
   - query-time sidecar import enforces the same query-level substring gram caps and fuzzy key/term/candidate caps before any mmap expansion or candidate hydration starts;
   - the archive lookup caches repeated prefix, substring gram, and fuzzy key probes inside the mmap-backed lookup object and reports request, hit, and miss counters with each budgeted query;
   - prefix ids, archive prefix length, substring grams, substring ids per gram, fuzzy delete keys, fuzzy terms per key, and verified fuzzy candidates are capped by an explicit search lookup budget;

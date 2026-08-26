@@ -23,6 +23,12 @@ pub struct SubstringPosting {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LimitedSubstringPosting {
+    pub posting: SubstringPosting,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SubstringDirectoryEntry {
     gram: String,
     offset: u64,
@@ -152,28 +158,60 @@ impl MmapSubstringArchive {
         else {
             return Ok((Vec::new(), false));
         };
-        let bytes = self.posting_bytes(entry)?;
-        let mut cursor = Cursor::new(bytes);
-        let posting_gram = read_substring_posting_header(&mut cursor, &self.path)?;
-        if posting_gram != gram {
-            return Err(substring_format_error(
-                &self.path,
-                "substring directory points at the wrong posting",
-            ));
+        let posting = self.limited_posting_for_entry(entry, limit)?;
+        Ok((posting.posting.ids, posting.truncated))
+    }
+
+    pub fn postings_for_sorted_grams_limit<I, S>(
+        &self,
+        grams: I,
+        limit_per_gram: usize,
+    ) -> Result<Vec<LimitedSubstringPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        if limit_per_gram == 0 {
+            return Ok(Vec::new());
         }
-        let ids_start = usize::try_from(cursor.position())
-            .map_err(|_| substring_format_error(&self.path, "substring id offset overflow"))?;
-        let ids_bytes = bytes
-            .get(ids_start..)
-            .ok_or_else(|| substring_format_error(&self.path, "substring ids out of bounds"))?;
-        let mut ids = read_blocked_file_ids_limited_from_slice(
-            ids_bytes,
-            limit.saturating_add(1),
-            &self.path,
-        )?;
-        let truncated = ids.len() > limit;
-        ids.truncate(limit);
-        Ok((ids, truncated))
+
+        let mut postings = Vec::new();
+        let mut directory_index = 0usize;
+        let mut previous: Option<String> = None;
+
+        for gram in grams {
+            let gram = normalize(gram.as_ref());
+            if !is_substring_gram(&gram) {
+                continue;
+            }
+            if let Some(previous_gram) = previous.as_ref() {
+                if gram < *previous_gram {
+                    return Err(substring_format_error(
+                        &self.path,
+                        "batch substring lookup grams must be sorted",
+                    ));
+                }
+                if gram == *previous_gram {
+                    continue;
+                }
+            }
+
+            while let Some(entry) = self.directory.get(directory_index) {
+                if entry.gram.as_str() >= gram.as_str() {
+                    break;
+                }
+                directory_index += 1;
+            }
+
+            if let Some(entry) = self.directory.get(directory_index) {
+                if entry.gram.as_str() == gram.as_str() {
+                    postings.push(self.limited_posting_for_entry(entry, limit_per_gram)?);
+                }
+            }
+            previous = Some(gram);
+        }
+
+        Ok(postings)
     }
 
     pub fn postings(&self) -> Result<Vec<SubstringPosting>> {
@@ -222,14 +260,13 @@ impl MmapSubstringArchive {
             }
         }
 
-        let mut postings = Vec::new();
-        for gram in selected {
-            let (ids, _) = self.ids_for_limit(&gram, limit_per_gram)?;
-            if !ids.is_empty() {
-                postings.push(SubstringPosting { gram, ids });
-            }
-        }
-        Ok(postings)
+        self.postings_for_sorted_grams_limit(selected, limit_per_gram)
+            .map(|postings| {
+                postings
+                    .into_iter()
+                    .map(|posting| posting.posting)
+                    .collect()
+            })
     }
 
     pub fn posting_for(&self, gram: &str) -> Result<Option<SubstringPosting>> {
@@ -310,6 +347,41 @@ impl MmapSubstringArchive {
         self.mmap
             .get(start..end)
             .ok_or_else(|| substring_format_error(&self.path, "posting range out of bounds"))
+    }
+
+    fn limited_posting_for_entry(
+        &self,
+        entry: &SubstringDirectoryEntry,
+        limit: usize,
+    ) -> Result<LimitedSubstringPosting> {
+        let bytes = self.posting_bytes(entry)?;
+        let mut cursor = Cursor::new(bytes);
+        let posting_gram = read_substring_posting_header(&mut cursor, &self.path)?;
+        if posting_gram != entry.gram {
+            return Err(substring_format_error(
+                &self.path,
+                "substring directory points at the wrong posting",
+            ));
+        }
+        let ids_start = usize::try_from(cursor.position())
+            .map_err(|_| substring_format_error(&self.path, "substring id offset overflow"))?;
+        let ids_bytes = bytes
+            .get(ids_start..)
+            .ok_or_else(|| substring_format_error(&self.path, "substring ids out of bounds"))?;
+        let mut ids = read_blocked_file_ids_limited_from_slice(
+            ids_bytes,
+            limit.saturating_add(1),
+            &self.path,
+        )?;
+        let truncated = ids.len() > limit;
+        ids.truncate(limit);
+        Ok(LimitedSubstringPosting {
+            posting: SubstringPosting {
+                gram: posting_gram,
+                ids,
+            },
+            truncated,
+        })
     }
 }
 
@@ -628,6 +700,43 @@ mod tests {
         assert_eq!(limited[0].ids.len(), 3);
         assert_eq!(limited[0].ids[0], FileId::new(VolumeId(1), 1));
         assert_eq!(limited[1], postings[1]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_substring_archive_reads_bounded_sorted_postings_in_one_pass() {
+        let path = temp_path("gfm-substring-batch-postings", "gfmsubstr");
+        let postings = vec![
+            SubstringPosting {
+                gram: "alp".to_string(),
+                ids: (0..4)
+                    .map(|node| FileId::new(VolumeId(1), 100 + node))
+                    .collect(),
+            },
+            SubstringPosting {
+                gram: "pro".to_string(),
+                ids: (0..6)
+                    .map(|node| FileId::new(VolumeId(1), 200 + node))
+                    .collect(),
+            },
+        ];
+
+        write_substring_postings(&path, &postings).unwrap();
+        let archive = MmapSubstringArchive::open(&path).unwrap();
+        let batch = archive
+            .postings_for_sorted_grams_limit(["alp", "alp", "bad", "missing", "pro"], 3)
+            .unwrap();
+
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].posting.gram, "alp");
+        assert_eq!(batch[0].posting.ids, postings[0].ids[..3]);
+        assert!(batch[0].truncated);
+        assert_eq!(batch[1].posting.gram, "pro");
+        assert_eq!(batch[1].posting.ids, postings[1].ids[..3]);
+        assert!(batch[1].truncated);
+        assert!(archive
+            .postings_for_sorted_grams_limit(["pro", "alp"], 3)
+            .is_err());
         std::fs::remove_file(path).unwrap();
     }
 

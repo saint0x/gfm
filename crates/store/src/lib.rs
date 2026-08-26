@@ -78,7 +78,7 @@ pub use sidecar::{
 };
 pub use substring::{
     read_substring_postings, substring_postings_from_records, write_substring_postings,
-    MmapSubstringArchive, SubstringPosting,
+    LimitedSubstringPosting, MmapSubstringArchive, SubstringPosting,
 };
 
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
