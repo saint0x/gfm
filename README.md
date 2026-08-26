@@ -180,6 +180,8 @@ When `GFM_JOB_PAYLOAD_CATALOG` and `GFM_JOB_PROGRESS_STORE` are configured, shar
 
 The retriable background content indexing worker also publishes payload and progress records as it plans, enters retry attempts, and records terminal completion or failure, with catalog payload paths pointing at the persisted content job spec so machine-wide indexing work can be restored and diagnosed through the same runtime metadata layer.
 
+Adaptive jobs that are deferred under saturated IO or critical thermal pressure still publish durable payload rows and paused progress snapshots with an explicit `deferred:Defer` detail before returning, so the GPUI progress surface and restart planner can distinguish intentional backpressure from lost work.
+
 Adaptive scheduled producers for sidecar repair, persistent-index repair, diagnostics rebuilds, and content maintenance run through the same isolated retriable worker. Transient and offline-volume failures receive bounded backoff and durable attempt journal entries; permission, missing-file, corrupt-file, and permanent failures are terminal. The `jobs-runtime-retry-probe` diagnostic exercises that path deterministically.
 
 Cancellation is structured rather than flat. A parent job token fans out cancellation to children and grandchildren so nested previews, extraction, indexing, and operation subtasks stop quickly, while cancelling one child branch does not poison sibling work or the parent scope.

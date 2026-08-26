@@ -648,7 +648,24 @@ pub(crate) fn run_content_job(
     spec_path: &Path,
 ) -> Result<ContentJobOutcome> {
     let scheduling = pressure.decide(Priority::Background, 1, 1);
+    let label = "background content index";
     if scheduling.action == SchedulingAction::Defer {
+        let mut scheduler = Scheduler::new();
+        let volume = spec.volume.or_else(|| detect_volume_id(&spec.root).ok());
+        let job = if let Some(volume) = volume {
+            scheduler.schedule_on_volume(Priority::Background, label, volume)
+        } else {
+            scheduler.schedule(Priority::Background, label)
+        };
+        let runtime = RuntimeJobHandle::begin_with_payload_path(
+            &job,
+            JobPayloadKind::Indexing,
+            label,
+            spec_path,
+            1,
+            format!("index:{}", spec.root.display()),
+        )?;
+        runtime.deferred(scheduling.action)?;
         return Ok(ContentJobOutcome {
             report: None,
             inaccessible: 0,
@@ -681,7 +698,6 @@ pub(crate) fn run_content_job(
     let content_report = Arc::new(Mutex::new(None));
     let content_report_task = Arc::clone(&content_report);
     let mut scheduler = Scheduler::new();
-    let label = "background content index";
     let job = scheduler.schedule_on_volume(Priority::Background, label, volume);
     let runtime = RuntimeJobHandle::begin_with_payload_path(
         &job,

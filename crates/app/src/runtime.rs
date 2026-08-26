@@ -112,7 +112,21 @@ where
     T: Send + 'static,
 {
     let scheduling = pressure.decide(priority, 1, 1);
+    let mut scheduler = Scheduler::new();
+    let job = if let Some(volume) = volume {
+        scheduler.schedule_on_volume(priority, label, volume)
+    } else {
+        scheduler.schedule(priority, label)
+    };
+    let runtime = RuntimeJobHandle::begin(
+        &job,
+        payload_kind_for_label(label),
+        label,
+        1,
+        format!("{}:{label}:adaptive", priority.as_str()),
+    )?;
     if scheduling.action == SchedulingAction::Defer {
+        runtime.deferred(scheduling.action)?;
         return Ok(ScheduledTaskOutcome {
             result: None,
             scheduling_action: scheduling.action,
@@ -122,20 +136,7 @@ where
 
     let result_slot = Arc::new(Mutex::new(None));
     let result_slot_task = Arc::clone(&result_slot);
-    let mut scheduler = Scheduler::new();
-    let job = if let Some(volume) = volume {
-        scheduler.schedule_on_volume(priority, label, volume)
-    } else {
-        scheduler.schedule(priority, label)
-    };
     let job = drain_single_runtime_job(&mut scheduler, job, label)?;
-    let runtime = RuntimeJobHandle::begin(
-        &job,
-        payload_kind_for_label(label),
-        label,
-        1,
-        format!("{}:{label}:adaptive", priority.as_str()),
-    )?;
     let runtime_task = runtime.clone();
     let task = RetriableTask::new(job.clone(), move |cancellation| {
         runtime_task.running()?;
@@ -261,6 +262,18 @@ impl RuntimeJobHandle {
                 JobProgressState::Running,
                 0,
                 self.snapshot.detail.clone(),
+                job_timestamp_ms(),
+            ))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn deferred(&self, action: SchedulingAction) -> Result<()> {
+        if let Some(store) = &self.progress_store {
+            store.upsert(self.snapshot.clone().with_progress(
+                JobProgressState::Paused,
+                0,
+                format!("deferred:{}", action.as_str()),
                 job_timestamp_ms(),
             ))?;
         }

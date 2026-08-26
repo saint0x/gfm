@@ -4588,11 +4588,15 @@ fn defers_background_content_indexer_under_saturated_io_from_binary() {
     let content = unique_temp_path("gfm-cli-background-defer-content", "gfmcontent");
     let journal = unique_temp_path("gfm-cli-background-defer-jobs", "journal");
     let spec = unique_temp_path("gfm-cli-background-defer-content", "job");
+    let catalog = unique_temp_path("gfm-cli-background-defer-content", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-background-defer-content", "gfmprogress");
     fs::write(root.join("worker.md"), "deferred workermarker").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_JOB_JOURNAL", &journal)
         .env("GFM_CONTENT_JOB", &spec)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "index-content-background",
             root.to_str().unwrap(),
@@ -4621,12 +4625,29 @@ fn defers_background_content_indexer_under_saturated_io_from_binary() {
     assert!(fs::read_to_string(&spec)
         .unwrap()
         .contains("gfm-content-job-v1"));
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(catalog_text.contains("\tindexing\t"), "{catalog_text}");
+    assert!(
+        catalog_text.contains(spec.to_str().unwrap()),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tbackground\tbackground\tbackground content index"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
+        "{progress_text}"
+    );
     assert!(!journal.exists());
     assert!(fs::read_dir(&segments).unwrap().next().is_none());
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(segments).unwrap();
     fs::remove_file(spec).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
 }
 
 #[test]
@@ -5205,6 +5226,63 @@ fn volume_producers_persist_runtime_payload_and_progress_from_binary() {
     );
     assert!(
         progress_text.contains("\tcompleted\t1\t1\tcompleted\t"),
+        "{progress_text}"
+    );
+
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn deferred_adaptive_thumbnail_persists_runtime_payload_and_progress_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-deferred-thumbnail-root");
+    let image = root.join("Deferred.png");
+    fs::write(&image, b"\x89PNG\r\n\x1a\ndeferred thumbnail").unwrap();
+    let catalog = unique_temp_path("gfm-cli-runtime-deferred-thumbnail", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-runtime-deferred-thumbnail", "gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "thumbnail-generation-adaptive",
+            image.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("thumbnail-generation\tstatus=deferred\taction=Defer\tdeferred=true"),
+        "{stdout}"
+    );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(catalog_text.contains("\tthumbnail\t"), "{catalog_text}");
+    assert!(
+        catalog_text.contains("thumbnail generation"),
+        "{catalog_text}"
+    );
+    assert!(
+        catalog_text.contains("runtime/thumbnail/thumbnail-generation.gfmjob"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tbackground\tbackground\tthumbnail generation"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
         "{progress_text}"
     );
 
