@@ -1796,6 +1796,25 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "fileprovider-state-with-identity",
+        "tmp/gfm-fozzy-downloaded.icloud.md"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-state-with-identity",
+        "tmp/gfm-fozzy-downloaded.icloud.md"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "fileprovider-domain",
         "tmp/gfm-fozzy-downloaded.icloud.md"
       ],

@@ -59,6 +59,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = required_path(args.next(), "fileprovider-state requires a path")?;
             println!("{}", FileProviderStateReport::read_path(path)?.as_tsv());
         }
+        "fileprovider-state-with-identity" => {
+            let path = required_path(
+                args.next(),
+                "fileprovider-state-with-identity requires a path",
+            )?;
+            println!(
+                "{}",
+                FileProviderStateReport::from_path_with_native_identity(path).as_tsv()
+            );
+        }
         "fileprovider-domain" => {
             let path = required_path(args.next(), "fileprovider-domain requires a path")?;
             println!("{}", FileProviderDomainReport::read_path(path)?.as_tsv());

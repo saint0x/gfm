@@ -373,6 +373,22 @@ fn reports_fileprovider_state_from_binary() {
     assert!(downloaded_stdout.contains("\tdomain=icloud-drive\tstate=downloaded\t"));
     assert!(downloaded_stdout.contains("\tbadges=available-offline\t"));
     assert!(downloaded_stdout.contains("\tdownload=disabled\tevict=enabled\t"));
+    assert!(!downloaded_stdout.contains("nsfileprovidermanager"));
+
+    let identity_state_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-state-with-identity")
+        .arg(&downloaded)
+        .output()
+        .unwrap();
+    assert!(
+        identity_state_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&identity_state_output.stderr)
+    );
+    let identity_state_stdout = String::from_utf8(identity_state_output.stdout).unwrap();
+    assert!(identity_state_stdout.starts_with("fileprovider-state\t"));
+    assert!(identity_state_stdout.contains("\tdomain=icloud-drive\tstate=downloaded\t"));
+    assert!(identity_state_stdout.contains("\tsource="));
 
     let domain_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-domain")
