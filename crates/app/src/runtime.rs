@@ -256,6 +256,12 @@ pub(crate) fn default_extraction_quarantine_path() -> PathBuf {
         .unwrap_or_else(|| env::temp_dir().join("gfm-extraction.gfmquarantine"))
 }
 
+pub(crate) fn default_security_bookmarks_path() -> PathBuf {
+    env::var_os("GFM_SECURITY_BOOKMARKS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env::temp_dir().join("gfm-security-bookmarks.tsv"))
+}
+
 fn runtime_payload_catalog() -> Option<JobPayloadCatalog> {
     env::var_os("GFM_JOB_PAYLOAD_CATALOG").map(JobPayloadCatalog::new)
 }

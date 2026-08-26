@@ -4,8 +4,9 @@ mod spotlight;
 mod volume;
 
 pub use bookmark::{
-    create_security_scoped_bookmark, resolve_security_scoped_bookmark, NativeBookmarkData,
-    NativeBookmarkResolution, NativeBookmarkStatus,
+    create_security_scoped_bookmark, resolve_security_scoped_bookmark,
+    start_security_scoped_bookmark_access, NativeBookmarkData, NativeBookmarkResolution,
+    NativeBookmarkStatus, NativeSecurityScopedAccess,
 };
 pub use finder::{copy_kind_string_for_path, NativeFinderKind, NativeFinderKindStatus};
 pub use spotlight::{

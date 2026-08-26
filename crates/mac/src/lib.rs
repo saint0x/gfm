@@ -28,7 +28,8 @@ pub use permissions::{
 };
 pub use security::{
     AccessIntent, AccessProbeState, ProtectedScope, SecurityAccessMode, SecurityDecisionAction,
-    SecurityScopedAccessReport, SecurityScopedBookmark, SecurityScopedBookmarkRecord,
+    SecurityScopedAccessReport, SecurityScopedBookmark, SecurityScopedBookmarkAccess,
+    SecurityScopedBookmarkAccessLookup, SecurityScopedBookmarkLookup, SecurityScopedBookmarkRecord,
     SecurityScopedBookmarkReport, SecurityScopedBookmarkResolution, SecurityScopedBookmarkStatus,
     SecurityScopedBookmarkStore, SecurityScopedBookmarkStoreReport,
 };

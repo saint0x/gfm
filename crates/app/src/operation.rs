@@ -1,9 +1,12 @@
-use crate::runtime::{default_journal_path, default_trash_metadata_path, run_volume_task};
+use crate::runtime::{
+    default_journal_path, default_security_bookmarks_path, default_trash_metadata_path,
+    run_volume_task,
+};
 use crate::{detect_volume_id, parent_volume, required_path};
 use gfm_jobs::Priority;
 use gfm_mac::{
-    AccessIntent, SecurityDecisionAction, SecurityScopedAccessReport, VolumeDiscoveryReport,
-    VolumeKind,
+    AccessIntent, SecurityDecisionAction, SecurityScopedAccessReport, SecurityScopedBookmarkAccess,
+    SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore, VolumeDiscoveryReport, VolumeKind,
 };
 use gfm_ops::{
     read_trash_metadata, ConflictPolicy, Operation, OperationAccessDecision, OperationAccessGate,
@@ -171,6 +174,7 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     let label = operation_kind(&operation);
     let volume = operation_volume(&operation);
     let entry = run_volume_task(volume, Priority::Interactive, label, move || {
+        let _security_scope = operation_security_accesses(&operation)?;
         let operator = Operator::new(
             OperationContext::new(journal)
                 .with_conflict(conflict)
@@ -186,6 +190,7 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
 
 fn operation_access_gate(operation: &Operation) -> OperationAccessGate {
     let mut gate = OperationAccessGate::new();
+    let bookmark_store = SecurityScopedBookmarkStore::new(default_security_bookmarks_path());
     for requirement in operation.access_requirements() {
         let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
         let report = SecurityScopedAccessReport::evaluate(&probe_path, AccessIntent::Operate);
@@ -203,16 +208,73 @@ fn operation_access_gate(operation: &Operation) -> OperationAccessGate {
             requirement.role.as_str(),
             probe_path.display()
         );
-        let decision = match report.action {
+        let decision = if report.bookmark_required {
+            stored_bookmark_decision(&bookmark_store, &probe_path, &reason)
+        } else {
+            None
+        }
+        .unwrap_or_else(|| match report.action {
             SecurityDecisionAction::Allow => OperationAccessDecision::allow(reason),
             SecurityDecisionAction::Prompt => OperationAccessDecision::prompt(reason),
             SecurityDecisionAction::Degrade | SecurityDecisionAction::Deny => {
                 OperationAccessDecision::deny(reason)
             }
-        };
+        });
         gate = gate.with_decision(requirement.path, decision);
     }
     gate
+}
+
+fn operation_security_accesses(operation: &Operation) -> Result<Vec<SecurityScopedBookmarkAccess>> {
+    let store = SecurityScopedBookmarkStore::new(default_security_bookmarks_path());
+    let mut accesses = Vec::new();
+    for requirement in operation.access_requirements() {
+        let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        let report = SecurityScopedAccessReport::evaluate(&probe_path, AccessIntent::Operate);
+        if !report.bookmark_required {
+            continue;
+        }
+        if matches!(report.action, SecurityDecisionAction::Deny)
+            && matches!(report.probe, gfm_mac::AccessProbeState::Missing)
+            && !matches!(requirement.role, OperationAccessRole::DestinationParent)
+        {
+            continue;
+        }
+        let lookup = store.start_access_for_path(&probe_path, false, true)?;
+        let Some(access) = lookup.access else {
+            return Err(GfmError::Permission {
+                path: probe_path,
+                message: format!(
+                    "{} requires stored security-scoped access before mutation",
+                    requirement.role.as_str()
+                ),
+            });
+        };
+        accesses.push(access);
+    }
+    Ok(accesses)
+}
+
+fn stored_bookmark_decision(
+    store: &SecurityScopedBookmarkStore,
+    path: &Path,
+    reason: &str,
+) -> Option<OperationAccessDecision> {
+    let lookup = store.resolve_for_path(path, false, true, true).ok()?;
+    let resolution = lookup.resolution?;
+    (resolution.report.status == SecurityScopedBookmarkStatus::Resolved).then(|| {
+        OperationAccessDecision::allow(format!(
+            "{reason}; bookmark=resolved; stale={}; repaired={}; resolved={}",
+            resolution.report.stale,
+            resolution.repaired,
+            resolution
+                .report
+                .resolved_path
+                .as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "-".to_string())
+        ))
+    })
 }
 
 fn operation_access_probe_path(path: &Path, role: OperationAccessRole) -> PathBuf {
@@ -388,6 +450,26 @@ mod tests {
             policy.copy_buffer_bytes_for_paths(&source, &destination),
             256 * 1024
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stored_bookmark_allows_protected_operation_preflight() {
+        let root = unique_temp_dir("gfm-app-op-bookmark");
+        let store_path = root.join("bookmarks.tsv");
+        let store = SecurityScopedBookmarkStore::new(&store_path);
+        let protected = root.join("Documents").join("Plan.md");
+        fs::create_dir_all(protected.parent().unwrap()).unwrap();
+        fs::write(&protected, "plan").unwrap();
+        let bookmark = gfm_mac::SecurityScopedBookmark::create(&protected, false).unwrap();
+        store.upsert(bookmark).unwrap();
+
+        let decision = stored_bookmark_decision(&store, &protected, "needs scoped access")
+            .expect("stored bookmark should resolve");
+
+        assert_eq!(decision.action, gfm_ops::OperationAccessAction::Allow);
+        assert!(decision.reason.contains("bookmark=resolved"));
 
         fs::remove_dir_all(root).unwrap();
     }

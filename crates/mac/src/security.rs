@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 mod bookmark;
 
 pub use bookmark::{
-    SecurityScopedBookmark, SecurityScopedBookmarkRecord, SecurityScopedBookmarkReport,
+    SecurityScopedBookmark, SecurityScopedBookmarkAccess, SecurityScopedBookmarkAccessLookup,
+    SecurityScopedBookmarkLookup, SecurityScopedBookmarkRecord, SecurityScopedBookmarkReport,
     SecurityScopedBookmarkResolution, SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore,
     SecurityScopedBookmarkStoreReport,
 };

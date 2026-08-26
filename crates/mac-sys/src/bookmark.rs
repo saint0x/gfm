@@ -53,6 +53,18 @@ pub struct NativeBookmarkResolution {
     pub reason: Option<String>,
 }
 
+pub struct NativeSecurityScopedAccess {
+    url: CFURL,
+    pub path: Option<PathBuf>,
+    pub stale: bool,
+}
+
+impl Drop for NativeSecurityScopedAccess {
+    fn drop(&mut self) {
+        unsafe { CFURLStopAccessingSecurityScopedResource(self.url.as_concrete_TypeRef()) };
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeBookmarkStatus {
     Available,
@@ -98,12 +110,73 @@ pub fn create_security_scoped_bookmark(path: &Path, read_only: bool) -> NativeBo
     }
 }
 
+pub fn start_security_scoped_bookmark_access(
+    data: &[u8],
+) -> std::result::Result<NativeSecurityScopedAccess, NativeBookmarkResolution> {
+    let resolution = resolve_security_scoped_bookmark_url(data)?;
+    let access_started =
+        unsafe { CFURLStartAccessingSecurityScopedResource(resolution.url.as_concrete_TypeRef()) };
+    if access_started == 0 {
+        return Err(NativeBookmarkResolution {
+            status: NativeBookmarkStatus::Unavailable,
+            path: resolution.path,
+            stale: resolution.stale,
+            access_started: false,
+            reason: Some("CoreFoundation did not start security-scoped access".to_string()),
+        });
+    }
+    Ok(NativeSecurityScopedAccess {
+        url: resolution.url,
+        path: resolution.path,
+        stale: resolution.stale,
+    })
+}
+
 pub fn resolve_security_scoped_bookmark(
     data: &[u8],
     start_access: bool,
 ) -> NativeBookmarkResolution {
+    let resolution = match resolve_security_scoped_bookmark_url(data) {
+        Ok(resolution) => resolution,
+        Err(resolution) => return resolution,
+    };
+    let access_started = start_access
+        && unsafe {
+            CFURLStartAccessingSecurityScopedResource(resolution.url.as_concrete_TypeRef()) != 0
+        };
+    if start_access && !access_started {
+        return NativeBookmarkResolution {
+            status: NativeBookmarkStatus::Unavailable,
+            path: resolution.path,
+            stale: resolution.stale,
+            access_started: false,
+            reason: Some("CoreFoundation did not start security-scoped access".to_string()),
+        };
+    }
+    if access_started {
+        unsafe { CFURLStopAccessingSecurityScopedResource(resolution.url.as_concrete_TypeRef()) };
+    }
+
+    NativeBookmarkResolution {
+        status: NativeBookmarkStatus::Available,
+        path: resolution.path,
+        stale: resolution.stale,
+        access_started,
+        reason: None,
+    }
+}
+
+struct ResolvedBookmarkUrl {
+    url: CFURL,
+    path: Option<PathBuf>,
+    stale: bool,
+}
+
+fn resolve_security_scoped_bookmark_url(
+    data: &[u8],
+) -> std::result::Result<ResolvedBookmarkUrl, NativeBookmarkResolution> {
     if data.is_empty() {
-        return unavailable_resolution("bookmark data is empty");
+        return Err(unavailable_resolution("bookmark data is empty"));
     }
     let data = CFData::from_buffer(data);
     let mut stale = 0;
@@ -123,35 +196,18 @@ pub fn resolve_security_scoped_bookmark(
         )
     };
     if url.is_null() {
-        return unavailable_resolution(
+        return Err(unavailable_resolution(
             "CoreFoundation did not resolve security-scoped bookmark data",
-        );
+        ));
     }
 
     let url = unsafe { CFURL::wrap_under_create_rule(url) };
     let path = url.to_path();
-    let access_started = start_access
-        && unsafe { CFURLStartAccessingSecurityScopedResource(url.as_concrete_TypeRef()) != 0 };
-    if start_access && !access_started {
-        return NativeBookmarkResolution {
-            status: NativeBookmarkStatus::Unavailable,
-            path,
-            stale: stale != 0,
-            access_started: false,
-            reason: Some("CoreFoundation did not start security-scoped access".to_string()),
-        };
-    }
-    if access_started {
-        unsafe { CFURLStopAccessingSecurityScopedResource(url.as_concrete_TypeRef()) };
-    }
-
-    NativeBookmarkResolution {
-        status: NativeBookmarkStatus::Available,
+    Ok(ResolvedBookmarkUrl {
+        url,
         path,
         stale: stale != 0,
-        access_started,
-        reason: None,
-    }
+    })
 }
 
 fn missing_data(reason: impl Into<String>) -> NativeBookmarkData {

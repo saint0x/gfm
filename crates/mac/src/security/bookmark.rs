@@ -47,6 +47,22 @@ pub struct SecurityScopedBookmarkStoreReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecurityScopedBookmarkLookup {
+    pub requested_path: PathBuf,
+    pub resolution: Option<SecurityScopedBookmarkResolution>,
+}
+
+pub struct SecurityScopedBookmarkAccess {
+    pub report: SecurityScopedBookmarkReport,
+    _native: gfm_mac_sys::NativeSecurityScopedAccess,
+}
+
+pub struct SecurityScopedBookmarkAccessLookup {
+    pub requested_path: PathBuf,
+    pub access: Option<SecurityScopedBookmarkAccess>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecurityScopedBookmarkResolution {
     pub record: SecurityScopedBookmarkRecord,
     pub report: SecurityScopedBookmarkReport,
@@ -158,6 +174,46 @@ impl SecurityScopedBookmark {
                     }),
                 )
             }
+        }
+    }
+
+    pub fn start_access(
+        &self,
+    ) -> std::result::Result<SecurityScopedBookmarkAccess, SecurityScopedBookmarkReport> {
+        match gfm_mac_sys::start_security_scoped_bookmark_access(&self.data) {
+            Ok(native) => Ok(SecurityScopedBookmarkAccess {
+                report: SecurityScopedBookmarkReport {
+                    path: self.path.clone(),
+                    status: SecurityScopedBookmarkStatus::Resolved,
+                    read_only: self.read_only,
+                    byte_len: self.data.len(),
+                    resolved_path: native.path.clone(),
+                    stale: native.stale,
+                    access_started: true,
+                    reason: None,
+                },
+                _native: native,
+            }),
+            Err(native) => Err(SecurityScopedBookmarkReport {
+                path: self.path.clone(),
+                status: match native.status {
+                    gfm_mac_sys::NativeBookmarkStatus::Available => {
+                        SecurityScopedBookmarkStatus::Resolved
+                    }
+                    gfm_mac_sys::NativeBookmarkStatus::Missing => {
+                        SecurityScopedBookmarkStatus::Missing
+                    }
+                    gfm_mac_sys::NativeBookmarkStatus::Unavailable => {
+                        SecurityScopedBookmarkStatus::Unavailable
+                    }
+                },
+                read_only: self.read_only,
+                byte_len: self.data.len(),
+                resolved_path: native.path,
+                stale: native.stale,
+                access_started: native.access_started,
+                reason: native.reason,
+            }),
         }
     }
 }
@@ -311,6 +367,62 @@ impl SecurityScopedBookmarkStore {
         Ok(resolutions)
     }
 
+    pub fn resolve_for_path(
+        &self,
+        path: impl AsRef<Path>,
+        read_only: bool,
+        start_access: bool,
+        repair_stale: bool,
+    ) -> Result<SecurityScopedBookmarkLookup> {
+        let requested_path = path.as_ref().to_path_buf();
+        let requested_identity = path_identity(&requested_path);
+        let resolution = self
+            .resolve_all(start_access, repair_stale)?
+            .into_iter()
+            .find(|resolution| {
+                resolution.record.read_only == read_only
+                    && same_path_identity(
+                        &requested_identity,
+                        &resolution.record.path,
+                        resolution.report.resolved_path.as_deref(),
+                    )
+            });
+        Ok(SecurityScopedBookmarkLookup {
+            requested_path,
+            resolution,
+        })
+    }
+
+    pub fn start_access_for_path(
+        &self,
+        path: impl AsRef<Path>,
+        read_only: bool,
+        repair_stale: bool,
+    ) -> Result<SecurityScopedBookmarkAccessLookup> {
+        let requested_path = path.as_ref().to_path_buf();
+        let lookup = self.resolve_for_path(&requested_path, read_only, false, repair_stale)?;
+        let Some(resolution) = lookup.resolution else {
+            return Ok(SecurityScopedBookmarkAccessLookup {
+                requested_path,
+                access: None,
+            });
+        };
+        let access = resolution
+            .record
+            .bookmark()
+            .start_access()
+            .map_err(|report| GfmError::Permission {
+                path: requested_path.clone(),
+                message: report
+                    .reason
+                    .unwrap_or_else(|| "security-scoped access did not start".to_string()),
+            })?;
+        Ok(SecurityScopedBookmarkAccessLookup {
+            requested_path,
+            access: Some(access),
+        })
+    }
+
     pub fn reconcile(&self) -> Result<SecurityScopedBookmarkStoreReport> {
         let resolutions = self.resolve_all(false, true)?;
         Ok(SecurityScopedBookmarkStoreReport {
@@ -451,6 +563,21 @@ fn parse_bookmark_record(line: &str) -> std::result::Result<SecurityScopedBookma
         read_only,
         data,
     })
+}
+
+fn same_path_identity(
+    requested_identity: &PathBuf,
+    record_path: &Path,
+    resolved_path: Option<&Path>,
+) -> bool {
+    path_identity(record_path) == *requested_identity
+        || resolved_path
+            .map(path_identity)
+            .is_some_and(|resolved_identity| resolved_identity == *requested_identity)
+}
+
+fn path_identity(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn escape_field(value: &str) -> String {
@@ -661,6 +788,56 @@ mod tests {
         assert_eq!(report.records, 1);
         assert_eq!(report.unavailable, 0);
         assert!(report.as_tsv().contains("records=1"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bookmark_store_resolves_single_record_by_canonical_identity() {
+        let root = temp_root("security-bookmark-lookup");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        let path = root.join("Documents").join("Plan.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "plan").unwrap();
+        store
+            .upsert(SecurityScopedBookmark::create(&path, true).unwrap())
+            .unwrap();
+
+        let lookup = store.resolve_for_path(&path, true, false, true).unwrap();
+
+        assert!(lookup.resolution.is_some());
+        assert_eq!(
+            lookup
+                .resolution
+                .as_ref()
+                .unwrap()
+                .report
+                .resolved_path
+                .as_ref()
+                .and_then(|path| path.canonicalize().ok()),
+            Some(path.canonicalize().unwrap())
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bookmark_store_starts_scoped_access_for_matching_record() {
+        let root = temp_root("security-bookmark-access");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        let path = root.join("Documents").join("Plan.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "plan").unwrap();
+        store
+            .upsert(SecurityScopedBookmark::create(&path, false).unwrap())
+            .unwrap();
+
+        let lookup = store.start_access_for_path(&path, false, true).unwrap();
+        let access = lookup.access.expect("matching bookmark access");
+
+        assert_eq!(lookup.requested_path, path);
+        assert_eq!(access.report.status, SecurityScopedBookmarkStatus::Resolved);
+        assert!(access.report.access_started);
 
         fs::remove_dir_all(root).unwrap();
     }
