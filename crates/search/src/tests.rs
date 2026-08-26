@@ -2156,6 +2156,46 @@ fn search_index_uses_bounded_top_hits_for_single_shard() {
 }
 
 #[test]
+fn simple_single_term_stream_keeps_name_hits_hot_and_content_hits_deep() {
+    let mut index = SearchIndex::new();
+    let hot = record(1, "/tmp/report.md", "report.md");
+    let deep = record(2, "/tmp/body.md", "body.md");
+    index.insert(hot.clone());
+    index.insert(deep.clone());
+    index.insert_content(deep.id, "report appears only in content");
+
+    let batches = index.stream("report", 10).unwrap();
+
+    assert_eq!(batches.len(), 2);
+    assert_eq!(batches[0].stage, SearchStreamStage::Hot);
+    assert_eq!(batches[0].hits.len(), 1);
+    assert_eq!(batches[0].hits[0].record.path, hot.path);
+    assert_eq!(batches[1].stage, SearchStreamStage::Deep);
+    assert_eq!(batches[1].hits.len(), 1);
+    assert_eq!(batches[1].hits[0].record.path, deep.path);
+}
+
+#[test]
+fn simple_multi_term_stream_keeps_name_hits_hot_and_content_hits_deep() {
+    let mut index = SearchIndex::new();
+    let hot = record(1, "/tmp/alpha-beta.md", "alpha-beta.md");
+    let deep = record(2, "/tmp/body.md", "body.md");
+    index.insert(hot.clone());
+    index.insert(deep.clone());
+    index.insert_content(deep.id, "alpha beta appears only in content");
+
+    let batches = index.stream("alpha beta", 10).unwrap();
+
+    assert_eq!(batches.len(), 2);
+    assert_eq!(batches[0].stage, SearchStreamStage::Hot);
+    assert_eq!(batches[0].hits.len(), 1);
+    assert_eq!(batches[0].hits[0].record.path, hot.path);
+    assert_eq!(batches[1].stage, SearchStreamStage::Deep);
+    assert_eq!(batches[1].hits.len(), 1);
+    assert_eq!(batches[1].hits[0].record.path, deep.path);
+}
+
+#[test]
 fn hit_sorting_caches_keys_without_changing_tie_break_order() {
     let mut hits = vec![
         SearchHit {

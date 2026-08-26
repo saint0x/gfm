@@ -97,6 +97,7 @@ The index is compact and incremental:
 - mmap-backed index footprint telemetry with adaptive run/throttle/defer compaction scheduling
 - hot mutable buffers
 - progressive hot/deep result streaming with stable dedupe
+- dedicated simple-query hot-pass execution for immediate name/path/metadata batches before deep fuzzy/content retrieval
 - query-intent preclassification so ordinary searches skip full-record Finder-intent scoring passes
 - anchored boolean execution so positive `AND` terms, phrases, or proximity clauses bound `NOT` and filter checks without forcing a full-record universe scan
 - indexed positive `name:`, `path:`, `ext:`, `tag:`, and `kind:` filter candidates for boolean `AND`/`OR` expressions, with final expression matching kept as the correctness authority

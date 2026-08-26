@@ -1048,8 +1048,7 @@ impl SearchIndex {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> gfm_types::Result<Option<SearchQueryReport>> {
-        if pass != SearchPass::Full
-            || query.expression.is_some()
+        if query.expression.is_some()
             || query.terms.len() != 1
             || !query.excluded_terms.is_empty()
             || !query.phrases.is_empty()
@@ -1090,41 +1089,47 @@ impl SearchIndex {
         {
             add_scores(&mut scores, postings.0, postings.1, postings.2);
         }
-        for id in self.fuzzy_ids(term, lookup, budget, &mut telemetry)? {
-            cancellation.check()?;
-            let Some(record) = self.records.get(&id) else {
-                continue;
-            };
-            if !self.record_contains_term(record, term)
-                && self.record_fuzzy_matches_term(record, term)
-            {
-                scores
-                    .entry(id)
-                    .and_modify(|score| score.add(FUZZY_NAME, MatchReason::FuzzyName))
-                    .or_insert_with(|| RankAccumulator::new(FUZZY_NAME, MatchReason::FuzzyName));
+        if pass.includes_deep() {
+            for id in self.fuzzy_ids(term, lookup, budget, &mut telemetry)? {
+                cancellation.check()?;
+                let Some(record) = self.records.get(&id) else {
+                    continue;
+                };
+                if !self.record_contains_term(record, term)
+                    && self.record_fuzzy_matches_term(record, term)
+                {
+                    scores
+                        .entry(id)
+                        .and_modify(|score| score.add(FUZZY_NAME, MatchReason::FuzzyName))
+                        .or_insert_with(|| {
+                            RankAccumulator::new(FUZZY_NAME, MatchReason::FuzzyName)
+                        });
+                }
             }
         }
 
         let mut hits = BoundedHitMerge::new(limit);
-        if let Some(content_positions) = self.content_terms.get(term) {
-            for id in content_positions.keys() {
-                cancellation.check()?;
-                if let Some(score) = scores.get_mut(id) {
-                    score.add(CONTENT, MatchReason::Content);
-                    continue;
+        if pass.includes_deep() {
+            if let Some(content_positions) = self.content_terms.get(term) {
+                for id in content_positions.keys() {
+                    cancellation.check()?;
+                    if let Some(score) = scores.get_mut(id) {
+                        score.add(CONTENT, MatchReason::Content);
+                        continue;
+                    }
+                    let Some(record) = self.records.get(id) else {
+                        continue;
+                    };
+                    let mut score = RankAccumulator::new(CONTENT, MatchReason::Content);
+                    score.boost(self.composite_boosts(record, query, pass));
+                    let (score, reason) = score.finish();
+                    hits.push(SearchHit {
+                        record: record.clone(),
+                        score,
+                        reason,
+                        snippet: None,
+                    });
                 }
-                let Some(record) = self.records.get(id) else {
-                    continue;
-                };
-                let mut score = RankAccumulator::new(CONTENT, MatchReason::Content);
-                score.boost(self.composite_boosts(record, query, pass));
-                let (score, reason) = score.finish();
-                hits.push(SearchHit {
-                    record: record.clone(),
-                    score,
-                    reason,
-                    snippet: None,
-                });
             }
         }
 
@@ -1161,8 +1166,7 @@ impl SearchIndex {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> gfm_types::Result<Option<SearchQueryReport>> {
-        if pass != SearchPass::Full
-            || query.expression.is_some()
+        if query.expression.is_some()
             || query.terms.len() < 2
             || !query.excluded_terms.is_empty()
             || !query.phrases.is_empty()
@@ -1180,8 +1184,12 @@ impl SearchIndex {
         let mut candidate_sets = Vec::with_capacity(query.terms.len());
         for term in &query.terms {
             cancellation.check()?;
-            let fuzzy_ids = self.fuzzy_ids(term, lookup, budget, &mut telemetry)?;
-            let mut candidates = self.term_candidate_ids(term, SearchPass::Full);
+            let fuzzy_ids = if pass.includes_deep() {
+                self.fuzzy_ids(term, lookup, budget, &mut telemetry)?
+            } else {
+                BTreeSet::new()
+            };
+            let mut candidates = self.term_candidate_ids(term, pass);
             candidates.extend(fuzzy_ids.iter().copied());
             if candidates.is_empty() {
                 return Ok(Some(SearchQueryReport {
@@ -1211,6 +1219,7 @@ impl SearchIndex {
                 &text,
                 &full_text_prefix_ids,
                 &fuzzy_by_term,
+                pass,
             );
             score.boost(self.composite_boosts(record, query, pass));
             let (score, reason) = score.finish();
@@ -1235,6 +1244,7 @@ impl SearchIndex {
         text: &str,
         full_text_prefix_ids: &BTreeSet<FileId>,
         fuzzy_by_term: &[BTreeSet<FileId>],
+        pass: SearchPass,
     ) -> RankAccumulator {
         let mut score = RankAccumulator::new(0, MatchReason::PathComponent);
         if self
@@ -1283,12 +1293,13 @@ impl SearchIndex {
             {
                 score.add(TAG, MatchReason::Tag);
             }
-            if self.content_has(record.id, term) {
+            if pass.includes_deep() && self.content_has(record.id, term) {
                 score.add(CONTENT, MatchReason::Content);
             }
-            if fuzzy_by_term
-                .get(index)
-                .is_some_and(|ids| ids.contains(&record.id))
+            if pass.includes_deep()
+                && fuzzy_by_term
+                    .get(index)
+                    .is_some_and(|ids| ids.contains(&record.id))
                 && !self.record_contains_term(record, term)
                 && self.record_fuzzy_matches_term(record, term)
             {
