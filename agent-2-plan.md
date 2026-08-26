@@ -21,14 +21,10 @@ GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GF
 1. Implement direct `NSFileProviderManager` or FileProvider-domain enumeration in the macOS bridge so provider/domain identity is not inferred only from URL resource keys, path shape, xattrs, or fixture names.
 2. Add a typed FileProvider domain/manager report that can distinguish iCloud Drive, third-party FileProvider domains, unavailable provider APIs, missing domains, permission-denied paths, and unsupported macOS hosts.
 3. Wire the provider/domain report into `FileProviderStateReport` without losing the existing stable TSV behavior for operator routes.
-4. Add provider progress observation for downloads, evictions, uploads, and waiting/materialization states. Prefer native progress/callback sources; if the API cannot provide percentage for a state, expose an explicit indeterminate progress state rather than fabricating numbers.
-5. Feed FileProvider progress into the job/runtime progress model so foreground preview, thumbnail, operation, and sidebar surfaces can display truthful live state without polling from the UI render path.
-6. Harden materialized-placeholder detection beyond filename and xattr heuristics. Use native resource values and FileProvider domain truth where available, and return a typed unknown/unsupported result when host data is not sufficient.
-7. Add conflict-resolution domain plumbing for FileProvider conflicts: typed conflict identity, affected path list where available, reveal/open command intent, and operation preflight refusal for unresolved conflicts.
-8. Wire FileProvider state into the GPUI sidebar row model for iCloud Drive and FileProvider-backed locations, including cloud-only, downloading, syncing, unavailable, waiting, and conflict presentation.
-9. Wire FileProvider state into live UI invalidation so icon, preview memory cache, preview disk cache, sidebar rows, and search metadata are invalidated from provider state transitions rather than manual refresh.
-10. Add captured Finder pixel baselines for FileProvider/iCloud icon badges, sidebar rows, progress states, conflict states, and unavailable/offline states.
-11. Verify FileProvider work with focused `gfm-mac-sys`, `gfm-mac`, `gfm-preview`, `gfm-ui`, `gfm`, and Fozzy coverage. Leave `STATUS.md` item 28 in place until every FileProvider sub-capability in that item is complete.
+4. Harden materialized-placeholder detection beyond filename and xattr heuristics. Use native resource values and FileProvider domain truth where available, and return a typed unknown/unsupported result when host data is not sufficient.
+5. Replace the current FileProvider state-transition report with a live invalidation source that is driven by native provider callbacks or an explicitly owned background observer, then feed those events into icon, preview memory cache, preview disk cache, sidebar rows, and search metadata.
+6. Add captured Finder pixel baselines for FileProvider/iCloud icon badges, sidebar rows, progress states, conflict states, and unavailable/offline states.
+7. Verify FileProvider work with focused `gfm-mac-sys`, `gfm-mac`, `gfm-preview`, `gfm-ui`, `gfm`, and Fozzy coverage. Leave `STATUS.md` item 28 in place until every FileProvider sub-capability in that item is complete.
 
 ## DiskArbitration And Volume Remaining Work
 

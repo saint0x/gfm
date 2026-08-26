@@ -14,9 +14,9 @@ pub use bridge::{
 };
 pub use fileprovider::{
     CloudBadge, CloudCommandPolicy, CloudCommandState, CloudStorageState, CloudTransferDirection,
-    CloudTransferProgress, FileProviderDomain, FileProviderInvalidationReport,
-    FileProviderOperation, FileProviderOperationDisposition, FileProviderOperationReport,
-    FileProviderProgressReport, FileProviderStateReport,
+    CloudTransferProgress, FileProviderConflictReport, FileProviderDomain,
+    FileProviderInvalidationReport, FileProviderOperation, FileProviderOperationDisposition,
+    FileProviderOperationReport, FileProviderProgressReport, FileProviderStateReport,
 };
 pub use finder::{FinderKindSource, NativeFinderKindReport};
 pub use host::{

@@ -4,17 +4,19 @@ use gfm_fs::{
 };
 use gfm_index::Indexer;
 use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore};
-use gfm_mac::{CloudStorageState, FileProviderStateReport};
+use gfm_mac::{
+    CloudCommandState, CloudStorageState, FileProviderConflictReport, FileProviderStateReport,
+};
 use gfm_types::{FileKind, GfmError, Result};
 use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
     MenuContract, OperationProgressContract, OperationProgressInput, OperationProgressState,
-    SearchResultsBatch, SearchResultsContract, SearchResultsOptions, SearchResultsStage,
-    SidebarCloudState, SidebarContract, TitlebarContract, ToolbarContract, TrashEntryMetadata,
-    TrashViewContract, TrashViewOptions, VirtualSurface, VirtualizationContract,
-    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    ProviderConflictContract, ProviderConflictInput, SearchResultsBatch, SearchResultsContract,
+    SearchResultsOptions, SearchResultsStage, SidebarCloudState, SidebarContract, TitlebarContract,
+    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
+    VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -118,6 +120,26 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     ))
                 })?;
             println!("{}", operation_progress_contract(snapshot).as_tsv());
+        }
+        "ui-fileprovider-conflict-contract" => {
+            let path = required_path(
+                args.next(),
+                "ui-fileprovider-conflict-contract requires a FileProvider path",
+            )?;
+            let report = FileProviderConflictReport::read_path(&path)?;
+            let contract = ProviderConflictContract::from_input(ProviderConflictInput::new(
+                report.path.display().to_string(),
+                report.has_unresolved_conflict,
+                report
+                    .affected_paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect(),
+                report.reveal_command == CloudCommandState::Enabled,
+                report.block_operations,
+                report.reason,
+            ));
+            println!("{}", contract.as_tsv());
         }
         "ui-titlebar-contract" => {
             let spec = app_launch_spec(args.next());

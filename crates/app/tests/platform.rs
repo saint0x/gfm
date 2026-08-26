@@ -404,6 +404,26 @@ fn reports_fileprovider_state_from_binary() {
     assert!(conflict_stdout.contains("\tbadges=conflict\t"));
     assert!(conflict_stdout.contains("\treveal-conflict=enabled\t"));
 
+    let conflict_report = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-conflict")
+        .arg(&conflict)
+        .output()
+        .unwrap();
+    assert!(
+        conflict_report.status.success(),
+        "{}",
+        String::from_utf8_lossy(&conflict_report.stderr)
+    );
+    let conflict_report_stdout = String::from_utf8(conflict_report.stdout).unwrap();
+    assert!(conflict_report_stdout.starts_with("fileprovider-conflict\t"));
+    assert!(conflict_report_stdout
+        .contains("\tconflict=true\tstate=conflict\taffected=1\taffected-paths="));
+    assert!(conflict_report_stdout.contains("\treveal=enabled\tblock-operations=true\t"));
+    assert!(
+        conflict_report_stdout.ends_with("reason=conflict-requires-user-resolution\n"),
+        "{conflict_report_stdout}"
+    );
+
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -597,6 +617,24 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     assert!(evict_stdout.contains("\toperation=evict\tdisposition=refused\t"));
     assert!(evict_stdout.contains("\tbefore-state=downloaded\tafter-state=-\t"));
     assert!(evict_stdout.ends_with("reason=not-native-provider-backed\n"));
+
+    let conflict = root.join("Conflict.icloud-conflict.md");
+    std::fs::write(&conflict, "conflict").unwrap();
+    let conflict_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-operation")
+        .arg("evict")
+        .arg(&conflict)
+        .output()
+        .unwrap();
+    assert!(
+        conflict_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&conflict_output.stderr)
+    );
+    let conflict_stdout = String::from_utf8(conflict_output.stdout).unwrap();
+    assert!(conflict_stdout.contains("\toperation=evict\tdisposition=refused\t"));
+    assert!(conflict_stdout.contains("\tbefore-state=conflict\tafter-state=-\t"));
+    assert!(conflict_stdout.ends_with("reason=provider-conflict-requires-resolution\n"));
 
     let _ = std::fs::remove_dir_all(root);
 }

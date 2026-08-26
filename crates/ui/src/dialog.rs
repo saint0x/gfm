@@ -243,6 +243,92 @@ impl OperationProgressContract {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderConflictInput {
+    pub path: String,
+    pub has_unresolved_conflict: bool,
+    pub affected_count: usize,
+    pub affected_paths: Vec<String>,
+    pub reveal_enabled: bool,
+    pub operations_blocked: bool,
+    pub reason: String,
+}
+
+impl ProviderConflictInput {
+    pub fn new(
+        path: impl Into<String>,
+        has_unresolved_conflict: bool,
+        affected_paths: Vec<String>,
+        reveal_enabled: bool,
+        operations_blocked: bool,
+        reason: impl Into<String>,
+    ) -> Self {
+        let affected_count = affected_paths.len();
+        Self {
+            path: path.into(),
+            has_unresolved_conflict,
+            affected_count,
+            affected_paths,
+            reveal_enabled,
+            operations_blocked,
+            reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderConflictContract {
+    pub dialog: DialogContract,
+    pub path: String,
+    pub has_unresolved_conflict: bool,
+    pub affected_count: usize,
+    pub affected_paths: Vec<String>,
+    pub reveal_enabled: bool,
+    pub operations_blocked: bool,
+    pub reason: String,
+}
+
+impl ProviderConflictContract {
+    pub fn from_input(input: ProviderConflictInput) -> Self {
+        let mut dialog = DialogContract::provider_conflict(input.reveal_enabled);
+        if !input.has_unresolved_conflict {
+            dialog.buttons = dialog
+                .buttons
+                .into_iter()
+                .map(|button| DialogButtonSpec {
+                    enabled: false,
+                    ..button
+                })
+                .collect();
+        }
+
+        Self {
+            dialog,
+            path: input.path,
+            has_unresolved_conflict: input.has_unresolved_conflict,
+            affected_count: input.affected_count,
+            affected_paths: input.affected_paths,
+            reveal_enabled: input.reveal_enabled,
+            operations_blocked: input.operations_blocked,
+            reason: input.reason,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "{}\nprovider-conflict\tpath={}\tconflict={}\taffected={}\taffected-paths={}\treveal={}\toperations-blocked={}\treason={}",
+            self.dialog.as_tsv(),
+            escape_tsv(&self.path),
+            self.has_unresolved_conflict,
+            self.affected_count,
+            affected_paths_tsv(&self.affected_paths),
+            self.reveal_enabled,
+            self.operations_blocked,
+            escape_tsv(&self.reason),
+        )
+    }
+}
+
 impl DialogContract {
     pub fn finder_default(surface: DialogSurface) -> Self {
         match surface {
@@ -268,6 +354,25 @@ impl DialogContract {
             button("resume", "Resume", DialogButtonRole::Default, paused),
             button("stop", "Stop", DialogButtonRole::Cancel, cancellable),
         ];
+        contract
+    }
+
+    pub fn provider_conflict(reveal_enabled: bool) -> Self {
+        let mut contract = conflict_contract();
+        contract.title = "Resolve FileProvider Conflict";
+        contract.message =
+            "Finder-compatible FileProvider conflict sheet backed by unresolved provider state.";
+        contract.buttons = vec![
+            button(
+                "reveal-conflict",
+                "Reveal Conflict",
+                DialogButtonRole::Default,
+                reveal_enabled,
+            ),
+            button("skip", "Skip", DialogButtonRole::Alternate, true),
+            button("stop", "Stop", DialogButtonRole::Cancel, true),
+        ];
+        contract.fields.clear();
         contract
     }
 
@@ -494,6 +599,18 @@ fn field(
     }
 }
 
+fn affected_paths_tsv(paths: &[String]) -> String {
+    if paths.is_empty() {
+        "-".to_string()
+    } else {
+        paths
+            .iter()
+            .map(|path| escape_tsv(path))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
 fn escape_tsv(value: &str) -> String {
     value
         .chars()
@@ -536,6 +653,46 @@ mod tests {
             .fields
             .iter()
             .any(|field| field.id == "apply-to-all"));
+    }
+
+    #[test]
+    fn provider_conflict_contract_binds_reveal_intent_and_blocks_operations() {
+        let contract = ProviderConflictContract::from_input(ProviderConflictInput::new(
+            "/tmp/Conflict.icloud-conflict.md",
+            true,
+            vec!["/tmp/Conflict.icloud-conflict.md".to_string()],
+            true,
+            true,
+            "conflict-requires-user-resolution",
+        ));
+
+        assert!(contract.dialog.blocks_parent_window);
+        assert!(contract.operations_blocked);
+        assert!(contract
+            .dialog
+            .buttons
+            .iter()
+            .any(|button| button.id == "reveal-conflict" && button.enabled));
+        assert!(contract.as_tsv().contains(
+            "provider-conflict\tpath=/tmp/Conflict.icloud-conflict.md\tconflict=true\taffected=1\taffected-paths=/tmp/Conflict.icloud-conflict.md\treveal=true\toperations-blocked=true\treason=conflict-requires-user-resolution"
+        ));
+    }
+
+    #[test]
+    fn provider_conflict_contract_disables_actions_without_unresolved_conflict() {
+        let contract = ProviderConflictContract::from_input(ProviderConflictInput::new(
+            "/tmp/Downloaded.icloud.md",
+            false,
+            Vec::new(),
+            false,
+            false,
+            "no-provider-conflict",
+        ));
+
+        assert!(contract.dialog.buttons.iter().all(|button| !button.enabled));
+        assert!(contract
+            .as_tsv()
+            .contains("\tconflict=false\taffected=0\taffected-paths=-\treveal=false\toperations-blocked=false\t"));
     }
 
     #[test]

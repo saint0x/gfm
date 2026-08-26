@@ -296,6 +296,41 @@ fn reports_fileprovider_state_in_ui_sidebar_contract_from_binary() {
 }
 
 #[test]
+fn reports_fileprovider_conflict_in_ui_dialog_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-fileprovider-conflict-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let conflict = root.join("Conflict.icloud-conflict.md");
+    std::fs::write(&conflict, "conflict").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-fileprovider-conflict-contract")
+        .arg(&conflict)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=conflict\tpresentation=window-sheet"));
+    assert!(stdout.contains("button\treveal-conflict\tReveal Conflict\tdefault\tenabled=true"));
+    assert!(stdout.contains("button\tstop\tStop\tcancel\tenabled=true"));
+    assert!(stdout.contains("\nprovider-conflict\tpath="));
+    assert!(stdout.contains("\tconflict=true\taffected=1\taffected-paths="));
+    assert!(stdout.contains(
+        "\treveal=true\toperations-blocked=true\treason=conflict-requires-user-resolution"
+    ));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_ui_icon_view_contract_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-icon-view-contract-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

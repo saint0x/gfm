@@ -382,6 +382,7 @@ fn print_usage() {
   gfm ui-context-menu-contract [file|folder|volume|sidebar|empty|selection|search-result|trash] [selection-count] [writable] [ejectable] [has-clipboard-items]
   gfm ui-dialog-contract [alert|rename|popover|disclosure|progress|conflict|permission] [running|paused] [true|false]
   gfm ui-progress-job-contract <progress.gfmprogress> <job-id>
+  gfm ui-fileprovider-conflict-contract <fileprovider-path>
   gfm ui-titlebar-contract [path]
   gfm ui-session-contract [path] [window-session.tsv]
   gfm ui-toolbar-contract [path]
@@ -511,6 +512,7 @@ fn print_usage() {
   gfm native-icon-bridge <path>
   gfm fileprovider-state <path>
   gfm fileprovider-progress <path>
+  gfm fileprovider-conflict <path>
   gfm fileprovider-progress-job <path>
   gfm fileprovider-operation <download|evict> <path>
   gfm fileprovider-invalidation <previous-state> <path>

@@ -9,10 +9,11 @@ use gfm_jobs::{
 };
 use gfm_mac::{
     current_host_profile, parse_spotlight_fixture, AccessIntent, CloudStorageState,
-    CloudTransferDirection, FileProviderInvalidationReport, FileProviderOperation,
-    FileProviderOperationReport, FileProviderProgressReport, FileProviderStateReport,
-    MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
-    SpotlightMetadataReader, SpotlightReconciliationReport, VolumeDiscoveryReport,
+    CloudTransferDirection, FileProviderConflictReport, FileProviderInvalidationReport,
+    FileProviderOperation, FileProviderOperationReport, FileProviderProgressReport,
+    FileProviderStateReport, MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor,
+    SecurityScopedAccessReport, SpotlightMetadataReader, SpotlightReconciliationReport,
+    VolumeDiscoveryReport,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path, IconPreviewContract,
@@ -61,6 +62,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "fileprovider-progress" => {
             let path = required_path(args.next(), "fileprovider-progress requires a path")?;
             println!("{}", FileProviderProgressReport::read_path(path)?.as_tsv());
+        }
+        "fileprovider-conflict" => {
+            let path = required_path(args.next(), "fileprovider-conflict requires a path")?;
+            println!("{}", FileProviderConflictReport::read_path(path)?.as_tsv());
         }
         "fileprovider-progress-job" => {
             let path = required_path(args.next(), "fileprovider-progress-job requires a path")?;

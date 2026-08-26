@@ -1750,6 +1750,11 @@
       "data": "icloud downloaded"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-conflict.icloud-conflict.md",
+      "data": "icloud conflict"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -1808,6 +1813,25 @@
     },
     {
       "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-conflict",
+        "tmp/gfm-fozzy-conflict.icloud-conflict.md"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-conflict",
+        "tmp/gfm-fozzy-conflict.icloud-conflict.md"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
       "cmd": "/usr/bin/env",
       "args": [
         "GFM_JOB_PROGRESS_STORE=/tmp/gfm-fozzy-fileprovider-progress.gfmprogress",
@@ -1849,6 +1873,27 @@
         "fileprovider-operation",
         "evict",
         "tmp/gfm-fozzy-downloaded.icloud.md"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-operation",
+        "evict",
+        "tmp/gfm-fozzy-conflict.icloud-conflict.md"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-operation",
+        "evict",
+        "tmp/gfm-fozzy-conflict.icloud-conflict.md"
       ],
       "expect_exit": 0
     },
@@ -2182,6 +2227,25 @@
       "args": [
         "ui-dialog-contract",
         "conflict"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-fileprovider-conflict-contract",
+        "tmp/gfm-fozzy-conflict.icloud-conflict.md"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-fileprovider-conflict-contract",
+        "tmp/gfm-fozzy-conflict.icloud-conflict.md"
       ],
       "expect_exit": 0
     },

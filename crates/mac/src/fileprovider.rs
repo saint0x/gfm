@@ -265,6 +265,61 @@ impl FileProviderProgressReport {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderConflictReport {
+    pub path: PathBuf,
+    pub state: FileProviderStateReport,
+    pub has_unresolved_conflict: bool,
+    pub affected_paths: Vec<PathBuf>,
+    pub reveal_command: CloudCommandState,
+    pub block_operations: bool,
+    pub reason: String,
+}
+
+impl FileProviderConflictReport {
+    pub fn read_path(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let state = FileProviderStateReport::read_path(&path)?;
+        let has_unresolved_conflict = state.storage_state == CloudStorageState::Conflict;
+        let affected_paths = if has_unresolved_conflict {
+            vec![path.clone()]
+        } else {
+            Vec::new()
+        };
+        let reason = if has_unresolved_conflict {
+            "conflict-requires-user-resolution"
+        } else if state.domain == FileProviderDomain::Local {
+            "not-fileprovider-backed"
+        } else {
+            "no-provider-conflict"
+        };
+
+        Ok(Self {
+            path,
+            reveal_command: state.commands.reveal_conflict,
+            block_operations: has_unresolved_conflict,
+            state,
+            has_unresolved_conflict,
+            affected_paths,
+            reason: reason.to_string(),
+        })
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "fileprovider-conflict\t{}\tconflict={}\tstate={}\taffected={}\taffected-paths={}\treveal={}\tblock-operations={}\treason={}",
+            self.path.display(),
+            self.has_unresolved_conflict,
+            self.state.storage_state.as_str(),
+            self.affected_paths.len(),
+            affected_paths_field(&self.affected_paths),
+            self.reveal_command.as_str(),
+            self.block_operations,
+            escape_field(&self.reason),
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileProviderOperation {
     Download,
@@ -401,6 +456,14 @@ impl FileProviderOperationReport {
             FileProviderOperation::Download => before.commands.download,
             FileProviderOperation::Evict => before.commands.evict,
         };
+        if before.storage_state == CloudStorageState::Conflict {
+            return Ok(Self::refused(
+                path,
+                operation,
+                before,
+                "provider-conflict-requires-resolution",
+            ));
+        }
         if command != CloudCommandState::Enabled {
             return Ok(Self::refused(
                 path,
@@ -855,6 +918,18 @@ fn escape_field(value: &str) -> String {
         .replace('\n', "\\n")
 }
 
+fn affected_paths_field(paths: &[PathBuf]) -> String {
+    if paths.is_empty() {
+        "-".to_string()
+    } else {
+        paths
+            .iter()
+            .map(|path| escape_field(&path.display().to_string()))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -925,6 +1000,47 @@ mod tests {
     }
 
     #[test]
+    fn reports_fileprovider_conflict_resolution_intent() {
+        let root = unique_temp_dir();
+        let path = root.join("Conflict.icloud-conflict.md");
+        fs::write(&path, "conflict").unwrap();
+
+        let report = FileProviderConflictReport::read_path(&path).unwrap();
+
+        assert!(report.has_unresolved_conflict);
+        assert_eq!(report.state.storage_state, CloudStorageState::Conflict);
+        assert_eq!(report.affected_paths, vec![path.clone()]);
+        assert_eq!(report.reveal_command, CloudCommandState::Enabled);
+        assert!(report.block_operations);
+        assert_eq!(
+            affected_paths_field(&report.affected_paths),
+            escape_field(&path.display().to_string())
+        );
+        assert!(report
+            .as_tsv()
+            .contains("\tconflict=true\tstate=conflict\taffected=1\taffected-paths="));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_conflict_report_is_explicit_for_non_conflict_paths() {
+        let root = unique_temp_dir();
+        let path = root.join("Downloaded.icloud.md");
+        fs::write(&path, "downloaded").unwrap();
+
+        let report = FileProviderConflictReport::read_path(&path).unwrap();
+
+        assert!(!report.has_unresolved_conflict);
+        assert!(report.affected_paths.is_empty());
+        assert_eq!(report.reveal_command, CloudCommandState::Hidden);
+        assert!(!report.block_operations);
+        assert_eq!(report.reason, "no-provider-conflict");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn local_files_hide_cloud_commands() {
         let root = unique_temp_dir();
         let path = root.join("Local.md");
@@ -990,6 +1106,28 @@ mod tests {
             Some("operation-disabled-for-current-state")
         );
         assert_eq!(report.before.storage_state, CloudStorageState::Downloading);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operations_refuse_unresolved_provider_conflicts_before_native_call() {
+        let root = unique_temp_dir();
+        let conflict = root.join("Conflict.icloud-conflict.md");
+        fs::write(&conflict, "conflict").unwrap();
+
+        let report =
+            FileProviderOperationReport::execute(&conflict, FileProviderOperation::Evict).unwrap();
+
+        assert_eq!(
+            report.disposition,
+            FileProviderOperationDisposition::Refused
+        );
+        assert_eq!(
+            report.reason.as_deref(),
+            Some("provider-conflict-requires-resolution")
+        );
+        assert_eq!(report.before.storage_state, CloudStorageState::Conflict);
 
         fs::remove_dir_all(root).unwrap();
     }
