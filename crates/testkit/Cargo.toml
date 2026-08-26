@@ -10,6 +10,7 @@ gfm-index = { path = "../index" }
 gfm-store = { path = "../store" }
 gfm-telemetry = { path = "../telemetry" }
 gfm-types = { path = "../types" }
+png = "0.17"
 
 [lints]
 workspace = true

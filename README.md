@@ -180,7 +180,7 @@ When `GFM_JOB_PAYLOAD_CATALOG` and `GFM_JOB_PROGRESS_STORE` are configured, shar
 
 The retriable background content indexing worker also publishes payload and progress records as it plans, enters retry attempts, and records terminal completion or failure, with catalog payload paths pointing at the persisted content job spec so machine-wide indexing work can be restored and diagnosed through the same runtime metadata layer.
 
-Adaptive jobs that are deferred under saturated IO or critical thermal pressure still publish durable payload rows and paused progress snapshots with an explicit `deferred:Defer` detail before returning, so the GPUI progress surface and restart planner can distinguish intentional backpressure from lost work.
+Adaptive jobs that are deferred under saturated IO or critical thermal pressure still publish durable payload rows and paused progress snapshots with an explicit `deferred:Defer` detail before returning, so the GPUI progress surface and restart planner can distinguish intentional backpressure from lost work. Background content resumes accept either retry-journal entries or restorable progress snapshots, which lets pressure-deferred machine-wide indexing restart from the persisted content job spec even when no worker attempt was launched.
 
 Adaptive scheduled producers for sidecar repair, persistent-index repair, diagnostics rebuilds, and content maintenance run through the same isolated retriable worker. Transient and offline-volume failures receive bounded backoff and durable attempt journal entries; permission, missing-file, corrupt-file, and permanent failures are terminal. The `jobs-runtime-retry-probe` diagnostic exercises that path deterministically.
 
@@ -225,7 +225,7 @@ Every supported macOS build has a reference matrix covering:
 - selection, drag, rename, context menu, sheets, alerts, and progress UI
 - Desktop, home, Documents, Downloads, Applications, iCloud Drive, external volumes, network mounts, and Trash
 
-CI captures Finder and GFM against the same fixtures and fails on pixel drift. Any mask must be explicit, documented, and forbidden from hiding layout, text, icon, selection, focus, hover, toolbar, thumbnail, or file-content differences.
+CI captures Finder and GFM against the same fixtures and fails on pixel drift. Any mask must be explicit, documented, and forbidden from hiding layout, text, icon, selection, focus, hover, toolbar, thumbnail, or file-content differences. Parity-gate mask files include `x`, `y`, `width`, `height`, and a durable reason string so OS-owned dynamic pixels remain reviewable.
 
 ## Commands
 
@@ -333,7 +333,7 @@ cargo run -p gfm -- macrobench /tmp/gfm-bench standard
 cargo run -p gfm -- macrobench-fixture /tmp/gfm-bench million
 cargo run -p gfm -- parity-fixture /tmp/gfm-parity smoke
 cargo run -p gfm -- pixel-diff expected.rgba actual.rgba 3024 1890 masks.tsv
-cargo run -p gfm -- pixel-threshold-check toolbar expected.rgba actual.rgba 3024 1890 masks.tsv
+cargo run -p gfm -- pixel-threshold-check toolbar finder.png gfm.png 3024 1890 governed-masks.tsv
 cargo run -p gfm -- parity-gate parity-gate.tsv
 cargo run -p gfm -- parity-review parity-gate.tsv /tmp/gfm-parity-review
 cargo run -p gfm -- parity-profile 25A354 dark 2x display-p3

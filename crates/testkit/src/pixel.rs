@@ -1,5 +1,6 @@
 use gfm_types::{GfmError, Result};
 use std::fs;
+use std::io::BufWriter;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -63,9 +64,24 @@ impl PixelMaskRect {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PixelMaskRegion {
+    pub rect: PixelMaskRect,
+    pub reason: String,
+}
+
+impl PixelMaskRegion {
+    pub fn new(rect: PixelMaskRect, reason: impl Into<String>) -> Self {
+        Self {
+            rect,
+            reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PixelDiffOptions {
     pub size: PixelSize,
-    pub masks: Vec<PixelMaskRect>,
+    pub masks: Vec<PixelMaskRegion>,
     pub fail_on_masked_mismatch: bool,
 }
 
@@ -79,6 +95,14 @@ impl PixelDiffOptions {
     }
 
     pub fn with_masks(mut self, masks: Vec<PixelMaskRect>) -> Self {
+        self.masks = masks
+            .into_iter()
+            .map(|rect| PixelMaskRegion::new(rect, "legacy-explicit-mask"))
+            .collect();
+        self
+    }
+
+    pub fn with_governed_masks(mut self, masks: Vec<PixelMaskRegion>) -> Self {
         self.masks = masks;
         self
     }
@@ -91,7 +115,9 @@ pub struct PixelDiffReport {
     pub mismatched_pixels: usize,
     pub unmasked_mismatches: usize,
     pub masked_mismatches: usize,
-    pub masks: Vec<PixelMaskRect>,
+    pub max_channel_delta: u8,
+    pub masks: Vec<PixelMaskRegion>,
+    pub regions: Vec<PixelRegionSummary>,
     pub first_unmasked_mismatch: Option<PixelMismatch>,
 }
 
@@ -107,6 +133,14 @@ pub struct PixelMismatch {
     pub y: u32,
     pub expected: [u8; 4],
     pub actual: [u8; 4],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PixelRegionSummary {
+    pub name: String,
+    pub rect: PixelMaskRect,
+    pub mismatched_pixels: usize,
+    pub max_channel_delta: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -294,17 +328,38 @@ pub fn diff_rgba(
         )));
     }
     for mask in &options.masks {
-        if !mask.is_valid_for(options.size) {
+        if !mask.rect.is_valid_for(options.size) {
             return Err(GfmError::Format(format!(
                 "mask {},{},{},{} is outside {}x{} image",
-                mask.x, mask.y, mask.width, mask.height, options.size.width, options.size.height
+                mask.rect.x,
+                mask.rect.y,
+                mask.rect.width,
+                mask.rect.height,
+                options.size.width,
+                options.size.height
             )));
+        }
+        if mask.reason.trim().is_empty() {
+            return Err(GfmError::Format(
+                "pixel mask reason cannot be empty".to_string(),
+            ));
         }
     }
 
     let mut mismatched_pixels = 0;
     let mut unmasked_mismatches = 0;
     let mut masked_mismatches = 0;
+    let mut max_channel_delta = 0;
+    let mut regions = options
+        .masks
+        .iter()
+        .map(|mask| PixelRegionSummary {
+            name: mask.reason.clone(),
+            rect: mask.rect,
+            mismatched_pixels: 0,
+            max_channel_delta: 0,
+        })
+        .collect::<Vec<_>>();
     let mut first_unmasked_mismatch = None;
 
     for y in 0..options.size.height {
@@ -318,7 +373,16 @@ pub fn diff_rgba(
             }
 
             mismatched_pixels += 1;
-            let masked = options.masks.iter().any(|mask| mask.contains(x, y));
+            let delta = channel_delta(expected_pixel, actual_pixel);
+            max_channel_delta = max_channel_delta.max(delta);
+            let mut masked = false;
+            for (index, mask) in options.masks.iter().enumerate() {
+                if mask.rect.contains(x, y) {
+                    masked = true;
+                    regions[index].mismatched_pixels += 1;
+                    regions[index].max_channel_delta = regions[index].max_channel_delta.max(delta);
+                }
+            }
             if masked {
                 masked_mismatches += 1;
             } else {
@@ -343,7 +407,9 @@ pub fn diff_rgba(
         mismatched_pixels,
         unmasked_mismatches,
         masked_mismatches,
+        max_channel_delta,
         masks: options.masks.clone(),
+        regions,
         first_unmasked_mismatch,
     })
 }
@@ -360,10 +426,116 @@ pub fn diff_rgba_files(
     diff_rgba(&expected, &actual, options)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RgbaImage {
+    pub size: PixelSize,
+    pub bytes: Vec<u8>,
+}
+
+pub fn read_rgba_image_file(
+    path: impl AsRef<Path>,
+    raw_size: Option<PixelSize>,
+) -> Result<RgbaImage> {
+    let path = path.as_ref();
+    let bytes = fs::read(path).map_err(|err| GfmError::io(path, err))?;
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        decode_png_rgba(path, &bytes)
+    } else {
+        let size = raw_size.ok_or_else(|| {
+            GfmError::Format(format!(
+                "raw RGBA image {} requires an explicit width and height",
+                path.display()
+            ))
+        })?;
+        if bytes.len() != size.rgba_len()? {
+            return Err(GfmError::Format(format!(
+                "raw RGBA image {} has {} bytes; expected {}",
+                path.display(),
+                bytes.len(),
+                size.rgba_len()?
+            )));
+        }
+        Ok(RgbaImage { size, bytes })
+    }
+}
+
+pub fn diff_image_files(
+    expected_path: impl AsRef<Path>,
+    actual_path: impl AsRef<Path>,
+    raw_size: Option<PixelSize>,
+    masks: Vec<PixelMaskRegion>,
+) -> Result<(PixelDiffReport, RgbaImage, RgbaImage)> {
+    let expected = read_rgba_image_file(expected_path, raw_size)?;
+    let actual = read_rgba_image_file(actual_path, raw_size)?;
+    if expected.size != actual.size {
+        return Err(GfmError::Format(format!(
+            "image dimensions differ: expected {}x{} actual {}x{}",
+            expected.size.width, expected.size.height, actual.size.width, actual.size.height
+        )));
+    }
+    let options = PixelDiffOptions::strict(expected.size).with_governed_masks(masks);
+    let report = diff_rgba(&expected.bytes, &actual.bytes, &options)?;
+    Ok((report, expected, actual))
+}
+
+pub fn write_visual_diff_png(
+    path: impl AsRef<Path>,
+    expected: &RgbaImage,
+    actual: &RgbaImage,
+    report: &PixelDiffReport,
+) -> Result<()> {
+    if expected.size != actual.size {
+        return Err(GfmError::Format(
+            "cannot write visual diff for different image sizes".to_string(),
+        ));
+    }
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
+    let mut output = vec![0; expected.size.rgba_len()?];
+    for y in 0..expected.size.height {
+        for x in 0..expected.size.width {
+            let offset =
+                ((u64::from(y) * u64::from(expected.size.width) + u64::from(x)) * 4) as usize;
+            let expected_pixel = pixel_at(&expected.bytes, offset);
+            let actual_pixel = pixel_at(&actual.bytes, offset);
+            if expected_pixel == actual_pixel {
+                output[offset] = actual_pixel[0] / 4;
+                output[offset + 1] = actual_pixel[1] / 4;
+                output[offset + 2] = actual_pixel[2] / 4;
+                output[offset + 3] = 96;
+                continue;
+            }
+            let masked = report.masks.iter().any(|mask| mask.rect.contains(x, y));
+            if masked {
+                output[offset] = 0;
+                output[offset + 1] = 96;
+                output[offset + 2] = 255;
+            } else {
+                output[offset] = 255;
+                output[offset + 1] = 32;
+                output[offset + 2] = 48;
+            }
+            output[offset + 3] = 255;
+        }
+    }
+    encode_png_rgba(path, expected.size, &output)
+}
+
 pub fn read_mask_file(path: impl AsRef<Path>, size: PixelSize) -> Result<Vec<PixelMaskRect>> {
     let path = path.as_ref();
     let content = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
     parse_masks(&content, size)
+}
+
+pub fn read_governed_mask_file(
+    path: impl AsRef<Path>,
+    size: PixelSize,
+) -> Result<Vec<PixelMaskRegion>> {
+    let path = path.as_ref();
+    let content = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+    parse_governed_masks(&content, size)
 }
 
 pub fn parse_masks(content: &str, size: PixelSize) -> Result<Vec<PixelMaskRect>> {
@@ -397,6 +569,111 @@ pub fn parse_masks(content: &str, size: PixelSize) -> Result<Vec<PixelMaskRect>>
         masks.push(mask);
     }
     Ok(masks)
+}
+
+pub fn parse_governed_masks(content: &str, size: PixelSize) -> Result<Vec<PixelMaskRegion>> {
+    let mut masks = Vec::new();
+    for (line_index, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<_> = line.split('\t').collect();
+        if fields.len() != 5 {
+            return Err(GfmError::Format(format!(
+                "governed mask line {} must contain x, y, width, height, reason",
+                line_index + 1
+            )));
+        }
+        let reason = fields[4].trim();
+        if reason.is_empty() {
+            return Err(GfmError::Format(format!(
+                "governed mask line {} must include a reason",
+                line_index + 1
+            )));
+        }
+        let rect = PixelMaskRect {
+            x: parse_mask_field(fields[0], line_index, "x")?,
+            y: parse_mask_field(fields[1], line_index, "y")?,
+            width: parse_mask_field(fields[2], line_index, "width")?,
+            height: parse_mask_field(fields[3], line_index, "height")?,
+        };
+        if !rect.is_valid_for(size) {
+            return Err(GfmError::Format(format!(
+                "governed mask line {} is outside {}x{} image",
+                line_index + 1,
+                size.width,
+                size.height
+            )));
+        }
+        masks.push(PixelMaskRegion::new(rect, reason));
+    }
+    Ok(masks)
+}
+
+fn decode_png_rgba(path: &Path, bytes: &[u8]) -> Result<RgbaImage> {
+    let decoder = png::Decoder::new(bytes);
+    let mut reader = decoder
+        .read_info()
+        .map_err(|err| GfmError::Format(format!("failed to read PNG {}: {err}", path.display())))?;
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buffer).map_err(|err| {
+        GfmError::Format(format!("failed to decode PNG {}: {err}", path.display()))
+    })?;
+    let source = &buffer[..info.buffer_size()];
+    let rgba = match (info.color_type, info.bit_depth) {
+        (png::ColorType::Rgba, png::BitDepth::Eight) => source.to_vec(),
+        (png::ColorType::Rgb, png::BitDepth::Eight) => {
+            let mut out = Vec::with_capacity(source.len() / 3 * 4);
+            for pixel in source.chunks_exact(3) {
+                out.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+            }
+            out
+        }
+        (png::ColorType::Grayscale, png::BitDepth::Eight) => source
+            .iter()
+            .flat_map(|value| [*value, *value, *value, 255])
+            .collect(),
+        (png::ColorType::GrayscaleAlpha, png::BitDepth::Eight) => source
+            .chunks_exact(2)
+            .flat_map(|pixel| [pixel[0], pixel[0], pixel[0], pixel[1]])
+            .collect(),
+        _ => {
+            return Err(GfmError::Format(format!(
+                "unsupported PNG format for {}: {:?} {:?}",
+                path.display(),
+                info.color_type,
+                info.bit_depth
+            )))
+        }
+    };
+    Ok(RgbaImage {
+        size: PixelSize::new(info.width, info.height),
+        bytes: rgba,
+    })
+}
+
+fn encode_png_rgba(path: &Path, size: PixelSize, bytes: &[u8]) -> Result<()> {
+    let file = fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
+    let writer = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(writer, size.width, size.height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut png_writer = encoder.write_header().map_err(|err| {
+        GfmError::Format(format!("failed to write PNG {}: {err}", path.display()))
+    })?;
+    png_writer
+        .write_image_data(bytes)
+        .map_err(|err| GfmError::Format(format!("failed to write PNG {}: {err}", path.display())))
+}
+
+fn channel_delta(expected: [u8; 4], actual: [u8; 4]) -> u8 {
+    expected
+        .into_iter()
+        .zip(actual)
+        .map(|(left, right)| left.abs_diff(right))
+        .max()
+        .unwrap_or(0)
 }
 
 fn parse_mask_field(value: &str, line_index: usize, name: &str) -> Result<u32> {
@@ -463,6 +740,8 @@ mod tests {
         assert!(!report.passed());
         assert_eq!(report.masked_mismatches, 1);
         assert_eq!(report.unmasked_mismatches, 1);
+        assert_eq!(report.max_channel_delta, 1);
+        assert_eq!(report.regions[0].mismatched_pixels, 1);
         assert_eq!(report.first_unmasked_mismatch.unwrap().x, 2);
     }
 
@@ -471,6 +750,24 @@ mod tests {
         let masks = parse_masks("1\t2\t3\t4\n# comment\n", PixelSize::new(10, 10)).unwrap();
 
         assert_eq!(masks, vec![PixelMaskRect::new(1, 2, 3, 4)]);
+    }
+
+    #[test]
+    fn parses_governed_masks_with_reasons() {
+        let masks = parse_governed_masks("1\t2\t3\t4\tclock glyph blink\n", PixelSize::new(10, 10))
+            .unwrap();
+
+        assert_eq!(masks[0].rect, PixelMaskRect::new(1, 2, 3, 4));
+        assert_eq!(masks[0].reason, "clock glyph blink");
+    }
+
+    #[test]
+    fn rejects_governed_masks_without_reason() {
+        let err = parse_governed_masks("1\t2\t3\t4\n", PixelSize::new(10, 10)).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("must contain x, y, width, height, reason"));
     }
 
     #[test]
@@ -519,5 +816,41 @@ mod tests {
             threshold.as_tsv().to_string(),
             "threshold\ttoolbar\tunmasked<=0\tmasked<=unbounded-explicit\texplicit-masks=true"
         );
+    }
+
+    #[test]
+    fn decodes_and_writes_png_artifacts() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-png-pixel-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let expected = RgbaImage {
+            size: PixelSize::new(1, 1),
+            bytes: vec![0, 0, 0, 255],
+        };
+        let actual = RgbaImage {
+            size: PixelSize::new(1, 1),
+            bytes: vec![255, 0, 0, 255],
+        };
+        let diff = diff_rgba(
+            &expected.bytes,
+            &actual.bytes,
+            &PixelDiffOptions::strict(expected.size),
+        )
+        .unwrap();
+        let diff_path = root.join("diff.png");
+
+        write_visual_diff_png(&diff_path, &expected, &actual, &diff).unwrap();
+        let decoded = read_rgba_image_file(&diff_path, None).unwrap();
+
+        assert_eq!(decoded.size, PixelSize::new(1, 1));
+        assert_eq!(decoded.bytes, vec![255, 32, 48, 255]);
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

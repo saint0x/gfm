@@ -30,7 +30,9 @@ pub use parity_profile::{
     ParityAppearance, SymbolToken, TimingToken, TypographyToken,
 };
 pub use pixel::{
-    diff_rgba, diff_rgba_files, evaluate_pixel_threshold, parse_masks, read_mask_file,
-    ParitySurface, PixelDiffOptions, PixelDiffReport, PixelDriftThreshold, PixelMaskRect,
-    PixelMismatch, PixelSize, PixelThresholdEvaluation, PixelThresholdViolation, ThresholdTsv,
+    diff_image_files, diff_rgba, diff_rgba_files, evaluate_pixel_threshold, parse_governed_masks,
+    parse_masks, read_governed_mask_file, read_mask_file, read_rgba_image_file,
+    write_visual_diff_png, ParitySurface, PixelDiffOptions, PixelDiffReport, PixelDriftThreshold,
+    PixelMaskRect, PixelMaskRegion, PixelMismatch, PixelRegionSummary, PixelSize,
+    PixelThresholdEvaluation, PixelThresholdViolation, RgbaImage, ThresholdTsv,
 };

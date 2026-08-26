@@ -1814,6 +1814,7 @@ dependencies = [
  "gfm-store",
  "gfm-telemetry",
  "gfm-types",
+ "png 0.17.16",
 ]
 
 [[package]]

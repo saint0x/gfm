@@ -339,7 +339,7 @@ fn runtime_payload_catalog() -> Option<JobPayloadCatalog> {
     env::var_os("GFM_JOB_PAYLOAD_CATALOG").map(JobPayloadCatalog::new)
 }
 
-fn runtime_progress_store() -> Option<JobProgressStore> {
+pub(crate) fn runtime_progress_store() -> Option<JobProgressStore> {
     env::var_os("GFM_JOB_PROGRESS_STORE").map(JobProgressStore::new)
 }
 

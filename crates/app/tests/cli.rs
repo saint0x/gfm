@@ -74,6 +74,71 @@ fn indexes_and_searches_real_files_from_binary() {
 }
 
 #[test]
+fn parity_gate_and_review_use_governed_masks_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-gate-root");
+    let expected = root.join("finder.rgba");
+    let actual = root.join("gfm.rgba");
+    let mask = root.join("mask.tsv");
+    let manifest = root.join("gate.tsv");
+    let review = root.join("review");
+    fs::write(&expected, [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
+    fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
+    fs::write(&mask, "1\t0\t1\t1\tOS-owned sidebar clock repaint\n").unwrap();
+    fs::write(
+        &manifest,
+        format!(
+            "toolbar\t{}\t{}\t2\t1\t{}\n",
+            expected.display(),
+            actual.display(),
+            mask.display()
+        ),
+    )
+    .unwrap();
+
+    let gate = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["parity-gate", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        gate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gate.stderr)
+    );
+    let gate_stdout = String::from_utf8(gate.stdout).unwrap();
+    assert!(gate_stdout.contains("passed=true"), "{gate_stdout}");
+    assert!(gate_stdout.contains("masked=1"), "{gate_stdout}");
+
+    let bundle = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "parity-review",
+            manifest.to_str().unwrap(),
+            review.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        bundle.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bundle.stderr)
+    );
+    let bundle_stdout = String::from_utf8(bundle.stdout).unwrap();
+    assert!(bundle_stdout.contains("passed=true"), "{bundle_stdout}");
+    assert!(review
+        .join("visual-diffs")
+        .join("000-toolbar-diff.png")
+        .exists());
+    assert!(review
+        .join("source-artifacts")
+        .join("000-toolbar-finder.rgba")
+        .exists());
+    assert!(fs::read_to_string(review.join("mask-justifications.tsv"))
+        .unwrap()
+        .contains("OS-owned sidebar clock repaint"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn inspects_archive_schema_from_binary() {
     let root = unique_temp_dir("gfm-cli-archive-schema-root");
     let index = unique_temp_path("gfm-cli-archive-schema", "gfmidx");
@@ -4643,8 +4708,55 @@ fn defers_background_content_indexer_under_saturated_io_from_binary() {
     assert!(!journal.exists());
     assert!(fs::read_dir(&segments).unwrap().next().is_none());
 
+    let resume_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "resume-content-background",
+            spec.to_str().unwrap(),
+            journal.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        resume_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resume_output.stderr)
+    );
+    let resume_stderr = String::from_utf8(resume_output.stderr).unwrap();
+    assert!(
+        resume_stderr.contains("resumed-background-content-indexed"),
+        "{resume_stderr}"
+    );
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index",
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "workermarker",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+    let search_stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(search_stdout.contains("worker.md"), "{search_stdout}");
+    let resumed_progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        resumed_progress_text.contains("\tcompleted\t2\t2\tcompleted\t"),
+        "{resumed_progress_text}"
+    );
+
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+    fs::remove_file(journal).unwrap();
     fs::remove_file(spec).unwrap();
     fs::remove_file(catalog).unwrap();
     fs::remove_file(progress).unwrap();

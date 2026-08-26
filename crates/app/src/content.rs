@@ -5,7 +5,8 @@ use crate::extract::{
 };
 use crate::runtime::{
     default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
-    run_scheduled_volume_task_cancellable, run_volume_task_cancellable, RuntimeJobHandle,
+    run_scheduled_volume_task_cancellable, run_volume_task_cancellable, runtime_progress_store,
+    RuntimeJobHandle,
 };
 use crate::{
     detect_volume_id, optional_path_arg, parent_volume, parse_battery_state, parse_io_pressure,
@@ -26,6 +27,7 @@ use gfm_jobs::{
 };
 use gfm_store::read_records;
 use gfm_types::{GfmError, Result, SearchHit};
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -378,8 +380,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or_else(default_job_journal_path);
             let journal = JobJournal::new(journal);
-            let recoverable = journal.recoverable(RetryPolicy { max_attempts: 2 })?;
-            if recoverable.is_empty() {
+            let recoverable = recoverable_background_content_jobs(&journal)?;
+            if recoverable == 0 {
                 eprintln!("no recoverable background content jobs");
             } else {
                 let spec = ContentIndexJobSpec::read(&spec_path)?;
@@ -388,8 +390,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 if outcome.deferred {
                     eprintln!(
                         "resumed-background-content-deferred action={:?}; recoverable {}",
-                        outcome.scheduling_action,
-                        recoverable.len()
+                        outcome.scheduling_action, recoverable
                     );
                 } else {
                     let report = outcome.report.ok_or_else(|| {
@@ -407,7 +408,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         report.segments.len(),
                         report.terms,
                         outcome.scheduling_action,
-                        recoverable.len()
+                        recoverable
                     );
                 }
             }
@@ -423,8 +424,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let pressure = parse_required_scheduling_pressure(args, "resume content job")?;
             let journal = JobJournal::new(journal_path);
-            let recoverable = journal.recoverable(RetryPolicy { max_attempts: 2 })?;
-            if recoverable.is_empty() {
+            let recoverable = recoverable_background_content_jobs(&journal)?;
+            if recoverable == 0 {
                 eprintln!("no recoverable background content jobs");
             } else {
                 let spec = ContentIndexJobSpec::read(&spec_path)?;
@@ -432,8 +433,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 if outcome.deferred {
                     eprintln!(
                         "resumed-background-content-deferred action={:?}; recoverable {}",
-                        outcome.scheduling_action,
-                        recoverable.len()
+                        outcome.scheduling_action, recoverable
                     );
                 } else {
                     let report = outcome.report.ok_or_else(|| {
@@ -451,7 +451,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         report.segments.len(),
                         report.terms,
                         outcome.scheduling_action,
-                        recoverable.len()
+                        recoverable
                     );
                 }
             }
@@ -631,6 +631,23 @@ pub(crate) fn run_content_search(
             Ok((indexed, hits))
         },
     )
+}
+
+fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<usize> {
+    let mut ids = journal
+        .recoverable(RetryPolicy { max_attempts: 2 })?
+        .into_iter()
+        .filter(|job| job.label == "background content index")
+        .map(|job| job.id)
+        .collect::<HashSet<_>>();
+    if let Some(store) = runtime_progress_store() {
+        for snapshot in store.restorable()? {
+            if snapshot.label == "background content index" {
+                ids.insert(snapshot.id);
+            }
+        }
+    }
+    Ok(ids.len())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

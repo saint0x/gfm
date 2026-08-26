@@ -1,6 +1,6 @@
 use crate::{
-    diff_rgba_files, evaluate_pixel_threshold, read_mask_file, ParitySurface, PixelDiffOptions,
-    PixelDiffReport, PixelDriftThreshold, PixelSize, PixelThresholdEvaluation,
+    diff_image_files, evaluate_pixel_threshold, read_governed_mask_file, write_visual_diff_png,
+    ParitySurface, PixelDiffReport, PixelDriftThreshold, PixelSize, PixelThresholdEvaluation,
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
@@ -77,6 +77,10 @@ pub struct ParityReviewBundle {
     pub entries_path: PathBuf,
     pub violations_path: PathBuf,
     pub first_mismatch_path: PathBuf,
+    pub region_summary_path: PathBuf,
+    pub mask_justification_path: PathBuf,
+    pub visual_diff_dir: PathBuf,
+    pub source_artifact_dir: PathBuf,
     pub bundle_manifest_path: PathBuf,
     pub report: ParityGateReport,
 }
@@ -97,11 +101,15 @@ pub fn run_parity_gate(inputs: Vec<ParityGateInput>) -> Result<ParityGateReport>
         let masks = input
             .mask_path
             .as_ref()
-            .map(|path| read_mask_file(path, input.size))
+            .map(|path| read_governed_mask_file(path, input.size))
             .transpose()?
             .unwrap_or_default();
-        let options = PixelDiffOptions::strict(input.size).with_masks(masks);
-        let diff = diff_rgba_files(&input.expected_path, &input.actual_path, &options)?;
+        let (diff, _, _) = diff_image_files(
+            &input.expected_path,
+            &input.actual_path,
+            Some(input.size),
+            masks,
+        )?;
         let threshold = PixelDriftThreshold::finder_strict(input.surface);
         let evaluation = evaluate_pixel_threshold(&diff, threshold);
         entries.push(ParityGateEntryReport {
@@ -135,20 +143,41 @@ pub fn write_parity_review_bundle(
     let entries_path = output_dir.join("entries.tsv");
     let violations_path = output_dir.join("violations.tsv");
     let first_mismatch_path = output_dir.join("first-unmasked.tsv");
+    let region_summary_path = output_dir.join("regions.tsv");
+    let mask_justification_path = output_dir.join("mask-justifications.tsv");
+    let visual_diff_dir = output_dir.join("visual-diffs");
+    let source_artifact_dir = output_dir.join("source-artifacts");
     let bundle_manifest_path = output_dir.join("bundle.tsv");
+
+    fs::create_dir_all(&visual_diff_dir).map_err(|err| GfmError::io(&visual_diff_dir, err))?;
+    fs::create_dir_all(&source_artifact_dir)
+        .map_err(|err| GfmError::io(&source_artifact_dir, err))?;
+    let artifact_rows =
+        write_review_image_artifacts(&report, &visual_diff_dir, &source_artifact_dir)?;
 
     write_text(&review_path, &render_review_markdown(&report))?;
     write_text(&entries_path, &render_entries_tsv(&report))?;
     write_text(&violations_path, &render_violations_tsv(&report))?;
     write_text(&first_mismatch_path, &render_first_mismatches_tsv(&report))?;
+    write_text(&region_summary_path, &render_regions_tsv(&report))?;
+    write_text(
+        &mask_justification_path,
+        &render_mask_justifications_tsv(&report),
+    )?;
+    let manifest_context = BundleManifestContext {
+        review_path: &review_path,
+        entries_path: &entries_path,
+        violations_path: &violations_path,
+        first_mismatch_path: &first_mismatch_path,
+        region_summary_path: &region_summary_path,
+        mask_justification_path: &mask_justification_path,
+        visual_diff_dir: &visual_diff_dir,
+        source_artifact_dir: &source_artifact_dir,
+        artifact_rows: &artifact_rows,
+    };
     write_text(
         &bundle_manifest_path,
-        &render_bundle_manifest(
-            &review_path,
-            &entries_path,
-            &violations_path,
-            &first_mismatch_path,
-        ),
+        &render_bundle_manifest(&manifest_context),
     )?;
 
     Ok(ParityReviewBundle {
@@ -157,6 +186,10 @@ pub fn write_parity_review_bundle(
         entries_path,
         violations_path,
         first_mismatch_path,
+        region_summary_path,
+        mask_justification_path,
+        visual_diff_dir,
+        source_artifact_dir,
         bundle_manifest_path,
         report,
     })
@@ -213,17 +246,18 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
     text.push_str(&format!("Violations: {}\n\n", report.violations()));
     text.push_str(&format!("Passed: {}\n\n", report.passed()));
     text.push_str("## Surface Summary\n\n");
-    text.push_str("| Surface | Size | Mismatched | Unmasked | Masked | Passed |\n");
-    text.push_str("| --- | ---: | ---: | ---: | ---: | --- |\n");
+    text.push_str("| Surface | Size | Mismatched | Unmasked | Masked | Max Delta | Passed |\n");
+    text.push_str("| --- | ---: | ---: | ---: | ---: | ---: | --- |\n");
     for entry in &report.entries {
         text.push_str(&format!(
-            "| {} | {}x{} | {} | {} | {} | {} |\n",
+            "| {} | {}x{} | {} | {} | {} | {} | {} |\n",
             entry.input.surface.as_str(),
             entry.diff.size.width,
             entry.diff.size.height,
             entry.diff.mismatched_pixels,
             entry.diff.unmasked_mismatches,
             entry.diff.masked_mismatches,
+            entry.diff.max_channel_delta,
             entry.passed()
         ));
     }
@@ -238,11 +272,11 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
 
 fn render_entries_tsv(report: &ParityGateReport) -> String {
     let mut text =
-        "surface\twidth\theight\texpected\tactual\tmask\tmismatched\tunmasked\tmasked\tpassed\n"
+        "surface\twidth\theight\texpected\tactual\tmask\tmismatched\tunmasked\tmasked\tmax-channel-delta\tpassed\n"
             .to_string();
     for entry in &report.entries {
         text.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             entry.input.surface.as_str(),
             entry.diff.size.width,
             entry.diff.size.height,
@@ -257,6 +291,7 @@ fn render_entries_tsv(report: &ParityGateReport) -> String {
             entry.diff.mismatched_pixels,
             entry.diff.unmasked_mismatches,
             entry.diff.masked_mismatches,
+            entry.diff.max_channel_delta,
             entry.passed()
         ));
     }
@@ -294,19 +329,74 @@ fn render_first_mismatches_tsv(report: &ParityGateReport) -> String {
     text
 }
 
-fn render_bundle_manifest(
-    review_path: &Path,
-    entries_path: &Path,
-    violations_path: &Path,
-    first_mismatch_path: &Path,
-) -> String {
-    format!(
-        "kind\tpath\nreview\t{}\nentries\t{}\nviolations\t{}\nfirst-unmasked\t{}\n",
-        review_path.display(),
-        entries_path.display(),
-        violations_path.display(),
-        first_mismatch_path.display()
-    )
+fn render_regions_tsv(report: &ParityGateReport) -> String {
+    let mut text =
+        "surface\tname\tx\ty\twidth\theight\tmismatched\tmax-channel-delta\n".to_string();
+    for entry in &report.entries {
+        for region in &entry.diff.regions {
+            text.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                entry.input.surface.as_str(),
+                escape_tsv_field(&region.name),
+                region.rect.x,
+                region.rect.y,
+                region.rect.width,
+                region.rect.height,
+                region.mismatched_pixels,
+                region.max_channel_delta
+            ));
+        }
+    }
+    text
+}
+
+fn render_mask_justifications_tsv(report: &ParityGateReport) -> String {
+    let mut text = "surface\tx\ty\twidth\theight\treason\n".to_string();
+    for entry in &report.entries {
+        for mask in &entry.diff.masks {
+            text.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\n",
+                entry.input.surface.as_str(),
+                mask.rect.x,
+                mask.rect.y,
+                mask.rect.width,
+                mask.rect.height,
+                escape_tsv_field(&mask.reason)
+            ));
+        }
+    }
+    text
+}
+
+struct BundleManifestContext<'a> {
+    review_path: &'a Path,
+    entries_path: &'a Path,
+    violations_path: &'a Path,
+    first_mismatch_path: &'a Path,
+    region_summary_path: &'a Path,
+    mask_justification_path: &'a Path,
+    visual_diff_dir: &'a Path,
+    source_artifact_dir: &'a Path,
+    artifact_rows: &'a [String],
+}
+
+fn render_bundle_manifest(context: &BundleManifestContext<'_>) -> String {
+    let mut text = format!(
+        "kind\tpath\nreview\t{}\nentries\t{}\nviolations\t{}\nfirst-unmasked\t{}\nregions\t{}\nmask-justifications\t{}\nvisual-diffs\t{}\nsource-artifacts\t{}\n",
+        context.review_path.display(),
+        context.entries_path.display(),
+        context.violations_path.display(),
+        context.first_mismatch_path.display(),
+        context.region_summary_path.display(),
+        context.mask_justification_path.display(),
+        context.visual_diff_dir.display(),
+        context.source_artifact_dir.display()
+    );
+    for row in context.artifact_rows {
+        text.push_str(row);
+        text.push('\n');
+    }
+    text
 }
 
 fn pixel_hex(pixel: [u8; 4]) -> String {
@@ -318,6 +408,54 @@ fn pixel_hex(pixel: [u8; 4]) -> String {
 
 fn write_text(path: &Path, content: &str) -> Result<()> {
     fs::write(path, content).map_err(|err| GfmError::io(path, err))
+}
+
+fn write_review_image_artifacts(
+    report: &ParityGateReport,
+    visual_diff_dir: &Path,
+    source_artifact_dir: &Path,
+) -> Result<Vec<String>> {
+    let mut rows = Vec::new();
+    for (index, entry) in report.entries.iter().enumerate() {
+        let expected =
+            crate::read_rgba_image_file(&entry.input.expected_path, Some(entry.input.size))?;
+        let actual = crate::read_rgba_image_file(&entry.input.actual_path, Some(entry.input.size))?;
+        let stem = format!("{index:03}-{}", entry.input.surface.as_str());
+        let diff_path = visual_diff_dir.join(format!("{stem}-diff.png"));
+        write_visual_diff_png(&diff_path, &expected, &actual, &entry.diff)?;
+        rows.push(format!("visual-diff\t{}", diff_path.display()));
+
+        let expected_copy = source_artifact_dir.join(format!(
+            "{stem}-finder{}",
+            artifact_extension(&entry.input.expected_path)
+        ));
+        let actual_copy = source_artifact_dir.join(format!(
+            "{stem}-gfm{}",
+            artifact_extension(&entry.input.actual_path)
+        ));
+        copy_artifact(&entry.input.expected_path, &expected_copy)?;
+        copy_artifact(&entry.input.actual_path, &actual_copy)?;
+        rows.push(format!("finder-source\t{}", expected_copy.display()));
+        rows.push(format!("gfm-source\t{}", actual_copy.display()));
+    }
+    Ok(rows)
+}
+
+fn artifact_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| format!(".{extension}"))
+        .unwrap_or_else(|| ".rgba".to_string())
+}
+
+fn copy_artifact(source: &Path, destination: &Path) -> Result<()> {
+    fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(|err| GfmError::io(destination, err))
+}
+
+fn escape_tsv_field(value: &str) -> String {
+    value.replace(['\t', '\n', '\r'], " ")
 }
 
 fn resolve_manifest_path(base: &Path, value: &str) -> PathBuf {
@@ -341,6 +479,7 @@ fn parse_manifest_u32(line_index: usize, name: &str, value: &str) -> Result<u32>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RgbaImage;
 
     #[test]
     fn parity_gate_passes_only_explicitly_masked_drift() {
@@ -350,7 +489,7 @@ mod tests {
         let mask = root.join("mask.tsv");
         fs::write(&expected, [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
         fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
-        fs::write(&mask, "1\t0\t1\t1\n").unwrap();
+        fs::write(&mask, "1\t0\t1\t1\tclock owned by system menu extras\n").unwrap();
 
         let report = run_parity_gate(vec![ParityGateInput::new(
             ParitySurface::Toolbar,
@@ -364,6 +503,7 @@ mod tests {
         assert!(report.passed());
         assert_eq!(report.violations(), 0);
         assert_eq!(report.entries[0].diff.masked_mismatches, 1);
+        assert_eq!(report.entries[0].diff.regions[0].mismatched_pixels, 1);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -414,6 +554,35 @@ mod tests {
     }
 
     #[test]
+    fn parity_gate_reports_dimension_mismatches_for_png_inputs() {
+        let root = unique_temp_dir("gfm-parity-gate-dimensions");
+        let one = RgbaImage {
+            size: PixelSize::new(1, 1),
+            bytes: vec![0, 0, 0, 255],
+        };
+        let two = RgbaImage {
+            size: PixelSize::new(2, 1),
+            bytes: vec![0, 0, 0, 255, 0, 0, 0, 255],
+        };
+        let expected = root.join("expected.png");
+        let actual = root.join("actual.png");
+        write_visual_diff_png(&expected, &one, &one, &empty_report(one.size)).unwrap();
+        write_visual_diff_png(&actual, &two, &two, &empty_report(two.size)).unwrap();
+
+        let err = run_parity_gate(vec![ParityGateInput::new(
+            ParitySurface::Icon,
+            &expected,
+            &actual,
+            PixelSize::new(1, 1),
+        )])
+        .unwrap_err();
+
+        assert!(err.to_string().contains("image dimensions differ"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn review_bundle_writes_human_artifacts_for_failed_drift() {
         let root = unique_temp_dir("gfm-parity-review");
         let expected = root.join("expected.rgba");
@@ -434,6 +603,13 @@ mod tests {
         assert!(bundle.entries_path.exists());
         assert!(bundle.violations_path.exists());
         assert!(bundle.first_mismatch_path.exists());
+        assert!(bundle.region_summary_path.exists());
+        assert!(bundle.mask_justification_path.exists());
+        assert!(bundle.visual_diff_dir.join("000-text-diff.png").exists());
+        assert!(bundle
+            .source_artifact_dir
+            .join("000-text-finder.rgba")
+            .exists());
         assert!(fs::read_to_string(&bundle.review_path)
             .unwrap()
             .contains("Passed: false"));
@@ -445,6 +621,20 @@ mod tests {
             .contains("090a0aff"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn empty_report(size: PixelSize) -> PixelDiffReport {
+        PixelDiffReport {
+            size,
+            total_pixels: size.pixel_count().unwrap(),
+            mismatched_pixels: 0,
+            unmasked_mismatches: 0,
+            masked_mismatches: 0,
+            max_channel_delta: 0,
+            masks: Vec::new(),
+            regions: Vec::new(),
+            first_unmasked_mismatch: None,
+        }
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

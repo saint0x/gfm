@@ -92,13 +92,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let options = PixelDiffOptions::strict(size).with_masks(masks);
             let report = diff_rgba_files(expected, actual, &options)?;
             println!(
-                "pixel-diff\t{}x{}\ttotal={}\tmismatched={}\tunmasked={}\tmasked={}\tpassed={}",
+                "pixel-diff\t{}x{}\ttotal={}\tmismatched={}\tunmasked={}\tmasked={}\tmax-channel-delta={}\tpassed={}",
                 report.size.width,
                 report.size.height,
                 report.total_pixels,
                 report.mismatched_pixels,
                 report.unmasked_mismatches,
                 report.masked_mismatches,
+                report.max_channel_delta,
                 report.passed()
             );
             if let Some(mismatch) = report.first_unmasked_mismatch {
@@ -152,12 +153,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let threshold = PixelDriftThreshold::finder_strict(surface);
             let evaluation = evaluate_pixel_threshold(&report, threshold);
             println!(
-                "{}\tpassed={}\tmismatched={}\tunmasked={}\tmasked={}",
+                "{}\tpassed={}\tmismatched={}\tunmasked={}\tmasked={}\tmax-channel-delta={}",
                 threshold.as_tsv(),
                 evaluation.passed,
                 report.mismatched_pixels,
                 report.unmasked_mismatches,
-                report.masked_mismatches
+                report.masked_mismatches,
+                report.max_channel_delta
             );
             for violation in &evaluation.violations {
                 println!("{}", violation.as_tsv());
@@ -182,12 +184,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             );
             for entry in &report.entries {
                 println!(
-                    "{}\tpassed={}\tmismatched={}\tunmasked={}\tmasked={}\texpected={}\tactual={}",
+                    "{}\tpassed={}\tmismatched={}\tunmasked={}\tmasked={}\tmax-channel-delta={}\texpected={}\tactual={}",
                     entry.evaluation.threshold.as_tsv(),
                     entry.evaluation.passed,
                     entry.diff.mismatched_pixels,
                     entry.diff.unmasked_mismatches,
                     entry.diff.masked_mismatches,
+                    entry.diff.max_channel_delta,
                     entry.input.expected_path.display(),
                     entry.input.actual_path.display()
                 );
@@ -219,6 +222,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             println!("entries\t{}", bundle.entries_path.display());
             println!("violations\t{}", bundle.violations_path.display());
             println!("first-unmasked\t{}", bundle.first_mismatch_path.display());
+            println!("regions\t{}", bundle.region_summary_path.display());
+            println!(
+                "mask-justifications\t{}",
+                bundle.mask_justification_path.display()
+            );
+            println!("visual-diffs\t{}", bundle.visual_diff_dir.display());
+            println!("source-artifacts\t{}", bundle.source_artifact_dir.display());
             println!("bundle\t{}", bundle.bundle_manifest_path.display());
             if !bundle.report.passed() {
                 return Err(GfmError::Format(format!(
