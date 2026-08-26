@@ -4,9 +4,11 @@ use gfm_store::{
     fuzzy_postings_from_records, metadata_postings_from_records, prefix_postings_from_records,
     substring_postings_from_records, write_content_postings, write_fuzzy_postings,
     write_metadata_postings, write_prefix_postings, write_record_columns, write_substring_postings,
-    FuzzyPosting, PrefixPosting, SubstringPosting,
+    FuzzyPosting, MetadataField, MmapMetadataArchive, PrefixPosting, SubstringPosting,
 };
-use gfm_types::{ContentPositions, ContentPosting, FileKind, MatchReason, VolumeId};
+use gfm_types::{
+    ContentPositions, ContentPosting, FileKind, MatchReason, SecondaryMetadataRecord, VolumeId,
+};
 use std::collections::HashSet;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -49,6 +51,58 @@ fn builds_saves_loads_and_searches_snapshot() {
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(output).unwrap();
+}
+
+#[test]
+fn publishes_secondary_metadata_to_mmap_archive() {
+    let metadata_path = unique_temp_path("gfm-secondary-metadata", "gfmmeta");
+    let record = FileRecord {
+        id: FileId::new(VolumeId(7), 99),
+        parent: None,
+        path: PathBuf::from("/tmp/report.md"),
+        name: "report.md".to_string(),
+        kind: FileKind::File,
+        len: 10,
+        mode: 0,
+        owner: 0,
+        group: 0,
+        xattrs_digest: 0,
+        created: None,
+        modified: None,
+        changed: None,
+        hidden: false,
+        tags: vec!["Primary".to_string()],
+        finder_comment: Some("local note".to_string()),
+    };
+    let secondary = SecondaryMetadataRecord {
+        id: record.id,
+        tags: vec!["Spotlight".to_string()],
+        comments: vec!["Markdown Document imported from example.com".to_string()],
+    };
+
+    let report = publish_secondary_metadata(
+        std::slice::from_ref(&record),
+        std::slice::from_ref(&secondary),
+        &metadata_path,
+    )
+    .unwrap();
+    let archive = MmapMetadataArchive::open(&metadata_path).unwrap();
+
+    assert_eq!(report.primary_records, 1);
+    assert_eq!(report.secondary_records, 1);
+    assert!(report.postings >= 6);
+    assert_eq!(
+        archive.ids_for(MetadataField::Tag, "spotlight").unwrap(),
+        vec![record.id]
+    );
+    assert_eq!(
+        archive.ids_for(MetadataField::Comment, "markdown").unwrap(),
+        vec![record.id]
+    );
+    assert!(report
+        .as_tsv()
+        .starts_with("secondary-metadata-publication\t"));
+    fs::remove_file(metadata_path).unwrap();
 }
 
 #[test]

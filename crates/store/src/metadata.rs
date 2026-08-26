@@ -4,7 +4,7 @@ use crate::ids::{
     read_blocked_file_ids_limited_from_slice, write_blocked_file_ids,
 };
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
-use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
+use gfm_types::{FileId, FileRecord, GfmError, Result, SecondaryMetadataRecord, VolumeId};
 use memmap2::{Mmap, MmapOptions};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -88,26 +88,27 @@ pub struct MmapMetadataArchive {
 }
 
 pub fn metadata_postings_from_records(records: &[FileRecord]) -> Vec<MetadataPosting> {
+    metadata_postings_from_records_and_secondary(records, &[])
+}
+
+pub fn metadata_postings_from_records_and_secondary(
+    records: &[FileRecord],
+    secondary: &[SecondaryMetadataRecord],
+) -> Vec<MetadataPosting> {
     let mut postings: BTreeMap<(MetadataField, String), BTreeSet<FileId>> = BTreeMap::new();
     for record in records {
-        for tag in &record.tags {
-            let tag = normalize(tag);
-            if !tag.is_empty() {
-                postings
-                    .entry((MetadataField::Tag, tag))
-                    .or_default()
-                    .insert(record.id);
-            }
-        }
-        if let Some(comment) = &record.finder_comment {
-            for token in tokenize(&normalize(comment)) {
-                postings
-                    .entry((MetadataField::Comment, token))
-                    .or_default()
-                    .insert(record.id);
-            }
+        index_tags(&mut postings, record.id, &record.tags);
+        if let Some(comment) = record.finder_comment.as_ref() {
+            index_comment(&mut postings, record.id, comment);
         }
     }
+    for record in secondary {
+        index_tags(&mut postings, record.id, &record.tags);
+        for comment in &record.comments {
+            index_comment(&mut postings, record.id, comment);
+        }
+    }
+
     postings
         .into_iter()
         .map(|((field, term), ids)| MetadataPosting {
@@ -116,6 +117,35 @@ pub fn metadata_postings_from_records(records: &[FileRecord]) -> Vec<MetadataPos
             ids: ids.into_iter().collect(),
         })
         .collect()
+}
+
+fn index_tags(
+    postings: &mut BTreeMap<(MetadataField, String), BTreeSet<FileId>>,
+    id: FileId,
+    tags: &[String],
+) {
+    for tag in tags {
+        let tag = normalize(tag);
+        if !tag.is_empty() {
+            postings
+                .entry((MetadataField::Tag, tag))
+                .or_default()
+                .insert(id);
+        }
+    }
+}
+
+fn index_comment(
+    postings: &mut BTreeMap<(MetadataField, String), BTreeSet<FileId>>,
+    id: FileId,
+    comment: &str,
+) {
+    for token in tokenize(&normalize(comment)) {
+        postings
+            .entry((MetadataField::Comment, token))
+            .or_default()
+            .insert(id);
+    }
 }
 
 pub fn write_metadata_postings(path: impl AsRef<Path>, postings: &[MetadataPosting]) -> Result<()> {

@@ -56,6 +56,13 @@ impl FileRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecondaryMetadataRecord {
+    pub id: FileId,
+    pub tags: Vec<String>,
+    pub comments: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectoryPage {
     pub root: PathBuf,
     pub entries: Vec<FileRecord>,

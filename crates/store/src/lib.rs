@@ -54,8 +54,9 @@ pub use fuzzy::{
     LimitedFuzzyPosting, MmapFuzzyArchive,
 };
 pub use metadata::{
-    metadata_postings_from_records, read_metadata_postings, write_metadata_postings,
-    LimitedMetadataPosting, MetadataField, MetadataPosting, MmapMetadataArchive,
+    metadata_postings_from_records, metadata_postings_from_records_and_secondary,
+    read_metadata_postings, write_metadata_postings, LimitedMetadataPosting, MetadataField,
+    MetadataPosting, MmapMetadataArchive,
 };
 pub use prefix::{
     prefix_postings_from_records, read_prefix_postings, write_prefix_postings,

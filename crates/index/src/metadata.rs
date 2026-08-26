@@ -1,4 +1,5 @@
-use gfm_types::FileRecord;
+use gfm_store::{metadata_postings_from_records_and_secondary, write_metadata_postings};
+use gfm_types::{FileRecord, Result, SecondaryMetadataRecord};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6,6 +7,26 @@ pub struct MetadataUpdateReport {
     pub path: PathBuf,
     pub existed: bool,
     pub changed: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecondaryMetadataPublicationReport {
+    pub path: PathBuf,
+    pub primary_records: usize,
+    pub secondary_records: usize,
+    pub postings: usize,
+}
+
+impl SecondaryMetadataPublicationReport {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "secondary-metadata-publication\t{}\tprimary_records={}\tsecondary_records={}\tpostings={}",
+            self.path.display(),
+            self.primary_records,
+            self.secondary_records,
+            self.postings,
+        )
+    }
 }
 
 impl MetadataUpdateReport {
@@ -60,6 +81,22 @@ impl MetadataUpdateReport {
             self.changed.join(",")
         )
     }
+}
+
+pub fn publish_secondary_metadata(
+    records: &[FileRecord],
+    secondary: &[SecondaryMetadataRecord],
+    metadata_path: impl AsRef<Path>,
+) -> Result<SecondaryMetadataPublicationReport> {
+    let metadata_path = metadata_path.as_ref();
+    let postings = metadata_postings_from_records_and_secondary(records, secondary);
+    write_metadata_postings(metadata_path, &postings)?;
+    Ok(SecondaryMetadataPublicationReport {
+        path: metadata_path.to_path_buf(),
+        primary_records: records.len(),
+        secondary_records: secondary.len(),
+        postings: postings.len(),
+    })
 }
 
 pub fn diff_metadata(

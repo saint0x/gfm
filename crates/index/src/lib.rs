@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use gfm_store::write_content_segment;
 #[cfg(test)]
-use gfm_store::{MmapMetadataArchive, MmapRecordColumns, MmapSubstringArchive};
+use gfm_store::{MmapRecordColumns, MmapSubstringArchive};
 #[cfg(test)]
 use gfm_types::{FileEvent, FileEventKind, GfmError};
 
@@ -63,7 +63,10 @@ pub use lookup::{
     query_sidecar_imports, ContentQueryLoadReport, SearchArchiveLookup, SidecarQueryImport,
     SidecarQueryImportReport, SidecarRecordHydrationReport,
 };
-pub use metadata::{diff_metadata, MetadataUpdateReport};
+pub use metadata::{
+    diff_metadata, publish_secondary_metadata, MetadataUpdateReport,
+    SecondaryMetadataPublicationReport,
+};
 pub use progress::{ScanProgressCheckpoint, SCAN_PROGRESS_SCHEMA_VERSION};
 pub use recovery::{
     persistent_index_action_name, persistent_index_reason_name, plan_persistent_index_recovery,

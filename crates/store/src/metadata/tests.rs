@@ -1,5 +1,5 @@
 use super::*;
-use gfm_types::FileKind;
+use gfm_types::{FileKind, SecondaryMetadataRecord};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -54,6 +54,61 @@ fn mmap_metadata_archive_reads_tags_and_comment_terms() {
         Vec::new()
     );
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn metadata_postings_merge_secondary_spotlight_records() {
+    let primary = FileRecord {
+        id: FileId::new(VolumeId(4), 12),
+        parent: None,
+        path: PathBuf::from("/tmp/a/report.md"),
+        name: "report.md".to_string(),
+        kind: FileKind::File,
+        len: 1,
+        mode: 0,
+        owner: 0,
+        group: 0,
+        xattrs_digest: 0,
+        created: None,
+        modified: None,
+        changed: None,
+        hidden: false,
+        tags: vec!["Important".to_string()],
+        finder_comment: Some("client handoff".to_string()),
+    };
+    let secondary = SecondaryMetadataRecord {
+        id: primary.id,
+        tags: vec!["Important".to_string(), "Blue".to_string()],
+        comments: vec![
+            "PDF document".to_string(),
+            "https://example.com/source".to_string(),
+        ],
+    };
+
+    let postings = metadata_postings_from_records_and_secondary(&[primary.clone()], &[secondary]);
+
+    assert_eq!(
+        postings
+            .iter()
+            .find(|posting| posting.field == MetadataField::Tag && posting.term == "important")
+            .unwrap()
+            .ids,
+        vec![primary.id]
+    );
+    assert_eq!(
+        postings
+            .iter()
+            .find(|posting| posting.field == MetadataField::Tag && posting.term == "blue")
+            .unwrap()
+            .ids,
+        vec![primary.id]
+    );
+    assert!(postings
+        .iter()
+        .any(|posting| posting.field == MetadataField::Comment && posting.term == "pdf"));
+    assert!(postings
+        .iter()
+        .any(|posting| posting.field == MetadataField::Comment && posting.term == "example"));
 }
 
 #[test]
