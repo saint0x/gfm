@@ -10,7 +10,10 @@ pub use bookmark::{
     NativeBookmarkStatus, NativeSecurityScopedAccess,
 };
 pub use fileprovider::{
-    copy_fileprovider_resource_values, evict_ubiquitous_item, start_downloading_ubiquitous_item,
+    copy_fileprovider_identity, copy_fileprovider_resource_values, enumerate_fileprovider_domains,
+    evict_ubiquitous_item, start_downloading_ubiquitous_item, NativeFileProviderDomain,
+    NativeFileProviderDomainEnumeration, NativeFileProviderDomainStatus,
+    NativeFileProviderIdentity, NativeFileProviderIdentityStatus,
     NativeFileProviderOperationResult, NativeFileProviderOperationStatus,
     NativeFileProviderResourceValues, NativeFileProviderStatus, NativeUbiquitousDownloadingStatus,
 };

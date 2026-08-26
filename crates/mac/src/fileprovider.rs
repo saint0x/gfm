@@ -1,5 +1,8 @@
 use gfm_mac_sys::{
-    copy_fileprovider_resource_values, evict_ubiquitous_item, start_downloading_ubiquitous_item,
+    copy_fileprovider_identity, copy_fileprovider_resource_values, enumerate_fileprovider_domains,
+    evict_ubiquitous_item, start_downloading_ubiquitous_item, NativeFileProviderDomain,
+    NativeFileProviderDomainEnumeration, NativeFileProviderDomainStatus,
+    NativeFileProviderIdentity, NativeFileProviderIdentityStatus,
     NativeFileProviderOperationStatus, NativeFileProviderResourceValues,
     NativeUbiquitousDownloadingStatus,
 };
@@ -144,6 +147,197 @@ pub struct FileProviderStateReport {
     pub conflict: bool,
     pub provider_identifier: Option<String>,
     pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderDomainReport {
+    pub path: PathBuf,
+    pub domain: FileProviderDomain,
+    pub native_identity_status: NativeFileProviderIdentityStatus,
+    pub native_manager_status: NativeFileProviderDomainStatus,
+    pub resource_status: &'static str,
+    pub domain_count: usize,
+    pub item_identifier: Option<String>,
+    pub domain_identifier: Option<String>,
+    pub matched_domain_display_name: Option<String>,
+    pub matched_path_relative_to_document_storage: Option<String>,
+    pub matched_domain_disconnected: Option<bool>,
+    pub provider_identifier: Option<String>,
+    pub source: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderRegisteredDomain {
+    pub domain: FileProviderDomain,
+    pub identifier: Option<String>,
+    pub display_name: Option<String>,
+    pub path_relative_to_document_storage: Option<String>,
+    pub disconnected: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderDomainEnumerationReport {
+    pub status: NativeFileProviderDomainStatus,
+    pub domains: Vec<FileProviderRegisteredDomain>,
+    pub reason: Option<String>,
+}
+
+impl FileProviderDomainEnumerationReport {
+    pub fn discover() -> Self {
+        let native = enumerate_fileprovider_domains();
+        Self::from_native(native)
+    }
+
+    fn from_native(native: NativeFileProviderDomainEnumeration) -> Self {
+        Self {
+            status: native.status,
+            domains: native
+                .domains
+                .into_iter()
+                .map(|domain| {
+                    let mapped = domain
+                        .identifier
+                        .as_deref()
+                        .filter(|identifier| is_icloud_domain_identifier(identifier))
+                        .map(|_| FileProviderDomain::ICloudDrive)
+                        .unwrap_or(FileProviderDomain::FileProvider);
+                    FileProviderRegisteredDomain {
+                        domain: mapped,
+                        identifier: domain.identifier,
+                        display_name: domain.display_name,
+                        path_relative_to_document_storage: domain.path_relative_to_document_storage,
+                        disconnected: domain.disconnected,
+                    }
+                })
+                .collect(),
+            reason: native.reason,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let mut lines = vec![format!(
+            "fileprovider-domains\tstatus={}\tcount={}\treason={}",
+            self.status.as_str(),
+            self.domains.len(),
+            self.reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+        )];
+        lines.extend(self.domains.iter().map(|domain| {
+            format!(
+                "domain\tkind={}\tidentifier={}\tdisplay-name={}\tpath-relative={}\tdisconnected={}",
+                domain.domain.as_str(),
+                domain
+                    .identifier
+                    .as_deref()
+                    .map(escape_field)
+                    .unwrap_or_else(|| "-".to_string()),
+                domain
+                    .display_name
+                    .as_deref()
+                    .map(escape_field)
+                    .unwrap_or_else(|| "-".to_string()),
+                domain
+                    .path_relative_to_document_storage
+                    .as_deref()
+                    .map(escape_field)
+                    .unwrap_or_else(|| "-".to_string()),
+                domain
+                    .disconnected
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            )
+        }));
+        lines.join("\n")
+    }
+}
+
+impl FileProviderDomainReport {
+    pub fn read_path(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        if !path.exists() && !is_evicted_placeholder_path(&path) {
+            return Err(GfmError::io(&path, "path does not exist"));
+        }
+        let hints = CloudHints::read(&path);
+        Ok(Self::from_hints_and_domains(
+            path,
+            hints,
+            enumerate_fileprovider_domains(),
+        ))
+    }
+
+    fn from_hints_and_domains(
+        path: PathBuf,
+        hints: CloudHints,
+        domains: NativeFileProviderDomainEnumeration,
+    ) -> Self {
+        let domain = domain_for_path(&path, &hints);
+        let matched_domain = matched_domain(&hints, &domains);
+        Self {
+            path,
+            domain,
+            native_identity_status: hints.native_identity.status,
+            native_manager_status: domains.status,
+            resource_status: hints.native.status.as_str(),
+            domain_count: domains.domains.len(),
+            item_identifier: hints.native_identity.item_identifier,
+            domain_identifier: hints.native_identity.domain_identifier,
+            matched_domain_display_name: matched_domain
+                .and_then(|domain| domain.display_name.clone()),
+            matched_path_relative_to_document_storage: matched_domain
+                .and_then(|domain| domain.path_relative_to_document_storage.clone()),
+            matched_domain_disconnected: matched_domain.and_then(|domain| domain.disconnected),
+            provider_identifier: hints.provider_identifier,
+            source: hints.source,
+            reason: hints
+                .native_identity
+                .reason
+                .or(hints.native.reason)
+                .or(domains.reason),
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "fileprovider-domain\t{}\tdomain={}\tidentity-status={}\tmanager-status={}\tresource-status={}\tdomain-count={}\titem={}\tdomain-id={}\tmatched-display={}\tstorage-relative={}\tdisconnected={}\tprovider={}\tsource={}\treason={}",
+            self.path.display(),
+            self.domain.as_str(),
+            self.native_identity_status.as_str(),
+            self.native_manager_status.as_str(),
+            self.resource_status,
+            self.domain_count,
+            self.item_identifier
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.domain_identifier
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.matched_domain_display_name
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.matched_path_relative_to_document_storage
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.matched_domain_disconnected
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.provider_identifier
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            escape_field(&self.source),
+            self.reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -621,6 +815,7 @@ impl FileProviderStateReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CloudHints {
     native: NativeFileProviderResourceValues,
+    native_identity: NativeFileProviderIdentity,
     xattrs: Vec<String>,
     provider_identifier: Option<String>,
     source: String,
@@ -629,12 +824,17 @@ struct CloudHints {
 impl CloudHints {
     fn read(path: &Path) -> Self {
         let native = copy_fileprovider_resource_values(path);
+        let native_identity = copy_fileprovider_identity(path);
         let mut xattrs = Vec::new();
         let mut provider_identifier = None;
         let mut sources = Vec::new();
 
         if native_has_fileprovider_values(&native) {
             sources.push("native-url-resource".to_string());
+        }
+        if native_identity.status == NativeFileProviderIdentityStatus::Available {
+            sources.push("nsfileprovidermanager".to_string());
+            provider_identifier = native_identity.domain_identifier.clone();
         }
 
         if let Ok(attrs) = xattr::list(path) {
@@ -671,6 +871,7 @@ impl CloudHints {
 
         Self {
             native,
+            native_identity,
             xattrs,
             provider_identifier,
             source: if sources.is_empty() {
@@ -685,7 +886,12 @@ impl CloudHints {
 }
 
 fn domain_for_path(path: &Path, hints: &CloudHints) -> FileProviderDomain {
-    if hints.native.is_ubiquitous == Some(true)
+    if hints
+        .native_identity
+        .domain_identifier
+        .as_deref()
+        .is_some_and(is_icloud_domain_identifier)
+        || hints.native.is_ubiquitous == Some(true)
         || path_components(path)
             .iter()
             .any(|component| component == ICLOUD_DRIVE_COMPONENT)
@@ -696,16 +902,24 @@ fn domain_for_path(path: &Path, hints: &CloudHints) -> FileProviderDomain {
             .any(|attr| attr.contains("icloud") || attr.contains("ubiquit"))
     {
         FileProviderDomain::ICloudDrive
-    } else if hints
-        .xattrs
-        .iter()
-        .any(|attr| attr.contains("fileprovider"))
+    } else if hints.native_identity.status == NativeFileProviderIdentityStatus::Available
+        || hints
+            .xattrs
+            .iter()
+            .any(|attr| attr.contains("fileprovider"))
         || file_name_lower(path).contains("fileprovider")
     {
         FileProviderDomain::FileProvider
     } else {
         FileProviderDomain::Local
     }
+}
+
+fn is_icloud_domain_identifier(identifier: &str) -> bool {
+    let identifier = identifier.to_ascii_lowercase();
+    identifier.contains("icloud")
+        || identifier.contains("clouddocs")
+        || identifier.contains("com.apple")
 }
 
 fn storage_state_for_path(
@@ -878,6 +1092,17 @@ fn provider_from_attr(path: &Path, attr: &str) -> Option<String> {
         .flatten()
         .and_then(|value| String::from_utf8(value).ok())
         .and_then(non_empty)
+}
+
+fn matched_domain<'a>(
+    hints: &CloudHints,
+    domains: &'a NativeFileProviderDomainEnumeration,
+) -> Option<&'a NativeFileProviderDomain> {
+    let identifier = hints.native_identity.domain_identifier.as_deref()?;
+    domains
+        .domains
+        .iter()
+        .find(|domain| domain.identifier.as_deref() == Some(identifier))
 }
 
 fn path_components(path: &Path) -> Vec<String> {
@@ -1058,6 +1283,118 @@ mod tests {
     }
 
     #[test]
+    fn domain_report_does_not_claim_local_files_are_provider_backed() {
+        let root = unique_temp_dir();
+        let path = root.join("Local.md");
+        fs::write(&path, "local").unwrap();
+
+        let report = FileProviderDomainReport::read_path(&path).unwrap();
+
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_ne!(
+            report.native_identity_status,
+            NativeFileProviderIdentityStatus::Available
+        );
+        assert!(report.item_identifier.is_none());
+        assert!(report.domain_identifier.is_none());
+        assert!(report.as_tsv().starts_with("fileprovider-domain\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_manager_identity_marks_third_party_fileprovider_domain() {
+        let path = PathBuf::from("/tmp/LocalName.txt");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::Available,
+                item_identifier: Some("item-123".to_string()),
+                domain_identifier: Some("com.example.drive.account".to_string()),
+                reason: None,
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "nsfileprovidermanager".to_string(),
+        };
+
+        let report = FileProviderDomainReport::from_hints_and_domains(
+            path,
+            hints,
+            NativeFileProviderDomainEnumeration {
+                status: NativeFileProviderDomainStatus::Available,
+                domains: vec![NativeFileProviderDomain {
+                    identifier: Some("com.example.drive.account".to_string()),
+                    display_name: Some("Example Drive".to_string()),
+                    path_relative_to_document_storage: Some("Example Drive".to_string()),
+                    disconnected: Some(false),
+                }],
+                reason: None,
+            },
+        );
+
+        assert_eq!(report.domain, FileProviderDomain::FileProvider);
+        assert_eq!(
+            report.native_identity_status,
+            NativeFileProviderIdentityStatus::Available
+        );
+        assert_eq!(
+            report.native_manager_status,
+            NativeFileProviderDomainStatus::Available
+        );
+        assert_eq!(report.item_identifier.as_deref(), Some("item-123"));
+        assert_eq!(
+            report.domain_identifier.as_deref(),
+            Some("com.example.drive.account")
+        );
+        assert_eq!(
+            report.matched_domain_display_name.as_deref(),
+            Some("Example Drive")
+        );
+        assert_eq!(report.matched_domain_disconnected, Some(false));
+        assert!(report.as_tsv().contains("\tdomain=fileprovider\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tmatched-display=Example Drive\t"));
+    }
+
+    #[test]
+    fn domain_enumeration_maps_native_domains_without_path_heuristics() {
+        let report =
+            FileProviderDomainEnumerationReport::from_native(NativeFileProviderDomainEnumeration {
+                status: NativeFileProviderDomainStatus::Available,
+                domains: vec![
+                    NativeFileProviderDomain {
+                        identifier: Some("com.apple.CloudDocs".to_string()),
+                        display_name: Some("iCloud Drive".to_string()),
+                        path_relative_to_document_storage: Some("Documents".to_string()),
+                        disconnected: Some(false),
+                    },
+                    NativeFileProviderDomain {
+                        identifier: Some("com.example.drive.account".to_string()),
+                        display_name: Some("Example Drive".to_string()),
+                        path_relative_to_document_storage: Some("Root".to_string()),
+                        disconnected: Some(true),
+                    },
+                ],
+                reason: None,
+            });
+
+        assert_eq!(report.status, NativeFileProviderDomainStatus::Available);
+        assert_eq!(report.domains.len(), 2);
+        assert_eq!(report.domains[0].domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.domains[1].domain, FileProviderDomain::FileProvider);
+        let tsv = report.as_tsv();
+        assert!(tsv.starts_with("fileprovider-domains\tstatus=available\tcount=2\t"));
+        assert!(tsv.contains(
+            "domain\tkind=icloud-drive\tidentifier=com.apple.CloudDocs\tdisplay-name=iCloud Drive"
+        ));
+        assert!(tsv.contains(
+            "domain\tkind=fileprovider\tidentifier=com.example.drive.account\tdisplay-name=Example Drive"
+        ));
+    }
+
+    #[test]
     fn operations_refuse_fixture_only_provider_items() {
         let root = unique_temp_dir();
         let evicted = root.join("Evicted.icloud-placeholder");
@@ -1226,6 +1563,12 @@ mod tests {
         native.downloading_status = Some(NativeUbiquitousDownloadingStatus::Current);
         let hints = CloudHints {
             native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NoProviderForPath,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("test fixture has no native manager identity".to_string()),
+            },
             xattrs: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
@@ -1258,6 +1601,12 @@ mod tests {
         native.downloading_status = Some(NativeUbiquitousDownloadingStatus::Downloaded);
         let hints = CloudHints {
             native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NoProviderForPath,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("test fixture has no native manager identity".to_string()),
+            },
             xattrs: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),

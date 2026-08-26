@@ -511,6 +511,8 @@ fn print_usage() {
   gfm native-icon <path>
   gfm native-icon-bridge <path>
   gfm fileprovider-state <path>
+  gfm fileprovider-domain <path>
+  gfm fileprovider-domains
   gfm fileprovider-progress <path>
   gfm fileprovider-conflict <path>
   gfm fileprovider-progress-job <path>

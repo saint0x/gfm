@@ -374,6 +374,41 @@ fn reports_fileprovider_state_from_binary() {
     assert!(downloaded_stdout.contains("\tbadges=available-offline\t"));
     assert!(downloaded_stdout.contains("\tdownload=disabled\tevict=enabled\t"));
 
+    let domain_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-domain")
+        .arg(&downloaded)
+        .output()
+        .unwrap();
+    assert!(
+        domain_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&domain_output.stderr)
+    );
+    let domain_stdout = String::from_utf8(domain_output.stdout).unwrap();
+    assert!(domain_stdout.starts_with("fileprovider-domain\t"));
+    assert!(domain_stdout.contains("\tdomain=icloud-drive\t"));
+    assert!(domain_stdout.contains("\tidentity-status="));
+    assert!(domain_stdout.contains("\tmanager-status="));
+    assert!(domain_stdout.contains("\tresource-status=available\t"));
+    assert!(domain_stdout.contains("\tdomain-count="));
+    assert!(domain_stdout.contains("\titem="));
+    assert!(domain_stdout.contains("\tdomain-id="));
+    assert!(domain_stdout.contains("\tmatched-display="));
+
+    let domains_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-domains")
+        .output()
+        .unwrap();
+    assert!(
+        domains_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&domains_output.stderr)
+    );
+    let domains_stdout = String::from_utf8(domains_output.stdout).unwrap();
+    assert!(domains_stdout.starts_with("fileprovider-domains\t"));
+    assert!(domains_stdout.contains("\tcount="));
+    assert!(domains_stdout.contains("\treason="));
+
     let evicted_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-state")
         .arg(&evicted)

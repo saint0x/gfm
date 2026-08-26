@@ -9,11 +9,11 @@ use gfm_jobs::{
 };
 use gfm_mac::{
     current_host_profile, parse_spotlight_fixture, AccessIntent, CloudStorageState,
-    CloudTransferDirection, FileProviderConflictReport, FileProviderInvalidationReport,
-    FileProviderOperation, FileProviderOperationReport, FileProviderProgressReport,
-    FileProviderStateReport, MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor,
-    SecurityScopedAccessReport, SpotlightMetadataReader, SpotlightReconciliationReport,
-    VolumeDiscoveryReport,
+    CloudTransferDirection, FileProviderConflictReport, FileProviderDomainEnumerationReport,
+    FileProviderDomainReport, FileProviderInvalidationReport, FileProviderOperation,
+    FileProviderOperationReport, FileProviderProgressReport, FileProviderStateReport,
+    MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
+    SpotlightMetadataReader, SpotlightReconciliationReport, VolumeDiscoveryReport,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path, IconPreviewContract,
@@ -58,6 +58,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "fileprovider-state" => {
             let path = required_path(args.next(), "fileprovider-state requires a path")?;
             println!("{}", FileProviderStateReport::read_path(path)?.as_tsv());
+        }
+        "fileprovider-domain" => {
+            let path = required_path(args.next(), "fileprovider-domain requires a path")?;
+            println!("{}", FileProviderDomainReport::read_path(path)?.as_tsv());
+        }
+        "fileprovider-domains" => {
+            println!(
+                "{}",
+                FileProviderDomainEnumerationReport::discover().as_tsv()
+            );
         }
         "fileprovider-progress" => {
             let path = required_path(args.next(), "fileprovider-progress requires a path")?;

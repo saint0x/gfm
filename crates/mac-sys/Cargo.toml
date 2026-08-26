@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+block = "0.1"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
 libc = "0.2"
