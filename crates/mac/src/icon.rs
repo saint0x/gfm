@@ -1,4 +1,7 @@
-use crate::{MacBridgeThreadPolicy, MacFramework, SupportEvaluation, SupportMatrix, SupportTier};
+use crate::{
+    CloudBadge, FileProviderDomain, FileProviderStateReport, MacBridgeThreadPolicy, MacFramework,
+    SupportEvaluation, SupportMatrix, SupportTier,
+};
 use gfm_types::{FileKind, FileRecord};
 use std::path::Path;
 
@@ -72,6 +75,13 @@ impl NativeIconBridgeDecision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NativeIconBadge {
     Alias,
+    Cloud,
+    CloudAvailableOffline,
+    CloudConflict,
+    CloudDownloading,
+    CloudOffline,
+    CloudUploading,
+    CloudWaiting,
     Hidden,
     Package,
     Tagged,
@@ -81,6 +91,13 @@ impl NativeIconBadge {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Alias => "alias",
+            Self::Cloud => "cloud",
+            Self::CloudAvailableOffline => "cloud-available-offline",
+            Self::CloudConflict => "cloud-conflict",
+            Self::CloudDownloading => "cloud-downloading",
+            Self::CloudOffline => "cloud-offline",
+            Self::CloudUploading => "cloud-uploading",
+            Self::CloudWaiting => "cloud-waiting",
             Self::Hidden => "hidden",
             Self::Package => "package",
             Self::Tagged => "tagged",
@@ -244,7 +261,23 @@ fn badges_for_record(record: &FileRecord) -> Vec<NativeIconBadge> {
     if is_package(record) {
         badges.push(NativeIconBadge::Package);
     }
+    let cloud = FileProviderStateReport::from_path(record.path.clone());
+    if cloud.domain != FileProviderDomain::Local {
+        badges.extend(cloud.badges.into_iter().map(cloud_badge));
+    }
     badges
+}
+
+fn cloud_badge(badge: CloudBadge) -> NativeIconBadge {
+    match badge {
+        CloudBadge::AvailableOffline => NativeIconBadge::CloudAvailableOffline,
+        CloudBadge::Cloud => NativeIconBadge::Cloud,
+        CloudBadge::Downloading => NativeIconBadge::CloudDownloading,
+        CloudBadge::Uploading => NativeIconBadge::CloudUploading,
+        CloudBadge::Waiting => NativeIconBadge::CloudWaiting,
+        CloudBadge::Conflict => NativeIconBadge::CloudConflict,
+        CloudBadge::Offline => NativeIconBadge::CloudOffline,
+    }
 }
 
 fn type_hint_for_record(record: &FileRecord) -> String {
@@ -408,6 +441,63 @@ mod tests {
         assert_eq!(descriptor.role, NativeIconRole::Symlink);
         assert_eq!(descriptor.badges, vec![NativeIconBadge::Alias]);
         assert_eq!(descriptor.type_hint, "public.symlink");
+    }
+
+    #[test]
+    fn downloaded_icloud_items_carry_available_offline_badge() {
+        let path = temp_path("gfm-native-downloaded-icon", "icloud.md");
+        fs::write(&path, "downloaded").unwrap();
+        let mut record = record("Downloaded.icloud.md", FileKind::File);
+        record.path = path.clone();
+
+        let descriptor = NativeIconDescriptor::for_record(&record);
+
+        assert_eq!(
+            descriptor.badges,
+            vec![NativeIconBadge::CloudAvailableOffline]
+        );
+        assert_eq!(
+            descriptor.cache_key,
+            "document:extension:md:cloud-available-offline"
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn evicted_icloud_placeholders_carry_cloud_badge() {
+        let path = temp_path("gfm-native-evicted-icon", "icloud-placeholder");
+        fs::write(&path, "placeholder").unwrap();
+        let mut record = record("Remote.icloud-placeholder", FileKind::File);
+        record.path = path.clone();
+
+        let descriptor = NativeIconDescriptor::for_record(&record);
+
+        assert_eq!(descriptor.badges, vec![NativeIconBadge::Cloud]);
+        assert_eq!(
+            descriptor.cache_key,
+            "document:extension:icloud-placeholder:cloud"
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn in_flight_icloud_items_carry_progress_badge() {
+        let path = temp_path("gfm-native-downloading-icon", "icloud-downloading.png");
+        fs::write(&path, "downloading").unwrap();
+        let mut record = record("Asset.icloud-downloading.png", FileKind::File);
+        record.path = path.clone();
+
+        let descriptor = NativeIconDescriptor::for_record(&record);
+
+        assert_eq!(
+            descriptor.badges,
+            vec![NativeIconBadge::Cloud, NativeIconBadge::CloudDownloading]
+        );
+        assert_eq!(
+            descriptor.cache_key,
+            "document:extension:png:cloud+cloud-downloading"
+        );
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

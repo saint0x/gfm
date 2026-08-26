@@ -188,6 +188,51 @@ fn reports_native_icon_descriptor_from_binary() {
 }
 
 #[test]
+fn reports_icloud_badges_in_native_icon_descriptor_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-native-icon-cloud-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let evicted = root.join("Remote.icloud-placeholder");
+    let downloading = root.join("Asset.icloud-downloading.png");
+    std::fs::write(&evicted, "placeholder").unwrap();
+    std::fs::write(&downloading, "downloading").unwrap();
+
+    let evicted_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("native-icon")
+        .arg(&evicted)
+        .output()
+        .unwrap();
+    assert!(
+        evicted_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&evicted_output.stderr)
+    );
+    let evicted_stdout = String::from_utf8(evicted_output.stdout).unwrap();
+    assert!(
+        evicted_stdout.contains("\tbadges=cloud\n"),
+        "{evicted_stdout}"
+    );
+
+    let downloading_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("native-icon")
+        .arg(&downloading)
+        .output()
+        .unwrap();
+    assert!(
+        downloading_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&downloading_output.stderr)
+    );
+    let downloading_stdout = String::from_utf8(downloading_output.stdout).unwrap();
+    assert!(
+        downloading_stdout.contains("\tbadges=cloud,cloud-downloading\n"),
+        "{downloading_stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_custom_finder_icon_descriptor_from_binary() {
     const FINDER_INFO_XATTR: &str = "com.apple.FinderInfo";
     const FINDER_FLAG_CUSTOM_ICON: u16 = 0x0400;
