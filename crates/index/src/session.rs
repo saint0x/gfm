@@ -107,10 +107,12 @@ impl ContentIndexQuerySession {
     ) -> Result<ContentQuerySessionReport> {
         let posting_hits_before = self.posting_cache_hits.load(Ordering::Relaxed);
         let posting_misses_before = self.posting_cache_misses.load(Ordering::Relaxed);
-        let postings = self.postings_for_terms(content_query_terms(query), budget)?;
+        let content_terms = content_query_terms(query);
+        let has_content_terms = !content_terms.is_empty();
+        let postings = self.postings_for_terms(content_terms, budget)?;
         let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
-        let (live, load) = self.live_from_postings(postings)?;
+        let (live, load) = self.live_from_postings(postings, has_content_terms)?;
         let hits = live.search(query, limit);
         Ok(ContentQuerySessionReport {
             load,
@@ -199,9 +201,12 @@ impl ContentIndexQuerySession {
     fn live_from_postings(
         &self,
         postings: Vec<ContentPosting>,
+        has_content_terms: bool,
     ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
         let candidate_ids = content_candidate_ids(&postings);
-        let full_hydration = candidate_ids.is_empty();
+        let has_content_postings = !postings.is_empty();
+        let full_hydration =
+            !has_content_terms || (has_content_postings && candidate_ids.is_empty());
         let candidate_count = candidate_ids.len();
         let (records, missing) = if full_hydration {
             self.hydrate_all_records()?

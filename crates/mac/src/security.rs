@@ -250,38 +250,50 @@ fn decide(
 }
 
 fn protected_scope(path: &Path) -> ProtectedScope {
-    let components = path_components(path);
-    if components.iter().any(|component| component == "Volumes") {
+    if path.starts_with("/Volumes") {
         return ProtectedScope::ExternalVolume;
     }
-    if components.iter().any(|component| component == "Network") {
+    if path.starts_with("/Network") {
         return ProtectedScope::NetworkVolume;
     }
-    if components
-        .windows(2)
-        .any(|window| window == ["Library", "Mail"])
-    {
+
+    let Some(home) = home_dir() else {
+        return ProtectedScope::None;
+    };
+    protected_scope_for_home(path, &home)
+}
+
+fn protected_scope_for_home(path: &Path, home: &Path) -> ProtectedScope {
+    if within(path, &home.join("Library/Mail")) {
         return ProtectedScope::FullDiskAccess;
     }
-    if components.iter().any(|component| component == "Desktop") {
-        ProtectedScope::Desktop
-    } else if components.iter().any(|component| component == "Documents") {
-        ProtectedScope::Documents
-    } else if components.iter().any(|component| component == "Downloads") {
-        ProtectedScope::Downloads
-    } else if components
-        .iter()
-        .any(|component| component == "Photos Library.photoslibrary")
-    {
-        ProtectedScope::Photos
-    } else if components
-        .windows(3)
-        .any(|window| window == ["Library", "Group Containers", "group.com.apple.mail"])
-    {
-        ProtectedScope::Mail
-    } else {
-        ProtectedScope::None
+    if within(
+        path,
+        &home.join("Library/Group Containers/group.com.apple.mail"),
+    ) {
+        return ProtectedScope::Mail;
     }
+    if within(path, &home.join("Desktop")) {
+        return ProtectedScope::Desktop;
+    }
+    if within(path, &home.join("Documents")) {
+        return ProtectedScope::Documents;
+    }
+    if within(path, &home.join("Downloads")) {
+        return ProtectedScope::Downloads;
+    }
+    if within(path, &home.join("Pictures/Photos Library.photoslibrary")) {
+        return ProtectedScope::Photos;
+    }
+    ProtectedScope::None
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn within(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
 }
 
 fn probe_path(path: &Path, intent: AccessIntent) -> AccessProbeState {
@@ -373,13 +385,6 @@ fn write_intent(intent: AccessIntent) -> bool {
     matches!(intent, AccessIntent::Write | AccessIntent::Operate)
 }
 
-fn path_components(path: &Path) -> Vec<String> {
-    path.components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
 fn escape_field(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -411,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn protected_documents_read_requires_bookmark_retention() {
+    fn documents_named_temp_directory_does_not_require_bookmark_retention() {
         let root = temp_root("security-documents");
         let path = root.join("Documents").join("Plan.md");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -419,13 +424,27 @@ mod tests {
 
         let report = SecurityScopedAccessReport::evaluate(&path, AccessIntent::Read);
 
-        assert_eq!(report.scope, ProtectedScope::Documents);
-        assert_eq!(report.mode, SecurityAccessMode::SecurityScopedBookmark);
+        assert_eq!(report.scope, ProtectedScope::None);
+        assert_eq!(report.mode, SecurityAccessMode::PlainFilesystem);
         assert_eq!(report.action, SecurityDecisionAction::Allow);
-        assert!(report.bookmark_required);
-        assert!(report.as_tsv().contains("bookmark-required=true"));
+        assert!(!report.bookmark_required);
+        assert!(report.as_tsv().contains("bookmark-required=false"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn protected_documents_scope_is_limited_to_home_documents() {
+        let home = PathBuf::from("/Users/me");
+
+        assert_eq!(
+            protected_scope_for_home(Path::new("/Users/me/Documents/Plan.md"), &home),
+            ProtectedScope::Documents
+        );
+        assert_eq!(
+            protected_scope_for_home(Path::new("/private/tmp/Documents/Plan.md"), &home),
+            ProtectedScope::None
+        );
     }
 
     #[test]

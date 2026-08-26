@@ -67,6 +67,12 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 
 No UI render/update path performs blocking filesystem work. No performance-critical search, ranking, scheduling, virtualization, storage, or operation orchestration path is outsourced to a generic black box. Dependencies exist for platform access and standards compliance; GFM owns the contracts.
 
+## Toolchain
+
+GFM is macOS-only. Development and CI builds use GPUI's supported runtime-shader path, so the native app compiles on machines with Apple's Command Line Tools even when the standalone `metal` and `metallib` executables from full Xcode are not installed. The app still renders through Metal; this only changes when GPUI shader source is compiled.
+
+Release packaging keeps Xcode as part of the production host contract for signing, notarization, hardened-runtime validation, bundle inspection, and any future offline `.metallib` build mode.
+
 ## Search
 
 Search is designed as a first-class engine, not a text box glued to Spotlight.
@@ -106,8 +112,8 @@ The index is compact and incremental:
 - archive-backed metadata, prefix, substring, and fuzzy lookup with explicit candidate budgets, query-level substring gram and fuzzy key/term caps, direct/fuzzy prefix-candidate dedupe, sorted batch metadata, prefix, substring, and fuzzy directory scans for uncached query imports, adaptive prefix cutoffs, lookup cache telemetry, truncation telemetry, and mmap-resident sidecars instead of hydrated session heaps
 - sidecar-backed `SidecarIndexQuerySession` objects that keep record, column, metadata, prefix, substring, fuzzy, and content mmap archives open across repeated UI query changes while reusing lookup caches and a bounded hydrated record/column cache
 - default sidecar-backed search imports only bounded query-matching metadata, prefix, substring, fuzzy-term, and content postings before ranking, then hydrates matching record IDs through one sorted mmap record-directory pass unless correctness requires a full-record universe; repeated candidate hits are served from the session hydration cache instead of rereading and decoding the same mmap rows
-- content-backed `ContentIndexQuerySession` objects keep mmap record archives and content archive sets/manifests open across repeated content queries, reuse bounded content-posting caches for repeated hits and complete term misses, reuse `FileId`-keyed record caches for repeated candidates, and return per-query cache-hit/cache-miss telemetry for search-as-you-type integration
-- budgeted query-scoped content archive, archive-set, and manifest loading that resolves selected terms through sorted batch mmap directory scans, decodes bounded compressed ID and positional prefixes per term, hydrates only matching mmap record rows through sorted batch file-ID lookup, and falls back to full-record hydration only when content postings provide no candidate anchor
+- content-backed `ContentIndexQuerySession` objects keep mmap record archives and content archive sets/manifests open across repeated content queries, reuse bounded content-posting caches for repeated hits and complete term misses, skip record hydration entirely for complete negative content-term lookups, reuse `FileId`-keyed record caches for repeated candidates, and return per-query cache-hit/cache-miss telemetry for search-as-you-type integration
+- budgeted query-scoped content archive, archive-set, and manifest loading that resolves selected terms through sorted batch mmap directory scans, decodes bounded compressed ID and positional prefixes per term, hydrates only matching mmap record rows through sorted batch file-ID lookup, and falls back to full-record hydration only for non-content queries or positive content postings that provide no candidate anchor
 - cached score/name/path/id sort keys during bounded top-k ranking so deterministic ordering does not repeatedly allocate while results are merged
 - direct content-posting scoring for normal content-term queries without temporary ID-set materialization
 - exact phrase and `near:N:alpha,beta` positional content retrieval, with phrase and proximity candidates anchored on the rarest posting lists instead of full-record scans or temporary full-term ID sets

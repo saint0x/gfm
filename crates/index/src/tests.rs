@@ -1713,6 +1713,16 @@ fn content_query_session_reuses_archives_and_record_cache() {
 
     assert!(missing_first.search.hits.is_empty());
     assert!(missing_second.search.hits.is_empty());
+    assert_eq!(missing_first.load.content_keys, 0);
+    assert_eq!(missing_first.load.candidate_ids, 0);
+    assert_eq!(missing_first.load.records_loaded, 0);
+    assert_eq!(missing_first.load.records_missing, 0);
+    assert!(!missing_first.load.full_hydration);
+    assert_eq!(missing_second.load.content_keys, 0);
+    assert_eq!(missing_second.load.candidate_ids, 0);
+    assert_eq!(missing_second.load.records_loaded, 0);
+    assert_eq!(missing_second.load.records_missing, 0);
+    assert!(!missing_second.load.full_hydration);
     assert_eq!(missing_first.posting_cache_hits, 0);
     assert_eq!(missing_first.posting_cache_misses, 1);
     assert_eq!(missing_second.posting_cache_hits, 1);
@@ -1728,6 +1738,42 @@ fn content_query_session_reuses_archives_and_record_cache() {
     fs::remove_file(records).unwrap();
     fs::remove_file(first_content).unwrap();
     fs::remove_file(second_content).unwrap();
+}
+
+#[test]
+fn content_query_session_hydrates_full_archive_for_non_content_queries() {
+    let root = unique_temp_dir("gfm-content-query-session-non-content-root");
+    let records = unique_temp_path("gfm-content-query-session-non-content-records", "gfmidx");
+    let content = unique_temp_path("gfm-content-query-session-non-content", "gfmcontent");
+    fs::write(root.join("SearchNotes.md"), "cached content").unwrap();
+    fs::write(root.join("Other.md"), "other content").unwrap();
+
+    let indexer = Indexer::default();
+    let snapshot = indexer.build(&root).unwrap();
+    snapshot.save(&records).unwrap();
+    write_content_postings(&content, &[]).unwrap();
+
+    let session = indexer
+        .load_content_set_query_session(&records, [&content])
+        .unwrap();
+    let report = session.search("kind:file", 5).unwrap();
+
+    assert_eq!(report.load.content_keys, 0);
+    assert_eq!(report.load.candidate_ids, 0);
+    assert_eq!(report.load.records_loaded, snapshot.records.len());
+    assert_eq!(report.load.records_missing, 0);
+    assert!(report.load.full_hydration);
+    let hit_names = report
+        .search
+        .hits
+        .iter()
+        .map(|hit| hit.record.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(hit_names, vec!["Other.md", "SearchNotes.md"]);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
 }
 
 #[test]

@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 anyhow = "1.0"
 gfm-types = { path = "../types" }
-gpui = { version = "0.2.2", default-features = false }
+gpui = { version = "0.2.2", default-features = false, features = ["runtime_shaders"] }
 
 [lints]
 workspace = true

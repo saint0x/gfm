@@ -82,7 +82,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         .map_err(|err| GfmError::io(&fixture_path, err))?;
                     parse_spotlight_fixture(&path, &text)?
                 }
-                None => SpotlightMetadataReader::default().read_path(&path)?,
+                None => SpotlightMetadataReader.read_path(&path)?,
             };
             println!(
                 "{}",

@@ -686,7 +686,9 @@ fn temporary_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security::SecurityScopedAccessReport;
+    use crate::security::{
+        AccessProbeState, ProtectedScope, SecurityAccessMode, SecurityScopedAccessReport,
+    };
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -712,7 +714,20 @@ mod tests {
         let path = root.join("Documents").join("Plan.md");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "plan").unwrap();
-        let report = SecurityScopedAccessReport::evaluate(&path, AccessIntent::Read);
+        let report = SecurityScopedAccessReport {
+            path: path.clone(),
+            intent: AccessIntent::Read,
+            scope: ProtectedScope::Documents,
+            probe: AccessProbeState::Granted,
+            mode: SecurityAccessMode::SecurityScopedBookmark,
+            action: SecurityDecisionAction::Allow,
+            bookmark_required: true,
+            can_read: true,
+            can_write: false,
+            least_privilege: true,
+            reason: "path is readable now but should be retained with a security-scoped bookmark"
+                .to_string(),
+        };
 
         let bookmark = SecurityScopedBookmark::create(&path, true).unwrap();
         let created = report.create_bookmark();

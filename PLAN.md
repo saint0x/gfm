@@ -200,6 +200,14 @@ gfm/
     architecture/
 ```
 
+### Toolchain Policy
+
+- GFM is macOS-only and targets Apple Silicon and supported Intel Macs through the native Rust macOS target.
+- GPUI is built with its supported `runtime_shaders` feature for development and CI so the native app does not fail on machines that have Apple's Command Line Tools but lack full Xcode's build-time `metal` and `metallib` executables.
+- Runtime shaders are not a renderer fallback: the app still uses Metal and GPUI; only shader compilation moves from Cargo build time to Metal runtime library creation.
+- Production release hosts must still pass an explicit Xcode toolchain check for signing, notarization, hardened-runtime validation, bundle inspection, and any later offline `.metallib` release mode.
+- The build should fail loudly if release packaging needs full Xcode and the selected developer directory is only Command Line Tools.
+
 ### Crate Responsibilities
 
 `app`
@@ -466,7 +474,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - single immutable mmap content archives and archive sets are opened as query-scoped search surfaces;
   - query content-term imports resolve selected terms through one sorted pass over each mmap content archive directory, decoding only bounded ID and positional heads, so archive-set search avoids one binary lookup per selected term per archive;
   - budgeted content-term loads decode only the bounded compressed ID prefix and matching bounded positional prefix needed by the active lookup budget, then union per-archive heads deterministically before import;
-  - content archive, archive-set, and manifest search hydrates only the record rows identified by bounded content posting candidates through the mmap record file-ID directory, with full-record hydration reserved for queries whose content postings produce no candidate anchor;
+  - content archive, archive-set, and manifest search hydrates only the record rows identified by bounded content posting candidates through the mmap record file-ID directory, skips record hydration entirely for complete negative content-term lookups, and reserves full-record hydration for non-content queries or positive content postings that produce no candidate anchor;
   - duplicate file ids and positional offsets are merged deterministically through ordered sets;
   - this lets background compaction publish new tier files while retained archives remain searchable.
 - Query-time record hydration:
@@ -483,7 +491,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
   - archive-backed lookup avoids importing large metadata/prefix/substring/fuzzy candidate maps into heap memory for each machine-wide query session;
   - sidecar-backed UI search opens record, column, metadata, prefix, substring, fuzzy, and content mmap archives once per `SidecarIndexQuerySession`, retaining lookup caches and a bounded hydrated record/column cache across repeated query changes while hydrating only the current query's missing candidate records;
   - default sidecar-backed search imports only budgeted query-matching metadata, prefix, substring, fuzzy-term, and content postings before ranking; explicit operator budget commands can lower or raise those caps for diagnostics;
-  - content-backed UI search opens mmap record archives and content archive sets or manifests once per `ContentIndexQuerySession`, retaining bounded content-posting caches for repeated hits and complete term misses plus `FileId`-keyed record caches across repeated content query changes and reporting per-query posting/hydration cache hits and misses;
+  - content-backed UI search opens mmap record archives and content archive sets or manifests once per `ContentIndexQuerySession`, retaining bounded content-posting caches for repeated hits and complete term misses, returning complete negative content-term lookups without record hydration, retaining `FileId`-keyed record caches across repeated content query changes, and reporting per-query posting/hydration cache hits and misses;
   - query metadata imports resolve tag/comment terms through one sorted pass per field over the mmap metadata directory, decoding only bounded ID heads and avoiding one binary archive lookup per selected term;
   - direct prefix terms and fuzzy-expanded prefix terms are deduplicated into one bounded prefix-posting import set before mmap prefix lookup, preventing repeated cache probes and duplicate prefix postings for the same query candidate;
   - uncached query prefix imports resolve through one sorted pass over the mmap prefix directory, decoding only bounded ID heads, preserving per-prefix cache telemetry, and avoiding one binary archive lookup per prefix candidate;

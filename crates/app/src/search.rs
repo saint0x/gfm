@@ -3,8 +3,8 @@ use crate::extract::extraction_budget_profile;
 use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, required_string};
 use gfm_content::Extractor;
 use gfm_index::{
-    Indexer, LiveIndex, SearchArchiveLookup, SearchLookupBudget, SearchRecordColumns,
-    SearchStreamStage, SidecarIndexQuerySession,
+    Indexer, LiveIndex, SearchLookupBudget, SearchRecordColumns, SearchStreamStage,
+    SidecarIndexQuerySession,
 };
 use gfm_store::{
     ContentArchive, MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary,
