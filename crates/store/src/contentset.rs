@@ -517,15 +517,7 @@ impl MmapContentSet {
             let Some(posting) = archive.posting_for_term(&term)? else {
                 continue;
             };
-            for id in posting.ids {
-                positions_by_id.entry(id).or_default();
-            }
-            for positions in posting.positions {
-                positions_by_id
-                    .entry(positions.id)
-                    .or_default()
-                    .extend(positions.positions);
-            }
+            merge_content_posting_positions(posting, &mut positions_by_id);
         }
         if positions_by_id.is_empty() {
             return Ok(None);
@@ -551,15 +543,7 @@ impl MmapContentSet {
                 continue;
             };
             truncated |= archive_truncated;
-            for id in posting.ids {
-                positions_by_id.entry(id).or_default();
-            }
-            for positions in posting.positions {
-                positions_by_id
-                    .entry(positions.id)
-                    .or_default()
-                    .extend(positions.positions);
-            }
+            merge_content_posting_positions(posting, &mut positions_by_id);
         }
         if positions_by_id.is_empty() {
             return Ok((None, truncated));
@@ -612,13 +596,35 @@ impl MmapContentSet {
             }
         }
 
-        let mut postings = Vec::new();
-        for term in selected {
-            if let (Some(posting), _) = self.posting_for_term_limit(&term, limit_per_term)? {
-                postings.push(posting);
+        let mut by_term: BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>> = selected
+            .iter()
+            .cloned()
+            .map(|term| (term, BTreeMap::new()))
+            .collect();
+
+        for archive in &self.archives {
+            for limited in archive.postings_for_sorted_terms_limit(&selected, limit_per_term)? {
+                let Some(positions_by_id) = by_term.get_mut(&limited.posting.term) else {
+                    continue;
+                };
+                merge_content_posting_positions(limited.posting, positions_by_id);
             }
         }
-        Ok(postings)
+
+        Ok(by_term
+            .into_iter()
+            .filter_map(|(term, mut positions_by_id)| {
+                if positions_by_id.is_empty() {
+                    return None;
+                }
+                if positions_by_id.len() > limit_per_term {
+                    while positions_by_id.len() > limit_per_term {
+                        positions_by_id.pop_last();
+                    }
+                }
+                Some(content_posting_from_positions(term, positions_by_id))
+            })
+            .collect())
     }
 
     pub fn archive_count(&self) -> usize {
@@ -854,6 +860,21 @@ fn content_posting_from_positions(
     }
 }
 
+fn merge_content_posting_positions(
+    posting: ContentPosting,
+    positions_by_id: &mut BTreeMap<FileId, BTreeSet<u32>>,
+) {
+    for id in posting.ids {
+        positions_by_id.entry(id).or_default();
+    }
+    for positions in posting.positions {
+        positions_by_id
+            .entry(positions.id)
+            .or_default()
+            .extend(positions.positions);
+    }
+}
+
 fn tier_name(tier: ContentMergeTier) -> &'static str {
     match tier {
         ContentMergeTier::Hot => "hot",
@@ -1057,6 +1078,83 @@ mod tests {
                 .collect::<Vec<_>>(),
             posting.ids
         );
+
+        std::fs::remove_file(first).unwrap();
+        std::fs::remove_file(second).unwrap();
+    }
+
+    #[test]
+    fn mmap_content_set_batches_selected_terms_across_archives() {
+        let first = temp_path("gfm-content-set-batch-first", "gfmcontent");
+        let second = temp_path("gfm-content-set-batch-second", "gfmcontent");
+        let alpha_left = FileId::new(VolumeId(2), 10);
+        let alpha_right = FileId::new(VolumeId(2), 11);
+        let beta = FileId::new(VolumeId(2), 20);
+
+        write_content_postings(
+            &first,
+            &[
+                ContentPosting {
+                    term: "alpha".to_string(),
+                    ids: vec![alpha_left],
+                    positions: vec![ContentPositions {
+                        id: alpha_left,
+                        positions: vec![1],
+                    }],
+                },
+                ContentPosting {
+                    term: "beta".to_string(),
+                    ids: vec![beta],
+                    positions: vec![ContentPositions {
+                        id: beta,
+                        positions: vec![5],
+                    }],
+                },
+            ],
+        )
+        .unwrap();
+        write_content_postings(
+            &second,
+            &[ContentPosting {
+                term: "alpha".to_string(),
+                ids: vec![alpha_left, alpha_right],
+                positions: vec![
+                    ContentPositions {
+                        id: alpha_left,
+                        positions: vec![3],
+                    },
+                    ContentPositions {
+                        id: alpha_right,
+                        positions: vec![7],
+                    },
+                ],
+            }],
+        )
+        .unwrap();
+
+        let set = MmapContentSet::open([&first, &second]).unwrap();
+        let postings = set
+            .postings_for_terms_limit(["missing", "beta", "alpha", "alpha"], 4)
+            .unwrap();
+
+        assert_eq!(postings.len(), 2);
+        assert_eq!(postings[0].term, "alpha");
+        assert_eq!(postings[0].ids, vec![alpha_left, alpha_right]);
+        assert_eq!(
+            postings[0].positions,
+            vec![
+                ContentPositions {
+                    id: alpha_left,
+                    positions: vec![1, 3],
+                },
+                ContentPositions {
+                    id: alpha_right,
+                    positions: vec![7],
+                },
+            ]
+        );
+        assert_eq!(postings[1].term, "beta");
+        assert_eq!(postings[1].ids, vec![beta]);
 
         std::fs::remove_file(first).unwrap();
         std::fs::remove_file(second).unwrap();

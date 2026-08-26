@@ -123,6 +123,12 @@ pub struct ContentMergeOutcome {
     pub tier: ContentMergeTier,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LimitedContentPosting {
+    pub posting: ContentPosting,
+    pub truncated: bool,
+}
+
 fn smallest_mergeable_tier(
     summaries: &[ContentSegmentSummary],
     policy: &ContentMergePolicy,
@@ -450,12 +456,78 @@ impl MmapContentArchive {
             }
         }
 
-        let mut postings = Vec::new();
-        for term in selected {
-            if let (Some(posting), _) = self.posting_for_term_limit(&term, limit_per_term)? {
-                postings.push(posting);
-            }
+        self.postings_for_sorted_terms_limit(selected, limit_per_term)
+            .map(|postings| {
+                postings
+                    .into_iter()
+                    .map(|posting| posting.posting)
+                    .collect()
+            })
+    }
+
+    pub fn postings_for_sorted_terms_limit<I, S>(
+        &self,
+        terms: I,
+        limit_per_term: usize,
+    ) -> Result<Vec<LimitedContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        if limit_per_term == 0 {
+            return Ok(Vec::new());
         }
+
+        let mut postings = Vec::new();
+        let mut directory_index = 0usize;
+        let mut previous: Option<String> = None;
+
+        for term in terms {
+            let term = term.as_ref().trim().to_lowercase();
+            if term.is_empty() {
+                continue;
+            }
+            if let Some(previous_term) = previous.as_ref() {
+                if term < *previous_term {
+                    return Err(content_format_error(
+                        &self.path,
+                        "batch content lookup terms must be sorted",
+                    ));
+                }
+                if term == *previous_term {
+                    continue;
+                }
+            }
+
+            while let Some(entry) = self.directory.get(directory_index) {
+                if entry.term.as_str() >= term.as_str() {
+                    break;
+                }
+                directory_index += 1;
+            }
+
+            if let Some(entry) = self.directory.get(directory_index) {
+                if entry.term.as_str() == term.as_str() {
+                    let bytes = self.posting_bytes(entry)?;
+                    let (posting, truncated) = read_content_posting_limited_from_slice(
+                        bytes,
+                        &self.path,
+                        self.version,
+                        limit_per_term,
+                    )?;
+                    if posting.term.trim().to_lowercase() == term {
+                        postings.push(LimitedContentPosting { posting, truncated });
+                    } else {
+                        return Err(content_format_error(
+                            &self.path,
+                            "content directory points at the wrong term",
+                        ));
+                    }
+                }
+            }
+            previous = Some(term);
+        }
+
         Ok(postings)
     }
 
@@ -1564,6 +1636,60 @@ mod tests {
         assert_eq!(bounded.ids, ids[..3]);
         assert_eq!(bounded.positions.len(), 3);
         assert_eq!(bounded.positions[0].positions, vec![1, 3]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_content_archive_reads_bounded_sorted_terms_in_one_pass() {
+        let path = temp_path("gfm-content-batch-postings", "gfmcontent");
+        let alpha_ids = (0..4)
+            .map(|node| FileId::new(VolumeId(8), 30_000 + node))
+            .collect::<Vec<_>>();
+        let beta_ids = (0..2)
+            .map(|node| FileId::new(VolumeId(8), 40_000 + node))
+            .collect::<Vec<_>>();
+        let postings = vec![
+            ContentPosting {
+                term: "alpha".to_string(),
+                ids: alpha_ids.clone(),
+                positions: alpha_ids
+                    .iter()
+                    .map(|id| ContentPositions {
+                        id: *id,
+                        positions: vec![2],
+                    })
+                    .collect(),
+            },
+            ContentPosting {
+                term: "beta".to_string(),
+                ids: beta_ids.clone(),
+                positions: beta_ids
+                    .iter()
+                    .map(|id| ContentPositions {
+                        id: *id,
+                        positions: vec![4],
+                    })
+                    .collect(),
+            },
+        ];
+
+        write_content_postings(&path, &postings).unwrap();
+        let archive = MmapContentArchive::open(&path).unwrap();
+        let batch = archive
+            .postings_for_sorted_terms_limit(["alpha", "alpha", "beta", "missing"], 2)
+            .unwrap();
+
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].posting.term, "alpha");
+        assert_eq!(batch[0].posting.ids, alpha_ids[..2]);
+        assert_eq!(batch[0].posting.positions.len(), 2);
+        assert!(batch[0].truncated);
+        assert_eq!(batch[1].posting.term, "beta");
+        assert_eq!(batch[1].posting.ids, beta_ids);
+        assert!(!batch[1].truncated);
+        assert!(archive
+            .postings_for_sorted_terms_limit(["beta", "alpha"], 2)
+            .is_err());
         std::fs::remove_file(path).unwrap();
     }
 
