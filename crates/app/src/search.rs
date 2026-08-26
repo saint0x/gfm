@@ -11,6 +11,7 @@ use gfm_store::{
     MmapSubstringArchive,
 };
 use gfm_types::{FileKind, Result, SearchHit};
+use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
@@ -54,6 +55,118 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let (indexed, hits) = run_content_search(root, query, extractor)?;
             eprintln!("content-indexed {indexed} files");
             for hit in hits {
+                print_hit(&hit);
+            }
+        }
+        "search-content-index" => {
+            let records =
+                required_path(args.next(), "search-content-index requires a records path")?;
+            let content =
+                required_path(args.next(), "search-content-index requires a content path")?;
+            let query =
+                required_string(args.next(), "search-content-index requires a query string")?;
+            let (live, report) =
+                Indexer::default().load_live_with_content_for_query(records, content, &query)?;
+            eprintln!(
+                "content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
+                report.content_keys,
+                report.records_loaded,
+                report.records_missing,
+                report.candidate_ids,
+                report.full_hydration
+            );
+            for hit in live.search_with_snippets(&query, 50, &Extractor::default(), 96)? {
+                print_hit(&hit);
+            }
+        }
+        "search-content-index-adaptive" => {
+            let records = required_path(
+                args.next(),
+                "search-content-index-adaptive requires a records path",
+            )?;
+            let content = required_path(
+                args.next(),
+                "search-content-index-adaptive requires a content path",
+            )?;
+            let query = required_string(
+                args.next(),
+                "search-content-index-adaptive requires a query string",
+            )?;
+            let pressure = parse_required_scheduling_pressure(args, "content index search")?;
+            let root = records
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let extractor =
+                Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
+            let (live, report) =
+                Indexer::default().load_live_with_content_for_query(records, content, &query)?;
+            eprintln!(
+                "content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
+                report.content_keys,
+                report.records_loaded,
+                report.records_missing,
+                report.candidate_ids,
+                report.full_hydration
+            );
+            for hit in live.search_with_snippets(&query, 50, &extractor, 96)? {
+                print_hit(&hit);
+            }
+        }
+        "search-content-index-set" => {
+            let records = required_path(
+                args.next(),
+                "search-content-index-set requires a records path",
+            )?;
+            let query = required_string(
+                args.next(),
+                "search-content-index-set requires a query string",
+            )?;
+            let content_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            if content_paths.is_empty() {
+                return Err(gfm_types::GfmError::Format(
+                    "search-content-index-set requires at least one content archive".to_string(),
+                ));
+            }
+            let (live, report) =
+                Indexer::default().load_live_with_content_set(records, &content_paths, &query)?;
+            eprintln!(
+                "content-archives {} content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
+                content_paths.len(),
+                report.content_keys,
+                report.records_loaded,
+                report.records_missing,
+                report.candidate_ids,
+                report.full_hydration
+            );
+            for hit in live.search(&query, 50) {
+                print_hit(&hit);
+            }
+        }
+        "search-content-index-manifest" => {
+            let records = required_path(
+                args.next(),
+                "search-content-index-manifest requires a records path",
+            )?;
+            let manifest = required_path(
+                args.next(),
+                "search-content-index-manifest requires a manifest path",
+            )?;
+            let query = required_string(
+                args.next(),
+                "search-content-index-manifest requires a query string",
+            )?;
+            let (live, report) =
+                Indexer::default().load_live_with_content_manifest(records, manifest, &query)?;
+            eprintln!(
+                "content-manifest-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
+                report.content_keys,
+                report.records_loaded,
+                report.records_missing,
+                report.candidate_ids,
+                report.full_hydration
+            );
+            for hit in live.search(&query, 50) {
                 print_hit(&hit);
             }
         }
@@ -317,7 +430,7 @@ fn marker(kind: FileKind) -> &'static str {
     }
 }
 
-pub(crate) fn print_hit(hit: &SearchHit) {
+fn print_hit(hit: &SearchHit) {
     print!(
         "{}\t{}\t{}\t{}",
         hit.score,
