@@ -40,9 +40,7 @@ use gfm_store::{
     promote_content_archive_manifest, rebuild_columns_archive, rebuild_derived_sidecar,
     recover_content_manifest, recover_content_manifest_promotion, write_dictionary,
     write_metadata_postings, write_record_columns, ArchiveRebuildInputs, ArchiveSchemaKind,
-    ContentArchiveHealth, MetadataField, MmapContentSet, MmapDictionary, MmapFuzzyArchive,
-    MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
-    MmapSubstringArchive,
+    ContentArchiveHealth, MmapContentSet, MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_store::{
     fuzzy_postings_from_records, plan_sidecar_recovery, prefix_postings_from_records,
@@ -1385,190 +1383,6 @@ fn run() -> Result<()> {
                 print_sidecar_recovery_report(report);
             }
         }
-        Some("fuzzy-terms-mmap") => {
-            let fuzzy = required_path(args.next(), "fuzzy-terms-mmap requires a fuzzy path")?;
-            let key = args
-                .next()
-                .ok_or_else(|| GfmError::Format("fuzzy-terms-mmap requires a key".to_string()))?;
-            let archive = MmapFuzzyArchive::open(fuzzy)?;
-            for term in archive.terms_for(&key)? {
-                println!("{term}");
-            }
-        }
-        Some("fuzzy-verify") => {
-            let fuzzy = required_path(args.next(), "fuzzy-verify requires a fuzzy path")?;
-            let archive = MmapFuzzyArchive::open(fuzzy)?;
-            println!(
-                "fuzzy-verify\tkeys={}\tbytes={}\tchecksum={}",
-                archive.indexed_keys(),
-                archive.mapped_len(),
-                archive.is_checksummed()
-            );
-        }
-        Some("prefix-ids-mmap") => {
-            let prefixes = required_path(args.next(), "prefix-ids-mmap requires a prefix path")?;
-            let prefix = args
-                .next()
-                .ok_or_else(|| GfmError::Format("prefix-ids-mmap requires a prefix".to_string()))?;
-            let archive = MmapPrefixArchive::open(prefixes)?;
-            for id in archive.ids_for(&prefix)? {
-                println!("{}\t{}", id.volume.0, id.node);
-            }
-        }
-        Some("prefix-id-block-mmap") => {
-            let prefixes =
-                required_path(args.next(), "prefix-id-block-mmap requires a prefix path")?;
-            let prefix = args.next().ok_or_else(|| {
-                GfmError::Format("prefix-id-block-mmap requires a prefix".to_string())
-            })?;
-            let block_index = args
-                .next()
-                .ok_or_else(|| {
-                    GfmError::Format("prefix-id-block-mmap requires a block index".to_string())
-                })?
-                .parse::<usize>()
-                .map_err(|err| GfmError::Format(format!("invalid prefix block index: {err}")))?;
-            let archive = MmapPrefixArchive::open(prefixes)?;
-            for id in archive.id_block_for(&prefix, block_index)? {
-                println!("{}\t{}", id.volume.0, id.node);
-            }
-        }
-        Some("prefix-verify") => {
-            let prefixes = required_path(args.next(), "prefix-verify requires a prefix path")?;
-            let archive = MmapPrefixArchive::open(prefixes)?;
-            println!(
-                "prefix-verify\tprefixes={}\tbytes={}\tchecksum={}",
-                archive.indexed_prefixes(),
-                archive.mapped_len(),
-                archive.is_checksummed()
-            );
-        }
-        Some("substring-ids-mmap") => {
-            let substrings =
-                required_path(args.next(), "substring-ids-mmap requires a substring path")?;
-            let gram = args.next().ok_or_else(|| {
-                GfmError::Format("substring-ids-mmap requires a trigram".to_string())
-            })?;
-            let archive = MmapSubstringArchive::open(substrings)?;
-            for id in archive.ids_for(&gram)? {
-                println!("{}\t{}", id.volume.0, id.node);
-            }
-        }
-        Some("substring-id-block-mmap") => {
-            let substrings = required_path(
-                args.next(),
-                "substring-id-block-mmap requires a substring path",
-            )?;
-            let gram = args.next().ok_or_else(|| {
-                GfmError::Format("substring-id-block-mmap requires a trigram".to_string())
-            })?;
-            let block_index = args
-                .next()
-                .ok_or_else(|| {
-                    GfmError::Format("substring-id-block-mmap requires a block index".to_string())
-                })?
-                .parse::<usize>()
-                .map_err(|err| GfmError::Format(format!("invalid substring block index: {err}")))?;
-            let archive = MmapSubstringArchive::open(substrings)?;
-            for id in archive.id_block_for(&gram, block_index)? {
-                println!("{}\t{}", id.volume.0, id.node);
-            }
-        }
-        Some("substring-verify") => {
-            let substrings =
-                required_path(args.next(), "substring-verify requires a substring path")?;
-            let archive = MmapSubstringArchive::open(substrings)?;
-            println!(
-                "substring-verify\tgrams={}\tbytes={}\tchecksum={}",
-                archive.indexed_grams(),
-                archive.mapped_len(),
-                archive.is_checksummed()
-            );
-        }
-        Some("dictionary-lookup") => {
-            let dictionary =
-                required_path(args.next(), "dictionary-lookup requires a dictionary path")?;
-            let term = args
-                .next()
-                .ok_or_else(|| GfmError::Format("dictionary-lookup requires a term".to_string()))?;
-            let archive = MmapDictionary::open(dictionary)?;
-            match archive.find(&term)? {
-                Some(index) => println!("dictionary\tfound\tindex={index}\tterm={term}"),
-                None => println!("dictionary\tmissing\tterm={term}"),
-            }
-        }
-        Some("dictionary-verify") => {
-            let dictionary =
-                required_path(args.next(), "dictionary-verify requires a dictionary path")?;
-            let archive = MmapDictionary::open(dictionary)?;
-            println!(
-                "dictionary-verify\tterms={}\tbytes={}\tchecksum={}",
-                archive.len(),
-                archive.mapped_len(),
-                if archive.is_checksummed() {
-                    "verified"
-                } else {
-                    "legacy"
-                }
-            );
-        }
-        Some("metadata-ids-mmap") => {
-            let metadata =
-                required_path(args.next(), "metadata-ids-mmap requires a metadata path")?;
-            let field = parse_metadata_field(
-                args.next().as_deref().ok_or_else(|| {
-                    GfmError::Format("metadata-ids-mmap requires a field".to_string())
-                })?,
-                "metadata field",
-            )?;
-            let term = args
-                .next()
-                .ok_or_else(|| GfmError::Format("metadata-ids-mmap requires a term".to_string()))?;
-            let archive = MmapMetadataArchive::open(metadata)?;
-            for id in archive.ids_for(field, &term)? {
-                println!("{}\t{}", id.volume.0, id.node);
-            }
-        }
-        Some("metadata-id-block-mmap") => {
-            let metadata = required_path(
-                args.next(),
-                "metadata-id-block-mmap requires a metadata path",
-            )?;
-            let field = parse_metadata_field(
-                args.next().as_deref().ok_or_else(|| {
-                    GfmError::Format("metadata-id-block-mmap requires a field".to_string())
-                })?,
-                "metadata field",
-            )?;
-            let term = args.next().ok_or_else(|| {
-                GfmError::Format("metadata-id-block-mmap requires a term".to_string())
-            })?;
-            let block_index = args
-                .next()
-                .ok_or_else(|| {
-                    GfmError::Format("metadata-id-block-mmap requires a block index".to_string())
-                })?
-                .parse::<usize>()
-                .map_err(|err| GfmError::Format(format!("invalid metadata block index: {err}")))?;
-            let archive = MmapMetadataArchive::open(metadata)?;
-            for id in archive.id_block_for(field, &term, block_index)? {
-                println!("{}\t{}", id.volume.0, id.node);
-            }
-        }
-        Some("metadata-verify") => {
-            let metadata = required_path(args.next(), "metadata-verify requires a metadata path")?;
-            let archive = MmapMetadataArchive::open(metadata)?;
-            println!(
-                "metadata-verify\tterms={}\tbytes={}\tchecksum={}",
-                archive.indexed_terms(),
-                archive.mapped_len(),
-                if archive.is_checksummed() {
-                    "verified"
-                } else {
-                    "legacy"
-                }
-            );
-        }
         Some("config-path") => {
             println!("{}", ConfigStore::platform_default()?.path().display());
         }
@@ -2477,10 +2291,6 @@ fn index_mount_state(state: MountState) -> IndexMountState {
 fn parse_quarantine_failure_kind(value: &str, name: &str) -> Result<QuarantineFailureKind> {
     QuarantineFailureKind::parse(value)
         .ok_or_else(|| GfmError::Format(format!("invalid {name}: {value}")))
-}
-
-fn parse_metadata_field(value: &str, name: &str) -> Result<MetadataField> {
-    MetadataField::parse(value).ok_or_else(|| GfmError::Format(format!("invalid {name}: {value}")))
 }
 
 fn parse_u32(value: &str, name: &str) -> Result<u32> {

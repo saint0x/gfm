@@ -7,8 +7,9 @@ use gfm_index::{
     SearchRecordColumns, SearchStreamStage,
 };
 use gfm_store::{
-    ContentArchive, MmapContentArchive, MmapContentSet, MmapMetadataArchive, MmapRecordArchive,
-    MmapRecordColumns, MmapSubstringArchive,
+    ContentArchive, MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary,
+    MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
+    MmapSubstringArchive,
 };
 use gfm_types::{FileKind, Result, SearchHit};
 use std::path::{Path, PathBuf};
@@ -471,9 +472,153 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 }
             );
         }
+        "fuzzy-terms-mmap" => {
+            let fuzzy = required_path(args.next(), "fuzzy-terms-mmap requires a fuzzy path")?;
+            let key = required_string(args.next(), "fuzzy-terms-mmap requires a key")?;
+            let archive = MmapFuzzyArchive::open(fuzzy)?;
+            for term in archive.terms_for(&key)? {
+                println!("{term}");
+            }
+        }
+        "fuzzy-verify" => {
+            let fuzzy = required_path(args.next(), "fuzzy-verify requires a fuzzy path")?;
+            let archive = MmapFuzzyArchive::open(fuzzy)?;
+            println!(
+                "fuzzy-verify\tkeys={}\tbytes={}\tchecksum={}",
+                archive.indexed_keys(),
+                archive.mapped_len(),
+                archive.is_checksummed()
+            );
+        }
+        "prefix-ids-mmap" => {
+            let prefixes = required_path(args.next(), "prefix-ids-mmap requires a prefix path")?;
+            let prefix = required_string(args.next(), "prefix-ids-mmap requires a prefix")?;
+            let archive = MmapPrefixArchive::open(prefixes)?;
+            print_file_ids(archive.ids_for(&prefix)?);
+        }
+        "prefix-id-block-mmap" => {
+            let prefixes =
+                required_path(args.next(), "prefix-id-block-mmap requires a prefix path")?;
+            let prefix = required_string(args.next(), "prefix-id-block-mmap requires a prefix")?;
+            let block_index =
+                parse_usize_arg(args.next(), "prefix-id-block-mmap requires a block index")?;
+            let archive = MmapPrefixArchive::open(prefixes)?;
+            print_file_ids(archive.id_block_for(&prefix, block_index)?);
+        }
+        "prefix-verify" => {
+            let prefixes = required_path(args.next(), "prefix-verify requires a prefix path")?;
+            let archive = MmapPrefixArchive::open(prefixes)?;
+            println!(
+                "prefix-verify\tprefixes={}\tbytes={}\tchecksum={}",
+                archive.indexed_prefixes(),
+                archive.mapped_len(),
+                archive.is_checksummed()
+            );
+        }
+        "substring-ids-mmap" => {
+            let substrings =
+                required_path(args.next(), "substring-ids-mmap requires a substring path")?;
+            let gram = required_string(args.next(), "substring-ids-mmap requires a trigram")?;
+            let archive = MmapSubstringArchive::open(substrings)?;
+            print_file_ids(archive.ids_for(&gram)?);
+        }
+        "substring-id-block-mmap" => {
+            let substrings = required_path(
+                args.next(),
+                "substring-id-block-mmap requires a substring path",
+            )?;
+            let gram = required_string(args.next(), "substring-id-block-mmap requires a trigram")?;
+            let block_index = parse_usize_arg(
+                args.next(),
+                "substring-id-block-mmap requires a block index",
+            )?;
+            let archive = MmapSubstringArchive::open(substrings)?;
+            print_file_ids(archive.id_block_for(&gram, block_index)?);
+        }
+        "substring-verify" => {
+            let substrings =
+                required_path(args.next(), "substring-verify requires a substring path")?;
+            let archive = MmapSubstringArchive::open(substrings)?;
+            println!(
+                "substring-verify\tgrams={}\tbytes={}\tchecksum={}",
+                archive.indexed_grams(),
+                archive.mapped_len(),
+                archive.is_checksummed()
+            );
+        }
+        "dictionary-lookup" => {
+            let dictionary =
+                required_path(args.next(), "dictionary-lookup requires a dictionary path")?;
+            let term = required_string(args.next(), "dictionary-lookup requires a term")?;
+            let archive = MmapDictionary::open(dictionary)?;
+            match archive.find(&term)? {
+                Some(index) => println!("dictionary\tfound\tindex={index}\tterm={term}"),
+                None => println!("dictionary\tmissing\tterm={term}"),
+            }
+        }
+        "dictionary-verify" => {
+            let dictionary =
+                required_path(args.next(), "dictionary-verify requires a dictionary path")?;
+            let archive = MmapDictionary::open(dictionary)?;
+            println!(
+                "dictionary-verify\tterms={}\tbytes={}\tchecksum={}",
+                archive.len(),
+                archive.mapped_len(),
+                if archive.is_checksummed() {
+                    "verified"
+                } else {
+                    "legacy"
+                }
+            );
+        }
+        "metadata-ids-mmap" => {
+            let metadata =
+                required_path(args.next(), "metadata-ids-mmap requires a metadata path")?;
+            let field = parse_metadata_field(
+                &required_string(args.next(), "metadata-ids-mmap requires a field")?,
+                "metadata field",
+            )?;
+            let term = required_string(args.next(), "metadata-ids-mmap requires a term")?;
+            let archive = MmapMetadataArchive::open(metadata)?;
+            print_file_ids(archive.ids_for(field, &term)?);
+        }
+        "metadata-id-block-mmap" => {
+            let metadata = required_path(
+                args.next(),
+                "metadata-id-block-mmap requires a metadata path",
+            )?;
+            let field = parse_metadata_field(
+                &required_string(args.next(), "metadata-id-block-mmap requires a field")?,
+                "metadata field",
+            )?;
+            let term = required_string(args.next(), "metadata-id-block-mmap requires a term")?;
+            let block_index =
+                parse_usize_arg(args.next(), "metadata-id-block-mmap requires a block index")?;
+            let archive = MmapMetadataArchive::open(metadata)?;
+            print_file_ids(archive.id_block_for(field, &term, block_index)?);
+        }
+        "metadata-verify" => {
+            let metadata = required_path(args.next(), "metadata-verify requires a metadata path")?;
+            let archive = MmapMetadataArchive::open(metadata)?;
+            println!(
+                "metadata-verify\tterms={}\tbytes={}\tchecksum={}",
+                archive.indexed_terms(),
+                archive.mapped_len(),
+                if archive.is_checksummed() {
+                    "verified"
+                } else {
+                    "legacy"
+                }
+            );
+        }
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn parse_metadata_field(value: &str, name: &str) -> Result<MetadataField> {
+    MetadataField::parse(value)
+        .ok_or_else(|| gfm_types::GfmError::Format(format!("invalid {name}: {value}")))
 }
 
 fn print_file_ids(ids: Vec<gfm_types::FileId>) {
