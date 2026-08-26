@@ -11,7 +11,9 @@ use crate::transfer::copy_file_bytes;
 use crate::transfer::{
     clone_fallback_allowed, clone_file, copy_file_bytes_tracked, remove_failed_clone_destination,
 };
+#[cfg(test)]
 use crate::verify::verify_copy;
+use crate::verify::verify_copy_checked;
 use crate::{
     ConflictPolicy, OperationProgressEvent, OperationVolumeCopyPolicy, VerificationPolicy,
 };
@@ -405,7 +407,7 @@ fn copy_path_existing(
             message: "merge destination file already exists".to_string(),
         })
     } else {
-        verify_copy(from, to, execution.verification)?;
+        verify_copy_with_progress(from, to, execution.verification, progress)?;
         crate::preserve::preserve_metadata(from, to, metadata)?;
         progress.advance(metadata)
     }
@@ -525,7 +527,7 @@ fn copy_file_tracked(
     match clone_file(from, to) {
         Ok(()) => {
             crate::preserve::preserve_metadata(from, to, &metadata)?;
-            verify_copy(from, to, verification)?;
+            verify_copy_with_progress(from, to, verification, progress)?;
             progress.advance(&metadata)?;
             Ok(CopyMethod::ApfsClone)
         }
@@ -533,12 +535,21 @@ fn copy_file_tracked(
             remove_failed_clone_destination(to)?;
             copy_file_bytes_tracked(from, to, volume_copy_policy, progress)?;
             crate::preserve::preserve_metadata(from, to, &metadata)?;
-            verify_copy(from, to, verification)?;
+            verify_copy_with_progress(from, to, verification, progress)?;
             progress.finish_current_item()?;
             Ok(CopyMethod::ByteCopy)
         }
         Err(err) => Err(GfmError::io(from, err)),
     }
+}
+
+fn verify_copy_with_progress(
+    from: &Path,
+    to: &Path,
+    verification: VerificationPolicy,
+    progress: &ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    verify_copy_checked(from, to, verification, || progress.check_cancelled())
 }
 
 fn copy_file_with_session(

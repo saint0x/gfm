@@ -1,9 +1,9 @@
 use super::*;
 use crate::copy::copy_file;
 use crate::journal::{append_journal, now_nanos};
-#[cfg(all(target_os = "macos"))]
+#[cfg(target_os = "macos")]
 use crate::preserve::acl_copy_unsupported;
-#[cfg(all(target_vendor = "apple"))]
+#[cfg(target_vendor = "apple")]
 use crate::preserve::file_flag_preservation_unsupported;
 use crate::preserve::{time_preservation_unsupported, xattr_copy_unsupported};
 use crate::progress::ProgressTracker;

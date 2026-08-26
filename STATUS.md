@@ -1,6 +1,6 @@
 # GFM Remaining Work
 
-Date: 2026-08-24
+Date: 2026-08-26
 
 This is the living unfinished-work ledger for GFM. When a capability is implemented, verified, and accepted as production-grade, remove it from this file.
 
@@ -73,7 +73,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 44. Complete automatic dependency-aware fair scheduling integration across foreground, visible, background, maintenance, and repair queues.
 45. Complete automatic persistent job progress restoration and GPUI progress-surface integration across remaining specialized producers.
 46. Bind thermal, battery, IO pressure, and user-activity adaptive scheduling into remaining foreground, preview, and thumbnail producers.
-47. Complete automatic structured cancellation propagation across remaining operation, indexing, extraction, thumbnail, preview, and repair producers.
+47. Complete automatic structured cancellation propagation across remaining indexing, extraction, thumbnail, preview, and repair producers.
 48. Complete retry/backoff integration across remaining operation, indexing, extraction, thumbnail, preview, and repair producers.
 
 ## Preview And Thumbnails
