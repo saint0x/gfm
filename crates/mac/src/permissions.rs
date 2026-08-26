@@ -226,7 +226,7 @@ impl PermissionStateSnapshot {
             readiness.push(PermissionReadiness {
                 scope: PermissionScope::parse(fields[0])?,
                 state: PermissionState::parse(fields[1])?,
-                path: PathBuf::from(fields[2]),
+                path: PathBuf::from(unescape_field(fields[2])),
                 reason: unescape_field(fields[3]),
             });
         }
@@ -241,7 +241,7 @@ impl PermissionStateSnapshot {
                 "{}\t{}\t{}\t{}\n",
                 item.scope.as_str(),
                 item.state.as_str(),
-                item.path.display(),
+                escape_field(&item.path.to_string_lossy()),
                 escape_field(&item.reason)
             ));
         }
@@ -305,7 +305,7 @@ impl PermissionStateInvalidationReport {
                 change.scope.as_str(),
                 change.previous.map(PermissionState::as_str).unwrap_or("-"),
                 change.current.as_str(),
-                change.path.display(),
+                escape_field(&change.path.to_string_lossy()),
                 escape_field(&change.reason)
             )
         }));
@@ -413,17 +413,40 @@ fn probe_file(path: &Path) -> PermissionState {
 }
 
 fn escape_field(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| match ch {
-            '\t' | '\n' | '\r' => ' ',
-            other => other,
-        })
-        .collect()
+    let mut output = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\\' => output.push_str("\\\\"),
+            '\t' => output.push_str("\\t"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            other => output.push(other),
+        }
+    }
+    output
 }
 
 fn unescape_field(value: &str) -> String {
-    value.to_string()
+    let mut output = String::new();
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            output.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => output.push('\\'),
+            Some('t') => output.push('\t'),
+            Some('n') => output.push('\n'),
+            Some('r') => output.push('\r'),
+            Some(other) => {
+                output.push('\\');
+                output.push(other);
+            }
+            None => output.push('\\'),
+        }
+    }
+    output
 }
 
 #[cfg(test)]
@@ -518,9 +541,9 @@ mod tests {
             policy: PermissionPolicy::default(),
             readiness: vec![PermissionReadiness {
                 scope: PermissionScope::Documents,
-                path: root.join("Documents"),
+                path: root.join("Doc\tuments\nArchive\\2026"),
                 state: PermissionState::Granted,
-                reason: "readable".to_string(),
+                reason: "readable\twithout prompts\nvia scoped retry\\cache".to_string(),
             }],
             action: PermissionAction::ContinueNormally,
             finder_parity_default: true,
@@ -528,6 +551,9 @@ mod tests {
         let snapshot = PermissionStateSnapshot::from_plan(&plan);
 
         snapshot.write(&path).unwrap();
+        let encoded = fs::read_to_string(&path).unwrap();
+        assert!(encoded.contains("Doc\\tuments\\nArchive\\\\2026"));
+        assert!(encoded.contains("readable\\twithout prompts\\nvia scoped retry\\\\cache"));
         let reloaded = PermissionStateSnapshot::read(&path).unwrap();
 
         assert_eq!(reloaded, snapshot);
