@@ -536,15 +536,6 @@ For a UI surface, production parity requires:
 
 If a feature is better than Finder, it must not disturb default parity. Put power features behind explicit commands, settings, or modes.
 
-## Merge-Friendly Slice Ideas
-
-These are good first slices because they are valuable, testable, and unlikely to collide with Agent 1:
-
-1. Extend the pixel parity manifest and bundle writer without touching GPUI runtime paths.
-2. Add a deterministic fixture generator for one Finder view state.
-3. Harden one isolated macOS bridge in `crates/mac` behind a typed safe API.
-4. Add a captured-baseline-ready UI contract test for one Finder surface.
-
 ## What Not To Do
 
 - Do not build a web UI.
