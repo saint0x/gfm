@@ -1,10 +1,11 @@
 use crate::{
-    decide_cloud_preview, decide_invalidation, decide_preview_security, security_input_for_path,
-    CloudPreviewDecision, PreviewInvalidationDecision, PreviewInvalidationEvent, PreviewKind,
-    PreviewRequestKey, PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision,
-    PreviewSecurityPolicy, PreviewTask, PreviewTaskDecision, Rect, Viewport,
+    cloud_materialization_for_state, decide_cloud_preview_for_materialization, decide_invalidation,
+    decide_preview_security, security_input_for_path, CloudPreviewDecision,
+    PreviewInvalidationDecision, PreviewInvalidationEvent, PreviewKind, PreviewRequestKey,
+    PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision, PreviewSecurityPolicy,
+    PreviewTask, PreviewTaskDecision, Rect, Viewport,
 };
-use gfm_mac::CloudStorageState;
+use gfm_mac::{CloudMaterialization, CloudStorageState};
 use gfm_types::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +56,7 @@ pub struct ThumbnailGenerationInput {
     pub scale_factor_milli: u16,
     pub invalidation_event: PreviewInvalidationEvent,
     pub cloud_state: CloudStorageState,
+    pub cloud_materialization: CloudMaterialization,
 }
 
 impl ThumbnailGenerationInput {
@@ -68,6 +70,7 @@ impl ThumbnailGenerationInput {
             scale_factor_milli: 2_000,
             invalidation_event: PreviewInvalidationEvent::default(),
             cloud_state: CloudStorageState::LocalOnly,
+            cloud_materialization: CloudMaterialization::NotProviderBacked,
         }
     }
 
@@ -91,6 +94,12 @@ impl ThumbnailGenerationInput {
 
     pub fn with_cloud_state(mut self, state: CloudStorageState) -> Self {
         self.cloud_state = state;
+        self.cloud_materialization = cloud_materialization_for_state(state);
+        self
+    }
+
+    pub fn with_cloud_materialization(mut self, materialization: CloudMaterialization) -> Self {
+        self.cloud_materialization = materialization;
         self
     }
 }
@@ -125,7 +134,7 @@ impl ThumbnailGenerationContract {
         let security_input = security_input_for_path(&input.key.path, PreviewKind::Thumbnail);
         check()?;
         let security = decide_preview_security(policy, &security_input);
-        let cloud = decide_cloud_preview(input.cloud_state);
+        let cloud = decide_cloud_preview_for_materialization(input.cloud_materialization);
         let generator_mode = generator_mode(security, cloud);
         let invalidation = decide_invalidation(input.invalidation_event);
         let cache_disposition = cache_disposition(generator_mode, &invalidation);

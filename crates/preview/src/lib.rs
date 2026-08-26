@@ -406,17 +406,36 @@ impl CloudPreviewDecision {
 }
 
 pub fn decide_cloud_preview(state: gfm_mac::CloudStorageState) -> CloudPreviewDecision {
+    decide_cloud_preview_for_materialization(cloud_materialization_for_state(state))
+}
+
+pub fn cloud_materialization_for_state(
+    state: gfm_mac::CloudStorageState,
+) -> gfm_mac::CloudMaterialization {
     match state {
-        gfm_mac::CloudStorageState::LocalOnly | gfm_mac::CloudStorageState::Downloaded => {
-            CloudPreviewDecision::NativeEligible
-        }
-        gfm_mac::CloudStorageState::Evicted
-        | gfm_mac::CloudStorageState::Conflict
-        | gfm_mac::CloudStorageState::Unknown => CloudPreviewDecision::MetadataOnly,
+        gfm_mac::CloudStorageState::LocalOnly => gfm_mac::CloudMaterialization::NotProviderBacked,
+        gfm_mac::CloudStorageState::Downloaded => gfm_mac::CloudMaterialization::Materialized,
+        gfm_mac::CloudStorageState::Evicted => gfm_mac::CloudMaterialization::RemotePlaceholder,
         gfm_mac::CloudStorageState::Downloading
         | gfm_mac::CloudStorageState::Uploading
-        | gfm_mac::CloudStorageState::Waiting => CloudPreviewDecision::Defer,
-        gfm_mac::CloudStorageState::Offline => CloudPreviewDecision::Unavailable,
+        | gfm_mac::CloudStorageState::Waiting => gfm_mac::CloudMaterialization::InFlight,
+        gfm_mac::CloudStorageState::Conflict => gfm_mac::CloudMaterialization::Conflict,
+        gfm_mac::CloudStorageState::Offline => gfm_mac::CloudMaterialization::Offline,
+        gfm_mac::CloudStorageState::Unknown => gfm_mac::CloudMaterialization::Unknown,
+    }
+}
+
+pub fn decide_cloud_preview_for_materialization(
+    materialization: gfm_mac::CloudMaterialization,
+) -> CloudPreviewDecision {
+    match materialization {
+        gfm_mac::CloudMaterialization::NotProviderBacked
+        | gfm_mac::CloudMaterialization::Materialized => CloudPreviewDecision::NativeEligible,
+        gfm_mac::CloudMaterialization::RemotePlaceholder
+        | gfm_mac::CloudMaterialization::Conflict
+        | gfm_mac::CloudMaterialization::Unknown => CloudPreviewDecision::MetadataOnly,
+        gfm_mac::CloudMaterialization::InFlight => CloudPreviewDecision::Defer,
+        gfm_mac::CloudMaterialization::Offline => CloudPreviewDecision::Unavailable,
     }
 }
 
@@ -584,6 +603,28 @@ mod tests {
         assert_eq!(
             decide_preview_security(&policy, &remote),
             PreviewSecurityDecision::Deny
+        );
+    }
+
+    #[test]
+    fn cloud_preview_uses_materialization_verdicts() {
+        assert_eq!(
+            decide_cloud_preview_for_materialization(gfm_mac::CloudMaterialization::Materialized),
+            CloudPreviewDecision::NativeEligible
+        );
+        assert_eq!(
+            decide_cloud_preview_for_materialization(
+                gfm_mac::CloudMaterialization::RemotePlaceholder
+            ),
+            CloudPreviewDecision::MetadataOnly
+        );
+        assert_eq!(
+            decide_cloud_preview_for_materialization(gfm_mac::CloudMaterialization::InFlight),
+            CloudPreviewDecision::Defer
+        );
+        assert_eq!(
+            decide_cloud_preview_for_materialization(gfm_mac::CloudMaterialization::Offline),
+            CloudPreviewDecision::Unavailable
         );
     }
 

@@ -258,13 +258,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "quicklook preview",
                 move |cancellation| {
                     cancellation.check()?;
-                    let cloud = FileProviderStateReport::read_path(&path)?.storage_state;
+                    let cloud = FileProviderStateReport::read_path(&path)?.materialization;
                     let input = QuickLookSessionInput::new(
                         PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
                         rect,
                         viewport,
                     )
-                    .with_cloud_state(cloud)
+                    .with_cloud_materialization(cloud)
                     .with_invalidation(PreviewInvalidationEvent {
                         content_changed: true,
                         ..PreviewInvalidationEvent::default()
@@ -292,13 +292,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 pressure,
                 move |cancellation| {
                     cancellation.check()?;
-                    let cloud = FileProviderStateReport::read_path(&path)?.storage_state;
+                    let cloud = FileProviderStateReport::read_path(&path)?.materialization;
                     let input = QuickLookSessionInput::new(
                         PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
                         rect,
                         viewport,
                     )
-                    .with_cloud_state(cloud)
+                    .with_cloud_materialization(cloud)
                     .with_scheduling_policy(
                         PreviewSchedulingPolicy {
                             max_visible: 1,
@@ -373,13 +373,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "thumbnail generation",
                 move |cancellation| {
                     cancellation.check()?;
-                    let cloud = FileProviderStateReport::read_path(&path)?.storage_state;
+                    let cloud = FileProviderStateReport::read_path(&path)?.materialization;
                     let input = ThumbnailGenerationInput::new(
                         PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
                         rect,
                         viewport,
                     )
-                    .with_cloud_state(cloud)
+                    .with_cloud_materialization(cloud)
                     .with_size(512, 2_000)
                     .with_invalidation(PreviewInvalidationEvent {
                         metadata_changed: true,
@@ -408,13 +408,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 pressure,
                 move |cancellation| {
                     cancellation.check()?;
-                    let cloud = FileProviderStateReport::read_path(&path)?.storage_state;
+                    let cloud = FileProviderStateReport::read_path(&path)?.materialization;
                     let input = ThumbnailGenerationInput::new(
                         PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
                         rect,
                         viewport,
                     )
-                    .with_cloud_state(cloud)
+                    .with_cloud_materialization(cloud)
                     .with_scheduling_policy(
                         PreviewSchedulingPolicy::default().adapted_for_pressure(pressure),
                     )
