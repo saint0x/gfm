@@ -386,6 +386,40 @@ pub fn security_input_for_path(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudPreviewDecision {
+    NativeEligible,
+    MetadataOnly,
+    Defer,
+    Unavailable,
+}
+
+impl CloudPreviewDecision {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NativeEligible => "native-eligible",
+            Self::MetadataOnly => "metadata-only",
+            Self::Defer => "defer",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+pub fn decide_cloud_preview(state: gfm_mac::CloudStorageState) -> CloudPreviewDecision {
+    match state {
+        gfm_mac::CloudStorageState::LocalOnly | gfm_mac::CloudStorageState::Downloaded => {
+            CloudPreviewDecision::NativeEligible
+        }
+        gfm_mac::CloudStorageState::Evicted
+        | gfm_mac::CloudStorageState::Conflict
+        | gfm_mac::CloudStorageState::Unknown => CloudPreviewDecision::MetadataOnly,
+        gfm_mac::CloudStorageState::Downloading
+        | gfm_mac::CloudStorageState::Uploading
+        | gfm_mac::CloudStorageState::Waiting => CloudPreviewDecision::Defer,
+        gfm_mac::CloudStorageState::Offline => CloudPreviewDecision::Unavailable,
+    }
+}
+
 fn trust_for_path(path: &Path) -> TrustLevel {
     let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
         return TrustLevel::Trusted;

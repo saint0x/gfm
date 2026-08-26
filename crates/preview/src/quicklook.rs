@@ -1,9 +1,10 @@
 use crate::{
-    decide_invalidation, decide_preview_security, security_input_for_path,
-    PreviewInvalidationDecision, PreviewInvalidationEvent, PreviewKind, PreviewRequestKey,
-    PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision, PreviewSecurityPolicy,
-    PreviewTask, PreviewTaskDecision, Rect, Viewport,
+    decide_cloud_preview, decide_invalidation, decide_preview_security, security_input_for_path,
+    CloudPreviewDecision, PreviewInvalidationDecision, PreviewInvalidationEvent, PreviewKind,
+    PreviewRequestKey, PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision,
+    PreviewSecurityPolicy, PreviewTask, PreviewTaskDecision, Rect, Viewport,
 };
+use gfm_mac::CloudStorageState;
 use gfm_types::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +33,7 @@ pub struct QuickLookSessionInput {
     pub viewport: Viewport,
     pub scheduling_policy: PreviewSchedulingPolicy,
     pub invalidation_event: PreviewInvalidationEvent,
+    pub cloud_state: CloudStorageState,
 }
 
 impl QuickLookSessionInput {
@@ -46,6 +48,7 @@ impl QuickLookSessionInput {
                 cancel_offscreen: true,
             },
             invalidation_event: PreviewInvalidationEvent::default(),
+            cloud_state: CloudStorageState::LocalOnly,
         }
     }
 
@@ -58,12 +61,18 @@ impl QuickLookSessionInput {
         self.scheduling_policy = policy;
         self
     }
+
+    pub fn with_cloud_state(mut self, state: CloudStorageState) -> Self {
+        self.cloud_state = state;
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuickLookSessionContract {
     pub key: PreviewRequestKey,
     pub security: PreviewSecurityDecision,
+    pub cloud: CloudPreviewDecision,
     pub controller_mode: QuickLookControllerMode,
     pub invalidation: PreviewInvalidationDecision,
     pub schedule_decision: PreviewTaskDecision,
@@ -86,27 +95,41 @@ impl QuickLookSessionContract {
         let security_input = security_input_for_path(&input.key.path, PreviewKind::QuickLook);
         check()?;
         let security = decide_preview_security(policy, &security_input);
-        let controller_mode = controller_mode(security);
+        let cloud = decide_cloud_preview(input.cloud_state);
+        let controller_mode = controller_mode(security, cloud);
         let invalidation = decide_invalidation(input.invalidation_event);
         check()?;
-        let mut scheduler = PreviewScheduler::new(input.scheduling_policy)?;
-        check()?;
-        let schedule_decision = scheduler
-            .schedule(
-                input.viewport,
-                [PreviewTask::new(input.key.clone(), input.rect)],
-            )
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| PreviewTaskDecision::Cancelled {
+        let schedule_decision = match cloud {
+            CloudPreviewDecision::Defer => PreviewTaskDecision::Cancelled {
                 key: input.key.clone(),
-                reason: "outside-preview-budget",
-            });
+                reason: "fileprovider-in-flight",
+            },
+            CloudPreviewDecision::Unavailable => PreviewTaskDecision::Cancelled {
+                key: input.key.clone(),
+                reason: "fileprovider-unavailable",
+            },
+            CloudPreviewDecision::NativeEligible | CloudPreviewDecision::MetadataOnly => {
+                let mut scheduler = PreviewScheduler::new(input.scheduling_policy)?;
+                check()?;
+                scheduler
+                    .schedule(
+                        input.viewport,
+                        [PreviewTask::new(input.key.clone(), input.rect)],
+                    )
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| PreviewTaskDecision::Cancelled {
+                        key: input.key.clone(),
+                        reason: "outside-preview-budget",
+                    })
+            }
+        };
         check()?;
 
         Ok(Self {
             key: input.key,
             security,
+            cloud,
             controller_mode,
             invalidation,
             schedule_decision,
@@ -115,10 +138,11 @@ impl QuickLookSessionContract {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "quicklook-session\t{}\t{}\t{}\t{}\t{}:{}\tinvalidate-memory={}\tinvalidate-disk={}\tschedule={}",
+            "quicklook-session\t{}\t{}\t{}\tcloud={}\t{}\t{}:{}\tinvalidate-memory={}\tinvalidate-disk={}\tschedule={}",
             self.key.kind.as_str(),
             self.key.path.display(),
             self.security.as_str(),
+            self.cloud.as_str(),
             self.controller_mode.as_str(),
             self.key.file_id.volume.0,
             self.key.file_id.node,
@@ -129,7 +153,16 @@ impl QuickLookSessionContract {
     }
 }
 
-fn controller_mode(security: PreviewSecurityDecision) -> QuickLookControllerMode {
+fn controller_mode(
+    security: PreviewSecurityDecision,
+    cloud: CloudPreviewDecision,
+) -> QuickLookControllerMode {
+    match cloud {
+        CloudPreviewDecision::MetadataOnly => return QuickLookControllerMode::MetadataOnly,
+        CloudPreviewDecision::Defer => return QuickLookControllerMode::MetadataOnly,
+        CloudPreviewDecision::Unavailable => return QuickLookControllerMode::Denied,
+        CloudPreviewDecision::NativeEligible => {}
+    }
     match security {
         PreviewSecurityDecision::AllowNative => QuickLookControllerMode::NativePreviewController,
         PreviewSecurityDecision::Sandbox => QuickLookControllerMode::SandboxedGenerator,
@@ -232,6 +265,69 @@ mod tests {
     }
 
     #[test]
+    fn evicted_fileprovider_items_are_metadata_only_for_quicklook() {
+        let contract = QuickLookSessionContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Remote.icloud", Rect::new(0, 0, 400, 300))
+                .with_cloud_state(CloudStorageState::Evicted),
+        )
+        .unwrap();
+
+        assert_eq!(contract.cloud, CloudPreviewDecision::MetadataOnly);
+        assert_eq!(
+            contract.controller_mode,
+            QuickLookControllerMode::MetadataOnly
+        );
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Scheduled { .. }
+        ));
+    }
+
+    #[test]
+    fn in_flight_fileprovider_items_defer_quicklook() {
+        let contract = QuickLookSessionContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Downloading.icloud", Rect::new(0, 0, 400, 300))
+                .with_cloud_state(CloudStorageState::Downloading),
+        )
+        .unwrap();
+
+        assert_eq!(contract.cloud, CloudPreviewDecision::Defer);
+        assert_eq!(
+            contract.controller_mode,
+            QuickLookControllerMode::MetadataOnly
+        );
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "fileprovider-in-flight",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn offline_fileprovider_items_deny_quicklook() {
+        let contract = QuickLookSessionContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Offline.icloud", Rect::new(0, 0, 400, 300))
+                .with_cloud_state(CloudStorageState::Offline),
+        )
+        .unwrap();
+
+        assert_eq!(contract.cloud, CloudPreviewDecision::Unavailable);
+        assert_eq!(contract.controller_mode, QuickLookControllerMode::Denied);
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "fileprovider-unavailable",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn checked_contract_honors_pre_cancelled_work() {
         let err = QuickLookSessionContract::from_input_checked(
             &PreviewSecurityPolicy::default(),
@@ -258,7 +354,7 @@ mod tests {
 
         assert_eq!(
             contract.as_tsv(),
-            "quicklook-session\tquick-look\t/tmp/Report.pdf\tallow-native\tnative-preview-controller\t1:10\tinvalidate-memory=true\tinvalidate-disk=true\tschedule=scheduled:visible"
+            "quicklook-session\tquick-look\t/tmp/Report.pdf\tallow-native\tcloud=native-eligible\tnative-preview-controller\t1:10\tinvalidate-memory=true\tinvalidate-disk=true\tschedule=scheduled:visible"
         );
     }
 

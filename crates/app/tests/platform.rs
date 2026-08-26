@@ -363,6 +363,60 @@ fn reports_fileprovider_state_from_binary() {
 }
 
 #[test]
+fn fileprovider_state_controls_preview_generation_from_binary() {
+    let root =
+        std::env::temp_dir().join(format!("gfm-fileprovider-preview-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let evicted = root.join("Remote.icloud-placeholder.pdf");
+    let downloading = root.join("Downloading.icloud-downloading.png");
+    std::fs::write(&evicted, "%PDF-1.7\nplaceholder").unwrap();
+    std::fs::write(&downloading, "png").unwrap();
+
+    let quicklook = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("quicklook-session")
+        .arg(&evicted)
+        .output()
+        .unwrap();
+    assert!(
+        quicklook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&quicklook.stderr)
+    );
+    let quicklook_stdout = String::from_utf8(quicklook.stdout).unwrap();
+    assert!(
+        quicklook_stdout.contains("\tallow-native\tcloud=metadata-only\tmetadata-only\t"),
+        "{quicklook_stdout}"
+    );
+    assert!(
+        quicklook_stdout.ends_with("schedule=scheduled:visible\n"),
+        "{quicklook_stdout}"
+    );
+
+    let thumbnail = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("thumbnail-generation")
+        .arg(&downloading)
+        .output()
+        .unwrap();
+    assert!(
+        thumbnail.status.success(),
+        "{}",
+        String::from_utf8_lossy(&thumbnail.stderr)
+    );
+    let thumbnail_stdout = String::from_utf8(thumbnail.stdout).unwrap();
+    assert!(
+        thumbnail_stdout.contains("\tallow-native\tcloud=defer\tmetadata-only\t512px\t"),
+        "{thumbnail_stdout}"
+    );
+    assert!(
+        thumbnail_stdout.ends_with("schedule=cancelled:fileprovider-in-flight\n"),
+        "{thumbnail_stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_discovery_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-volumes-{}", std::process::id()));
     let external = root.join("Work Drive");

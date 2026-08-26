@@ -1,9 +1,10 @@
 use crate::{
-    decide_invalidation, decide_preview_security, security_input_for_path,
-    PreviewInvalidationDecision, PreviewInvalidationEvent, PreviewKind, PreviewRequestKey,
-    PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision, PreviewSecurityPolicy,
-    PreviewTask, PreviewTaskDecision, Rect, Viewport,
+    decide_cloud_preview, decide_invalidation, decide_preview_security, security_input_for_path,
+    CloudPreviewDecision, PreviewInvalidationDecision, PreviewInvalidationEvent, PreviewKind,
+    PreviewRequestKey, PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision,
+    PreviewSecurityPolicy, PreviewTask, PreviewTaskDecision, Rect, Viewport,
 };
+use gfm_mac::CloudStorageState;
 use gfm_types::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +54,7 @@ pub struct ThumbnailGenerationInput {
     pub max_pixel_size: u16,
     pub scale_factor_milli: u16,
     pub invalidation_event: PreviewInvalidationEvent,
+    pub cloud_state: CloudStorageState,
 }
 
 impl ThumbnailGenerationInput {
@@ -65,6 +67,7 @@ impl ThumbnailGenerationInput {
             max_pixel_size: 512,
             scale_factor_milli: 2_000,
             invalidation_event: PreviewInvalidationEvent::default(),
+            cloud_state: CloudStorageState::LocalOnly,
         }
     }
 
@@ -85,6 +88,11 @@ impl ThumbnailGenerationInput {
         self.scheduling_policy = policy;
         self
     }
+
+    pub fn with_cloud_state(mut self, state: CloudStorageState) -> Self {
+        self.cloud_state = state;
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +100,7 @@ pub struct ThumbnailGenerationContract {
     pub key: PreviewRequestKey,
     pub generator_mode: ThumbnailGeneratorMode,
     pub security: PreviewSecurityDecision,
+    pub cloud: CloudPreviewDecision,
     pub invalidation: PreviewInvalidationDecision,
     pub cache_disposition: ThumbnailCacheDisposition,
     pub schedule_decision: PreviewTaskDecision,
@@ -116,29 +125,43 @@ impl ThumbnailGenerationContract {
         let security_input = security_input_for_path(&input.key.path, PreviewKind::Thumbnail);
         check()?;
         let security = decide_preview_security(policy, &security_input);
-        let generator_mode = generator_mode(security);
+        let cloud = decide_cloud_preview(input.cloud_state);
+        let generator_mode = generator_mode(security, cloud);
         let invalidation = decide_invalidation(input.invalidation_event);
         let cache_disposition = cache_disposition(generator_mode, &invalidation);
         check()?;
-        let mut scheduler = PreviewScheduler::new(input.scheduling_policy)?;
-        check()?;
-        let schedule_decision = scheduler
-            .schedule(
-                input.viewport,
-                [PreviewTask::new(input.key.clone(), input.rect)],
-            )
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| PreviewTaskDecision::Cancelled {
+        let schedule_decision = match cloud {
+            CloudPreviewDecision::Defer => PreviewTaskDecision::Cancelled {
                 key: input.key.clone(),
-                reason: "outside-thumbnail-budget",
-            });
+                reason: "fileprovider-in-flight",
+            },
+            CloudPreviewDecision::Unavailable => PreviewTaskDecision::Cancelled {
+                key: input.key.clone(),
+                reason: "fileprovider-unavailable",
+            },
+            CloudPreviewDecision::NativeEligible | CloudPreviewDecision::MetadataOnly => {
+                let mut scheduler = PreviewScheduler::new(input.scheduling_policy)?;
+                check()?;
+                scheduler
+                    .schedule(
+                        input.viewport,
+                        [PreviewTask::new(input.key.clone(), input.rect)],
+                    )
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| PreviewTaskDecision::Cancelled {
+                        key: input.key.clone(),
+                        reason: "outside-thumbnail-budget",
+                    })
+            }
+        };
         check()?;
 
         Ok(Self {
             key: input.key,
             generator_mode,
             security,
+            cloud,
             invalidation,
             cache_disposition,
             schedule_decision,
@@ -149,9 +172,10 @@ impl ThumbnailGenerationContract {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "thumbnail-generation\t{}\t{}\t{}\t{}px\tscale={}m\t{}:{}\tcache={}\tinvalidate-memory={}\tinvalidate-disk={}\tschedule={}",
+            "thumbnail-generation\t{}\t{}\tcloud={}\t{}\t{}px\tscale={}m\t{}:{}\tcache={}\tinvalidate-memory={}\tinvalidate-disk={}\tschedule={}",
             self.key.path.display(),
             self.security.as_str(),
+            self.cloud.as_str(),
             self.generator_mode.as_str(),
             self.max_pixel_size,
             self.scale_factor_milli,
@@ -165,7 +189,16 @@ impl ThumbnailGenerationContract {
     }
 }
 
-fn generator_mode(security: PreviewSecurityDecision) -> ThumbnailGeneratorMode {
+fn generator_mode(
+    security: PreviewSecurityDecision,
+    cloud: CloudPreviewDecision,
+) -> ThumbnailGeneratorMode {
+    match cloud {
+        CloudPreviewDecision::MetadataOnly => return ThumbnailGeneratorMode::MetadataOnly,
+        CloudPreviewDecision::Defer => return ThumbnailGeneratorMode::MetadataOnly,
+        CloudPreviewDecision::Unavailable => return ThumbnailGeneratorMode::Denied,
+        CloudPreviewDecision::NativeEligible => {}
+    }
     match security {
         PreviewSecurityDecision::AllowNative => ThumbnailGeneratorMode::QuickLookThumbnailing,
         PreviewSecurityDecision::Sandbox => ThumbnailGeneratorMode::SandboxedGenerator,
@@ -285,6 +318,73 @@ mod tests {
     }
 
     #[test]
+    fn evicted_fileprovider_items_are_metadata_only_for_thumbnails() {
+        let contract = ThumbnailGenerationContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Remote.icloud", Rect::new(0, 0, 128, 128))
+                .with_cloud_state(CloudStorageState::Evicted),
+        )
+        .unwrap();
+
+        assert_eq!(contract.cloud, CloudPreviewDecision::MetadataOnly);
+        assert_eq!(
+            contract.generator_mode,
+            ThumbnailGeneratorMode::MetadataOnly
+        );
+        assert_eq!(
+            contract.cache_disposition,
+            ThumbnailCacheDisposition::ReadThrough
+        );
+    }
+
+    #[test]
+    fn in_flight_fileprovider_items_defer_thumbnails() {
+        let contract = ThumbnailGenerationContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Downloading.icloud", Rect::new(0, 0, 128, 128))
+                .with_cloud_state(CloudStorageState::Downloading),
+        )
+        .unwrap();
+
+        assert_eq!(contract.cloud, CloudPreviewDecision::Defer);
+        assert_eq!(
+            contract.generator_mode,
+            ThumbnailGeneratorMode::MetadataOnly
+        );
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "fileprovider-in-flight",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn offline_fileprovider_items_bypass_thumbnail_cache() {
+        let contract = ThumbnailGenerationContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Offline.icloud", Rect::new(0, 0, 128, 128))
+                .with_cloud_state(CloudStorageState::Offline),
+        )
+        .unwrap();
+
+        assert_eq!(contract.cloud, CloudPreviewDecision::Unavailable);
+        assert_eq!(contract.generator_mode, ThumbnailGeneratorMode::Denied);
+        assert_eq!(
+            contract.cache_disposition,
+            ThumbnailCacheDisposition::Bypass
+        );
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "fileprovider-unavailable",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn checked_contract_honors_pre_cancelled_work() {
         let err = ThumbnailGenerationContract::from_input_checked(
             &PreviewSecurityPolicy::default(),
@@ -311,7 +411,7 @@ mod tests {
 
         assert_eq!(
             contract.as_tsv(),
-            "thumbnail-generation\t/tmp/Image.png\tallow-native\tquicklook-thumbnailing\t256px\tscale=2000m\t1:11\tcache=refresh-memory-only\tinvalidate-memory=true\tinvalidate-disk=false\tschedule=scheduled:visible"
+            "thumbnail-generation\t/tmp/Image.png\tallow-native\tcloud=native-eligible\tquicklook-thumbnailing\t256px\tscale=2000m\t1:11\tcache=refresh-memory-only\tinvalidate-memory=true\tinvalidate-disk=false\tschedule=scheduled:visible"
         );
     }
 

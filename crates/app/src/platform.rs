@@ -141,19 +141,22 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let rect = Rect::new(0, 0, 640, 480);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
             let volume = detect_volume_id(&path).ok();
-            let input = QuickLookSessionInput::new(
-                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
-                rect,
-                viewport,
-            )
-            .with_invalidation(PreviewInvalidationEvent {
-                content_changed: true,
-                ..PreviewInvalidationEvent::default()
-            });
             let contract = run_preview_contract_cancellable(
                 volume,
                 "quicklook preview",
                 move |cancellation| {
+                    cancellation.check()?;
+                    let cloud = FileProviderStateReport::read_path(&path)?.storage_state;
+                    let input = QuickLookSessionInput::new(
+                        PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
+                        rect,
+                        viewport,
+                    )
+                    .with_cloud_state(cloud)
+                    .with_invalidation(PreviewInvalidationEvent {
+                        content_changed: true,
+                        ..PreviewInvalidationEvent::default()
+                    });
                     QuickLookSessionContract::from_input_checked(
                         &PreviewSecurityPolicy::default(),
                         input,
@@ -170,32 +173,35 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let rect = Rect::new(0, 0, 640, 480);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
             let volume = detect_volume_id(&path).ok();
-            let input = QuickLookSessionInput::new(
-                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
-                rect,
-                viewport,
-            )
-            .with_scheduling_policy(
-                PreviewSchedulingPolicy {
-                    max_visible: 1,
-                    max_prefetch: 1,
-                    cancel_offscreen: true,
-                }
-                .adapted_for_pressure(pressure),
-            )
-            .with_invalidation(PreviewInvalidationEvent {
-                content_changed: true,
-                ..PreviewInvalidationEvent::default()
-            });
             let outcome = run_preview_contract_adaptive(
                 volume,
                 Priority::Visible,
                 "quicklook preview",
                 pressure,
                 move |cancellation| {
+                    cancellation.check()?;
+                    let cloud = FileProviderStateReport::read_path(&path)?.storage_state;
+                    let input = QuickLookSessionInput::new(
+                        PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
+                        rect,
+                        viewport,
+                    )
+                    .with_cloud_state(cloud)
+                    .with_scheduling_policy(
+                        PreviewSchedulingPolicy {
+                            max_visible: 1,
+                            max_prefetch: 1,
+                            cancel_offscreen: true,
+                        }
+                        .adapted_for_pressure(pressure),
+                    )
+                    .with_invalidation(PreviewInvalidationEvent {
+                        content_changed: true,
+                        ..PreviewInvalidationEvent::default()
+                    });
                     QuickLookSessionContract::from_input_checked(
                         &PreviewSecurityPolicy::default(),
-                        input.clone(),
+                        input,
                         || cancellation.check(),
                     )
                 },
@@ -250,20 +256,23 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let rect = Rect::new(0, 0, 160, 160);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
             let volume = detect_volume_id(&path).ok();
-            let input = ThumbnailGenerationInput::new(
-                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
-                rect,
-                viewport,
-            )
-            .with_size(512, 2_000)
-            .with_invalidation(PreviewInvalidationEvent {
-                metadata_changed: true,
-                ..PreviewInvalidationEvent::default()
-            });
             let contract = run_preview_contract_cancellable(
                 volume,
                 "thumbnail generation",
                 move |cancellation| {
+                    cancellation.check()?;
+                    let cloud = FileProviderStateReport::read_path(&path)?.storage_state;
+                    let input = ThumbnailGenerationInput::new(
+                        PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
+                        rect,
+                        viewport,
+                    )
+                    .with_cloud_state(cloud)
+                    .with_size(512, 2_000)
+                    .with_invalidation(PreviewInvalidationEvent {
+                        metadata_changed: true,
+                        ..PreviewInvalidationEvent::default()
+                    });
                     ThumbnailGenerationContract::from_input_checked(
                         &PreviewSecurityPolicy::default(),
                         input,
@@ -280,28 +289,31 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let rect = Rect::new(0, 0, 160, 160);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
             let volume = detect_volume_id(&path).ok();
-            let input = ThumbnailGenerationInput::new(
-                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
-                rect,
-                viewport,
-            )
-            .with_scheduling_policy(
-                PreviewSchedulingPolicy::default().adapted_for_pressure(pressure),
-            )
-            .with_size(512, 2_000)
-            .with_invalidation(PreviewInvalidationEvent {
-                metadata_changed: true,
-                ..PreviewInvalidationEvent::default()
-            });
             let outcome = run_preview_contract_adaptive(
                 volume,
                 Priority::Background,
                 "thumbnail generation",
                 pressure,
                 move |cancellation| {
+                    cancellation.check()?;
+                    let cloud = FileProviderStateReport::read_path(&path)?.storage_state;
+                    let input = ThumbnailGenerationInput::new(
+                        PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
+                        rect,
+                        viewport,
+                    )
+                    .with_cloud_state(cloud)
+                    .with_scheduling_policy(
+                        PreviewSchedulingPolicy::default().adapted_for_pressure(pressure),
+                    )
+                    .with_size(512, 2_000)
+                    .with_invalidation(PreviewInvalidationEvent {
+                        metadata_changed: true,
+                        ..PreviewInvalidationEvent::default()
+                    });
                     ThumbnailGenerationContract::from_input_checked(
                         &PreviewSecurityPolicy::default(),
-                        input.clone(),
+                        input,
                         || cancellation.check(),
                     )
                 },

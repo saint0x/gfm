@@ -571,7 +571,7 @@ fn reports_quicklook_session_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.starts_with("quicklook-session\tquick-look\t"));
-    assert!(stdout.contains("\tallow-native\tnative-preview-controller\t"));
+    assert!(stdout.contains("\tallow-native\tcloud=native-eligible\tnative-preview-controller\t"));
     assert!(stdout.contains("\tinvalidate-memory=true\tinvalidate-disk=true\t"));
     assert!(stdout.ends_with("schedule=scheduled:visible\n"));
 
@@ -652,7 +652,9 @@ fn reports_thumbnail_generation_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.starts_with("thumbnail-generation\t"));
-    assert!(stdout.contains("\tallow-native\tquicklook-thumbnailing\t512px\tscale=2000m\t"));
+    assert!(stdout.contains(
+        "\tallow-native\tcloud=native-eligible\tquicklook-thumbnailing\t512px\tscale=2000m\t"
+    ));
     assert!(stdout.contains("\tcache=refresh-memory-only\t"));
     assert!(stdout.contains("\tinvalidate-memory=true\tinvalidate-disk=false\t"));
     assert!(stdout.ends_with("schedule=scheduled:visible\n"));
