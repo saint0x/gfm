@@ -1,8 +1,10 @@
+use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
 use gfm_mac::{AccessIntent, SecurityDecisionAction, SecurityScopedAccessReport};
 use gfm_types::{GfmError, Result};
 use std::path::Path;
 
 pub(crate) fn preflight_access(path: &Path, intent: AccessIntent, worker: &str) -> Result<()> {
+    let _ = refresh_permission_state(PermissionRefreshAudience::Workers, worker)?;
     let report = SecurityScopedAccessReport::evaluate(path, intent);
     eprintln!("{}", report.as_tsv());
     match report.action {

@@ -77,6 +77,85 @@ fn indexes_and_searches_real_files_from_binary() {
 }
 
 #[test]
+fn index_preflight_refreshes_permission_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-permission-worker-refresh");
+    let index = root.join("records.gfmidx");
+    let state = root.join("permission-state.tsv");
+    fs::write(root.join("note.md"), "alpha").unwrap();
+    seed_stale_permission_state(&state);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_PERMISSION_STATE", &state)
+        .args(["index", root.to_str().unwrap(), index.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("permission-refresh\taudience=workers\tsubject=index\t"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("\trefresh-workers=true\t"), "{stderr}");
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+
+    let quiet = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_PERMISSION_STATE", &state)
+        .args(["index", root.to_str().unwrap(), index.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        quiet.status.success(),
+        "{}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+    let quiet_stderr = String::from_utf8_lossy(&quiet.stderr);
+    assert!(
+        !quiet_stderr.contains("permission-refresh\t"),
+        "{quiet_stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn operation_preflight_refreshes_permission_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-permission-operation-refresh");
+    let source = root.join("source.txt");
+    let destination = root.join("destination.txt");
+    let state = root.join("permission-state.tsv");
+    fs::write(&source, "alpha").unwrap();
+    seed_stale_permission_state(&state);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_PERMISSION_STATE", &state)
+        .args([
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("permission-refresh\taudience=operations\tsubject=copy\t"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("\trefresh-operations=true"), "{stderr}");
+    assert!(destination.is_file());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn index_refuses_missing_root_before_scan_from_binary() {
     let root = unique_temp_path("gfm-cli-index-missing-root", "missing");
     let index = unique_temp_path("gfm-cli-index-missing-output", "gfmidx");
@@ -5737,6 +5816,38 @@ fn unique_temp_path(prefix: &str, extension: &str) -> std::path::PathBuf {
         name.push_str(extension);
     }
     std::env::temp_dir().join(name)
+}
+
+fn seed_stale_permission_state(state: &std::path::Path) {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation")
+        .arg(state)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = fs::read_to_string(state).unwrap();
+    let mut lines = text.lines().map(str::to_string).collect::<Vec<_>>();
+    let first_scope = lines
+        .iter_mut()
+        .skip(1)
+        .find(|line| !line.trim().is_empty())
+        .expect("permission snapshot should include at least one scope");
+    let mut fields = first_scope
+        .split('\t')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 4, "{first_scope}");
+    fields[1] = if fields[1] == "unknown" {
+        "granted".to_string()
+    } else {
+        "unknown".to_string()
+    };
+    *first_scope = fields.join("\t");
+    fs::write(state, format!("{}\n", lines.join("\n"))).unwrap();
 }
 
 #[cfg(unix)]

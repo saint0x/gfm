@@ -1,3 +1,4 @@
+use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
 use crate::runtime::{
     default_journal_path, default_security_bookmarks_path, default_trash_metadata_path,
     run_volume_task,
@@ -170,9 +171,10 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     let journal = default_journal_path();
     let trash_metadata = default_trash_metadata_path();
     let volume_report = VolumeDiscoveryReport::discover();
+    let label = operation_kind(&operation);
+    let _ = refresh_permission_state(PermissionRefreshAudience::Operations, label)?;
     let access_gate = operation_access_gate(&operation, &volume_report);
     let volume_copy_policy = operation_volume_copy_policy_from_report(&operation, &volume_report);
-    let label = operation_kind(&operation);
     let volume = operation_volume(&operation);
     let entry = run_volume_task(volume, Priority::Interactive, label, move || {
         let _security_scope = operation_security_accesses(&operation)?;

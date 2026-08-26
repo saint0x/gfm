@@ -8,9 +8,8 @@ use gfm_jobs::{
     JobBatteryState, JobIoPressure, JobThermalState, JobUserActivity, Priority, SchedulingPressure,
 };
 use gfm_mac::{
-    current_host_profile, current_permission_onboarding, MountState,
-    PermissionStateInvalidationReport, PermissionStateSnapshot, SupportMatrix, VolumeDescriptor,
-    VolumeKind,
+    current_host_profile, current_permission_onboarding, MountState, SupportMatrix,
+    VolumeDescriptor, VolumeKind,
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::env;
@@ -28,6 +27,7 @@ mod jobs;
 mod manifest;
 mod operation;
 mod packaging;
+mod permission_refresh;
 mod platform;
 mod runtime;
 mod search;
@@ -111,14 +111,7 @@ fn run() -> Result<()> {
                 .next()
                 .map(PathBuf::from)
                 .unwrap_or_else(runtime::default_permission_state_path);
-            let previous = if path.is_file() {
-                Some(PermissionStateSnapshot::read(&path)?)
-            } else {
-                None
-            };
-            let current = PermissionStateSnapshot::from_plan(&current_permission_onboarding()?);
-            let report = PermissionStateInvalidationReport::evaluate(previous.as_ref(), &current);
-            current.write(&path)?;
+            let report = permission_refresh::refresh_permission_state_at_path(&path)?;
             println!("{}", report.as_tsv());
         }
         Some(command) if platform::run(command, &mut args)? => {}

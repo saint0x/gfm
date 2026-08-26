@@ -1,3 +1,4 @@
+use crate::permission_refresh::refresh_permission_state_at_path;
 use gfm_content::{
     ExtractionBatteryState, ExtractionBudgetProfile, ExtractionFingerprint, ExtractionQuarantine,
     ExtractionThermalState, ExtractionUserActivity, ExtractionVolumeClass, QuarantineDecision,
@@ -78,21 +79,42 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
     })?;
     let stdout_path = worker_temp_path("stdout");
     let stderr_path = worker_temp_path("stderr");
+    let permission_state_dir = worker_temp_dir("permission-state");
+    let permission_state_path = permission_state_dir.join("state.tsv");
     std::fs::File::create(&stdout_path).map_err(|err| GfmError::io(&stdout_path, err))?;
     std::fs::File::create(&stderr_path).map_err(|err| GfmError::io(&stderr_path, err))?;
+    if let Err(err) = std::fs::create_dir(&permission_state_dir) {
+        let _ = std::fs::remove_file(&stdout_path);
+        let _ = std::fs::remove_file(&stderr_path);
+        return Err(GfmError::io(&permission_state_dir, err));
+    }
+    if let Err(err) = refresh_permission_state_at_path(&permission_state_path) {
+        let _ = std::fs::remove_file(&stdout_path);
+        let _ = std::fs::remove_file(&stderr_path);
+        let _ = std::fs::remove_dir_all(&permission_state_dir);
+        return Err(err);
+    }
     if let Err(err) = cancellation.check() {
         let _ = std::fs::remove_file(&stdout_path);
         let _ = std::fs::remove_file(&stderr_path);
+        let _ = std::fs::remove_dir_all(&permission_state_dir);
         return Err(err);
     }
-    let sandbox = WorkerSandbox::new(&exe, path, &stdout_path, &stderr_path)?;
-    let mut command = sandbox.command(&exe, path, pressure);
+    let sandbox = WorkerSandbox::new(
+        &exe,
+        path,
+        &stdout_path,
+        &stderr_path,
+        &permission_state_path,
+    )?;
+    let mut command = sandbox.command(&exe, path, pressure, &permission_state_path);
     let output = run_supervised_worker(
         &mut command,
         path,
         timeout,
         &stdout_path,
         &stderr_path,
+        &permission_state_dir,
         cancellation,
     )?;
     if !output.status.success() {
@@ -182,12 +204,18 @@ struct WorkerSandbox {
 }
 
 impl WorkerSandbox {
-    fn new(exe: &Path, input: &Path, stdout: &Path, stderr: &Path) -> Result<Self> {
+    fn new(
+        exe: &Path,
+        input: &Path,
+        stdout: &Path,
+        stderr: &Path,
+        permission_state: &Path,
+    ) -> Result<Self> {
         let Some(sandbox_exec) = sandbox_exec_path() else {
             return Ok(Self { profile_path: None });
         };
         let _ = sandbox_exec;
-        let profile = extraction_sandbox_profile(exe, input, stdout, stderr)?;
+        let profile = extraction_sandbox_profile(exe, input, stdout, stderr, permission_state)?;
         let profile_path = env::temp_dir().join(format!(
             "gfm-extract-worker-{}-{}.sb",
             std::process::id(),
@@ -199,7 +227,13 @@ impl WorkerSandbox {
         })
     }
 
-    fn command(&self, exe: &Path, input: &Path, pressure: SchedulingPressure) -> Command {
+    fn command(
+        &self,
+        exe: &Path,
+        input: &Path,
+        pressure: SchedulingPressure,
+        permission_state: &Path,
+    ) -> Command {
         if let (Some(sandbox_exec), Some(profile_path)) = (sandbox_exec_path(), &self.profile_path)
         {
             let mut command = Command::new(sandbox_exec);
@@ -210,6 +244,7 @@ impl WorkerSandbox {
                 .arg("extract-report-adaptive")
                 .arg(input)
                 .args(scheduling_pressure_args(pressure));
+            command.env("GFM_PERMISSION_STATE", permission_state);
             command
         } else {
             let mut command = Command::new(exe);
@@ -217,6 +252,7 @@ impl WorkerSandbox {
                 .arg("extract-report-adaptive")
                 .arg(input)
                 .args(scheduling_pressure_args(pressure));
+            command.env("GFM_PERMISSION_STATE", permission_state);
             command
         }
     }
@@ -236,6 +272,7 @@ fn run_supervised_worker(
     timeout: Duration,
     stdout_path: &Path,
     stderr_path: &Path,
+    permission_state_dir: &Path,
     cancellation: &Cancellation,
 ) -> Result<std::process::Output> {
     cancellation.check()?;
@@ -261,6 +298,7 @@ fn run_supervised_worker(
             let _ = child.wait();
             let _ = std::fs::remove_file(stdout_path);
             let _ = std::fs::remove_file(stderr_path);
+            let _ = std::fs::remove_dir_all(permission_state_dir);
             return Err(err);
         }
         match child.try_wait() {
@@ -271,6 +309,7 @@ fn run_supervised_worker(
                     std::fs::read(stderr_path).map_err(|err| GfmError::io(stderr_path, err))?;
                 let _ = std::fs::remove_file(stdout_path);
                 let _ = std::fs::remove_file(stderr_path);
+                let _ = std::fs::remove_dir_all(permission_state_dir);
                 return Ok(std::process::Output {
                     status,
                     stdout,
@@ -282,6 +321,7 @@ fn run_supervised_worker(
                 let _ = child.wait();
                 let _ = std::fs::remove_file(stdout_path);
                 let _ = std::fs::remove_file(stderr_path);
+                let _ = std::fs::remove_dir_all(permission_state_dir);
                 return Err(GfmError::Format(format!(
                     "adaptive extraction worker timed out after {} ms for {}",
                     timeout.as_millis(),
@@ -294,6 +334,7 @@ fn run_supervised_worker(
                 let _ = child.wait();
                 let _ = std::fs::remove_file(stdout_path);
                 let _ = std::fs::remove_file(stderr_path);
+                let _ = std::fs::remove_dir_all(permission_state_dir);
                 return Err(GfmError::Format(format!(
                     "could not supervise adaptive extraction worker for {}: {err}",
                     input.display()
@@ -318,6 +359,14 @@ fn worker_temp_path(label: &str) -> PathBuf {
     ))
 }
 
+fn worker_temp_dir(label: &str) -> PathBuf {
+    env::temp_dir().join(format!(
+        "gfm-extract-worker-{}-{}-{label}.d",
+        std::process::id(),
+        monotonic_nanos()
+    ))
+}
+
 fn sandbox_exec_path() -> Option<PathBuf> {
     let path = PathBuf::from("/usr/bin/sandbox-exec");
     path.is_file().then_some(path)
@@ -328,19 +377,28 @@ fn extraction_sandbox_profile(
     input: &Path,
     stdout: &Path,
     stderr: &Path,
+    permission_state: &Path,
 ) -> Result<String> {
     let _ = canonical_or_self(exe)?;
     let _ = canonical_or_self(input)?;
     let stdout = canonical_or_self(stdout)?;
     let stderr = canonical_or_self(stderr)?;
+    let permission_state = canonical_or_self(permission_state)?;
+    let permission_state_dir = permission_state
+        .parent()
+        .map(canonical_or_self)
+        .transpose()?
+        .unwrap_or_else(env::temp_dir);
     Ok(format!(
         "(version 1)\n\
          (allow default)\n\
          (deny file-write*)\n\
          (allow file-write-data (literal \"{}\"))\n\
-         (allow file-write-data (literal \"{}\"))\n",
+         (allow file-write-data (literal \"{}\"))\n\
+         (allow file-write* (subpath \"{}\"))\n",
         sandbox_escape(&stdout),
-        sandbox_escape(&stderr)
+        sandbox_escape(&stderr),
+        sandbox_escape(&permission_state_dir)
     ))
 }
 
