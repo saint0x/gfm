@@ -2,13 +2,13 @@ use gfm_search::substring_candidate_grams;
 use gfm_search::{
     SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupIds, SearchLookupTelemetry,
     SearchLookupTerms, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
-    SearchQueryReport, SearchSubstringPosting,
+    SearchQueryReport, SearchRecordColumns, SearchSubstringPosting,
 };
 use gfm_store::{
     MetadataField, MmapContentArchive, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
     MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
-use gfm_types::{ContentPosting, FileId, GfmError, Result};
+use gfm_types::{ContentPosting, FileId, FileRecord, GfmError, Result};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{
@@ -17,6 +17,7 @@ use std::sync::{
 };
 
 const SEARCH_ARCHIVE_LOOKUP_CACHE_CAPACITY: usize = 512;
+const SIDECAR_RECORD_CACHE_CAPACITY: usize = 8192;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SidecarQueryImport {
@@ -65,6 +66,8 @@ pub struct ContentQueryLoadReport {
 pub struct SidecarQuerySessionReport {
     pub hydration: SidecarRecordHydrationReport,
     pub search: SearchQueryReport,
+    pub record_cache_hits: usize,
+    pub record_cache_misses: usize,
 }
 
 #[derive(Debug)]
@@ -75,6 +78,9 @@ pub struct SidecarIndexQuerySession {
     lookup: SearchArchiveLookup,
     substrings: MmapSubstringArchive,
     content: MmapContentArchive,
+    record_cache: Mutex<LookupCache<HydratedRecord>>,
+    record_cache_hits: AtomicUsize,
+    record_cache_misses: AtomicUsize,
 }
 
 impl SidecarIndexQuerySession {
@@ -95,6 +101,9 @@ impl SidecarIndexQuerySession {
             lookup: SearchArchiveLookup::open(prefixes, substrings, fuzzy)?,
             substrings: MmapSubstringArchive::open(substrings)?,
             content: MmapContentArchive::open(content)?,
+            record_cache: Mutex::new(LookupCache::new(SIDECAR_RECORD_CACHE_CAPACITY)),
+            record_cache_hits: AtomicUsize::new(0),
+            record_cache_misses: AtomicUsize::new(0),
         })
     }
 
@@ -122,6 +131,13 @@ impl SidecarIndexQuerySession {
         self.lookup.cache_telemetry()
     }
 
+    pub fn record_cache_telemetry(&self) -> (usize, usize) {
+        (
+            self.record_cache_hits.load(Ordering::Relaxed),
+            self.record_cache_misses.load(Ordering::Relaxed),
+        )
+    }
+
     pub fn search(&self, query: &str, limit: usize) -> Result<SidecarQuerySessionReport> {
         self.search_with_budget(query, limit, SearchLookupBudget::default())
     }
@@ -140,14 +156,142 @@ impl SidecarIndexQuerySession {
             query,
             budget,
         )?;
-        let (live, hydration) = crate::LiveIndex::from_mmap_records_with_sidecar_import(
-            &self.records,
-            &self.columns,
-            import,
-        )?;
+        let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
+        let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
+        let (live, hydration) = self.live_from_import(import)?;
         let search = live.search_with_lookup_budget(query, limit, &self.lookup, budget)?;
-        Ok(SidecarQuerySessionReport { hydration, search })
+        Ok(SidecarQuerySessionReport {
+            hydration,
+            search,
+            record_cache_hits: self
+                .record_cache_hits
+                .load(Ordering::Relaxed)
+                .saturating_sub(cache_hits_before),
+            record_cache_misses: self
+                .record_cache_misses
+                .load(Ordering::Relaxed)
+                .saturating_sub(cache_misses_before),
+        })
     }
+
+    fn live_from_import(
+        &self,
+        import: SidecarQueryImport,
+    ) -> Result<(crate::LiveIndex, SidecarRecordHydrationReport)> {
+        let (records, missing) = if import.report.requires_full_record_hydration {
+            self.hydrate_all_records()?
+        } else {
+            self.hydrate_record_ids(sidecar_candidate_ids(&import))?
+        };
+        let (live, applied, metadata_keys, prefix_keys, substring_keys, fuzzy_keys, content_keys) =
+            crate::LiveIndex::from_records_with_sidecars(
+                records
+                    .iter()
+                    .map(|record| record.record.clone())
+                    .collect::<Vec<_>>(),
+                records
+                    .into_iter()
+                    .filter_map(|record| record.columns)
+                    .collect::<Vec<_>>(),
+                import.metadata,
+                import.prefixes,
+                import.substrings,
+                import.fuzzy,
+                import.content,
+            );
+        let report = SidecarRecordHydrationReport {
+            records_loaded: live.indexed_records(),
+            records_missing: missing,
+            columns_applied: applied,
+            metadata_keys,
+            prefix_keys,
+            substring_keys,
+            fuzzy_keys,
+            content_keys,
+            import: import.report,
+        };
+        Ok((live, report))
+    }
+
+    fn hydrate_all_records(&self) -> Result<(Vec<HydratedRecord>, usize)> {
+        let mut records = Vec::with_capacity(self.records.len());
+        for index in 0..self.records.len() {
+            let record = self.records.record(index)?;
+            records.push(self.hydrate_record(record)?);
+        }
+        Ok((records, 0))
+    }
+
+    fn hydrate_record_ids(&self, ids: BTreeSet<FileId>) -> Result<(Vec<HydratedRecord>, usize)> {
+        if ids.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+
+        let mut hydrated_by_id = HashMap::new();
+        let mut misses = Vec::new();
+        {
+            let cache = self
+                .record_cache
+                .lock()
+                .map_err(|_| GfmError::Format("sidecar record cache lock poisoned".to_string()))?;
+            for id in &ids {
+                if let Some(record) = cache.get(&record_cache_key(*id)) {
+                    self.record_cache_hits.fetch_add(1, Ordering::Relaxed);
+                    hydrated_by_id.insert(*id, record);
+                } else {
+                    self.record_cache_misses.fetch_add(1, Ordering::Relaxed);
+                    misses.push(*id);
+                }
+            }
+        }
+
+        let batch = self
+            .records
+            .records_for_sorted_ids(misses.iter().copied())?;
+        let missing = batch.missing;
+        let mut loaded = Vec::with_capacity(batch.records.len());
+        for record in batch.records {
+            let id = record.id;
+            loaded.push((id, self.hydrate_record(record)?));
+        }
+        {
+            let mut cache = self
+                .record_cache
+                .lock()
+                .map_err(|_| GfmError::Format("sidecar record cache lock poisoned".to_string()))?;
+            for (id, hydrated) in loaded {
+                cache.insert(record_cache_key(id), hydrated.clone());
+                hydrated_by_id.insert(id, hydrated);
+            }
+        }
+
+        let records = ids
+            .into_iter()
+            .filter_map(|id| hydrated_by_id.remove(&id))
+            .collect::<Vec<_>>();
+        Ok((records, missing))
+    }
+
+    fn hydrate_record(&self, record: FileRecord) -> Result<HydratedRecord> {
+        let columns = self
+            .columns
+            .find(record.id)?
+            .map(|column| SearchRecordColumns {
+                id: column.id,
+                name: column.name,
+                path: column.path,
+                extension: column.extension,
+                tags: column.tags,
+                comment: column.comment,
+            });
+        Ok(HydratedRecord { record, columns })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct HydratedRecord {
+    record: FileRecord,
+    columns: Option<SearchRecordColumns>,
 }
 
 #[derive(Debug)]
@@ -721,6 +865,10 @@ fn bounded_substring_grams(terms: &[String], budget: SearchLookupBudget) -> Vec<
         );
     }
     grams.into_iter().collect()
+}
+
+fn record_cache_key(id: FileId) -> String {
+    format!("{}:{}", id.volume.0, id.node)
 }
 
 #[derive(Debug)]

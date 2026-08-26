@@ -662,16 +662,23 @@ fn sidecar_query_session_reuses_mmap_archives_and_lookup_cache() {
     .unwrap();
 
     let first = session.search("finderlatency", 5).unwrap();
-    let before_second = session.lookup_telemetry();
+    let lookup_before_second = session.lookup_telemetry();
+    let record_cache_before_second = session.record_cache_telemetry();
     let second = session.search("finderlatency", 5).unwrap();
-    let after_second = session.lookup_telemetry();
+    let lookup_after_second = session.lookup_telemetry();
+    let record_cache_after_second = session.record_cache_telemetry();
 
     assert_eq!(session.indexed_records(), 1);
     assert_eq!(session.indexed_columns(), 1);
     assert_eq!(first.search.hits[0].record.id, record.id);
     assert_eq!(second.search.hits[0].record.id, record.id);
     assert_eq!(second.hydration.records_loaded, 1);
-    assert!(after_second.prefix_cache_hits > before_second.prefix_cache_hits);
+    assert_eq!(first.record_cache_hits, 0);
+    assert_eq!(first.record_cache_misses, 1);
+    assert_eq!(second.record_cache_hits, 1);
+    assert_eq!(second.record_cache_misses, 0);
+    assert!(record_cache_after_second.0 > record_cache_before_second.0);
+    assert!(lookup_after_second.prefix_cache_hits > lookup_before_second.prefix_cache_hits);
 
     fs::remove_file(records_path).unwrap();
     fs::remove_file(columns_path).unwrap();
