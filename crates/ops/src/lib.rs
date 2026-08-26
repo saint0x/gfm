@@ -6,6 +6,7 @@ mod plan;
 mod preserve;
 mod progress;
 mod recovery;
+mod transfer;
 mod trashmeta;
 mod verify;
 mod volume;
@@ -40,6 +41,13 @@ pub use progress::{
 use recovery::recoverable_operations;
 pub use recovery::{OperationRecoveryOutcome, OperationRecoveryPolicy, OperationRecoveryReport};
 #[cfg(test)]
+use transfer::copy_file_bytes;
+#[cfg(test)]
+use transfer::metadata_has_sparse_holes;
+use transfer::{
+    clone_fallback_allowed, clone_file, copy_file_bytes_tracked, remove_failed_clone_destination,
+};
+#[cfg(test)]
 use trashmeta::append_trash_metadata_entry;
 use trashmeta::{append_trash_metadata, reconcile_empty_trash_metadata, remove_trash_metadata};
 pub use trashmeta::{read_trash_metadata, TrashRestoreMetadata};
@@ -52,9 +60,12 @@ use volume::{COPY_BUFFER_BYTES, SLOW_COPY_BUFFER_BYTES};
 use gfm_fs::PackagePolicy;
 use gfm_types::{FileKind, GfmError, Result};
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs;
+#[cfg(test)]
+use std::fs::File;
 use std::io;
-use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(test)]
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1379,142 +1390,6 @@ fn link_existing_hard_link(
     progress.advance(metadata)
 }
 
-#[cfg(test)]
-fn copy_file_bytes(from: &Path, to: &Path) -> Result<u64> {
-    let mut source = File::open(from).map_err(|err| GfmError::io(from, err))?;
-    let source_metadata = source.metadata().map_err(|err| GfmError::io(from, err))?;
-    let preserve_sparse_holes = metadata_has_sparse_holes(&source_metadata);
-    let mut destination = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(to)
-        .map_err(|err| GfmError::io(to, err))?;
-    let mut buffer = vec![0; COPY_BUFFER_BYTES];
-    let mut written = 0_u64;
-
-    let result = loop {
-        let read = match source.read(&mut buffer) {
-            Ok(read) => read,
-            Err(err) => break Err(GfmError::io(from, err)),
-        };
-        if read == 0 {
-            break Ok(written);
-        }
-        if let Err(err) = write_copy_chunk(&mut destination, &buffer[..read], preserve_sparse_holes)
-        {
-            break Err(GfmError::io(to, err));
-        }
-        written += read as u64;
-    };
-
-    let result = result.and_then(|written| {
-        destination
-            .set_len(written)
-            .map_err(|err| GfmError::io(to, err))?;
-        Ok(written)
-    });
-
-    if result.is_err() {
-        let _ = fs::remove_file(to);
-    }
-    result
-}
-
-fn copy_file_bytes_tracked(
-    from: &Path,
-    to: &Path,
-    volume_copy_policy: &OperationVolumeCopyPolicy,
-    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
-) -> Result<u64> {
-    let mut source = File::open(from).map_err(|err| GfmError::io(from, err))?;
-    let source_metadata = source.metadata().map_err(|err| GfmError::io(from, err))?;
-    let preserve_sparse_holes = metadata_has_sparse_holes(&source_metadata);
-    let mut destination = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(to)
-        .map_err(|err| GfmError::io(to, err))?;
-    let mut buffer = vec![0; volume_copy_policy.copy_buffer_bytes_for_paths(from, to)];
-    let mut written = 0_u64;
-
-    let result = loop {
-        progress.check_cancelled()?;
-        let read = match source.read(&mut buffer) {
-            Ok(read) => read,
-            Err(err) => break Err(GfmError::io(from, err)),
-        };
-        if read == 0 {
-            break Ok(written);
-        }
-        if let Err(err) = write_copy_chunk(&mut destination, &buffer[..read], preserve_sparse_holes)
-        {
-            break Err(GfmError::io(to, err));
-        }
-        written += read as u64;
-        if let Err(err) = progress.advance_bytes(read as u64) {
-            break Err(err);
-        }
-    };
-
-    let result = result.and_then(|written| {
-        destination
-            .set_len(written)
-            .map_err(|err| GfmError::io(to, err))?;
-        Ok(written)
-    });
-
-    if result.is_err() {
-        let _ = fs::remove_file(to);
-    }
-    result
-}
-
-fn write_copy_chunk(
-    destination: &mut File,
-    chunk: &[u8],
-    preserve_sparse_holes: bool,
-) -> io::Result<()> {
-    if preserve_sparse_holes {
-        write_sparse_chunk(destination, chunk)
-    } else {
-        destination.write_all(chunk)
-    }
-}
-
-fn write_sparse_chunk(destination: &mut File, chunk: &[u8]) -> io::Result<()> {
-    let mut cursor = 0;
-    while cursor < chunk.len() {
-        let run_start = cursor;
-        if chunk[cursor] == 0 {
-            while cursor < chunk.len() && chunk[cursor] == 0 {
-                cursor += 1;
-            }
-            destination.seek(SeekFrom::Current((cursor - run_start) as i64))?;
-        } else {
-            while cursor < chunk.len() && chunk[cursor] != 0 {
-                cursor += 1;
-            }
-            destination.write_all(&chunk[run_start..cursor])?;
-        }
-    }
-    Ok(())
-}
-
-fn metadata_has_sparse_holes(metadata: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-
-        metadata.len() > 0 && metadata.blocks().saturating_mul(512) < metadata.len()
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        false
-    }
-}
-
 #[cfg(unix)]
 fn create_symlink(target: &Path, link: &Path) -> Result<()> {
     std::os::unix::fs::symlink(target, link).map_err(|err| GfmError::io(link, err))
@@ -1526,47 +1401,6 @@ fn create_symlink(target: &Path, link: &Path) -> Result<()> {
         std::os::windows::fs::symlink_dir(target, link).map_err(|err| GfmError::io(link, err))
     } else {
         std::os::windows::fs::symlink_file(target, link).map_err(|err| GfmError::io(link, err))
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn clone_file(from: &Path, to: &Path) -> io::Result<()> {
-    let source = File::open(from)?;
-    rustix::fs::fclonefileat(
-        &source,
-        rustix::fs::CWD,
-        to,
-        rustix::fs::CloneFlags::empty(),
-    )
-    .map_err(io::Error::from)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn clone_file(_from: &Path, _to: &Path) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "native clonefile is only available on macOS",
-    ))
-}
-
-fn clone_fallback_allowed(err: &io::Error) -> bool {
-    matches!(
-        err.raw_os_error(),
-        Some(libc::ENOTSUP) | Some(libc::EXDEV) | Some(libc::EINVAL)
-    ) || matches!(
-        err.kind(),
-        io::ErrorKind::Unsupported | io::ErrorKind::InvalidInput
-    )
-}
-
-fn remove_failed_clone_destination(to: &Path) -> Result<()> {
-    match fs::symlink_metadata(to) {
-        Ok(metadata) if metadata.is_dir() => {
-            fs::remove_dir_all(to).map_err(|err| GfmError::io(to, err))
-        }
-        Ok(_) => fs::remove_file(to).map_err(|err| GfmError::io(to, err)),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(GfmError::io(to, err)),
     }
 }
 
