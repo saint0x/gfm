@@ -78,7 +78,7 @@ pub struct SidecarIndexQuerySession {
     lookup: SearchArchiveLookup,
     substrings: MmapSubstringArchive,
     content: MmapContentArchive,
-    record_cache: Mutex<LookupCache<HydratedRecord>>,
+    record_cache: Mutex<RecordCache>,
     record_cache_hits: AtomicUsize,
     record_cache_misses: AtomicUsize,
 }
@@ -101,7 +101,7 @@ impl SidecarIndexQuerySession {
             lookup: SearchArchiveLookup::open(prefixes, substrings, fuzzy)?,
             substrings: MmapSubstringArchive::open(substrings)?,
             content: MmapContentArchive::open(content)?,
-            record_cache: Mutex::new(LookupCache::new(SIDECAR_RECORD_CACHE_CAPACITY)),
+            record_cache: Mutex::new(RecordCache::new(SIDECAR_RECORD_CACHE_CAPACITY)),
             record_cache_hits: AtomicUsize::new(0),
             record_cache_misses: AtomicUsize::new(0),
         })
@@ -235,7 +235,7 @@ impl SidecarIndexQuerySession {
                 .lock()
                 .map_err(|_| GfmError::Format("sidecar record cache lock poisoned".to_string()))?;
             for id in &ids {
-                if let Some(record) = cache.get(&record_cache_key(*id)) {
+                if let Some(record) = cache.get(*id) {
                     self.record_cache_hits.fetch_add(1, Ordering::Relaxed);
                     hydrated_by_id.insert(*id, record);
                 } else {
@@ -260,7 +260,7 @@ impl SidecarIndexQuerySession {
                 .lock()
                 .map_err(|_| GfmError::Format("sidecar record cache lock poisoned".to_string()))?;
             for (id, hydrated) in loaded {
-                cache.insert(record_cache_key(id), hydrated.clone());
+                cache.insert(id, hydrated.clone());
                 hydrated_by_id.insert(id, hydrated);
             }
         }
@@ -867,15 +867,48 @@ fn bounded_substring_grams(terms: &[String], budget: SearchLookupBudget) -> Vec<
     grams.into_iter().collect()
 }
 
-fn record_cache_key(id: FileId) -> String {
-    format!("{}:{}", id.volume.0, id.node)
-}
-
 #[derive(Debug)]
 struct LookupCache<V> {
     capacity: usize,
     order: VecDeque<String>,
     values: HashMap<String, V>,
+}
+
+#[derive(Debug)]
+struct RecordCache {
+    capacity: usize,
+    order: VecDeque<FileId>,
+    values: HashMap<FileId, HydratedRecord>,
+}
+
+impl RecordCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::with_capacity(capacity),
+            values: HashMap::new(),
+        }
+    }
+
+    fn get(&self, id: FileId) -> Option<HydratedRecord> {
+        self.values.get(&id).cloned()
+    }
+
+    fn insert(&mut self, id: FileId, record: HydratedRecord) {
+        if self.capacity == 0 {
+            return;
+        }
+        if !self.values.contains_key(&id) {
+            self.order.push_back(id);
+        }
+        self.values.insert(id, record);
+        while self.values.len() > self.capacity {
+            let Some(expired) = self.order.pop_front() else {
+                break;
+            };
+            self.values.remove(&expired);
+        }
+    }
 }
 
 impl<V: Clone> LookupCache<V> {
