@@ -136,13 +136,15 @@ impl FinderMetadataReport {
             .unwrap_or_else(|| finder_info.label);
         let link_role = link_role(&record, &finder_info);
         let type_role = type_role(&record, link_role);
-        let extension_hidden =
-            finder_info.extension_hidden || extension_hidden_by_name_policy(&record.name);
-        let display_name = display_name(&record.name, extension_hidden);
         let localized_name = localized_name(&record.path);
         let comment = finder_comment(&record.path);
         let kind_string = kind_string(&record, type_role);
         let hidden = record.hidden || extension_hidden_by_finder_policy(&record.name);
+        let extension_hidden =
+            finder_info.extension_hidden || extension_hidden_by_name_policy(&record.name);
+        let display_name = bundle_display_name(&record, type_role)
+            .or_else(|| localized_name.clone())
+            .unwrap_or_else(|| display_name(&record.name, extension_hidden));
 
         Self {
             record,
@@ -306,6 +308,29 @@ fn localized_name(path: &Path) -> Option<String> {
     })
 }
 
+fn bundle_display_name(record: &FileRecord, role: FinderTypeRole) -> Option<String> {
+    if !matches!(role, FinderTypeRole::Package(_)) {
+        return None;
+    }
+    let plist = record.path.join("Contents").join("Info.plist");
+    let value = plist::Value::from_file(plist).ok()?;
+    let plist::Value::Dictionary(dictionary) = value else {
+        return None;
+    };
+    dictionary
+        .get("CFBundleDisplayName")
+        .and_then(plist_string)
+        .or_else(|| dictionary.get("CFBundleName").and_then(plist_string))
+        .and_then(non_empty)
+}
+
+fn plist_string(value: &plist::Value) -> Option<String> {
+    match value {
+        plist::Value::String(value) => Some(value.clone()),
+        _ => None,
+    }
+}
+
 fn display_name(name: &str, extension_hidden: bool) -> String {
     if extension_hidden {
         Path::new(name)
@@ -465,12 +490,20 @@ mod tests {
     fn classifies_packages_symlinks_aliases_and_localized_names() {
         let root = unique_temp_dir();
         let app = root.join("GFM.app");
-        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(app.join("Contents")).unwrap();
+        let mut info = plist::Dictionary::new();
+        info.insert(
+            "CFBundleDisplayName".to_string(),
+            plist::Value::String("Good Finder Manager".to_string()),
+        );
+        plist::Value::Dictionary(info)
+            .to_file_xml(app.join("Contents").join("Info.plist"))
+            .unwrap();
         fs::write(root.join(".localized"), "GFM.app\tGood Fucking Manager\n").unwrap();
 
         let app_report = FinderMetadataReport::read_path(&app).unwrap();
 
-        assert_eq!(app_report.display_name, "GFM");
+        assert_eq!(app_report.display_name, "Good Finder Manager");
         assert_eq!(
             app_report.localized_name.as_deref(),
             Some("Good Fucking Manager")
@@ -480,6 +513,10 @@ mod tests {
             FinderTypeRole::Package(PackageKind::Application)
         );
         assert_eq!(app_report.kind_string, "Application");
+        assert!(app_report
+            .secondary_metadata_record()
+            .comments
+            .contains(&"Good Finder Manager".to_string()));
 
         let target = root.join("target.txt");
         let link = root.join("target link");
