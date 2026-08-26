@@ -133,10 +133,20 @@ pub fn plan_content_segment_merge(
     segments: &[impl AsRef<Path>],
     policy: &ContentMergePolicy,
 ) -> Result<ContentMergePlan> {
-    let mut summaries = segments
-        .iter()
-        .map(|path| summarize_content_segment(path.as_ref(), policy))
-        .collect::<Result<Vec<_>>>()?;
+    plan_content_segment_merge_checked(segments, policy, || Ok(()))
+}
+
+pub fn plan_content_segment_merge_checked(
+    segments: &[impl AsRef<Path>],
+    policy: &ContentMergePolicy,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<ContentMergePlan> {
+    let mut summaries = Vec::with_capacity(segments.len());
+    for path in segments {
+        check()?;
+        summaries.push(summarize_content_segment(path.as_ref(), policy)?);
+    }
+    check()?;
     summaries.sort_by(|left, right| {
         (left.tombstones == 0)
             .cmp(&(right.tombstones == 0))
@@ -160,6 +170,7 @@ pub fn plan_content_segment_merge(
         .iter()
         .filter(|summary| summary.tombstones > 0 || summary.tier == preferred_tier)
     {
+        check()?;
         if selected_count >= policy.max_merge_segments {
             break;
         }
@@ -180,20 +191,17 @@ pub fn plan_content_segment_merge(
         merge_bytes = 0;
     }
 
-    let merge_segments = segments
-        .iter()
-        .filter_map(|path| {
-            let path = path.as_ref().to_path_buf();
-            selected_paths.contains(&path).then_some(path)
-        })
-        .collect();
-    let retained_segments = segments
-        .iter()
-        .filter_map(|path| {
-            let path = path.as_ref().to_path_buf();
-            (!selected_paths.contains(&path)).then_some(path)
-        })
-        .collect();
+    let mut merge_segments = Vec::new();
+    let mut retained_segments = Vec::new();
+    for path in segments {
+        check()?;
+        let path = path.as_ref().to_path_buf();
+        if selected_paths.contains(&path) {
+            merge_segments.push(path);
+        } else {
+            retained_segments.push(path);
+        }
+    }
     Ok(ContentMergePlan {
         merge_segments,
         retained_segments,
@@ -208,12 +216,24 @@ pub fn compact_content_segments_with_policy(
     segments: &[impl AsRef<Path>],
     policy: &ContentMergePolicy,
 ) -> Result<ContentMergeOutcome> {
-    let plan = plan_content_segment_merge(segments, policy)?;
+    compact_content_segments_with_policy_checked(output, segments, policy, || Ok(()))
+}
+
+pub fn compact_content_segments_with_policy_checked(
+    output: impl AsRef<Path>,
+    segments: &[impl AsRef<Path>],
+    policy: &ContentMergePolicy,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<ContentMergeOutcome> {
+    check()?;
+    let plan = plan_content_segment_merge_checked(segments, policy, &mut check)?;
+    check()?;
     let postings = if plan.merge_segments.is_empty() {
         Vec::new()
     } else {
-        compact_content_segments(output, &plan.merge_segments)?
+        compact_content_segments_checked(output, &plan.merge_segments, &mut check)?
     };
+    check()?;
     Ok(ContentMergeOutcome {
         postings,
         merged_segments: plan.merge_segments,
@@ -228,7 +248,20 @@ pub fn compact_content_segments(
     output: impl AsRef<Path>,
     segments: &[impl AsRef<Path>],
 ) -> Result<Vec<ContentPosting>> {
-    compact_content_postings_with_segments(output, std::iter::empty::<ContentPosting>(), segments)
+    compact_content_segments_checked(output, segments, || Ok(()))
+}
+
+pub fn compact_content_segments_checked(
+    output: impl AsRef<Path>,
+    segments: &[impl AsRef<Path>],
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Vec<ContentPosting>> {
+    compact_content_postings_with_segments_checked(
+        output,
+        std::iter::empty::<ContentPosting>(),
+        segments,
+        &mut check,
+    )
 }
 
 pub fn compact_content_postings_with_segments(
@@ -236,40 +269,59 @@ pub fn compact_content_postings_with_segments(
     base_postings: impl IntoIterator<Item = ContentPosting>,
     segments: &[impl AsRef<Path>],
 ) -> Result<Vec<ContentPosting>> {
-    let mut terms = content_terms_from_postings(base_postings);
+    compact_content_postings_with_segments_checked(output, base_postings, segments, || Ok(()))
+}
+
+pub fn compact_content_postings_with_segments_checked(
+    output: impl AsRef<Path>,
+    base_postings: impl IntoIterator<Item = ContentPosting>,
+    segments: &[impl AsRef<Path>],
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Vec<ContentPosting>> {
+    check()?;
+    let mut terms = content_terms_from_postings_checked(base_postings, &mut check)?;
     for segment_path in segments {
+        check()?;
         let segment = read_content_segment(segment_path.as_ref())?;
-        apply_content_segment(&mut terms, segment);
+        apply_content_segment_checked(&mut terms, segment, &mut check)?;
     }
 
-    let postings = content_postings_from_terms(terms);
+    check()?;
+    let postings = content_postings_from_terms_checked(terms, &mut check)?;
+    check()?;
     write_content_postings(output, &postings)?;
     Ok(postings)
 }
 
-fn content_terms_from_postings(
+fn content_terms_from_postings_checked(
     postings: impl IntoIterator<Item = ContentPosting>,
-) -> BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>> {
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>>> {
     let mut terms: BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>> = BTreeMap::new();
     for posting in postings {
+        check()?;
         merge_content_posting(&mut terms, posting);
     }
-    terms
+    Ok(terms)
 }
 
-fn apply_content_segment(
+fn apply_content_segment_checked(
     terms: &mut BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>>,
     segment: gfm_types::ContentSegment,
-) {
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<()> {
     for id in segment.tombstones {
+        check()?;
         for positions in terms.values_mut() {
             positions.remove(&id);
         }
         terms.retain(|_, positions| !positions.is_empty());
     }
     for posting in segment.postings {
+        check()?;
         merge_content_posting(terms, posting);
     }
+    Ok(())
 }
 
 fn merge_content_posting(
@@ -291,12 +343,14 @@ fn merge_content_posting(
     }
 }
 
-fn content_postings_from_terms(
+fn content_postings_from_terms_checked(
     terms: BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>>,
-) -> Vec<ContentPosting> {
-    terms
-        .into_iter()
-        .map(|(term, positions)| ContentPosting {
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Vec<ContentPosting>> {
+    let mut postings = Vec::with_capacity(terms.len());
+    for (term, positions) in terms {
+        check()?;
+        postings.push(ContentPosting {
             term,
             ids: positions.keys().copied().collect(),
             positions: positions
@@ -307,6 +361,7 @@ fn content_postings_from_terms(
                     positions: positions.into_iter().collect(),
                 })
                 .collect(),
-        })
-        .collect()
+        });
+    }
+    Ok(postings)
 }

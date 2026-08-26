@@ -71,7 +71,7 @@ No UI render/update path performs blocking filesystem work. No performance-criti
 
 GFM is macOS-only. Development and CI builds use GPUI's supported runtime-shader path, so the native app compiles on machines with Apple's Command Line Tools even when the standalone `metal` and `metallib` executables from full Xcode are not installed. The app still renders through Metal; this only changes when GPUI shader source is compiled.
 
-Release packaging keeps Xcode as part of the production host contract for signing, notarization, hardened-runtime validation, bundle inspection, and any future offline `.metallib` build mode. The `release-toolchain` operator route validates the selected developer directory, locates every required Apple utility, compiles a real Metal probe with `xcrun metal`, links it with `xcrun metallib`, and fails loudly when production release work is attempted from a Command Line Tools-only or broken Xcode host.
+Release packaging keeps Xcode as part of the production host contract for signing, notarization, hardened-runtime validation, bundle inspection, and any future offline `.metallib` build mode. The `release-toolchain` operator route validates a full Xcode developer directory, auto-discovers a usable Xcode install when `xcode-select` points at Command Line Tools, honors `GFM_RELEASE_DEVELOPER_DIR` for explicit production hosts, pins every `xcrun` call to that directory, compiles a real Metal probe with `xcrun metal`, links it with `xcrun metallib`, and fails loudly when the host truly cannot provide Apple's production Metal tools.
 
 ## Search
 
@@ -126,7 +126,7 @@ The index is compact and incremental:
 - bounded HTML, RTF, MIME multipart email, and ZIP/TAR/TAR.GZ archive-metadata extraction policies, including PAX and GNU TAR long-name headers
 - structured JSON, CSV, XML plist, and binary plist extraction for searchable keys, cells, and values
 - format-scoped extractor versioning so parser upgrades invalidate only the affected content-cache family
-- incremental content indexing that tombstones changed/deleted file IDs, re-extracts only new or content-modified records, and checks cancellation before each record-level extraction/insertion step
+- incremental content indexing that tombstones changed/deleted file IDs, re-extracts only new or content-modified records, checks cancellation before each record-level extraction/insertion step, and keeps archive compaction cancellable through segment planning, merge, materialization, and publish boundaries
 - persistent extraction quarantine during background content indexing so repeated corrupt/encrypted extractor failures are skipped before they spend more indexing latency
 - explicit ranking accumulator for exact, prefix, substring, fuzzy, path, metadata, kind, tag, content, recency, term-frequency, and user-pinned signals
 - user-intent boosts for Applications, Recents, Downloads, Desktop, screenshots, and project folders

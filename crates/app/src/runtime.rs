@@ -1,7 +1,8 @@
 use gfm_jobs::{
-    Job, JobJournal, JobPayloadCatalog, JobPayloadKind, JobPayloadRecord, JobProgressSnapshot,
-    JobProgressState, JobProgressStore, Priority, RetriableTask, RetryPolicy, Scheduler,
-    SchedulingAction, SchedulingPressure, Task, TaskStatus, VolumeConcurrencyPolicy, WorkerPool,
+    Cancellation, Job, JobJournal, JobPayloadCatalog, JobPayloadKind, JobPayloadRecord,
+    JobProgressSnapshot, JobProgressState, JobProgressStore, Priority, RetriableTask, RetryPolicy,
+    Scheduler, SchedulingAction, SchedulingPressure, Task, TaskStatus, VolumeConcurrencyPolicy,
+    WorkerPool,
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::env;
@@ -84,6 +85,19 @@ pub(crate) fn run_scheduled_volume_task<T>(
 where
     T: Send + 'static,
 {
+    run_scheduled_volume_task_cancellable(volume, priority, label, pressure, move |_| work())
+}
+
+pub(crate) fn run_scheduled_volume_task_cancellable<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    label: &'static str,
+    pressure: SchedulingPressure,
+    work: impl Fn(Cancellation) -> Result<T> + Send + Sync + 'static,
+) -> Result<ScheduledTaskOutcome<T>>
+where
+    T: Send + 'static,
+{
     let scheduling = pressure.decide(priority, 1, 1);
     if scheduling.action == SchedulingAction::Defer {
         return Ok(ScheduledTaskOutcome {
@@ -109,9 +123,9 @@ where
         format!("{}:{label}:adaptive", priority.as_str()),
     )?;
     let runtime_task = runtime.clone();
-    let task = RetriableTask::new(job.clone(), move |_| {
+    let task = RetriableTask::new(job.clone(), move |cancellation| {
         runtime_task.running()?;
-        let result = work()?;
+        let result = work(cancellation)?;
         *result_slot_task
             .lock()
             .expect("scheduled task result lock poisoned") = Some(result);

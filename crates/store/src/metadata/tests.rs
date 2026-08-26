@@ -85,7 +85,8 @@ fn metadata_postings_merge_secondary_spotlight_records() {
         ],
     };
 
-    let postings = metadata_postings_from_records_and_secondary(&[primary.clone()], &[secondary]);
+    let postings =
+        metadata_postings_from_records_and_secondary(std::slice::from_ref(&primary), &[secondary]);
 
     assert_eq!(
         postings

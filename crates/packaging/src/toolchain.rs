@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const RELEASE_XCRUN_UTILITIES: &[&str] = &["ditto", "notarytool", "stapler", "metal", "metallib"];
 const CODESIGN_UTILITIES: &[&str] = &["codesign"];
+const RELEASE_DEVELOPER_DIR_ENV: &str = "GFM_RELEASE_DEVELOPER_DIR";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppleToolchainReport {
@@ -37,12 +38,9 @@ fn require_toolchain(
     path_utilities: &[&str],
     xcrun_utilities: &[&str],
 ) -> Result<AppleToolchainReport> {
-    let developer_dir = selected_developer_dir()?;
     let metal_smoke_required =
         xcrun_utilities.contains(&"metal") && xcrun_utilities.contains(&"metallib");
-    if metal_smoke_required {
-        require_full_xcode_developer_dir(&developer_dir, label)?;
-    }
+    let developer_dir = developer_dir_for_toolchain(label, metal_smoke_required)?;
     let mut utilities = Vec::with_capacity(path_utilities.len() + xcrun_utilities.len() + 1);
     utilities.push(AppleToolchainUtility {
         name: "xcrun".to_string(),
@@ -76,9 +74,49 @@ fn require_full_xcode_developer_dir(developer_dir: &Path, label: &str) -> Result
     }
 
     Err(GfmError::Format(format!(
-        "{label} requires Apple's full Xcode Metal toolchain; selected developer directory is {}. Command Line Tools do not ship the production `metal` and `metallib` tools required for release validation. Install full Xcode and select it with `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`",
+        "{label} requires Apple's full Xcode Metal toolchain; selected developer directory is {}. Command Line Tools do not ship the production `metal` and `metallib` tools required for release validation. Install full Xcode and select it with `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`, or set `{RELEASE_DEVELOPER_DIR_ENV}` to a full Xcode Developer directory for this release command",
         developer_dir.display()
     )))
+}
+
+fn developer_dir_for_toolchain(label: &str, require_metal: bool) -> Result<PathBuf> {
+    if let Some(developer_dir) = explicit_release_developer_dir()? {
+        if require_metal {
+            require_full_xcode_developer_dir(&developer_dir, label)?;
+        }
+        return Ok(developer_dir);
+    }
+
+    let selected = selected_developer_dir()?;
+    if !require_metal || is_full_xcode_developer_dir(&selected) {
+        return Ok(selected);
+    }
+
+    if let Some(discovered) = discover_full_xcode_developer_dir() {
+        return Ok(discovered);
+    }
+
+    require_full_xcode_developer_dir(&selected, label)?;
+    Ok(selected)
+}
+
+fn explicit_release_developer_dir() -> Result<Option<PathBuf>> {
+    let Some(value) = std::env::var_os(RELEASE_DEVELOPER_DIR_ENV) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Err(GfmError::Format(format!(
+            "`{RELEASE_DEVELOPER_DIR_ENV}` is set but empty"
+        )));
+    }
+    let path = PathBuf::from(value);
+    if !path.is_dir() {
+        return Err(GfmError::Format(format!(
+            "`{RELEASE_DEVELOPER_DIR_ENV}` points to {}, which is not a directory",
+            path.display()
+        )));
+    }
+    Ok(Some(path))
 }
 
 fn is_full_xcode_developer_dir(developer_dir: &Path) -> bool {
@@ -96,6 +134,45 @@ fn is_full_xcode_developer_dir(developer_dir: &Path) -> bool {
         .and_then(|bundle| bundle.extension())
         .and_then(|extension| extension.to_str())
         == Some("app")
+}
+
+fn discover_full_xcode_developer_dir() -> Option<PathBuf> {
+    candidate_xcode_developer_dirs()
+        .into_iter()
+        .find(|developer_dir| has_metal_xcrun_tools(developer_dir))
+}
+
+fn candidate_xcode_developer_dirs() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for app in [
+        PathBuf::from("/Applications/Xcode.app"),
+        PathBuf::from("/Applications/Xcode-beta.app"),
+        PathBuf::from("/Applications/Xcode-Beta.app"),
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join("Applications/Xcode.app"),
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join("Applications/Xcode-beta.app"),
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join("Applications/Xcode-Beta.app"),
+    ] {
+        let developer_dir = app.join("Contents/Developer");
+        if is_full_xcode_developer_dir(&developer_dir) && developer_dir.is_dir() {
+            candidates.push(developer_dir);
+        }
+    }
+    candidates
+}
+
+fn has_metal_xcrun_tools(developer_dir: &Path) -> bool {
+    ["metal", "metallib"]
+        .iter()
+        .all(|tool| xcrun_find(tool, developer_dir, "production release").is_ok())
 }
 
 fn selected_developer_dir() -> Result<PathBuf> {
@@ -150,8 +227,13 @@ fn require_path_utility(name: &str, label: &str) -> Result<PathBuf> {
     path_from_stdout(name, label, output.stdout)
 }
 
-fn require_xcrun_utility(name: &str, developer_dir: &PathBuf, label: &str) -> Result<PathBuf> {
-    let output = Command::new("xcrun")
+fn require_xcrun_utility(name: &str, developer_dir: &Path, label: &str) -> Result<PathBuf> {
+    let output = xcrun_find(name, developer_dir, label)?;
+    path_from_stdout(name, label, output.stdout)
+}
+
+fn xcrun_find(name: &str, developer_dir: &Path, label: &str) -> Result<std::process::Output> {
+    let output = xcrun(developer_dir)
         .arg("--find")
         .arg(name)
         .output()
@@ -159,15 +241,18 @@ fn require_xcrun_utility(name: &str, developer_dir: &PathBuf, label: &str) -> Re
     if !output.status.success() {
         return Err(command_failure(
             label,
-            &format!("xcrun --find {name}"),
+            &format!(
+                "DEVELOPER_DIR={} xcrun --find {name}",
+                developer_dir.display()
+            ),
             output,
             Some(developer_dir),
         ));
     }
-    path_from_stdout(name, label, output.stdout)
+    Ok(output)
 }
 
-fn validate_metal_toolchain(developer_dir: &PathBuf, label: &str) -> Result<()> {
+fn validate_metal_toolchain(developer_dir: &Path, label: &str) -> Result<()> {
     let root = unique_temp_dir("gfm-metal-toolchain")?;
     let source = root.join("gfm_toolchain_probe.metal");
     let air = root.join("gfm_toolchain_probe.air");
@@ -176,7 +261,7 @@ fn validate_metal_toolchain(developer_dir: &PathBuf, label: &str) -> Result<()> 
     let result = (|| {
         fs::write(&source, metal_probe_source()).map_err(|err| GfmError::io(&source, err))?;
 
-        let metal = Command::new("xcrun")
+        let metal = xcrun(developer_dir)
             .args(["-sdk", "macosx", "metal", "-c"])
             .arg(&source)
             .arg("-o")
@@ -194,7 +279,7 @@ fn validate_metal_toolchain(developer_dir: &PathBuf, label: &str) -> Result<()> 
             ));
         }
 
-        let link = Command::new("xcrun")
+        let link = xcrun(developer_dir)
             .args(["-sdk", "macosx", "metallib"])
             .arg(&air)
             .arg("-o")
@@ -274,7 +359,7 @@ fn command_failure(
     label: &str,
     command: &str,
     output: std::process::Output,
-    developer_dir: Option<&PathBuf>,
+    developer_dir: Option<&Path>,
 ) -> GfmError {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -288,6 +373,12 @@ fn command_failure(
         stdout.trim(),
         stderr.trim()
     ))
+}
+
+fn xcrun(developer_dir: &Path) -> Command {
+    let mut command = Command::new("xcrun");
+    command.env("DEVELOPER_DIR", developer_dir);
+    command
 }
 
 fn shell_quote(value: &str) -> String {
@@ -310,6 +401,7 @@ mod tests {
         let message = err.to_string();
 
         assert!(message.contains("production release requires Apple's full release toolchain"));
+        assert!(message.contains("DEVELOPER_DIR=/Library/Developer/CommandLineTools"));
         assert!(message.contains("xcrun --find gfm-definitely-missing-apple-tool"));
         assert!(message.contains("xcode-select --switch"));
     }
@@ -325,6 +417,7 @@ mod tests {
         assert!(message.contains("/Library/Developer/CommandLineTools"));
         assert!(message.contains("metal"));
         assert!(message.contains("metallib"));
+        assert!(message.contains(RELEASE_DEVELOPER_DIR_ENV));
         assert!(message.contains("xcode-select --switch"));
     }
 

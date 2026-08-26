@@ -2245,6 +2245,71 @@ fn background_content_maintenance_compacts_segments_and_updates_manifest() {
 }
 
 #[test]
+fn background_content_maintenance_honors_pre_cancelled_token_without_publishing() {
+    let root = unique_temp_dir("gfm-background-content-maintenance-cancel-root");
+    let records = unique_temp_path(
+        "gfm-background-content-maintenance-cancel-records",
+        "gfmidx",
+    );
+    let initial_content = unique_temp_path(
+        "gfm-background-content-maintenance-cancel-initial",
+        "gfmcontent",
+    );
+    let output_content = unique_temp_path(
+        "gfm-background-content-maintenance-cancel-output",
+        "gfmcontent",
+    );
+    let manifest = unique_temp_path("gfm-background-content-maintenance-cancel", "gfmmanifest");
+    let segments = unique_temp_dir("gfm-background-content-maintenance-cancel-segments");
+    fs::write(root.join("cancelled.md"), "body contains cancelmainttoken").unwrap();
+
+    let indexer = Indexer::default();
+    let snapshot = indexer.build(&root).unwrap();
+    snapshot
+        .save_with_content(&records, &initial_content, &Extractor::default())
+        .unwrap();
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Warm,
+        path: initial_content.clone(),
+    }])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    fs::create_dir_all(&segments).unwrap();
+    let segment_paths = (0..4)
+        .map(|index| segments.join(format!("hot-{index}.gfmseg")))
+        .collect::<Vec<_>>();
+    for segment in &segment_paths {
+        snapshot
+            .save_content_segment(segment, &Extractor::default(), Vec::new())
+            .unwrap();
+    }
+
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+    let result = BackgroundContentIndexer::default().maintain_segments_cancellable(
+        &manifest,
+        &output_content,
+        &segment_paths,
+        &ContentMaintenanceOptions::default(),
+        &cancellation,
+    );
+    let manifest_after = ContentArchiveManifest::read(&manifest).unwrap();
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert_eq!(manifest_after.archives.len(), 1);
+    assert_eq!(manifest_after.archives[0].path, initial_content);
+    assert!(!output_content.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(initial_content).unwrap();
+    fs::remove_file(manifest).unwrap();
+}
+
+#[test]
 fn index_footprint_reports_sizes_and_schedules_segment_compaction() {
     let root = unique_temp_dir("gfm-index-footprint-root");
     let records = unique_temp_path("gfm-index-footprint-records", "gfmidx");

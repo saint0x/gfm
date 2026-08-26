@@ -206,7 +206,7 @@ gfm/
 - GPUI is built with its supported `runtime_shaders` feature for development and CI so the native app does not fail on machines that have Apple's Command Line Tools but lack full Xcode's build-time `metal` and `metallib` executables.
 - Runtime shaders are not a renderer fallback: the app still uses Metal and GPUI; only shader compilation moves from Cargo build time to Metal runtime library creation.
 - Production release hosts must still pass an explicit Xcode toolchain check for signing, notarization, hardened-runtime validation, bundle inspection, and any later offline `.metallib` release mode.
-- The `release-toolchain` route validates the selected developer directory plus required Apple tools, including `metal` and `metallib`, then compiles and links a real Metal smoke-test kernel before production release validation or notarization proceeds.
+- The `release-toolchain` route validates a full Xcode developer directory, auto-discovers a usable Xcode install when `xcode-select` points at Command Line Tools, honors `GFM_RELEASE_DEVELOPER_DIR` for explicit production hosts, pins every `xcrun` call to that directory, and compiles/links a real Metal smoke-test kernel before production release validation or notarization proceeds.
 
 ### Crate Responsibilities
 
@@ -341,7 +341,7 @@ gfm/
 - Copies the native binary and icon resources into the canonical app bundle layout.
 - Generates signing entitlements as release inputs and signs bundles with ad-hoc or Developer ID identities.
 - Enables hardened runtime during signing and verifies the signature after bundle creation.
-- Validates the production release host with an explicit Apple toolchain preflight and Metal compile/link smoke test so CLT-only or broken-Xcode machines fail with actionable `xcode-select` guidance instead of an opaque `metal`/`metallib` failure.
+- Validates the production release host with an explicit Apple toolchain preflight and Metal compile/link smoke test so full-Xcode hosts are selected deterministically and CLT-only or broken-Xcode machines fail with actionable `xcode-select`/`GFM_RELEASE_DEVELOPER_DIR` guidance instead of an opaque `metal`/`metallib` failure.
 - Archives signed bundles through `xcrun ditto`, submits notarization through `xcrun notarytool`, waits for Apple acceptance, staples the ticket through `xcrun stapler`, and validates the stapled app.
 - Supports keychain-profile, Apple ID, and App Store Connect API key credential modes without storing secrets in project files.
 - Exposes Launch Services registration as an explicit operator command so release/install flows can register GFM without hiding host mutation inside validation.
@@ -427,7 +427,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
    - HTML, RTF, MIME multipart email, and ZIP/TAR/TAR.GZ archive metadata take format-specific extraction paths, including PAX and GNU TAR long-name headers, so markup, transport headers, MIME body parts, control words, and archive entry names become searchable without indexing binary payloads.
    - JSON, CSV, XML plist, and binary plist extraction exposes searchable structural keys, cells, primitive values, and plist dictionaries under explicit text-output budgets.
    - Format-scoped extractor versions feed content fingerprints and cache keys so archive, rich-text, PDF, Office, structured-data, text, and unsupported-path parser upgrades do not evict unrelated hot search caches.
-   - Background content indexing is delta-based: it compares current records to the previously published record archive, tombstones changed or deleted file IDs, re-extracts only new or content-modified records, checks cancellation before each record-level extraction/insertion step, and atomically rewrites the searchable content archive from the prior postings plus delta segments.
+   - Background content indexing is delta-based: it compares current records to the previously published record archive, tombstones changed or deleted file IDs, re-extracts only new or content-modified records, checks cancellation before each record-level extraction/insertion step, and cancellably rewrites the searchable content archive from the prior postings plus delta segments through segment planning, merge, materialization, and publish boundaries.
    - Background content indexing consults and persists the extraction quarantine store, reselecting unchanged files with outstanding failure history until they are cleared by success or blocked before extraction after repeated corrupt/encrypted failures.
    - Normal content-term query scoring walks the content postings map directly instead of materializing temporary ID sets; proximity query execution anchors candidates on the rarest posting list and filters against existing posting maps without constructing full temporary term-ID sets.
    - Positional postings support exact quoted phrases and explicit `near:N:alpha,beta` proximity windows after durable reload, with phrase and proximity execution anchored on rarest posting lists rather than full-record scans.

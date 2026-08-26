@@ -22,8 +22,10 @@ pub use content::{
     ContentArchive, LimitedContentPosting, MmapContentArchive,
 };
 pub use contentmerge::{
-    compact_content_postings_with_segments, compact_content_segments,
-    compact_content_segments_with_policy, plan_content_segment_merge, summarize_content_segment,
+    compact_content_postings_with_segments, compact_content_postings_with_segments_checked,
+    compact_content_segments, compact_content_segments_checked,
+    compact_content_segments_with_policy, compact_content_segments_with_policy_checked,
+    plan_content_segment_merge, plan_content_segment_merge_checked, summarize_content_segment,
     ContentMergeOutcome, ContentMergePlan, ContentMergePolicy, ContentMergeTier,
     ContentSegmentSummary,
 };

@@ -1,8 +1,9 @@
 use super::*;
 use crate::contentmerge::{
-    compact_content_segments, compact_content_segments_with_policy, ContentMergePolicy,
+    compact_content_segments, compact_content_segments_checked,
+    compact_content_segments_with_policy, ContentMergePolicy,
 };
-use gfm_types::{ContentPositions, VolumeId};
+use gfm_types::{ContentPositions, GfmError, VolumeId};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -346,6 +347,35 @@ fn compacts_content_segments_with_tombstones() {
     std::fs::remove_file(first).unwrap();
     std::fs::remove_file(second).unwrap();
     std::fs::remove_file(output).unwrap();
+}
+
+#[test]
+fn cancellable_compaction_stops_before_writing_output() {
+    let output = temp_path("gfm-content-cancel-compact", "gfmcontent");
+    let first = temp_path("gfm-content-cancel-first", "gfmseg");
+    let id = FileId::new(VolumeId(3), 10);
+    write_content_segment(
+        &first,
+        &ContentSegment {
+            tombstones: Vec::new(),
+            postings: vec![ContentPosting {
+                term: "cancelcompact".to_string(),
+                ids: vec![id],
+                positions: vec![ContentPositions {
+                    id,
+                    positions: vec![1],
+                }],
+            }],
+        },
+    )
+    .unwrap();
+
+    let result = compact_content_segments_checked(&output, &[&first], || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!output.exists());
+
+    std::fs::remove_file(first).unwrap();
 }
 
 #[test]

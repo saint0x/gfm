@@ -4,10 +4,11 @@ use gfm_content::{
 };
 use gfm_jobs::Cancellation;
 use gfm_store::{
-    compact_content_postings_with_segments, compact_content_segments,
-    compact_content_segments_with_policy, plan_content_segment_merge, read_content_postings,
-    write_content_segment, ContentArchiveCleanupAction, ContentArchiveCleanupPolicy,
-    ContentArchiveManifest, ContentArchiveManifestEntry, ContentMergePolicy, ContentMergeTier,
+    compact_content_postings_with_segments_checked, compact_content_segments_checked,
+    compact_content_segments_with_policy_checked, plan_content_segment_merge_checked,
+    read_content_postings, write_content_segment, ContentArchiveCleanupAction,
+    ContentArchiveCleanupPolicy, ContentArchiveManifest, ContentArchiveManifestEntry,
+    ContentMergePolicy, ContentMergeTier,
 };
 use gfm_types::{ContentSegment, FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
 use std::collections::{HashMap, HashSet};
@@ -482,7 +483,10 @@ impl BackgroundContentIndexer {
     ) -> Result<ContentIndexReport> {
         let mut report = self.run_to_segments(snapshot, segment_dir, cancellation)?;
         cancellation.check()?;
-        report.terms = compact_content_segments(content_path, &report.segments)?.len();
+        report.terms = compact_content_segments_checked(content_path, &report.segments, || {
+            cancellation.check()
+        })?
+        .len();
         Ok(report)
     }
 
@@ -506,9 +510,13 @@ impl BackgroundContentIndexer {
             Some(path) if path.is_file() => read_content_postings(path)?,
             _ => Vec::new(),
         };
-        report.terms =
-            compact_content_postings_with_segments(content_path, base_postings, &report.segments)?
-                .len();
+        report.terms = compact_content_postings_with_segments_checked(
+            content_path,
+            base_postings,
+            &report.segments,
+            || cancellation.check(),
+        )?
+        .len();
         Ok(report)
     }
 
@@ -529,10 +537,11 @@ impl BackgroundContentIndexer {
             Some(path) if path.is_file() => read_content_postings(path)?,
             _ => Vec::new(),
         };
-        report.terms = compact_content_postings_with_segments(
+        report.terms = compact_content_postings_with_segments_checked(
             request.content_path,
             base_postings,
             &report.segments,
+            || request.cancellation.check(),
         )?
         .len();
         Ok(report)
@@ -545,9 +554,28 @@ impl BackgroundContentIndexer {
         segments: &[impl AsRef<Path>],
         options: &ContentMaintenanceOptions,
     ) -> Result<ContentMaintenanceReport> {
+        self.maintain_segments_cancellable(
+            manifest_path,
+            output_archive,
+            segments,
+            options,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn maintain_segments_cancellable(
+        &self,
+        manifest_path: impl AsRef<Path>,
+        output_archive: impl AsRef<Path>,
+        segments: &[impl AsRef<Path>],
+        options: &ContentMaintenanceOptions,
+        cancellation: &Cancellation,
+    ) -> Result<ContentMaintenanceReport> {
         let manifest_path = manifest_path.as_ref();
         let output_archive = output_archive.as_ref();
-        let plan = plan_content_segment_merge(segments, &options.merge_policy)?;
+        let plan = plan_content_segment_merge_checked(segments, &options.merge_policy, || {
+            cancellation.check()
+        })?;
         if plan.merge_segments.is_empty() {
             return Ok(ContentMaintenanceReport {
                 scheduled: false,
@@ -569,10 +597,11 @@ impl BackgroundContentIndexer {
             });
         }
 
-        let outcome = compact_content_segments_with_policy(
+        let outcome = compact_content_segments_with_policy_checked(
             output_archive,
             &plan.merge_segments,
             &options.merge_policy,
+            || cancellation.check(),
         )?;
         let manifest = ContentArchiveManifest::read(manifest_path)?;
         let promotion = manifest.promote_archive(

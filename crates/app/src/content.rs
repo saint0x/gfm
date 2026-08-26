@@ -5,7 +5,7 @@ use crate::extract::{
 };
 use crate::runtime::{
     default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
-    run_scheduled_volume_task, run_volume_task, RuntimeJobHandle,
+    run_scheduled_volume_task_cancellable, run_volume_task, RuntimeJobHandle,
 };
 use crate::{
     detect_volume_id, optional_path_arg, parent_volume, parse_battery_state, parse_io_pressure,
@@ -278,17 +278,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .ok()
                 .or_else(|| parent_volume(&output_archive));
             let worker = BackgroundContentIndexer::default();
-            let outcome = run_scheduled_volume_task(
+            let outcome = run_scheduled_volume_task_cancellable(
                 volume,
                 Priority::Background,
                 "content maintenance",
                 pressure,
-                move || {
-                    worker.maintain_segments(
+                move |cancellation| {
+                    worker.maintain_segments_cancellable(
                         &manifest_path,
                         &output_archive,
                         &segments,
                         &ContentMaintenanceOptions::default(),
+                        &cancellation,
                     )
                 },
             )?;
