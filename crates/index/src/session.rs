@@ -159,9 +159,11 @@ impl ContentIndexQuerySession {
             let cache = self.record_posting_cache()?;
             for term in &selected {
                 let key = posting_cache_key(term, budget.max_content_ids_per_term);
-                if let Some(posting) = cache.get(&key) {
+                if let Some(cached) = cache.get(&key) {
                     self.posting_cache_hits.fetch_add(1, Ordering::Relaxed);
-                    postings.push(posting);
+                    if let Some(posting) = cached {
+                        postings.push(posting);
+                    }
                 } else {
                     self.posting_cache_misses.fetch_add(1, Ordering::Relaxed);
                     misses.push(term.clone());
@@ -173,13 +175,13 @@ impl ContentIndexQuerySession {
             let (posting, truncated) = self
                 .content
                 .posting_for_term_limit(&term, budget.max_content_ids_per_term)?;
+            if !truncated {
+                self.record_posting_cache()?.insert(
+                    posting_cache_key(&term, budget.max_content_ids_per_term),
+                    posting.clone(),
+                );
+            }
             if let Some(posting) = posting {
-                if !truncated {
-                    self.record_posting_cache()?.insert(
-                        posting_cache_key(&term, budget.max_content_ids_per_term),
-                        posting.clone(),
-                    );
-                }
                 postings.push(posting);
             }
         }
@@ -301,7 +303,7 @@ fn posting_cache_key(term: &str, limit: usize) -> String {
 struct ContentPostingCache {
     capacity: usize,
     order: VecDeque<String>,
-    values: HashMap<String, ContentPosting>,
+    values: HashMap<String, Option<ContentPosting>>,
 }
 
 impl ContentPostingCache {
@@ -313,11 +315,11 @@ impl ContentPostingCache {
         }
     }
 
-    fn get(&self, key: &str) -> Option<ContentPosting> {
+    fn get(&self, key: &str) -> Option<Option<ContentPosting>> {
         self.values.get(key).cloned()
     }
 
-    fn insert(&mut self, key: String, posting: ContentPosting) {
+    fn insert(&mut self, key: String, posting: Option<ContentPosting>) {
         if self.capacity == 0 {
             return;
         }

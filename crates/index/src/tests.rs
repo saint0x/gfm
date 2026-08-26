@@ -1704,6 +1704,26 @@ fn content_query_session_reuses_archives_and_record_cache() {
     assert!(posting_after_second.0 > posting_before_second.0);
     assert!(after_second.0 > before_second.0);
 
+    let missing_first = session.search("absentcontentneedle", 5).unwrap();
+    let missing_posting_before_second = session.posting_cache_telemetry();
+    let missing_record_before_second = session.record_cache_telemetry();
+    let missing_second = session.search("absentcontentneedle", 5).unwrap();
+    let missing_posting_after_second = session.posting_cache_telemetry();
+    let missing_record_after_second = session.record_cache_telemetry();
+
+    assert!(missing_first.search.hits.is_empty());
+    assert!(missing_second.search.hits.is_empty());
+    assert_eq!(missing_first.posting_cache_hits, 0);
+    assert_eq!(missing_first.posting_cache_misses, 1);
+    assert_eq!(missing_second.posting_cache_hits, 1);
+    assert_eq!(missing_second.posting_cache_misses, 0);
+    assert_eq!(missing_first.record_cache_hits, 0);
+    assert_eq!(missing_first.record_cache_misses, 0);
+    assert_eq!(missing_second.record_cache_hits, 0);
+    assert_eq!(missing_second.record_cache_misses, 0);
+    assert!(missing_posting_after_second.0 > missing_posting_before_second.0);
+    assert_eq!(missing_record_after_second, missing_record_before_second);
+
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(first_content).unwrap();
