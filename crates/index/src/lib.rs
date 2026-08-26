@@ -459,6 +459,10 @@ impl SearchArchiveLookup {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         let mut selected = BTreeSet::new();
         for prefix in prefixes {
             let prefix = prefix.as_ref();
@@ -467,16 +471,58 @@ impl SearchArchiveLookup {
             }
         }
 
-        selected
+        let mut postings = Vec::with_capacity(selected.len());
+        let mut misses = Vec::new();
+        {
+            let cache = self
+                .prefix_cache
+                .lock()
+                .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?;
+            for prefix in &selected {
+                self.prefix_requests.fetch_add(1, Ordering::Relaxed);
+                if let Some(mut ids) = cache.get(prefix) {
+                    self.prefix_hits.fetch_add(1, Ordering::Relaxed);
+                    ids.truncate(limit);
+                    postings.push(SearchPrefixPosting {
+                        prefix: prefix.clone(),
+                        ids,
+                    });
+                } else {
+                    self.prefix_misses.fetch_add(1, Ordering::Relaxed);
+                    misses.push(prefix.clone());
+                }
+            }
+        }
+
+        let loaded = self
+            .prefixes
+            .postings_for_sorted_prefixes_limit(&misses, limit)?
             .into_iter()
-            .map(|prefix| {
-                let ids = self.prefix_ids_bounded(&prefix, limit)?;
-                Ok(SearchPrefixPosting {
-                    prefix,
-                    ids: ids.ids,
-                })
+            .map(|limited| {
+                (
+                    limited.posting.prefix,
+                    (limited.posting.ids, limited.truncated),
+                )
             })
-            .collect()
+            .collect::<HashMap<_, _>>();
+
+        let mut cache = self
+            .prefix_cache
+            .lock()
+            .map_err(|_| GfmError::Format("prefix lookup cache lock poisoned".to_string()))?;
+        for prefix in misses {
+            let (ids, truncated) = loaded
+                .get(&prefix)
+                .cloned()
+                .unwrap_or_else(|| (Vec::new(), false));
+            if !truncated {
+                cache.insert(prefix.clone(), ids.clone());
+            }
+            postings.push(SearchPrefixPosting { prefix, ids });
+        }
+
+        postings.sort_by(|left, right| left.prefix.cmp(&right.prefix));
+        Ok(postings)
     }
 }
 

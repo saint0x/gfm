@@ -23,6 +23,12 @@ pub struct PrefixPosting {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LimitedPrefixPosting {
+    pub posting: PrefixPosting,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PrefixDirectoryEntry {
     prefix: String,
     offset: u64,
@@ -151,28 +157,60 @@ impl MmapPrefixArchive {
         else {
             return Ok((Vec::new(), false));
         };
-        let bytes = self.posting_bytes(entry)?;
-        let mut cursor = Cursor::new(bytes);
-        let posting_prefix = read_prefix_posting_header(&mut cursor, &self.path)?;
-        if posting_prefix != prefix {
-            return Err(prefix_format_error(
-                &self.path,
-                "prefix directory points at the wrong posting",
-            ));
+        let posting = self.limited_posting_for_entry(entry, limit)?;
+        Ok((posting.posting.ids, posting.truncated))
+    }
+
+    pub fn postings_for_sorted_prefixes_limit<I, S>(
+        &self,
+        prefixes: I,
+        limit_per_prefix: usize,
+    ) -> Result<Vec<LimitedPrefixPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        if limit_per_prefix == 0 {
+            return Ok(Vec::new());
         }
-        let ids_start = usize::try_from(cursor.position())
-            .map_err(|_| prefix_format_error(&self.path, "prefix id offset overflow"))?;
-        let ids_bytes = bytes
-            .get(ids_start..)
-            .ok_or_else(|| prefix_format_error(&self.path, "prefix ids out of bounds"))?;
-        let mut ids = read_blocked_file_ids_limited_from_slice(
-            ids_bytes,
-            limit.saturating_add(1),
-            &self.path,
-        )?;
-        let truncated = ids.len() > limit;
-        ids.truncate(limit);
-        Ok((ids, truncated))
+
+        let mut postings = Vec::new();
+        let mut directory_index = 0usize;
+        let mut previous: Option<String> = None;
+
+        for prefix in prefixes {
+            let prefix = normalize(prefix.as_ref());
+            if prefix.is_empty() {
+                continue;
+            }
+            if let Some(previous_prefix) = previous.as_ref() {
+                if prefix < *previous_prefix {
+                    return Err(prefix_format_error(
+                        &self.path,
+                        "batch prefix lookup terms must be sorted",
+                    ));
+                }
+                if prefix == *previous_prefix {
+                    continue;
+                }
+            }
+
+            while let Some(entry) = self.directory.get(directory_index) {
+                if entry.prefix.as_str() >= prefix.as_str() {
+                    break;
+                }
+                directory_index += 1;
+            }
+
+            if let Some(entry) = self.directory.get(directory_index) {
+                if entry.prefix.as_str() == prefix.as_str() {
+                    postings.push(self.limited_posting_for_entry(entry, limit_per_prefix)?);
+                }
+            }
+            previous = Some(prefix);
+        }
+
+        Ok(postings)
     }
 
     pub fn postings(&self) -> Result<Vec<PrefixPosting>> {
@@ -277,6 +315,41 @@ impl MmapPrefixArchive {
         self.mmap
             .get(start..end)
             .ok_or_else(|| prefix_format_error(&self.path, "posting range out of bounds"))
+    }
+
+    fn limited_posting_for_entry(
+        &self,
+        entry: &PrefixDirectoryEntry,
+        limit: usize,
+    ) -> Result<LimitedPrefixPosting> {
+        let bytes = self.posting_bytes(entry)?;
+        let mut cursor = Cursor::new(bytes);
+        let posting_prefix = read_prefix_posting_header(&mut cursor, &self.path)?;
+        if posting_prefix != entry.prefix {
+            return Err(prefix_format_error(
+                &self.path,
+                "prefix directory points at the wrong posting",
+            ));
+        }
+        let ids_start = usize::try_from(cursor.position())
+            .map_err(|_| prefix_format_error(&self.path, "prefix id offset overflow"))?;
+        let ids_bytes = bytes
+            .get(ids_start..)
+            .ok_or_else(|| prefix_format_error(&self.path, "prefix ids out of bounds"))?;
+        let mut ids = read_blocked_file_ids_limited_from_slice(
+            ids_bytes,
+            limit.saturating_add(1),
+            &self.path,
+        )?;
+        let truncated = ids.len() > limit;
+        ids.truncate(limit);
+        Ok(LimitedPrefixPosting {
+            posting: PrefixPosting {
+                prefix: posting_prefix,
+                ids,
+            },
+            truncated,
+        })
     }
 }
 
@@ -538,6 +611,43 @@ mod tests {
             archive.postings_for(["proj", "missing", "proj"]).unwrap(),
             vec![postings[1].clone()]
         );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_prefix_archive_reads_bounded_sorted_postings_in_one_pass() {
+        let path = temp_path("gfm-prefix-batch-postings", "gfmprefix");
+        let postings = vec![
+            PrefixPosting {
+                prefix: "alpha".to_string(),
+                ids: (0..4)
+                    .map(|node| FileId::new(VolumeId(1), 100 + node))
+                    .collect(),
+            },
+            PrefixPosting {
+                prefix: "project".to_string(),
+                ids: (0..6)
+                    .map(|node| FileId::new(VolumeId(1), 200 + node))
+                    .collect(),
+            },
+        ];
+
+        write_prefix_postings(&path, &postings).unwrap();
+        let archive = MmapPrefixArchive::open(&path).unwrap();
+        let batch = archive
+            .postings_for_sorted_prefixes_limit(["alpha", "alpha", "missing", "project"], 3)
+            .unwrap();
+
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].posting.prefix, "alpha");
+        assert_eq!(batch[0].posting.ids, postings[0].ids[..3]);
+        assert!(batch[0].truncated);
+        assert_eq!(batch[1].posting.prefix, "project");
+        assert_eq!(batch[1].posting.ids, postings[1].ids[..3]);
+        assert!(batch[1].truncated);
+        assert!(archive
+            .postings_for_sorted_prefixes_limit(["project", "alpha"], 3)
+            .is_err());
         std::fs::remove_file(path).unwrap();
     }
 

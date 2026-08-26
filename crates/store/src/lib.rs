@@ -53,8 +53,8 @@ pub use metadata::{
     MetadataPosting, MmapMetadataArchive,
 };
 pub use prefix::{
-    prefix_postings_from_records, read_prefix_postings, write_prefix_postings, MmapPrefixArchive,
-    PrefixPosting,
+    prefix_postings_from_records, read_prefix_postings, write_prefix_postings,
+    LimitedPrefixPosting, MmapPrefixArchive, PrefixPosting,
 };
 pub use rebuild::{
     plan_archive_rebuilds, plan_columns_archive_rebuild, plan_derived_sidecar_rebuild,
