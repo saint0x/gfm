@@ -1,7 +1,8 @@
 use gfm_packaging::{
-    build_app_bundle, notarize_app_bundle, register_launch_services, validate_release_artifact,
-    AppBundleSpec, NotarizationCredentials, NotarizationSpec, ReleaseArtifactSpec, ReleasePolicy,
-    SigningIdentity,
+    build_app_bundle, notarize_app_bundle, register_launch_services, require_codesign_toolchain,
+    require_release_xcode_toolchain, validate_release_artifact, AppBundleSpec,
+    AppleToolchainReport, NotarizationCredentials, NotarizationSpec, ReleaseArtifactSpec,
+    ReleasePolicy, SigningIdentity,
 };
 use gfm_types::{GfmError, Result};
 use std::path::PathBuf;
@@ -28,6 +29,9 @@ pub fn release_validate(args: &mut impl Iterator<Item = String>) -> Result<()> {
             }
         }
     }
+    if spec.require_signed || spec.require_notarized || spec.assess_gatekeeper {
+        require_release_xcode_toolchain()?;
+    }
     let report = validate_release_artifact(&spec)?;
     println!(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -52,6 +56,9 @@ pub fn bundle_app(args: &mut impl Iterator<Item = String>) -> Result<()> {
         Some("--ad-hoc") | None => SigningIdentity::AdHoc,
         Some(identity) => SigningIdentity::DeveloperId(identity.to_string()),
     };
+    if spec.signing_identity != SigningIdentity::Unsigned {
+        require_codesign_toolchain()?;
+    }
     let bundle = build_app_bundle(&spec)?;
     println!(
         "{}\t{}\t{}",
@@ -73,6 +80,7 @@ pub fn notarize_app(args: &mut impl Iterator<Item = String>) -> Result<()> {
     let app_path = required_path(args.next(), "notarize-app requires an .app path")?;
     let output_dir = required_path(args.next(), "notarize-app requires an output directory")?;
     let credentials = notarization_credentials(args)?;
+    require_release_xcode_toolchain()?;
     let ticket = notarize_app_bundle(&NotarizationSpec::new(app_path, output_dir, credentials))?;
     println!(
         "{}\t{}\t{:?}\t{}",
@@ -81,6 +89,11 @@ pub fn notarize_app(args: &mut impl Iterator<Item = String>) -> Result<()> {
         ticket.status,
         ticket.stapled
     );
+    Ok(())
+}
+
+pub fn release_toolchain() -> Result<()> {
+    print_toolchain_report(&require_release_xcode_toolchain()?);
     Ok(())
 }
 
@@ -114,6 +127,13 @@ fn print_release_policy(policy: &ReleasePolicy) {
         policy.remote_diagnostics_upload_allowed(),
         policy.diagnostics.retention_days
     );
+}
+
+fn print_toolchain_report(report: &AppleToolchainReport) {
+    println!("developer-dir\t{}", report.developer_dir.display());
+    for utility in &report.utilities {
+        println!("tool\t{}\t{}", utility.name, utility.path.display());
+    }
 }
 
 fn notarization_credentials(

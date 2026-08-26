@@ -109,6 +109,7 @@ fn run() -> Result<()> {
         Some(command) if platform::run(command, &mut args)? => {}
         Some(command) if gates::run(command, &mut args)? => {}
         Some("release-policy") => packaging::release_policy()?,
+        Some("release-toolchain") => packaging::release_toolchain()?,
         Some("release-validate") => packaging::release_validate(&mut args)?,
         Some("bundle-app") => packaging::bundle_app(&mut args)?,
         Some("register-app") => packaging::register_app(&mut args)?,
@@ -512,6 +513,7 @@ fn print_usage() {
   gfm regression-gate <workspace> [smoke|standard]
   gfm large-sidecar-gate <workspace> <synthetic-records>
   gfm release-policy
+  gfm release-toolchain
   gfm release-validate <GFM.app> [--allow-unsigned] [--skip-notarization] [--skip-gatekeeper]
   gfm bundle-app <executable> <GFM.icns> <output-dir> [--ad-hoc|--unsigned|developer-id]
   gfm register-app <GFM.app>

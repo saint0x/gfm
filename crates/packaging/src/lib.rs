@@ -6,6 +6,7 @@ use std::process::Command;
 mod artifact;
 mod notarize;
 mod policy;
+mod toolchain;
 
 pub use artifact::{
     validate_release_artifact, GatekeeperAssessment, ReleaseArtifactReport, ReleaseArtifactSpec,
@@ -18,6 +19,10 @@ pub use notarize::{
 pub use policy::{
     CrashReportMode, CrashReportPolicy, DiagnosticMode, DiagnosticsPolicy, ReleaseChannel,
     ReleasePolicy, RollbackPolicy, UpdateDecision, UpdateMode, UpdatePolicy,
+};
+pub use toolchain::{
+    require_codesign_toolchain, require_release_xcode_toolchain, AppleToolchainReport,
+    AppleToolchainUtility,
 };
 
 const DEFAULT_MINIMUM_SYSTEM_VERSION: &str = "14.0";
