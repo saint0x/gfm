@@ -551,12 +551,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "finder-metadata" => {
             let path = required_path(args.next(), "finder-metadata requires a path")?;
-            let _access = crate::access::preflight_access_scope(
-                &path,
-                AccessIntent::Read,
-                "finder metadata",
-            )?;
-            println!("{}", FinderMetadataReport::read_path(path)?.as_tsv());
+            println!("{}", read_finder_metadata(path)?.as_tsv());
         }
         "ui-virtualization-contract" => {
             let surface = parse_virtual_surface(args.next().as_deref())?;
@@ -1257,6 +1252,25 @@ fn read_trash_restore_metadata(path: &Path) -> Result<BTreeMap<String, TrashEntr
             let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
             cancellation.check()?;
             parse_trash_restore_metadata(&path)
+        },
+    )
+}
+
+fn read_finder_metadata(path: PathBuf) -> Result<FinderMetadataReport> {
+    const WORKER: &str = "finder metadata";
+    crate::access::preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
+    let volume = crate::detect_volume_id(&path)
+        .ok()
+        .or_else(|| crate::parent_volume(&path));
+    crate::runtime::run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        WORKER,
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
+            cancellation.check()?;
+            FinderMetadataReport::read_path(path)
         },
     )
 }

@@ -2974,6 +2974,8 @@ fn reports_finder_metadata_from_binary() {
         "{}",
         String::from_utf8_lossy(&app_output.stderr)
     );
+    let app_stderr = String::from_utf8_lossy(&app_output.stderr);
+    assert_worker_admitted(&app_stderr, "finder metadata", &app);
     let app_stdout = String::from_utf8(app_output.stdout).unwrap();
     assert!(app_stdout.starts_with("finder-metadata\t"), "{app_stdout}");
     assert!(
@@ -2998,6 +3000,8 @@ fn reports_finder_metadata_from_binary() {
         "{}",
         String::from_utf8_lossy(&link_output.stderr)
     );
+    let link_stderr = String::from_utf8_lossy(&link_output.stderr);
+    assert_worker_admitted(&link_stderr, "finder metadata", &link);
     let link_stdout = String::from_utf8(link_output.stdout).unwrap();
     assert!(link_stdout.contains("\tkind=Alias\t"), "{link_stdout}");
     assert!(link_stdout.contains("\ttype=symlink\t"), "{link_stdout}");
@@ -3025,6 +3029,13 @@ fn finder_metadata_refuses_unreachable_volume_before_native_read_from_binary() {
     assert!(!stdout.contains("finder-metadata\t"), "{stdout}");
     assert!(
         stderr.contains("finder metadata volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=finder metadata\tpath={}",
+            file.display()
+        )),
         "{stderr}"
     );
 
@@ -8389,6 +8400,20 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{}",
         String::from_utf8_lossy(&manifest_inspect.stderr)
     );
+    let inspect_stderr = String::from_utf8_lossy(&manifest_inspect.stderr);
+    assert!(
+        inspect_stderr.contains(&format!(
+            "security-worker-admission\tworker=content manifest inspect\tpath={}",
+            manifest.display()
+        )) && inspect_stderr.contains(&format!(
+            "security-worker-admission\tworker=content manifest inspect archive\tpath={}",
+            first_content.display()
+        )) && inspect_stderr.contains(&format!(
+            "security-worker-admission\tworker=content manifest inspect archive\tpath={}",
+            second_content.display()
+        )),
+        "{inspect_stderr}"
+    );
     let inspect_stdout = String::from_utf8(manifest_inspect.stdout).unwrap();
     assert!(
         inspect_stdout.contains("content-manifest\tarchives=2")
@@ -8861,6 +8886,55 @@ fn content_manifest_write_refuses_unreachable_archive_before_publishing_from_bin
         "{stderr}"
     );
     assert!(!manifest.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_manifest_inspect_refuses_unreachable_archive_before_mapping_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-inspect-unreachable");
+    let local = root.join("local");
+    let offline = root.join("offline");
+    fs::create_dir_all(&local).unwrap();
+    fs::create_dir_all(&offline).unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let manifest = local.join("content.gfmmanifest");
+    let content = offline.join("content.gfmcontent");
+    fs::write(&content, "not mmap content").unwrap();
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: content.clone(),
+    }])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["content-manifest-inspect", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains(
+            "content manifest inspect archive volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=content manifest inspect\tpath={}",
+            manifest.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("invalid magic") && !stderr.contains("content archive"),
+        "{stderr}"
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -12064,4 +12138,14 @@ fn write_tar_octal(field: &mut [u8], value: u64) {
     let start = field.len().saturating_sub(1 + bytes.len());
     field[start..start + bytes.len()].copy_from_slice(bytes);
     field[field.len() - 1] = 0;
+}
+
+fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker={worker}\tpath={}",
+            path.display()
+        )),
+        "{stderr}"
+    );
 }

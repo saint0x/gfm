@@ -1,9 +1,11 @@
-use crate::access::{preflight_access_scope, ScopedAccessGuard};
-use crate::{parse_u64_arg, parse_usize_arg, required_path};
+use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
+use crate::runtime::run_volume_task_cancellable;
+use crate::{detect_volume_id, parse_u64_arg, parse_usize_arg, required_path};
 use gfm_index::{
     ContentArchiveCleanupPolicy, ContentArchiveManifest, ContentArchiveManifestEntry,
     ContentMergeTier,
 };
+use gfm_jobs::Priority;
 use gfm_mac::AccessIntent;
 use gfm_store::{
     plan_content_manifest_promotion_recovery, plan_content_manifest_recovery,
@@ -33,23 +35,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "content-manifest-inspect requires a manifest path",
             )?;
-            let _access = retain_manifest_inspect_access(&manifest_path)?;
-            let manifest = ContentArchiveManifest::read(&manifest_path)?;
-            let paths = manifest.resolved_archive_paths(&manifest_path);
-            let set = MmapContentSet::open(&paths)?;
-            println!(
-                "content-manifest\tarchives={}\tterms={}\tbytes={}",
-                set.archive_count(),
-                set.indexed_terms(),
-                set.mapped_len()
-            );
-            for (entry, path) in manifest.archives.iter().zip(paths) {
-                println!(
-                    "archive\t{}\t{}\t{}",
-                    content_tier_name(entry.tier),
-                    entry.path.display(),
-                    path.display()
-                );
+            for line in run_manifest_inspect(manifest_path)? {
+                println!("{line}");
             }
         }
         "content-manifest-recovery-plan" => {
@@ -253,22 +240,68 @@ fn retain_manifest_write_access(
     Ok(guards)
 }
 
-fn retain_manifest_inspect_access(manifest_path: &Path) -> Result<Vec<ScopedAccessGuard>> {
-    let manifest = preflight_access_scope(
-        manifest_path,
-        AccessIntent::Read,
-        "content manifest inspect",
-    )?;
-    let parsed = ContentArchiveManifest::read(manifest_path)?;
-    let mut guards = vec![manifest];
-    for path in parsed.resolved_archive_paths(manifest_path) {
+fn retain_manifest_inspect_archive_access<'a>(
+    archive_paths: impl Iterator<Item = &'a PathBuf>,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = Vec::new();
+    for path in archive_paths {
         guards.push(preflight_access_scope(
-            &path,
+            path,
             AccessIntent::Read,
             "content manifest inspect archive",
         )?);
     }
     Ok(guards)
+}
+
+fn run_manifest_inspect(manifest_path: PathBuf) -> Result<Vec<String>> {
+    preflight_volume_access_scope(
+        &manifest_path,
+        AccessIntent::Read,
+        "content manifest inspect",
+    )?;
+    let volume = detect_volume_id(&manifest_path).ok();
+    run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        "content manifest inspect",
+        move |cancellation| {
+            cancellation.check()?;
+            let _manifest_access = preflight_access_scope(
+                &manifest_path,
+                AccessIntent::Read,
+                "content manifest inspect",
+            )?;
+            let manifest = ContentArchiveManifest::read(&manifest_path)?;
+            let paths = manifest.resolved_archive_paths(&manifest_path);
+            for path in &paths {
+                preflight_volume_access_scope(
+                    path,
+                    AccessIntent::Read,
+                    "content manifest inspect archive",
+                )?;
+            }
+            cancellation.check()?;
+            let _archive_access = retain_manifest_inspect_archive_access(paths.iter())?;
+            cancellation.check()?;
+            let set = MmapContentSet::open(&paths)?;
+            let mut lines = vec![format!(
+                "content-manifest\tarchives={}\tterms={}\tbytes={}",
+                set.archive_count(),
+                set.indexed_terms(),
+                set.mapped_len()
+            )];
+            for (entry, path) in manifest.archives.iter().zip(paths) {
+                lines.push(format!(
+                    "archive\t{}\t{}\t{}",
+                    content_tier_name(entry.tier),
+                    entry.path.display(),
+                    path.display()
+                ));
+            }
+            Ok(lines)
+        },
+    )
 }
 
 fn retain_manifest_recovery_plan_access<'a>(
