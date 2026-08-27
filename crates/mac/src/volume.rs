@@ -158,15 +158,9 @@ impl VolumeDescriptor {
         let metadata = fs::metadata(&path).map_err(|err| GfmError::io(&path, err))?;
         let id = volume_id(&metadata);
         let marker = marker_kind(&path);
-        let native = marker
-            .is_none()
-            .then(|| gfm_mac_sys::copy_volume_description_for_path(&path));
-        let resource = marker
-            .is_none()
-            .then(|| gfm_mac_sys::copy_volume_resource_values(&path));
-        let mount_table = marker
-            .is_none()
-            .then(|| gfm_mac_sys::copy_volume_mount_table_entry(&path));
+        let native = Some(gfm_mac_sys::copy_volume_description_for_path(&path));
+        let resource = Some(gfm_mac_sys::copy_volume_resource_values(&path));
+        let mount_table = Some(gfm_mac_sys::copy_volume_mount_table_entry(&path));
         let native_status = native.as_ref().map(|native| native.status);
         let resource_status = resource.as_ref().map(|resource| resource.status);
         let mount_table_status = mount_table.as_ref().map(|mount_table| mount_table.status);
@@ -186,9 +180,9 @@ impl VolumeDescriptor {
         } else {
             MountState::Stale
         };
-        let removable = resource
-            .as_ref()
-            .and_then(|resource| resource.is_removable)
+        let marker_value = marker.as_deref();
+        let removable = marker_removable(marker_value)
+            .or_else(|| resource.as_ref().and_then(|resource| resource.is_removable))
             .or_else(|| native.as_ref().and_then(|native| native.media_removable))
             .unwrap_or({
                 matches!(
@@ -200,8 +194,8 @@ impl VolumeDescriptor {
             .as_ref()
             .and_then(|mount_table| mount_table.is_local)
             .or_else(|| resource.as_ref().and_then(|resource| resource.is_local));
-        let network = local
-            .map(|local| !local)
+        let network = marker_network(marker_value)
+            .or_else(|| local.map(|local| !local))
             .or_else(|| native.as_ref().and_then(|native| native.volume_network))
             .unwrap_or(kind == VolumeKind::Network);
         let reachable = marker_reachability(
@@ -211,9 +205,8 @@ impl VolumeDescriptor {
             resource.as_ref(),
             &path,
         );
-        let ejectable = resource
-            .as_ref()
-            .and_then(|resource| resource.is_ejectable)
+        let ejectable = marker_ejectable(marker_value)
+            .or_else(|| resource.as_ref().and_then(|resource| resource.is_ejectable))
             .or_else(|| native.as_ref().and_then(|native| native.media_ejectable))
             .unwrap_or(removable || network);
         let writable = mount_table
@@ -244,13 +237,16 @@ impl VolumeDescriptor {
         let mountable = native.as_ref().and_then(|native| native.volume_mountable);
         let capacity = VolumeCapacity::read(&path);
         let commands = command_policy(kind, mount_state, ejectable);
-        let stable_identity = stable_identity(
-            id,
-            &path,
-            native.as_ref(),
-            resource.as_ref(),
-            mount_table.as_ref(),
-        );
+        let stable_identity = match marker.as_deref() {
+            Some(marker) => marker_stable_identity(marker, id, &path),
+            None => stable_identity(
+                id,
+                &path,
+                native.as_ref(),
+                resource.as_ref(),
+                mount_table.as_ref(),
+            ),
+        };
         let source = marker
             .map(|marker| format!("fixture-marker:{marker}"))
             .unwrap_or_else(|| volume_source(native.as_ref()));
@@ -1617,6 +1613,65 @@ fn marker_kind(path: &Path) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
+fn marker_removable(marker: Option<&str>) -> Option<bool> {
+    match marker {
+        Some("external-removable") | Some("removable") | Some("disk-image") => Some(true),
+        Some("network")
+        | Some("network-smb")
+        | Some("network-afp")
+        | Some("network-nfs")
+        | Some("network-unreachable")
+        | Some("network-offline")
+        | Some("system")
+        | Some("internal") => Some(false),
+        _ => None,
+    }
+}
+
+fn marker_network(marker: Option<&str>) -> Option<bool> {
+    match marker {
+        Some("network")
+        | Some("network-smb")
+        | Some("network-afp")
+        | Some("network-nfs")
+        | Some("network-unreachable")
+        | Some("network-offline") => Some(true),
+        Some("external")
+        | Some("external-removable")
+        | Some("removable")
+        | Some("disk-image")
+        | Some("system")
+        | Some("internal") => Some(false),
+        _ => None,
+    }
+}
+
+fn marker_ejectable(marker: Option<&str>) -> Option<bool> {
+    match marker {
+        Some("external")
+        | Some("external-removable")
+        | Some("removable")
+        | Some("disk-image")
+        | Some("network")
+        | Some("network-smb")
+        | Some("network-afp")
+        | Some("network-nfs")
+        | Some("network-unreachable")
+        | Some("network-offline") => Some(true),
+        Some("system") | Some("internal") => Some(false),
+        _ => None,
+    }
+}
+
+fn marker_stable_identity(marker: &str, id: VolumeId, path: &Path) -> String {
+    format!(
+        "fixture-marker:{}:dev:{}:{}",
+        escape_field(marker),
+        id.0,
+        escape_field(&path.display().to_string())
+    )
+}
+
 fn volume_label(path: &Path) -> String {
     if path == Path::new("/") {
         "Macintosh HD".to_string()
@@ -1721,23 +1776,21 @@ mod tests {
         assert!(descriptor.removable);
         assert_eq!(descriptor.reachable, Some(true));
         assert!(descriptor.ejectable);
-        assert_eq!(descriptor.native_status, None);
-        assert_eq!(descriptor.resource_status, None);
-        assert_eq!(descriptor.mount_table_status, None);
-        assert!(descriptor.stable_identity.starts_with("dev:"));
+        assert!(descriptor.native_status.is_some());
+        assert!(descriptor.resource_status.is_some());
+        assert!(descriptor.mount_table_status.is_some());
+        assert!(descriptor
+            .stable_identity
+            .starts_with("fixture-marker:external-removable:dev:"));
         assert_eq!(descriptor.commands.eject, VolumeCommandState::Enabled);
         assert!(descriptor
             .as_tsv()
             .contains("source=fixture-marker:external-removable"));
-        assert_eq!(descriptor.case_sensitive, None);
-        assert!(descriptor.as_tsv().contains("\tresource-status=-"));
-        assert!(descriptor.as_tsv().contains("\tresource-uuid=-\t"));
-        assert!(descriptor.as_tsv().contains("\tmount-status=-\t"));
-        assert!(descriptor.as_tsv().contains("\tvolume-type=-\t"));
-        assert!(descriptor.as_tsv().contains("\tmedia-encrypted=-\t"));
-        assert!(descriptor.as_tsv().contains("\tmedia-size=-\t"));
-        assert!(!descriptor.source.contains("url-resource="));
-        assert!(!descriptor.source.contains("mount-table="));
+        assert!(descriptor.as_tsv().contains("\tnative-status="));
+        assert!(descriptor.as_tsv().contains("\tresource-status="));
+        assert!(descriptor.as_tsv().contains("\tmount-status="));
+        assert!(descriptor.source.contains("url-resource="));
+        assert!(descriptor.source.contains("mount-table="));
 
         fs::remove_dir_all(root).unwrap();
     }

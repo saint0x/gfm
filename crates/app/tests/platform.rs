@@ -1608,11 +1608,11 @@ fn reports_volume_discovery_from_binary() {
     assert!(stdout.contains(
         "\tkind=network\tmount=mounted\tremovable=false\tnetwork=true\treachable=false\tejectable=true\t"
     ));
-    assert!(stdout.contains("\tstable-id=dev:"));
-    assert!(stdout.contains("\tnative-status=-\twritable="));
+    assert!(stdout.contains("\tstable-id="));
+    assert!(!stdout.contains("\tnative-status=-\twritable="));
     assert!(stdout.contains("\tread-only="));
-    assert!(stdout.contains("\tresource-status=-"));
-    assert!(stdout.contains("\tmount-status=-\t"));
+    assert!(!stdout.contains("\tresource-status=-"));
+    assert!(!stdout.contains("\tmount-status=-\t"));
     assert!(stdout.contains("source=fixture-marker:network-smb"));
     assert!(stdout.contains("source=fixture-marker:network-unreachable"));
 
