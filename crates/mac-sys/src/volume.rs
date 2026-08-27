@@ -7,6 +7,7 @@ use core_foundation::url::CFURL;
 use core_foundation_sys::array::CFArrayRef;
 use core_foundation_sys::base::{CFAllocatorRef, CFGetTypeID, CFRelease, CFTypeRef};
 use core_foundation_sys::dictionary::{CFDictionaryGetValueIfPresent, CFDictionaryRef};
+use core_foundation_sys::error::{CFErrorCopyDescription, CFErrorRef};
 use core_foundation_sys::runloop::{
     kCFRunLoopDefaultMode, CFRunLoopGetCurrent, CFRunLoopRef, CFRunLoopRunInMode, CFRunLoopStop,
     CFRunLoopWakeUp,
@@ -169,7 +170,7 @@ extern "C" {
         url: CFURLRef,
         key: CFStringRef,
         property_value_type_ref_ptr: *mut CFTypeRef,
-        error: *mut core_foundation_sys::error::CFErrorRef,
+        error: *mut CFErrorRef,
     ) -> core_foundation_sys::base::Boolean;
 }
 
@@ -873,26 +874,105 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
         );
     };
     let url = url.as_concrete_TypeRef();
+    let mut errors = Vec::new();
 
+    let is_automounted = copy_resource_bool(
+        url,
+        unsafe { NSURLVolumeIsAutomountedKey },
+        "NSURLVolumeIsAutomountedKey",
+        &mut errors,
+    );
+    let is_browsable = copy_resource_bool(
+        url,
+        unsafe { NSURLVolumeIsBrowsableKey },
+        "NSURLVolumeIsBrowsableKey",
+        &mut errors,
+    );
+    let is_ejectable = copy_resource_bool(
+        url,
+        unsafe { NSURLVolumeIsEjectableKey },
+        "NSURLVolumeIsEjectableKey",
+        &mut errors,
+    );
+    let is_internal = copy_resource_bool(
+        url,
+        unsafe { NSURLVolumeIsInternalKey },
+        "NSURLVolumeIsInternalKey",
+        &mut errors,
+    );
+    let is_local = copy_resource_bool(
+        url,
+        unsafe { NSURLVolumeIsLocalKey },
+        "NSURLVolumeIsLocalKey",
+        &mut errors,
+    );
+    let is_read_only = copy_resource_bool(
+        url,
+        unsafe { NSURLVolumeIsReadOnlyKey },
+        "NSURLVolumeIsReadOnlyKey",
+        &mut errors,
+    );
+    let is_reachable = check_resource_is_reachable(url);
+    let is_removable = copy_resource_bool(
+        url,
+        unsafe { NSURLVolumeIsRemovableKey },
+        "NSURLVolumeIsRemovableKey",
+        &mut errors,
+    );
+    let remount_url = copy_resource_url_string(
+        url,
+        unsafe { NSURLVolumeURLForRemountingKey },
+        "NSURLVolumeURLForRemountingKey",
+        &mut errors,
+    );
+    let supports_case_preserved_names = copy_resource_bool(
+        url,
+        unsafe { NSURLVolumeSupportsCasePreservedNamesKey },
+        "NSURLVolumeSupportsCasePreservedNamesKey",
+        &mut errors,
+    );
+    let supports_case_sensitive_names = copy_resource_bool(
+        url,
+        unsafe { NSURLVolumeSupportsCaseSensitiveNamesKey },
+        "NSURLVolumeSupportsCaseSensitiveNamesKey",
+        &mut errors,
+    );
+    let volume_uuid = copy_resource_string(
+        url,
+        unsafe { NSURLVolumeUUIDStringKey },
+        "NSURLVolumeUUIDStringKey",
+        &mut errors,
+    );
+    let has_values = is_automounted.is_some()
+        || is_browsable.is_some()
+        || is_ejectable.is_some()
+        || is_internal.is_some()
+        || is_local.is_some()
+        || is_read_only.is_some()
+        || is_reachable.is_some()
+        || is_removable.is_some()
+        || remount_url.is_some()
+        || supports_case_preserved_names.is_some()
+        || supports_case_sensitive_names.is_some()
+        || volume_uuid.is_some();
+    let status = volume_resource_status_for_values(has_values, &errors);
+    let reason = (status == NativeVolumeStatus::Unavailable)
+        .then(|| unavailable_volume_resource_values_reason(path, &errors));
     NativeVolumeResourceValues {
-        status: NativeVolumeStatus::Available,
-        is_automounted: copy_resource_bool(url, unsafe { NSURLVolumeIsAutomountedKey }),
-        is_browsable: copy_resource_bool(url, unsafe { NSURLVolumeIsBrowsableKey }),
-        is_ejectable: copy_resource_bool(url, unsafe { NSURLVolumeIsEjectableKey }),
-        is_internal: copy_resource_bool(url, unsafe { NSURLVolumeIsInternalKey }),
-        is_local: copy_resource_bool(url, unsafe { NSURLVolumeIsLocalKey }),
-        is_read_only: copy_resource_bool(url, unsafe { NSURLVolumeIsReadOnlyKey }),
-        is_reachable: check_resource_is_reachable(url),
-        is_removable: copy_resource_bool(url, unsafe { NSURLVolumeIsRemovableKey }),
-        remount_url: copy_resource_url_string(url, unsafe { NSURLVolumeURLForRemountingKey }),
-        supports_case_preserved_names: copy_resource_bool(url, unsafe {
-            NSURLVolumeSupportsCasePreservedNamesKey
-        }),
-        supports_case_sensitive_names: copy_resource_bool(url, unsafe {
-            NSURLVolumeSupportsCaseSensitiveNamesKey
-        }),
-        volume_uuid: copy_resource_string(url, unsafe { NSURLVolumeUUIDStringKey }),
-        reason: None,
+        status,
+        is_automounted,
+        is_browsable,
+        is_ejectable,
+        is_internal,
+        is_local,
+        is_read_only,
+        is_reachable,
+        is_removable,
+        remount_url,
+        supports_case_preserved_names,
+        supports_case_sensitive_names,
+        volume_uuid,
+        reason,
     }
 }
 
@@ -1036,8 +1116,13 @@ fn url_value(
         .and_then(|url| url.to_path())
 }
 
-fn copy_resource_bool(url: CFURLRef, key: CFStringRef) -> Option<bool> {
-    let value = copy_resource_value(url, key)?;
+fn copy_resource_bool(
+    url: CFURLRef,
+    key: CFStringRef,
+    key_name: &'static str,
+    errors: &mut Vec<String>,
+) -> Option<bool> {
+    let value = copy_resource_value(url, key, key_name, errors)?;
     if unsafe { CFGetTypeID(value.as_CFTypeRef()) } != unsafe { CFBooleanGetTypeID() } {
         return None;
     }
@@ -1045,15 +1130,25 @@ fn copy_resource_bool(url: CFURLRef, key: CFStringRef) -> Option<bool> {
     Some(typed.into())
 }
 
-fn copy_resource_string(url: CFURLRef, key: CFStringRef) -> Option<String> {
-    copy_resource_value(url, key)?
+fn copy_resource_string(
+    url: CFURLRef,
+    key: CFStringRef,
+    key_name: &'static str,
+    errors: &mut Vec<String>,
+) -> Option<String> {
+    copy_resource_value(url, key, key_name, errors)?
         .downcast::<CFString>()
         .map(|value| value.to_string())
         .filter(|value| !value.is_empty())
 }
 
-fn copy_resource_url_string(url: CFURLRef, key: CFStringRef) -> Option<String> {
-    copy_resource_value(url, key)?
+fn copy_resource_url_string(
+    url: CFURLRef,
+    key: CFStringRef,
+    key_name: &'static str,
+    errors: &mut Vec<String>,
+) -> Option<String> {
+    copy_resource_value(url, key, key_name, errors)?
         .downcast::<CFURL>()
         .map(|url| url.get_string().to_string())
         .filter(|value| !value.is_empty())
@@ -1071,13 +1166,52 @@ fn check_resource_is_reachable(url: CFURLRef) -> Option<bool> {
     Some(unsafe { send(url, selector, &mut error) })
 }
 
-fn copy_resource_value(url: CFURLRef, key: CFStringRef) -> Option<CFType> {
+fn copy_resource_value(
+    url: CFURLRef,
+    key: CFStringRef,
+    key_name: &'static str,
+    errors: &mut Vec<String>,
+) -> Option<CFType> {
     let mut value: CFTypeRef = ptr::null();
-    let copied = unsafe { CFURLCopyResourcePropertyForKey(url, key, &mut value, ptr::null_mut()) };
+    let mut error: CFErrorRef = ptr::null_mut();
+    let copied = unsafe { CFURLCopyResourcePropertyForKey(url, key, &mut value, &mut error) };
     if copied == 0 || value.is_null() {
+        if !error.is_null() {
+            let description = unsafe { CFErrorCopyDescription(error) };
+            let description = if description.is_null() {
+                "resource value unavailable".to_string()
+            } else {
+                unsafe { CFString::wrap_under_create_rule(description) }.to_string()
+            };
+            unsafe {
+                CFRelease(error as CFTypeRef);
+            }
+            errors.push(format!("{}={}", key_name, description));
+        }
         None
     } else {
         Some(unsafe { CFType::wrap_under_create_rule(value) })
+    }
+}
+
+fn unavailable_volume_resource_values_reason(path: &Path, errors: &[String]) -> String {
+    let details = if errors.is_empty() {
+        "no resource values returned".to_string()
+    } else {
+        errors.join("; ")
+    };
+    format!(
+        "native volume URL resource values unavailable for {}: {}",
+        path.display(),
+        details
+    )
+}
+
+fn volume_resource_status_for_values(has_values: bool, errors: &[String]) -> NativeVolumeStatus {
+    if !has_values && !errors.is_empty() {
+        NativeVolumeStatus::Unavailable
+    } else {
+        NativeVolumeStatus::Available
     }
 }
 
@@ -1242,6 +1376,24 @@ mod tests {
         assert!(values.is_local.is_some() || values.is_read_only.is_some());
         assert_eq!(values.is_reachable, Some(true));
         assert!(values.is_browsable.is_some() || values.volume_uuid.is_some());
+    }
+
+    #[test]
+    fn volume_resource_status_reports_unavailable_only_when_all_values_fail() {
+        let errors = vec!["NSURLVolumeIsLocalKey=Operation not permitted".to_string()];
+
+        assert_eq!(
+            volume_resource_status_for_values(false, &errors),
+            NativeVolumeStatus::Unavailable
+        );
+        assert_eq!(
+            volume_resource_status_for_values(true, &errors),
+            NativeVolumeStatus::Available
+        );
+        assert_eq!(
+            unavailable_volume_resource_values_reason(Path::new("/Volumes/Remote"), &errors),
+            "native volume URL resource values unavailable for /Volumes/Remote: NSURLVolumeIsLocalKey=Operation not permitted"
+        );
     }
 
     #[test]
