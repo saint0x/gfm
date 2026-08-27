@@ -470,6 +470,20 @@ fn operation_conflict_contract(report: &OperationConflictReport) -> OperationCon
     ))
 }
 
+fn runtime_operation_conflict_contract(
+    conflict: &crate::runtime::RuntimeOperationConflict,
+) -> OperationConflictContract {
+    OperationConflictContract::from_input(OperationConflictInput::new(
+        conflict.operation.clone(),
+        conflict.target.clone(),
+        conflict.target_kind.clone(),
+        conflict.selected_policy.clone(),
+        conflict.available_policies.clone(),
+        conflict.blocks_operation,
+        conflict.reason.clone(),
+    ))
+}
+
 fn native_sidebar_volumes() -> Vec<SidebarVolumeSpec> {
     VolumeDiscoveryReport::discover()
         .volumes
@@ -500,6 +514,15 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
             .map(operation_progress_contract)
             .collect();
         spec = spec.with_progress_surfaces(progress_surfaces);
+    }
+    if let Some(store) = crate::runtime::runtime_operation_conflict_store() {
+        let conflicts = store
+            .read()?
+            .iter()
+            .filter(|conflict| conflict.blocks_operation)
+            .map(runtime_operation_conflict_contract)
+            .collect();
+        spec = spec.with_operation_conflicts(conflicts);
     }
     let refresh = crate::permission_refresh::refresh_permission_state(
         crate::permission_refresh::PermissionRefreshAudience::Ui,

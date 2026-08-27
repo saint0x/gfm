@@ -2504,6 +2504,76 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-conflict-source.txt",
+      "data": "source\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-conflict-target.txt",
+      "data": "target\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-conflict-source-dir/child.txt",
+      "data": "source child\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-conflict-target-dir/child.txt",
+      "data": "target child\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-operation-conflict-contract",
+        "copy",
+        "tmp/gfm-fozzy-operation-conflict-source.txt",
+        "tmp/gfm-fozzy-operation-conflict-target.txt"
+      ],
+      "exit_code": 0,
+      "stdout": "dialog\tsurface=conflict\tpresentation=window-sheet\ttitle=An item with the same name already exists\tmessage=Finder-compatible conflict sheet for replace, keep both, merge, stop, skip, and apply-to-all decisions.\ticon=system-alert\tblocks-parent=true\tescape-cancels=true\nfield\tapply-to-all\tApply to All\tcheckbox\trequired=false\tenabled=true\nbutton\treplace\tReplace\tdestructive\tenabled=true\nbutton\tkeep-both\tKeep Both\tdefault\tenabled=true\nbutton\tmerge\tMerge\talternate\tenabled=false\nbutton\tskip\tSkip\talternate\tenabled=true\nbutton\tstop\tStop\tcancel\tenabled=true\noperation-conflict-ui\toperation=copy\ttarget=tmp/gfm-fozzy-operation-conflict-target.txt\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-operation-conflict-contract",
+        "copy",
+        "tmp/gfm-fozzy-operation-conflict-source.txt",
+        "tmp/gfm-fozzy-operation-conflict-target.txt"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-operation-conflict-contract",
+        "move",
+        "tmp/gfm-fozzy-operation-conflict-source-dir",
+        "tmp/gfm-fozzy-operation-conflict-target-dir"
+      ],
+      "exit_code": 0,
+      "stdout": "dialog\tsurface=conflict\tpresentation=window-sheet\ttitle=An item with the same name already exists\tmessage=Finder-compatible conflict sheet for replace, keep both, merge, stop, skip, and apply-to-all decisions.\ticon=system-alert\tblocks-parent=true\tescape-cancels=true\nfield\tapply-to-all\tApply to All\tcheckbox\trequired=false\tenabled=true\nbutton\treplace\tReplace\tdestructive\tenabled=true\nbutton\tkeep-both\tKeep Both\tdefault\tenabled=true\nbutton\tmerge\tMerge\talternate\tenabled=true\nbutton\tskip\tSkip\talternate\tenabled=true\nbutton\tstop\tStop\tcancel\tenabled=true\noperation-conflict-ui\toperation=move\ttarget=tmp/gfm-fozzy-operation-conflict-target-dir\tkind=directory\tpolicy=fail\tavailable=replace,keep-both,merge,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-operation-conflict-contract",
+        "move",
+        "tmp/gfm-fozzy-operation-conflict-source-dir",
+        "tmp/gfm-fozzy-operation-conflict-target-dir"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

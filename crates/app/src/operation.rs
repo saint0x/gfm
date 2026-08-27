@@ -1,7 +1,7 @@
 use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
 use crate::runtime::{
     default_journal_path, default_security_bookmarks_path, default_trash_metadata_path,
-    run_volume_task,
+    run_volume_task, runtime_operation_conflict_store,
 };
 use crate::{detect_volume_id, parent_volume, required_path};
 use gfm_jobs::Priority;
@@ -11,8 +11,8 @@ use gfm_mac::{
 };
 use gfm_ops::{
     read_trash_metadata, ConflictPolicy, Operation, OperationAccessDecision, OperationAccessGate,
-    OperationAccessRole, OperationContext, OperationRecoveryPolicy, OperationVolumeClass,
-    OperationVolumeCopyPolicy, Operator,
+    OperationAccessRole, OperationConflictReport, OperationContext, OperationRecoveryPolicy,
+    OperationVolumeClass, OperationVolumeCopyPolicy, Operator,
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::path::{Path, PathBuf};
@@ -173,6 +173,12 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     let volume_report = VolumeDiscoveryReport::discover();
     let label = operation_kind(&operation);
     let _ = refresh_permission_state(PermissionRefreshAudience::Operations, label)?;
+    let conflict_report = OperationConflictReport::evaluate(&operation, conflict);
+    if conflict_report.blocks_operation {
+        if let Some(store) = runtime_operation_conflict_store() {
+            store.append(&conflict_report)?;
+        }
+    }
     let access_gate = operation_access_gate(&operation, &volume_report);
     let volume_copy_policy = operation_volume_copy_policy_from_report(&operation, &volume_report);
     let volume = operation_volume(&operation);

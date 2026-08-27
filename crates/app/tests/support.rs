@@ -292,6 +292,79 @@ fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
 }
 
 #[test]
+fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-lifecycle-operation-conflict-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let source = root.join("source.txt");
+    let target = root.join("target.txt");
+    let conflicts = root.join("operation-conflicts.tsv");
+    let journal = root.join("ops.journal");
+    std::fs::write(&source, "new").unwrap();
+    std::fs::write(&target, "old").unwrap();
+
+    let failed_copy = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPERATION_CONFLICT_STORE", &conflicts)
+        .env("GFM_OPS_JOURNAL", &journal)
+        .arg("copy")
+        .arg(&source)
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        !failed_copy.status.success(),
+        "{}",
+        String::from_utf8_lossy(&failed_copy.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&failed_copy.stderr).contains("destination already exists"),
+        "{}",
+        String::from_utf8_lossy(&failed_copy.stderr)
+    );
+    assert!(conflicts.is_file());
+    let conflict_store = std::fs::read_to_string(&conflicts).unwrap();
+    assert!(
+        conflict_store.contains(
+            "\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\t"
+        ),
+        "{conflict_store}"
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPERATION_CONFLICT_STORE", &conflicts)
+        .args(["ui-contract", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("window\tGFM\t"), "{stdout}");
+    assert!(
+        stdout.contains("\noperation-conflict-ui\toperation=copy\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\t"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("button\tmerge\tMerge\talternate\tenabled=false"),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_progress_dialog_pause_resume_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-dialog-contract", "progress", "paused", "true"])

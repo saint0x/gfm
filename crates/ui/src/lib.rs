@@ -92,6 +92,7 @@ pub struct AppLaunchSpec {
     pub tabbing_identifier: String,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
     pub progress_surfaces: Vec<OperationProgressContract>,
+    pub operation_conflicts: Vec<OperationConflictContract>,
     pub permission_dialog: Option<DialogContract>,
     pub permission_refresh: Option<PermissionRefreshContract>,
 }
@@ -186,6 +187,18 @@ impl AppLaunchSpec {
                 )));
             }
         }
+        for conflict in &self.operation_conflicts {
+            if conflict.dialog.surface != DialogSurface::Conflict {
+                return Err(GfmError::Format(
+                    "native app operation conflict must use the conflict surface".to_string(),
+                ));
+            }
+            if conflict.dialog.presentation != DialogPresentation::WindowSheet {
+                return Err(GfmError::Format(
+                    "native app operation conflict must be a window sheet".to_string(),
+                ));
+            }
+        }
         if let Some(dialog) = &self.permission_dialog {
             if dialog.surface != DialogSurface::Permission {
                 return Err(GfmError::Format(
@@ -217,6 +230,11 @@ impl AppLaunchSpec {
         self
     }
 
+    pub fn with_operation_conflicts(mut self, conflicts: Vec<OperationConflictContract>) -> Self {
+        self.operation_conflicts = conflicts;
+        self
+    }
+
     pub fn with_permission_refresh(mut self, refresh: PermissionRefreshContract) -> Self {
         self.permission_refresh = Some(refresh);
         self
@@ -237,6 +255,7 @@ impl Default for AppLaunchSpec {
             tabbing_identifier: "gfm-main-window".to_string(),
             sidebar_volumes: Vec::new(),
             progress_surfaces: Vec::new(),
+            operation_conflicts: Vec::new(),
             permission_dialog: None,
             permission_refresh: None,
         }
@@ -256,6 +275,7 @@ pub struct WindowLifecycleContract {
     pub tabbing_identifier: String,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
     pub progress_surfaces: Vec<OperationProgressContract>,
+    pub operation_conflicts: Vec<OperationConflictContract>,
     pub permission_dialog: Option<DialogSurface>,
     pub permission_refresh: Option<PermissionRefreshContract>,
 }
@@ -275,6 +295,7 @@ impl WindowLifecycleContract {
             tabbing_identifier: spec.tabbing_identifier.clone(),
             sidebar_volumes: spec.sidebar_volumes.clone(),
             progress_surfaces: spec.progress_surfaces.clone(),
+            operation_conflicts: spec.operation_conflicts.clone(),
             permission_dialog: spec.permission_dialog.as_ref().map(|dialog| dialog.surface),
             permission_refresh: spec.permission_refresh.clone(),
         })
@@ -300,6 +321,11 @@ impl WindowLifecycleContract {
             self.progress_surfaces
                 .iter()
                 .map(|progress| progress.as_tsv()),
+        );
+        lines.extend(
+            self.operation_conflicts
+                .iter()
+                .map(|conflict| conflict.as_tsv()),
         );
         if let Some(refresh) = &self.permission_refresh {
             lines.push(refresh.as_tsv());
@@ -341,6 +367,7 @@ fn open_main_window(
             ),
             icon_view: IconViewContract::from_records(&[], IconViewOptions::default()),
             progress_surfaces: spec.progress_surfaces,
+            operation_conflicts: spec.operation_conflicts,
             permission_dialog: spec.permission_dialog,
             permission_refresh: spec.permission_refresh,
             initial_path: spec.initial_path,
@@ -408,6 +435,7 @@ struct RootView {
     sidebar: SidebarContract,
     icon_view: IconViewContract,
     progress_surfaces: Vec<OperationProgressContract>,
+    operation_conflicts: Vec<OperationConflictContract>,
     permission_dialog: Option<DialogContract>,
     permission_refresh: Option<PermissionRefreshContract>,
     initial_path: PathBuf,
@@ -443,6 +471,11 @@ impl Render for RootView {
             root = root
                 .child(dialog::render(&progress.dialog))
                 .child(div().invisible().child(progress.as_tsv()));
+        }
+        for conflict in &self.operation_conflicts {
+            root = root
+                .child(dialog::render(&conflict.dialog))
+                .child(div().invisible().child(conflict.as_tsv()));
         }
         if let Some(refresh) = &self.permission_refresh {
             root = root.child(
@@ -558,6 +591,34 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\noperation-progress-command\tpause\tjob=7\tenabled=true"));
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_operation_conflict_surfaces() {
+        let conflict = OperationConflictContract::from_input(OperationConflictInput::new(
+            "copy",
+            "/tmp/target",
+            "file",
+            "fail",
+            vec![
+                "replace".to_string(),
+                "keep-both".to_string(),
+                "skip".to_string(),
+            ],
+            true,
+            "destination-conflict-requires-user-resolution",
+        ));
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_operation_conflicts(vec![conflict]);
+
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert_eq!(contract.operation_conflicts.len(), 1);
+        assert!(contract
+            .as_tsv()
+            .contains("\noperation-conflict-ui\toperation=copy\ttarget=/tmp/target\tkind=file\t"));
+        assert!(contract
+            .as_tsv()
+            .contains("button\tmerge\tMerge\talternate\tenabled=false"));
     }
 
     #[test]

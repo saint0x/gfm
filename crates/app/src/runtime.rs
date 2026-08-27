@@ -4,9 +4,12 @@ use gfm_jobs::{
     RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, Task, TaskStatus,
     VolumeConcurrencyPolicy, WorkerPool,
 };
+use gfm_ops::OperationConflictReport;
 use gfm_types::{GfmError, Result, VolumeId};
 use std::env;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -358,6 +361,57 @@ pub(crate) fn default_permission_state_path() -> PathBuf {
         .unwrap_or_else(|| env::temp_dir().join("gfm-permission-state.tsv"))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeOperationConflict {
+    pub(crate) operation: String,
+    pub(crate) target: String,
+    pub(crate) target_kind: String,
+    pub(crate) selected_policy: String,
+    pub(crate) available_policies: Vec<String>,
+    pub(crate) blocks_operation: bool,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct OperationConflictStore {
+    path: PathBuf,
+}
+
+impl OperationConflictStore {
+    pub(crate) fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub(crate) fn append(&self, report: &OperationConflictReport) -> Result<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .map_err(|err| GfmError::io(&self.path, err))?;
+        writeln!(file, "{}", report.as_tsv()).map_err(|err| GfmError::io(&self.path, err))
+    }
+
+    pub(crate) fn read(&self) -> Result<Vec<RuntimeOperationConflict>> {
+        let text = match fs::read_to_string(&self.path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(GfmError::io(&self.path, err)),
+        };
+        text.lines()
+            .enumerate()
+            .filter(|(_, line)| !line.trim().is_empty())
+            .map(|(line_index, line)| parse_operation_conflict_line(&self.path, line_index, line))
+            .collect()
+    }
+}
+
+pub(crate) fn runtime_operation_conflict_store() -> Option<OperationConflictStore> {
+    env::var_os("GFM_OPERATION_CONFLICT_STORE").map(OperationConflictStore::new)
+}
+
 fn runtime_payload_catalog() -> Option<JobPayloadCatalog> {
     env::var_os("GFM_JOB_PAYLOAD_CATALOG").map(JobPayloadCatalog::new)
 }
@@ -390,6 +444,59 @@ fn label_slug(label: &str) -> String {
     } else {
         slug.to_string()
     }
+}
+
+fn parse_operation_conflict_line(
+    path: &Path,
+    line_index: usize,
+    line: &str,
+) -> Result<RuntimeOperationConflict> {
+    let mut fields = line.split('\t');
+    if fields.next() != Some("operation-conflict") {
+        return Err(GfmError::Format(format!(
+            "{}:{} expected operation-conflict record",
+            path.display(),
+            line_index + 1
+        )));
+    }
+    let pairs = fields
+        .filter_map(|field| field.split_once('='))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let value = |key: &str| -> Result<String> {
+        pairs
+            .get(key)
+            .map(|value| (*value).to_string())
+            .ok_or_else(|| {
+                GfmError::Format(format!(
+                    "{}:{} missing operation-conflict `{key}` field",
+                    path.display(),
+                    line_index + 1
+                ))
+            })
+    };
+    Ok(RuntimeOperationConflict {
+        operation: value("operation")?,
+        target: value("target")?,
+        target_kind: value("kind")?,
+        selected_policy: value("policy")?,
+        available_policies: value("available")?
+            .split(',')
+            .filter(|policy| !policy.is_empty())
+            .map(str::to_string)
+            .collect(),
+        blocks_operation: match value("blocks-operation")?.as_str() {
+            "true" => true,
+            "false" => false,
+            other => {
+                return Err(GfmError::Format(format!(
+                    "{}:{} invalid operation-conflict blocks-operation `{other}`",
+                    path.display(),
+                    line_index + 1
+                )));
+            }
+        },
+        reason: value("reason")?,
+    })
 }
 
 fn payload_kind_for_label(label: &str) -> JobPayloadKind {
