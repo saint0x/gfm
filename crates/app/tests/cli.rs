@@ -9431,8 +9431,8 @@ fn volume_producers_persist_runtime_payload_and_progress_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("security-scope\t"), "{stderr}");
-    assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert!(!stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert!(!stderr.contains(&image.display().to_string()), "{stderr}");
 
     let catalog_text = fs::read_to_string(&catalog).unwrap();
     assert!(catalog_text.contains("\tthumbnail\t"), "{catalog_text}");
@@ -9599,8 +9599,8 @@ fn deferred_adaptive_thumbnail_persists_runtime_payload_and_progress_from_binary
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("security-scope\t"), "{stderr}");
-    assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert!(!stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert!(!stderr.contains(&image.display().to_string()), "{stderr}");
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
@@ -9622,6 +9622,60 @@ fn deferred_adaptive_thumbnail_persists_runtime_payload_and_progress_from_binary
         progress_text.contains("progress\t1\tbackground\tbackground\tthumbnail generation"),
         "{progress_text}"
     );
+    assert!(
+        progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
+        "{progress_text}"
+    );
+
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn deferred_adaptive_thumbnail_does_not_touch_unreachable_target_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-deferred-thumbnail-unreachable-root");
+    let image = root.join("Deferred.png");
+    let catalog = unique_temp_path("gfm-cli-runtime-deferred-thumbnail-unreachable", "gfmjobs");
+    let progress = unique_temp_path(
+        "gfm-cli-runtime-deferred-thumbnail-unreachable",
+        "gfmprogress",
+    );
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&image, b"\x89PNG\r\n\x1a\ndeferred thumbnail").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "thumbnail-generation-adaptive",
+            image.to_str().unwrap(),
+            "saturated",
+            "critical",
+            "low",
+            "active",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert!(!stderr.contains(&image.display().to_string()), "{stderr}");
+    assert!(
+        !stderr.contains("volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        "thumbnail-generation\tstatus=deferred\taction=Defer\tdeferred=true\n"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
     assert!(
         progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
         "{progress_text}"

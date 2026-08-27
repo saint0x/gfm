@@ -1829,11 +1829,14 @@ fn adaptive_thumbnail_generation_defers_under_saturated_pressure_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert_eq!(
         stdout,
         "thumbnail-generation\tstatus=deferred\taction=Defer\tdeferred=true\n"
     );
+    assert!(!stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert!(!stderr.contains(&path.display().to_string()), "{stderr}");
 
     let _ = std::fs::remove_file(path);
 }

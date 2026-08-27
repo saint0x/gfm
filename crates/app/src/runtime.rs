@@ -117,7 +117,31 @@ pub(crate) fn run_scheduled_volume_task_cancellable<T>(
 where
     T: Send + 'static,
 {
+    run_scheduled_volume_task_cancellable_with_volume(
+        priority,
+        label,
+        pressure,
+        || Ok(volume),
+        work,
+    )
+}
+
+pub(crate) fn run_scheduled_volume_task_cancellable_with_volume<T>(
+    priority: Priority,
+    label: &'static str,
+    pressure: SchedulingPressure,
+    volume: impl FnOnce() -> Result<Option<VolumeId>>,
+    work: impl Fn(Cancellation) -> Result<T> + Send + Sync + 'static,
+) -> Result<ScheduledTaskOutcome<T>>
+where
+    T: Send + 'static,
+{
     let scheduling = pressure.decide(priority, 1, 1);
+    let volume = if scheduling.action == SchedulingAction::Defer {
+        None
+    } else {
+        volume()?
+    };
     let mut scheduler = Scheduler::new();
     let job = if let Some(volume) = volume {
         scheduler.schedule_on_volume(priority, label, volume)

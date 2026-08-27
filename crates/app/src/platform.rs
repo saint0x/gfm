@@ -1,7 +1,8 @@
 use crate::access::{preflight_access_scope, ScopedAccessGuard};
 use crate::{
     detect_volume_id, index_volume_descriptor, parse_required_scheduling_pressure,
-    run_preview_contract_adaptive, run_preview_contract_cancellable, runtime::RuntimeJobHandle,
+    run_preview_contract_adaptive, run_preview_contract_adaptive_with_volume,
+    run_preview_contract_cancellable, runtime::RuntimeJobHandle,
 };
 use gfm_fs::record_for_path;
 use gfm_index::{
@@ -820,22 +821,29 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "thumbnail-generation-adaptive" => {
             let path = required_path(args.next(), "thumbnail-generation-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(args, "thumbnail generation")?;
-            let _access = preflight_access_scope(
-                &path,
-                AccessIntent::Preview,
-                "adaptive thumbnail generation",
-            )?;
-            let record = record_for_path(&path, None, false)?;
-            let rect = Rect::new(0, 0, 160, 160);
-            let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
-            let volume = detect_volume_id(&path).ok();
-            let outcome = run_preview_contract_adaptive(
-                volume,
+            let volume_path = path.clone();
+            let outcome = run_preview_contract_adaptive_with_volume(
                 Priority::Background,
                 "thumbnail generation",
                 pressure,
+                move || {
+                    let _access = preflight_access_scope(
+                        &volume_path,
+                        AccessIntent::Preview,
+                        "adaptive thumbnail generation volume",
+                    )?;
+                    Ok(detect_volume_id(&volume_path).ok())
+                },
                 move |cancellation| {
                     cancellation.check()?;
+                    let _access = preflight_access_scope(
+                        &path,
+                        AccessIntent::Preview,
+                        "adaptive thumbnail generation",
+                    )?;
+                    let record = record_for_path(&path, None, false)?;
+                    let rect = Rect::new(0, 0, 160, 160);
+                    let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
                     let cloud = FileProviderStateReport::read_path(&path)?.materialization;
                     let input = ThumbnailGenerationInput::new(
                         PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),

@@ -492,6 +492,21 @@ where
     runtime::run_scheduled_volume_task_cancellable(volume, priority, label, pressure, build)
 }
 
+pub(crate) fn run_preview_contract_adaptive_with_volume<T>(
+    priority: Priority,
+    label: &'static str,
+    pressure: SchedulingPressure,
+    volume: impl FnOnce() -> Result<Option<VolumeId>>,
+    build: impl Fn(gfm_jobs::Cancellation) -> Result<T> + Send + Sync + 'static,
+) -> Result<runtime::ScheduledTaskOutcome<T>>
+where
+    T: Send + 'static,
+{
+    runtime::run_scheduled_volume_task_cancellable_with_volume(
+        priority, label, pressure, volume, build,
+    )
+}
+
 pub(crate) fn detect_volume_id(path: &Path) -> Result<VolumeId> {
     volume_id_from_metadata(&std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?)
 }
