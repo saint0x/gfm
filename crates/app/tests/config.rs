@@ -18,13 +18,7 @@ fn creates_checks_and_dumps_config_from_binary() {
         String::from_utf8_lossy(&init_output.stderr)
     );
     let init_stderr = String::from_utf8_lossy(&init_output.stderr);
-    assert!(
-        init_stderr.contains(&format!(
-            "security-worker-admission\tworker=config init\tpath={}",
-            root.display()
-        )),
-        "{init_stderr}"
-    );
+    assert_worker_admitted(&init_stderr, "config init", &root);
     let init_stdout = String::from_utf8(init_output.stdout).unwrap();
     assert!(init_stdout.contains("3\t"), "{init_stdout}");
     assert!(config.exists());
@@ -39,13 +33,7 @@ fn creates_checks_and_dumps_config_from_binary() {
         String::from_utf8_lossy(&check_output.stderr)
     );
     let check_stderr = String::from_utf8_lossy(&check_output.stderr);
-    assert!(
-        check_stderr.contains(&format!(
-            "security-worker-admission\tworker=config check\tpath={}",
-            config.display()
-        )),
-        "{check_stderr}"
-    );
+    assert_worker_admitted(&check_stderr, "config check", &config);
 
     let dump_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["config-dump", config.to_str().unwrap()])
@@ -57,13 +45,7 @@ fn creates_checks_and_dumps_config_from_binary() {
         String::from_utf8_lossy(&dump_output.stderr)
     );
     let dump_stderr = String::from_utf8_lossy(&dump_output.stderr);
-    assert!(
-        dump_stderr.contains(&format!(
-            "security-worker-admission\tworker=config dump\tpath={}",
-            config.display()
-        )),
-        "{dump_stderr}"
-    );
+    assert_worker_admitted(&dump_stderr, "config dump", &config);
     let dump_stdout = String::from_utf8(dump_output.stdout).unwrap();
     assert!(dump_stdout.contains("schema_version = 3"), "{dump_stdout}");
     assert!(
