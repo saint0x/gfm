@@ -334,6 +334,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 required_path(args.next(), "search-index-sidecars requires a content path")?;
             let query =
                 required_string(args.next(), "search-index-sidecars requires a query string")?;
+            let sidecars = SidecarIndexAccessPaths {
+                records: &records,
+                columns: &columns,
+                metadata: &metadata,
+                prefixes: &prefixes,
+                substrings: &substrings,
+                fuzzy: &fuzzy,
+                content: &content,
+            };
+            let _access = preflight_sidecar_index_search_access(sidecars, "sidecar search")?;
             let session = SidecarIndexQuerySession::open(
                 records, columns, metadata, prefixes, substrings, fuzzy, content,
             )?;
@@ -398,6 +408,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-index-sidecars-session requires a query string",
             )?;
+            let sidecars = SidecarIndexAccessPaths {
+                records: &records,
+                columns: &columns,
+                metadata: &metadata,
+                prefixes: &prefixes,
+                substrings: &substrings,
+                fuzzy: &fuzzy,
+                content: &content,
+            };
+            let _access = preflight_sidecar_index_search_access(sidecars, "sidecar session")?;
             let session = SidecarIndexQuerySession::open(
                 records, columns, metadata, prefixes, substrings, fuzzy, content,
             )?;
@@ -471,6 +491,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-index-sidecars-budget requires a query string",
             )?;
+            let sidecars = SidecarIndexAccessPaths {
+                records: &records,
+                columns: &columns,
+                metadata: &metadata,
+                prefixes: &prefixes,
+                substrings: &substrings,
+                fuzzy: &fuzzy,
+                content: &content,
+            };
+            let _access = preflight_sidecar_index_search_access(sidecars, "sidecar budget")?;
             let session = SidecarIndexQuerySession::open(
                 records, columns, metadata, prefixes, substrings, fuzzy, content,
             )?;
@@ -575,6 +605,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-index-sidecars-volume-scope requires a query string",
             )?;
+            let sidecars = SidecarIndexAccessPaths {
+                records: &records,
+                columns: &columns,
+                metadata: &metadata,
+                prefixes: &prefixes,
+                substrings: &substrings,
+                fuzzy: &fuzzy,
+                content: &content,
+            };
+            let _access = preflight_sidecar_index_search_access(sidecars, "sidecar volume scope")?;
             let session = SidecarIndexQuerySession::open(
                 records, columns, metadata, prefixes, substrings, fuzzy, content,
             )?;
@@ -822,6 +862,55 @@ fn preflight_content_index_set_search_access(
         &content_worker,
     )?);
     Ok(guards)
+}
+
+struct SidecarIndexAccessPaths<'a> {
+    records: &'a Path,
+    columns: &'a Path,
+    metadata: &'a Path,
+    prefixes: &'a Path,
+    substrings: &'a Path,
+    fuzzy: &'a Path,
+    content: &'a Path,
+}
+
+fn preflight_sidecar_index_search_access(
+    paths: SidecarIndexAccessPaths<'_>,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(
+            paths.records,
+            AccessIntent::Read,
+            &format!("{worker} records"),
+        )?,
+        preflight_access_scope(
+            paths.columns,
+            AccessIntent::Read,
+            &format!("{worker} columns"),
+        )?,
+        preflight_access_scope(
+            paths.metadata,
+            AccessIntent::Read,
+            &format!("{worker} metadata"),
+        )?,
+        preflight_access_scope(
+            paths.prefixes,
+            AccessIntent::Read,
+            &format!("{worker} prefixes"),
+        )?,
+        preflight_access_scope(
+            paths.substrings,
+            AccessIntent::Read,
+            &format!("{worker} substrings"),
+        )?,
+        preflight_access_scope(paths.fuzzy, AccessIntent::Read, &format!("{worker} fuzzy"))?,
+        preflight_access_scope(
+            paths.content,
+            AccessIntent::Read,
+            &format!("{worker} content"),
+        )?,
+    ])
 }
 
 fn preflight_content_archives_access(

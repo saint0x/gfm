@@ -2892,6 +2892,59 @@ fn searches_persisted_tags_from_binary() {
 }
 
 #[test]
+fn search_index_sidecars_refuses_unreachable_content_before_open_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-sidecar-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = root.join("records.gfmidx");
+    let columns = root.join("columns.gfmcols");
+    let metadata = root.join("metadata.gfmmeta");
+    let prefixes = root.join("prefixes.gfmprefix");
+    let substrings = root.join("substrings.gfmsubstr");
+    let fuzzy = root.join("fuzzy.gfmfuzzy");
+    let content = offline.join("content.gfmcontent");
+    for path in [
+        &records,
+        &columns,
+        &metadata,
+        &prefixes,
+        &substrings,
+        &fuzzy,
+    ] {
+        fs::write(path, "not opened").unwrap();
+    }
+    fs::write(&content, "not opened").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-index-sidecars",
+            records.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+            substrings.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "needle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("hit\t"), "{stdout}");
+    assert!(
+        stderr.contains("sidecar search content volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("invalid magic"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn recovers_missing_and_corrupt_sidecars_from_binary() {
     let root = unique_temp_dir("gfm-cli-sidecar-recovery-root");
     let records = unique_temp_path("gfm-cli-sidecar-recovery", "gfmidx");
