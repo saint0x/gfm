@@ -314,22 +314,17 @@ impl RuntimeJobHandle {
             self.snapshot
                 .clone()
                 .with_progress(state, completed_units, detail, job_timestamp_ms());
-        {
-            let last = self
-                .last_progress
-                .lock()
-                .expect("runtime job progress lock poisoned");
-            if progress_semantics_equal(&last, &snapshot) {
-                return Ok(());
-            }
+        let mut last = self
+            .last_progress
+            .lock()
+            .expect("runtime job progress lock poisoned");
+        if progress_semantics_equal(&last, &snapshot) {
+            return Ok(());
         }
 
         let _access = preflight_runtime_write(store.path(), &self.snapshot.label)?;
         store.upsert(snapshot.clone())?;
-        *self
-            .last_progress
-            .lock()
-            .expect("runtime job progress lock poisoned") = snapshot;
+        *last = snapshot;
         Ok(())
     }
 }
