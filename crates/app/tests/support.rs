@@ -8,6 +8,16 @@ fn preview_security_scope_count(stderr: &str) -> usize {
         .count()
 }
 
+fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker={worker}\tpath={}",
+            path.display()
+        )),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn reports_ui_lifecycle_contract_from_binary() {
     let root =
@@ -285,7 +295,7 @@ fn permission_access_contract_refuses_unreachable_volume_from_binary() {
 }
 
 #[test]
-fn permission_access_contract_prefers_native_volume_access_over_marker_from_binary() {
+fn permission_access_contract_honors_read_only_volume_marker_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-permission-access-native-volume-{}",
         std::process::id()
@@ -324,9 +334,9 @@ fn permission_access_contract_prefers_native_volume_access_over_marker_from_bina
         "{stdout}"
     );
     assert!(stdout.contains("\taccess-action=allow\t"), "{stdout}");
-    assert!(stdout.contains("\tworker-action=start\t"), "{stdout}");
+    assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
     assert!(
-        stdout.contains("\trefresh-on-permission-change=false\tprompt-kind=general\t"),
+        stdout.contains("\trefresh-on-permission-change=true\tprompt-kind=blocked\t"),
         "{stdout}"
     );
     assert!(
@@ -334,7 +344,7 @@ fn permission_access_contract_prefers_native_volume_access_over_marker_from_bina
         "{stdout}"
     );
     assert!(
-        stdout.contains("export worker may start with filesystem access"),
+        stdout.contains("export worker volume access blocked: read-only volume external"),
         "{stdout}"
     );
 
@@ -2024,6 +2034,8 @@ fn reports_quicklook_session_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "quicklook preview", &path);
 
     assert!(stdout.starts_with("quicklook-session\tquick-look\t"));
     assert!(stdout.contains("\tallow-native\tcloud=native-eligible\tnative-preview-controller\t"));
@@ -2057,6 +2069,10 @@ fn quicklook_refuses_unreachable_network_volume_before_preview_from_binary() {
     assert!(!stdout.contains("quicklook-session\t"), "{stdout}");
     assert!(
         stderr.contains("quicklook preview volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=quicklook preview\t"),
         "{stderr}"
     );
 
@@ -2243,6 +2259,8 @@ fn reports_thumbnail_generation_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "thumbnail generation", &path);
 
     assert!(stdout.starts_with("thumbnail-generation\t"));
     assert!(stdout.contains(
@@ -2279,6 +2297,10 @@ fn thumbnail_refuses_unreachable_network_volume_before_generation_from_binary() 
     assert!(!stdout.contains("thumbnail-generation\t"), "{stdout}");
     assert!(
         stderr.contains("thumbnail generation volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=thumbnail generation\t"),
         "{stderr}"
     );
 

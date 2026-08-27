@@ -87,6 +87,55 @@ where
     Ok(result)
 }
 
+pub(crate) fn run_volume_task_cancellable_without_progress<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    label: &'static str,
+    work: impl FnOnce(Cancellation) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    let result_slot = Arc::new(Mutex::new(None));
+    let result_slot_task = Arc::clone(&result_slot);
+    let mut scheduler = Scheduler::new();
+    let job = if let Some(volume) = volume {
+        scheduler.schedule_on_volume(priority, label, volume)
+    } else {
+        scheduler.schedule(priority, label)
+    };
+    let job = drain_single_runtime_job(&mut scheduler, job, label)?;
+    let task = Task::new(job.clone(), move |cancellation| {
+        let result = work(cancellation)?;
+        *result_slot_task
+            .lock()
+            .expect("volume task result lock poisoned") = Some(result);
+        Ok(())
+    });
+    let report = WorkerPool::new(1).run_isolated(vec![task], VolumeConcurrencyPolicy::new(1));
+    let outcome = report
+        .outcomes
+        .iter()
+        .find(|outcome| outcome.id == job.id)
+        .ok_or_else(|| GfmError::Format(format!("{label} job did not run")))?;
+    match &outcome.status {
+        TaskStatus::Completed => {}
+        TaskStatus::Started => {
+            return Err(GfmError::Format(format!("{label} job is still running")))
+        }
+        TaskStatus::Cancelled => return Err(GfmError::Cancelled),
+        TaskStatus::Failed(message) => {
+            return Err(GfmError::Format(format!("{label} job failed: {message}")))
+        }
+    }
+    let result = result_slot
+        .lock()
+        .expect("volume task result lock poisoned")
+        .take()
+        .ok_or_else(|| GfmError::Format(format!("{label} job completed without a result")))?;
+    Ok(result)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ScheduledTaskOutcome<T> {
     pub(crate) result: Option<T>,

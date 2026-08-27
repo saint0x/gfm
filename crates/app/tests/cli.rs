@@ -12841,8 +12841,17 @@ fn volume_producers_persist_runtime_payload_and_progress_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("\tintent=preview\t"), "{stderr}");
-    assert!(!stderr.contains(&image.display().to_string()), "{stderr}");
+    assert!(
+        stderr.contains("\tintent=preview\t") && stderr.contains(&image.display().to_string()),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=thumbnail generation\tpath={}",
+            image.display()
+        )),
+        "{stderr}"
+    );
 
     let catalog_text = fs::read_to_string(&catalog).unwrap();
     assert!(catalog_text.contains("\tthumbnail\t"), "{catalog_text}");

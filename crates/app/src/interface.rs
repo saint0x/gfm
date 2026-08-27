@@ -947,13 +947,24 @@ fn read_directory_with_access(path: &Path, worker: &'static str) -> Result<Direc
 }
 
 fn read_ui_progress_snapshots(path: &Path) -> Result<Vec<JobProgressSnapshot>> {
+    read_ui_progress_snapshots_with(path, JobProgressStore::read)
+}
+
+fn read_ui_restorable_progress_snapshots(path: &Path) -> Result<Vec<JobProgressSnapshot>> {
+    read_ui_progress_snapshots_with(path, JobProgressStore::restorable)
+}
+
+fn read_ui_progress_snapshots_with(
+    path: &Path,
+    read: fn(&JobProgressStore) -> Result<Vec<JobProgressSnapshot>>,
+) -> Result<Vec<JobProgressSnapshot>> {
     const WORKER: &str = "ui progress store";
     crate::access::preflight_volume_access_scope(path, AccessIntent::Read, WORKER)?;
     let volume = crate::detect_volume_id(path)
         .ok()
         .or_else(|| crate::parent_volume(path));
     let path = path.to_path_buf();
-    crate::runtime::run_volume_task_cancellable(
+    crate::runtime::run_volume_task_cancellable_without_progress(
         volume,
         Priority::Visible,
         WORKER,
@@ -961,7 +972,8 @@ fn read_ui_progress_snapshots(path: &Path) -> Result<Vec<JobProgressSnapshot>> {
             cancellation.check()?;
             let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
             cancellation.check()?;
-            JobProgressStore::new(&path).read()
+            let store = JobProgressStore::new(&path);
+            read(&store)
         },
     )
 }
@@ -1122,8 +1134,9 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
         .unwrap_or_default()
         .with_sidebar_volumes(native_sidebar_volumes());
     if let Some(store) = crate::runtime::runtime_progress_store() {
-        let progress_surfaces = read_ui_progress_snapshots(store.path())?
+        let progress_surfaces = read_ui_restorable_progress_snapshots(store.path())?
             .iter()
+            .filter(|snapshot| snapshot.label != "ui progress store")
             .map(operation_progress_contract)
             .collect();
         spec = spec.with_progress_surfaces(progress_surfaces);
