@@ -35,9 +35,12 @@ pub(crate) fn refresh_permission_state(
     audience: PermissionRefreshAudience,
     subject: &str,
 ) -> Result<Option<PermissionStateInvalidationReport>> {
+    let explicit_state_path = std::env::var_os("GFM_PERMISSION_STATE").is_some();
+    if !explicit_state_path && !matches!(audience, PermissionRefreshAudience::Ui) {
+        return Ok(None);
+    }
     let path = default_permission_state_path();
     let report = refresh_permission_state_at_path(&path)?;
-    let explicit_state_path = std::env::var_os("GFM_PERMISSION_STATE").is_some();
     if !explicit_state_path || report.initialized || !audience.selected(&report) {
         return Ok(None);
     }

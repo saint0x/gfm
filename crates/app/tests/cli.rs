@@ -155,6 +155,38 @@ fn index_preflight_refreshes_permission_state_from_binary() {
 }
 
 #[test]
+fn index_preflight_skips_default_permission_snapshot_refresh_from_binary() {
+    let scratch = unique_temp_dir("gfm-cli-permission-worker-no-default-refresh");
+    let root = scratch.join("root");
+    let index = scratch.join("records.gfmidx");
+    let default_state = scratch.join("gfm-permission-state.tsv");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("note.md"), "alpha").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("TMPDIR", &scratch)
+        .env_remove("GFM_PERMISSION_STATE")
+        .args(["index", root.to_str().unwrap(), index.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("permission-refresh\t"), "{stderr}");
+    assert_worker_admitted(&stderr, "index", &root);
+    assert!(
+        !default_state.exists(),
+        "worker preflight should not materialize default permission snapshot at {}",
+        default_state.display()
+    );
+
+    fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
 fn lists_directory_entries_through_visible_worker_from_binary() {
     let root = unique_temp_dir("gfm-cli-list-visible-worker");
     fs::create_dir_all(root.join("Folder")).unwrap();
