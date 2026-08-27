@@ -722,9 +722,11 @@ fn print_usage() {
   gfm icon-preview <path>
   gfm quicklook-session <path>
   gfm quicklook-session-adaptive <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
+  gfm quicklook-session-adaptive-cancel-after-access <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm quicklook-session-cancel <path>
   gfm thumbnail-generation <path>
   gfm thumbnail-generation-adaptive <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
+  gfm thumbnail-generation-adaptive-cancel-after-access <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm thumbnail-generation-cancel <path>
   gfm preview-schedule
   gfm macrobench <workspace> [smoke|standard]

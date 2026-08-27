@@ -793,13 +793,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 })?;
             println!("{}", contract.as_tsv());
         }
-        "quicklook-session-adaptive" => {
-            let path = required_path(args.next(), "quicklook-session-adaptive requires a path")?;
+        "quicklook-session-adaptive" | "quicklook-session-adaptive-cancel-after-access" => {
+            let cancel_after_access = command == "quicklook-session-adaptive-cancel-after-access";
+            let path = required_path(args.next(), &format!("{command} requires a path"))?;
             let pressure = parse_required_scheduling_pressure(args, "quicklook preview")?;
             let rect = Rect::new(0, 0, 640, 480);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
             let volume_path = path.clone();
-            let outcome = run_preview_contract_adaptive_with_volume(
+            let outcome = match run_preview_contract_adaptive_with_volume(
                 Priority::Visible,
                 "quicklook preview",
                 pressure,
@@ -818,8 +819,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         AccessIntent::Preview,
                         "adaptive quicklook preview",
                     )?;
+                    if cancel_after_access {
+                        cancellation.cancel();
+                    }
+                    cancellation.check()?;
                     let record = record_for_path(&path, None, false)?;
+                    cancellation.check()?;
                     let cloud = FileProviderStateReport::read_path(&path)?.materialization;
+                    cancellation.check()?;
                     let input = QuickLookSessionInput::new(
                         PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
                         rect,
@@ -844,7 +851,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         || cancellation.check(),
                     )
                 },
-            )?;
+            ) {
+                Ok(outcome) => outcome,
+                Err(GfmError::Cancelled) if cancel_after_access => {
+                    println!("quicklook-session\tstatus=cancelled\treason=cancelled-after-access");
+                    return Ok(true);
+                }
+                Err(err) => return Err(err),
+            };
             match outcome.result {
                 Some(contract) => println!(
                     "{}\taction={}\tdeferred={}",
@@ -931,11 +945,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!("{}", contract.as_tsv());
         }
-        "thumbnail-generation-adaptive" => {
-            let path = required_path(args.next(), "thumbnail-generation-adaptive requires a path")?;
+        "thumbnail-generation-adaptive" | "thumbnail-generation-adaptive-cancel-after-access" => {
+            let cancel_after_access =
+                command == "thumbnail-generation-adaptive-cancel-after-access";
+            let path = required_path(args.next(), &format!("{command} requires a path"))?;
             let pressure = parse_required_scheduling_pressure(args, "thumbnail generation")?;
             let volume_path = path.clone();
-            let outcome = run_preview_contract_adaptive_with_volume(
+            let outcome = match run_preview_contract_adaptive_with_volume(
                 Priority::Background,
                 "thumbnail generation",
                 pressure,
@@ -954,10 +970,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         AccessIntent::Preview,
                         "adaptive thumbnail generation",
                     )?;
+                    if cancel_after_access {
+                        cancellation.cancel();
+                    }
+                    cancellation.check()?;
                     let record = record_for_path(&path, None, false)?;
+                    cancellation.check()?;
                     let rect = Rect::new(0, 0, 160, 160);
                     let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
                     let cloud = FileProviderStateReport::read_path(&path)?.materialization;
+                    cancellation.check()?;
                     let input = ThumbnailGenerationInput::new(
                         PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
                         rect,
@@ -978,7 +1000,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         || cancellation.check(),
                     )
                 },
-            )?;
+            ) {
+                Ok(outcome) => outcome,
+                Err(GfmError::Cancelled) if cancel_after_access => {
+                    println!(
+                        "thumbnail-generation\tstatus=cancelled\treason=cancelled-after-access"
+                    );
+                    return Ok(true);
+                }
+                Err(err) => return Err(err),
+            };
             match outcome.result {
                 Some(contract) => println!(
                     "{}\taction={}\tdeferred={}",

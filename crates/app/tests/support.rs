@@ -1954,6 +1954,42 @@ fn adaptive_quicklook_session_refuses_unreachable_volume_before_preview_from_bin
 }
 
 #[test]
+fn adaptive_quicklook_session_cancel_after_access_stops_before_record_read_from_binary() {
+    let path = std::env::temp_dir().join(format!(
+        "gfm-quicklook-adaptive-cancel-after-access-{}.pdf",
+        std::process::id()
+    ));
+    std::fs::write(&path, b"%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "quicklook-session-adaptive-cancel-after-access",
+            path.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        stdout,
+        "quicklook-session\tstatus=cancelled\treason=cancelled-after-access\n"
+    );
+    assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn cancelled_quicklook_session_stops_before_planning_from_binary() {
     let path =
         std::env::temp_dir().join(format!("gfm-quicklook-cancel-{}.pdf", std::process::id()));
@@ -2142,6 +2178,42 @@ fn adaptive_thumbnail_generation_throttles_prefetch_on_battery_from_binary() {
         stdout.contains("\taction=Throttle\tdeferred=false\n"),
         "{stdout}"
     );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn adaptive_thumbnail_generation_cancel_after_access_stops_before_record_read_from_binary() {
+    let path = std::env::temp_dir().join(format!(
+        "gfm-thumbnail-adaptive-cancel-after-access-{}.png",
+        std::process::id()
+    ));
+    std::fs::write(&path, b"png").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "thumbnail-generation-adaptive-cancel-after-access",
+            path.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        stdout,
+        "thumbnail-generation\tstatus=cancelled\treason=cancelled-after-access\n"
+    );
+    assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
 
     let _ = std::fs::remove_file(path);
 }

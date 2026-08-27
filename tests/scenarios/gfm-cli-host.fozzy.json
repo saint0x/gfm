@@ -3447,6 +3447,27 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-adaptive-cancel-preview.pdf",
+      "data": "%PDF-1.7\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "quicklook-session-adaptive-cancel-after-access",
+        "tmp/gfm-fozzy-adaptive-cancel-preview.pdf",
+        "nominal",
+        "nominal",
+        "ac",
+        "idle"
+      ],
+      "exit_code": 0,
+      "stdout": "quicklook-session\tstatus=cancelled\treason=cancelled-after-access\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -3455,6 +3476,22 @@
       ],
       "exit_code": 0,
       "stdout": "thumbnail-generation\tstatus=cancelled\treason=cancelled-before-plan\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "thumbnail-generation-adaptive-cancel-after-access",
+        "tmp/gfm-fozzy-runtime-thumbnail.png",
+        "nominal",
+        "nominal",
+        "ac",
+        "idle"
+      ],
+      "exit_code": 0,
+      "stdout": "thumbnail-generation\tstatus=cancelled\treason=cancelled-after-access\n",
       "stderr": "",
       "times": 1
     },
