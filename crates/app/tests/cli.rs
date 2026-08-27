@@ -3320,6 +3320,49 @@ fn searches_persisted_tags_from_binary() {
 }
 
 #[test]
+fn empty_volume_scope_sidecar_search_skips_archive_access_from_binary() {
+    let root = unique_temp_dir("gfm-empty-scope-sidecar-access");
+
+    let records = root.join("missing.records");
+    let columns = root.join("missing.columns");
+    let metadata = root.join("missing.metadata");
+    let prefixes = root.join("missing.prefixes");
+    let substrings = root.join("missing.substrings");
+    let fuzzy = root.join("missing.fuzzy");
+    let content = root.join("missing.content");
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-index-sidecars-volume-scope",
+            records.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+            substrings.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "-",
+            "bodymarker",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.is_empty(), "{stdout}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("sidecar-volume-scope"), "{stderr}");
+    assert!(stderr.contains("\trecords-indexed=0\t"), "{stderr}");
+    assert!(stderr.contains("\tcontent-cache-misses=0\t"), "{stderr}");
+    assert!(stderr.contains("\tfuzzy-lookup-requests=0\t"), "{stderr}");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn direct_search_archives_refuse_unreachable_volume_before_mapping_from_binary() {
     let offline = unique_temp_dir("gfm-cli-direct-search-preflight-offline");
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();

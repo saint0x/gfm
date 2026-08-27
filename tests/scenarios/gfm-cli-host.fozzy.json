@@ -1574,6 +1574,24 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "search-index-sidecars-volume-scope",
+        "tmp/gfm-fozzy-missing.records",
+        "tmp/gfm-fozzy-missing.columns",
+        "tmp/gfm-fozzy-missing.metadata",
+        "tmp/gfm-fozzy-missing.prefixes",
+        "tmp/gfm-fozzy-missing.substrings",
+        "tmp/gfm-fozzy-missing.fuzzy",
+        "tmp/gfm-fozzy-missing.content",
+        "-",
+        "tag:Important"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "search-index-sidecars-budget",
         "tmp/gfm-fozzy-metadata-records.gfmidx",
         "/tmp/gfm-fozzy-columns.gfmcols",

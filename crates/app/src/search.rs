@@ -608,6 +608,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-index-sidecars-volume-scope requires a query string",
             )?;
+            let budget = SearchLookupBudget::default();
+            if volume_scope_is_empty(&scope) {
+                print_empty_sidecar_session_report("sidecar-volume-scope", budget);
+                return Ok(true);
+            }
             let sidecars = SidecarIndexAccessPaths {
                 records: &records,
                 columns: &columns,
@@ -621,7 +626,6 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let session = SidecarIndexQuerySession::open(
                 records, columns, metadata, prefixes, substrings, fuzzy, content,
             )?;
-            let budget = SearchLookupBudget::default();
             let report = session.search_with_volume_scope(&query, 50, &scope)?;
             print_sidecar_session_report("sidecar-volume-scope", &session, &report, budget);
             for hit in report.search.hits {
@@ -1108,6 +1112,23 @@ fn print_sidecar_session_report(
         report.search.lookup.fuzzy_cache_hits,
         report.search.lookup.fuzzy_cache_misses,
     );
+}
+
+fn print_empty_sidecar_session_report(label: &str, budget: SearchLookupBudget) {
+    eprintln!(
+        "{label}\trecords-indexed=0\tcolumns-indexed=0\trecords-loaded=0\trecords-missing=0\tcandidate-ids=0\tfull-hydration=false\tmetadata-keys=0\tprefix-keys=0\tsubstring-keys=0\tfuzzy-keys=0\tcontent-keys=0\tcontent-cache-hits=0\tcontent-cache-misses=0\trecord-cache-hits=0\trecord-cache-misses=0\tresult-cache-hits=0\tresult-cache-misses=0\tmetadata-budget={}\tprefix-budget={}\tsubstring-budget={}\tfuzzy-key-budget={}\tfuzzy-term-budget={}\tfuzzy-candidate-budget={}\tcontent-budget={}\tprefix-archive-keys=0\tsubstring-archive-keys=0\tfuzzy-archive-keys=0\tprefix-lookup-requests=0\tprefix-lookup-ids=0\tprefix-cache-hits=0\tprefix-cache-misses=0\tsubstring-lookup-requests=0\tsubstring-lookup-ids=0\tsubstring-cache-hits=0\tsubstring-cache-misses=0\tfuzzy-lookup-requests=0\tfuzzy-lookup-terms=0\tfuzzy-cache-hits=0\tfuzzy-cache-misses=0",
+        budget.max_metadata_ids_per_term,
+        budget.max_prefix_ids_per_term,
+        budget.max_substring_ids_per_gram,
+        budget.max_fuzzy_keys_per_term,
+        budget.max_fuzzy_terms_per_key,
+        budget.max_fuzzy_candidates_per_term,
+        budget.max_content_ids_per_term
+    );
+}
+
+fn volume_scope_is_empty(scope: &SearchVolumeScope) -> bool {
+    matches!(scope, SearchVolumeScope::Only(volumes) if volumes.is_empty())
 }
 
 fn highlight_snippet(snippet: &gfm_types::SearchSnippet) -> String {
