@@ -3,7 +3,7 @@ use crate::access::{
     ScopedAccessGuard,
 };
 use crate::{
-    detect_volume_id, index_volume_descriptor, parse_required_scheduling_pressure,
+    detect_volume_id, index_volume_descriptor, parent_volume, parse_required_scheduling_pressure,
     run_preview_contract_adaptive_with_volume, run_preview_contract_cancellable,
     runtime::{preflight_runtime_job_state, run_volume_task_cancellable, RuntimeJobHandle},
 };
@@ -300,32 +300,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let event =
                 parse_fileprovider_event(&event_kind, path, args.next().map(PathBuf::from))?;
-            let _cache_access = preflight_access_scope(
-                write_probe_path(&cache_root),
-                AccessIntent::Write,
-                "preview cache root",
-            )?;
-            let mut access = vec![preflight_access_scope(
-                &write_probe_existing_ancestor(&state_path),
-                AccessIntent::Write,
-                "preview cache fileprovider observed invalidation",
-            )?];
-            let previous = if state_path.is_file() {
-                Some(FileProviderStateSnapshot::read(&state_path)?)
-            } else {
-                None
-            };
-            access.extend(retain_fileprovider_event_access(
-                &event,
-                previous.as_ref(),
-                "preview cache fileprovider observed invalidation",
-            )?);
-            let (observed, snapshot) =
-                FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
-            snapshot.write(&state_path)?;
             println!(
                 "{}",
-                observed_preview_cache_invalidation_tsv(&observed, &cache_root, kind)?
+                run_preview_cache_fileprovider_observed_invalidation(
+                    cache_root, state_path, kind, event,
+                )?
             );
         }
         "fileprovider-invalidation-scan" => {
@@ -339,19 +318,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "fileprovider-invalidation-scan requires at least one path".to_string(),
                 ));
             }
-            let _access = retain_fileprovider_snapshot_access(
-                &state_path,
-                &paths,
-                "fileprovider invalidation scan",
-            )?;
-            let previous = if state_path.is_file() {
-                Some(FileProviderStateSnapshot::read(&state_path)?)
-            } else {
-                None
-            };
-            let (report, snapshot) =
-                FileProviderStateInvalidationReport::evaluate(previous.as_ref(), paths)?;
-            snapshot.write(&state_path)?;
+            let report = run_fileprovider_invalidation_scan(state_path, paths)?;
             println!("{}", report.as_tsv());
         }
         "fileprovider-invalidation-event" => {
@@ -369,24 +336,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let event =
                 parse_fileprovider_event(&event_kind, path, args.next().map(PathBuf::from))?;
-            let mut access = vec![preflight_access_scope(
-                write_probe_path(&state_path),
-                AccessIntent::Write,
+            let observed = run_fileprovider_observed_invalidation(
+                state_path,
+                event,
                 "fileprovider invalidation event",
-            )?];
-            let previous = if state_path.is_file() {
-                Some(FileProviderStateSnapshot::read(&state_path)?)
-            } else {
-                None
-            };
-            access.extend(retain_fileprovider_event_access(
-                &event,
-                previous.as_ref(),
-                "fileprovider invalidation event",
-            )?);
-            let (observed, snapshot) =
-                FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
-            snapshot.write(&state_path)?;
+            )?;
             println!("{}", observed.as_tsv());
         }
         "fileprovider-observed-metadata-invalidation" => {
@@ -404,24 +358,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let event =
                 parse_fileprovider_event(&event_kind, path, args.next().map(PathBuf::from))?;
-            let mut access = vec![preflight_access_scope(
-                write_probe_path(&state_path),
-                AccessIntent::Write,
+            let observed = run_fileprovider_observed_invalidation(
+                state_path,
+                event,
                 "fileprovider observed metadata invalidation",
-            )?];
-            let previous = if state_path.is_file() {
-                Some(FileProviderStateSnapshot::read(&state_path)?)
-            } else {
-                None
-            };
-            access.extend(retain_fileprovider_event_access(
-                &event,
-                previous.as_ref(),
-                "fileprovider observed metadata invalidation",
-            )?);
-            let (observed, snapshot) =
-                FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
-            snapshot.write(&state_path)?;
+            )?;
             println!("{}", observed_metadata_invalidation_tsv(&observed));
         }
         "fileprovider-observer-probe" => {
@@ -1511,6 +1452,156 @@ fn run_fileprovider_operation(
         cancellation.check()?;
         FileProviderOperationReport::execute(path, operation)
     })
+}
+
+fn run_preview_cache_fileprovider_observed_invalidation(
+    cache_root: PathBuf,
+    state_path: PathBuf,
+    kind: PreviewKind,
+    event: FileEvent,
+) -> Result<String> {
+    const WORKER: &str = "preview cache fileprovider observed invalidation";
+    let cache_probe = write_probe_path(&cache_root).to_path_buf();
+    preflight_volume_access_scope(&cache_probe, AccessIntent::Write, "preview cache root")?;
+    preflight_fileprovider_observed_event_volumes(&state_path, &event, WORKER)?;
+    let volume = detect_volume_id(&cache_probe)
+        .ok()
+        .or_else(|| parent_volume(&cache_probe))
+        .or_else(|| {
+            fileprovider_raw_event_paths(&event)
+                .iter()
+                .find_map(|path| parent_volume(path))
+        })
+        .or_else(|| parent_volume(&write_probe_existing_ancestor(&state_path)));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _cache_access =
+            preflight_access_scope(&cache_probe, AccessIntent::Write, "preview cache root")?;
+        let observed =
+            evaluate_fileprovider_observed_invalidation(&state_path, event, WORKER, &cancellation)?;
+        cancellation.check()?;
+        observed_preview_cache_invalidation_tsv(&observed, &cache_root, kind)
+    })
+}
+
+fn run_fileprovider_invalidation_scan(
+    state_path: PathBuf,
+    paths: Vec<PathBuf>,
+) -> Result<FileProviderStateInvalidationReport> {
+    const WORKER: &str = "fileprovider invalidation scan";
+    preflight_fileprovider_snapshot_volumes(&state_path, &paths, WORKER)?;
+    let state_probe = write_probe_existing_ancestor(&state_path);
+    let volume =
+        parent_volume(&state_probe).or_else(|| paths.iter().find_map(|path| parent_volume(path)));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_fileprovider_snapshot_access(&state_path, &paths, WORKER)?;
+        cancellation.check()?;
+        let previous = if state_path.is_file() {
+            Some(FileProviderStateSnapshot::read(&state_path)?)
+        } else {
+            None
+        };
+        cancellation.check()?;
+        let (report, snapshot) =
+            FileProviderStateInvalidationReport::evaluate(previous.as_ref(), paths)?;
+        cancellation.check()?;
+        snapshot.write(&state_path)?;
+        Ok(report)
+    })
+}
+
+fn run_fileprovider_observed_invalidation(
+    state_path: PathBuf,
+    event: FileEvent,
+    worker: &'static str,
+) -> Result<FileProviderObservedInvalidation> {
+    preflight_fileprovider_observed_event_volumes(&state_path, &event, worker)?;
+    let state_probe = write_probe_existing_ancestor(&state_path);
+    let volume = parent_volume(&state_probe).or_else(|| {
+        fileprovider_raw_event_paths(&event)
+            .iter()
+            .find_map(|path| parent_volume(path))
+    });
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        evaluate_fileprovider_observed_invalidation(&state_path, event, worker, &cancellation)
+    })
+}
+
+fn evaluate_fileprovider_observed_invalidation(
+    state_path: &Path,
+    event: FileEvent,
+    worker: &str,
+    cancellation: &Cancellation,
+) -> Result<FileProviderObservedInvalidation> {
+    cancellation.check()?;
+    let mut access = vec![preflight_access_scope(
+        &write_probe_existing_ancestor(state_path),
+        AccessIntent::Write,
+        worker,
+    )?];
+    cancellation.check()?;
+    let previous = if state_path.is_file() {
+        Some(FileProviderStateSnapshot::read(state_path)?)
+    } else {
+        None
+    };
+    cancellation.check()?;
+    access.extend(retain_fileprovider_event_access(
+        &event,
+        previous.as_ref(),
+        worker,
+    )?);
+    cancellation.check()?;
+    let (observed, snapshot) =
+        FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
+    cancellation.check()?;
+    snapshot.write(state_path)?;
+    Ok(observed)
+}
+
+fn preflight_fileprovider_snapshot_volumes(
+    state_path: &Path,
+    paths: &[PathBuf],
+    worker: &str,
+) -> Result<()> {
+    preflight_volume_access_scope(
+        &write_probe_existing_ancestor(state_path),
+        AccessIntent::Write,
+        worker,
+    )?;
+    for path in paths {
+        preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
+    }
+    Ok(())
+}
+
+fn preflight_fileprovider_observed_event_volumes(
+    state_path: &Path,
+    event: &FileEvent,
+    worker: &str,
+) -> Result<()> {
+    preflight_volume_access_scope(
+        &write_probe_existing_ancestor(state_path),
+        AccessIntent::Write,
+        worker,
+    )?;
+    for path in fileprovider_raw_event_paths(event) {
+        preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    }
+    Ok(())
+}
+
+fn fileprovider_raw_event_paths(event: &FileEvent) -> Vec<PathBuf> {
+    match &event.kind {
+        FileEventKind::Rename { from, to } => vec![from.clone(), to.clone()],
+        FileEventKind::Remove
+        | FileEventKind::Create
+        | FileEventKind::Metadata
+        | FileEventKind::Modify
+        | FileEventKind::Rescan
+        | FileEventKind::Other => vec![event.path.clone()],
+    }
 }
 
 fn run_fileprovider_worker_without_runtime_progress<T>(

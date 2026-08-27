@@ -7687,6 +7687,285 @@ fn ui_fileprovider_observed_invalidation_refuses_unreachable_state_before_snapsh
 }
 
 #[test]
+fn fileprovider_invalidation_scan_persists_snapshot_on_visible_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-fileprovider-scan-root");
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    fs::write(&item, "remote placeholder").unwrap();
+    xattr::set(&item, "com.apple.icloud.placeholder", b"1").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fileprovider-invalidation-scan",
+            state.to_str().unwrap(),
+            item.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "fileprovider invalidation scan", &root);
+    assert_worker_admitted(&stderr, "fileprovider invalidation scan", &item);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("fileprovider-state-invalidation\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains(&item.display().to_string()), "{stdout}");
+
+    let stored = fs::read_to_string(&state).unwrap();
+    assert!(
+        stored.starts_with("gfm-fileprovider-state-v1\n"),
+        "{stored}"
+    );
+    assert!(stored.contains(&item.display().to_string()), "{stored}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn fileprovider_invalidation_event_persists_snapshot_on_visible_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-fileprovider-event-root");
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    fs::write(&item, "remote placeholder").unwrap();
+    xattr::set(&item, "com.apple.icloud.placeholder", b"1").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fileprovider-invalidation-event",
+            state.to_str().unwrap(),
+            "metadata",
+            item.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "fileprovider invalidation event", &root);
+    assert_worker_admitted(&stderr, "fileprovider invalidation event", &item);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(
+            "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1"
+        ),
+        "{stdout}"
+    );
+
+    let stored = fs::read_to_string(&state).unwrap();
+    assert!(
+        stored.starts_with("gfm-fileprovider-state-v1\n"),
+        "{stored}"
+    );
+    assert!(stored.contains(&item.display().to_string()), "{stored}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn fileprovider_observed_metadata_invalidation_persists_snapshot_on_visible_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-fileprovider-metadata-root");
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    fs::write(&item, "remote placeholder").unwrap();
+    xattr::set(&item, "com.apple.icloud.placeholder", b"1").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fileprovider-observed-metadata-invalidation",
+            state.to_str().unwrap(),
+            "metadata",
+            item.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(
+        &stderr,
+        "fileprovider observed metadata invalidation",
+        &root,
+    );
+    assert_worker_admitted(
+        &stderr,
+        "fileprovider observed metadata invalidation",
+        &item,
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(
+            "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("provider-metadata-invalidation\t"),
+        "{stdout}"
+    );
+
+    let stored = fs::read_to_string(&state).unwrap();
+    assert!(
+        stored.starts_with("gfm-fileprovider-state-v1\n"),
+        "{stored}"
+    );
+    assert!(stored.contains(&item.display().to_string()), "{stored}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn preview_cache_fileprovider_observed_invalidation_runs_on_visible_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-preview-fileprovider-observed-root");
+    let cache = root.join("preview-cache");
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(&item, "remote placeholder").unwrap();
+    xattr::set(&item, "com.apple.icloud.placeholder", b"1").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "preview-cache-fileprovider-observed-invalidation",
+            cache.to_str().unwrap(),
+            state.to_str().unwrap(),
+            "thumbnail",
+            "metadata",
+            item.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "preview cache root", &cache);
+    assert_worker_admitted(
+        &stderr,
+        "preview cache fileprovider observed invalidation",
+        &root,
+    );
+    assert_worker_admitted(
+        &stderr,
+        "preview cache fileprovider observed invalidation",
+        &item,
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(
+            "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1"
+        ),
+        "{stdout}"
+    );
+    assert!(stdout.contains("preview-cache-invalidation\t"), "{stdout}");
+
+    let stored = fs::read_to_string(&state).unwrap();
+    assert!(
+        stored.starts_with("gfm-fileprovider-state-v1\n"),
+        "{stored}"
+    );
+    assert!(stored.contains(&item.display().to_string()), "{stored}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn platform_fileprovider_invalidation_routes_refuse_unreachable_state_before_worker_io_from_binary()
+{
+    let root = unique_temp_dir("gfm-cli-fileprovider-routes-unreachable");
+    let cache = root.join("preview-cache");
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&item, "remote placeholder").unwrap();
+
+    let cases = [
+        (
+            "fileprovider invalidation scan",
+            vec![
+                "fileprovider-invalidation-scan".to_string(),
+                state.display().to_string(),
+                item.display().to_string(),
+            ],
+        ),
+        (
+            "fileprovider invalidation event",
+            vec![
+                "fileprovider-invalidation-event".to_string(),
+                state.display().to_string(),
+                "metadata".to_string(),
+                item.display().to_string(),
+            ],
+        ),
+        (
+            "fileprovider observed metadata invalidation",
+            vec![
+                "fileprovider-observed-metadata-invalidation".to_string(),
+                state.display().to_string(),
+                "metadata".to_string(),
+                item.display().to_string(),
+            ],
+        ),
+        (
+            "preview cache fileprovider observed invalidation",
+            vec![
+                "preview-cache-fileprovider-observed-invalidation".to_string(),
+                cache.display().to_string(),
+                state.display().to_string(),
+                "thumbnail".to_string(),
+                "metadata".to_string(),
+                item.display().to_string(),
+            ],
+        ),
+    ];
+
+    for (worker, args) in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(&args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{args:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stdout.is_empty(), "{args:?}: {stdout}");
+        assert!(
+            stderr.contains("volume access blocked: unreachable volume network"),
+            "{args:?}: {stderr}"
+        );
+        assert!(
+            !stderr.contains(&format!("security-worker-admission\tworker={worker}\t")),
+            "{args:?}: {stderr}"
+        );
+    }
+
+    assert!(!state.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cancellable_adaptive_extraction_worker_stops_before_launch_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-worker-cancel-root");
     let path = root.join("document.txt");
