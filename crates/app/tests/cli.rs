@@ -7068,7 +7068,7 @@ fn searches_persisted_text_content_from_binary() {
     assert_eq!(
         index_stderr
             .matches(&format!(
-                "security-worker-admission\tworker=background content index\tpath={}\tintent=index",
+                "security-worker-admission\tworker=content index\tpath={}\tintent=index",
                 root.display()
             ))
             .count(),
@@ -7138,6 +7138,13 @@ fn index_content_refuses_unreachable_records_output_before_scanning_from_binary(
         stderr.contains("content index volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content index\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
     assert!(!stderr.contains("indexed "), "{stderr}");
     assert!(!records.exists());
     assert!(!content.exists());
@@ -7175,6 +7182,13 @@ fn index_content_refuses_unreachable_content_output_before_scanning_from_binary(
     assert!(!stdout.contains("hit\t"), "{stdout}");
     assert!(
         stderr.contains("content index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content index\tpath={}",
+            root.display()
+        )),
         "{stderr}"
     );
     assert!(!stderr.contains("indexed "), "{stderr}");
@@ -8645,6 +8659,13 @@ fn index_content_segment_refuses_unreachable_output_before_scanning_from_binary(
     assert!(!stdout.contains("hit\t"), "{stdout}");
     assert!(
         stderr.contains("content segment index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content segment index\tpath={}",
+            root.display()
+        )),
         "{stderr}"
     );
     assert!(!stderr.contains("content-segmented"), "{stderr}");

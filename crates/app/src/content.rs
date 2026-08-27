@@ -41,15 +41,33 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "index-content requires a root path")?;
             let records = required_path(args.next(), "index-content requires a records path")?;
             let content = required_path(args.next(), "index-content requires a content path")?;
-            let _access =
-                retain_foreground_content_index_access(&root, &records, &content, "content index")?;
-            let snapshot = Indexer::default().build(root)?;
-            let indexed = snapshot.save_with_content(records, content, &Extractor::default())?;
+            preflight_foreground_content_index_volumes(&root, &records, &content, "content index")?;
+            let volume = detect_volume_id(&root)
+                .ok()
+                .or_else(|| parent_volume(&root));
+            let (records_len, inaccessible_len, indexed) = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "content index",
+                move |cancellation| {
+                    let _access = retain_foreground_content_index_access(
+                        &root,
+                        &records,
+                        &content,
+                        "content index",
+                    )?;
+                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                    let records_len = snapshot.records.len();
+                    let inaccessible_len = snapshot.inaccessible.len();
+                    cancellation.check()?;
+                    let indexed =
+                        snapshot.save_with_content(records, content, &Extractor::default())?;
+                    Ok((records_len, inaccessible_len, indexed))
+                },
+            )?;
             eprintln!(
                 "indexed {} records; content-indexed {} files; {} inaccessible",
-                snapshot.records.len(),
-                indexed,
-                snapshot.inaccessible.len()
+                records_len, indexed, inaccessible_len
             );
         }
         "extract-report" => {
@@ -272,15 +290,31 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-content-segment requires an output segment path",
             )?;
-            let _access =
-                retain_content_segment_index_access(&root, &output, "content segment index")?;
-            let snapshot = Indexer::default().build(root)?;
-            let indexed =
-                snapshot.save_content_segment(output, &Extractor::default(), Vec::new())?;
+            preflight_content_segment_index_volumes(&root, &output, "content segment index")?;
+            let volume = detect_volume_id(&root)
+                .ok()
+                .or_else(|| parent_volume(&root));
+            let (inaccessible_len, indexed) = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "content segment index",
+                move |cancellation| {
+                    let _access = retain_content_segment_index_access(
+                        &root,
+                        &output,
+                        "content segment index",
+                    )?;
+                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                    let inaccessible_len = snapshot.inaccessible.len();
+                    cancellation.check()?;
+                    let indexed =
+                        snapshot.save_content_segment(output, &Extractor::default(), Vec::new())?;
+                    Ok((inaccessible_len, indexed))
+                },
+            )?;
             eprintln!(
                 "content-segmented {} files; {} inaccessible",
-                indexed,
-                snapshot.inaccessible.len()
+                indexed, inaccessible_len
             );
         }
         "compact-content" => {
@@ -847,6 +881,17 @@ fn retain_foreground_content_index_access(
     ])
 }
 
+fn preflight_foreground_content_index_volumes(
+    root: &Path,
+    records: &Path,
+    content: &Path,
+    worker: &str,
+) -> Result<()> {
+    preflight_volume_access_scope(root, AccessIntent::Index, worker)?;
+    preflight_volume_access_scope(write_probe_path(records), AccessIntent::Write, worker)?;
+    preflight_volume_access_scope(write_probe_path(content), AccessIntent::Write, worker)
+}
+
 fn retain_content_segment_index_access(
     root: &Path,
     output: &Path,
@@ -856,6 +901,11 @@ fn retain_content_segment_index_access(
         preflight_access_scope(root, AccessIntent::Index, worker)?,
         preflight_access_scope(write_probe_path(output), AccessIntent::Write, worker)?,
     ])
+}
+
+fn preflight_content_segment_index_volumes(root: &Path, output: &Path, worker: &str) -> Result<()> {
+    preflight_volume_access_scope(root, AccessIntent::Index, worker)?;
+    preflight_volume_access_scope(write_probe_path(output), AccessIntent::Write, worker)
 }
 
 fn retain_content_segments_access(
