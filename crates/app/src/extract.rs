@@ -422,7 +422,7 @@ fn run_supervised_worker(
                     input.display()
                 )));
             }
-            Ok(None) => thread::sleep(Duration::from_millis(5)),
+            Ok(None) => supervised_worker_poll_pause(Duration::from_millis(5), cancellation)?,
             Err(err) => {
                 kill_process_group(child.id());
                 let _ = child.wait();
@@ -443,6 +443,19 @@ fn kill_process_group(pid: u32) {
         .arg("-KILL")
         .arg(format!("-{pid}"))
         .status();
+}
+
+fn supervised_worker_poll_pause(delay: Duration, cancellation: &Cancellation) -> Result<()> {
+    const CANCEL_GRANULARITY: Duration = Duration::from_millis(1);
+    let deadline = Instant::now() + delay;
+    loop {
+        cancellation.check()?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        thread::sleep(remaining.min(CANCEL_GRANULARITY));
+    }
 }
 
 fn worker_temp_path(label: &str) -> PathBuf {
@@ -790,6 +803,28 @@ mod tests {
         assert_eq!(scratch_before, worker_scratch_entries());
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn supervised_worker_poll_pause_returns_promptly_after_cancellation() {
+        let cancellation = Cancellation::default();
+        let canceller = cancellation.clone();
+        let started = Instant::now();
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(5));
+            canceller.cancel();
+        });
+
+        let err = supervised_worker_poll_pause(Duration::from_millis(250), &cancellation)
+            .expect_err("poll pause should observe cancellation");
+
+        handle.join().unwrap();
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "cancelled poll pause waited {:?}",
+            started.elapsed()
+        );
     }
 
     struct SandboxProfileFixture {
