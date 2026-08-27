@@ -1133,8 +1133,9 @@ fn execute_retriable_task(
 ) -> TaskStatus {
     let mut final_status = TaskStatus::Failed("task did not run".to_string());
     let attempts = retry_policy.max_attempts.max(1);
+    let cancellation = task.job.cancellation();
     for attempt in 1..=attempts {
-        if task.job.cancellation().is_cancelled() {
+        if cancellation.is_cancelled() {
             return TaskStatus::Cancelled;
         }
         let started = JournalEntry {
@@ -1148,7 +1149,7 @@ fn execute_retriable_task(
             break;
         }
 
-        let status = match (task.work)(task.job.cancellation()) {
+        let status = match (task.work)(cancellation.clone()) {
             Ok(()) => TaskStatus::Completed,
             Err(GfmError::Cancelled) => TaskStatus::Cancelled,
             Err(err) => TaskStatus::Failed(err.to_string()),
@@ -1172,6 +1173,20 @@ fn execute_retriable_task(
             break;
         }
         if let TaskStatus::Failed(message) = &final_status {
+            if cancellation.is_cancelled() {
+                let cancelled = JournalEntry {
+                    id: task.job.id,
+                    label: task.job.label.clone(),
+                    attempt,
+                    status: TaskStatus::Cancelled,
+                };
+                if let Err(err) = journal.append(&cancelled) {
+                    final_status = TaskStatus::Failed(err.to_string());
+                    break;
+                }
+                final_status = TaskStatus::Cancelled;
+                break;
+            }
             let decision = retry_policy.retry_decision(attempt, message);
             if !decision.retryable {
                 break;

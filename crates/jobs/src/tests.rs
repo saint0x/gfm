@@ -769,6 +769,37 @@ fn retriable_worker_does_not_execute_or_journal_pre_cancelled_tasks() {
 }
 
 #[test]
+fn retriable_worker_stops_retries_when_attempt_cancels_after_failure() {
+    let path = temp_path("gfm-job-journal-cancel-after-failure", "journal");
+    let journal = JobJournal::new(&path);
+    let mut scheduler = Scheduler::new();
+    let job = scheduler.schedule(Priority::Background, "cancelled failed extraction");
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_task = Arc::clone(&attempts);
+
+    let report = WorkerPool::new(1).run_retriable(
+        vec![RetriableTask::new(job, move |cancellation| {
+            attempts_task.fetch_add(1, AtomicOrdering::SeqCst);
+            cancellation.cancel();
+            Err(GfmError::Format("temporary extraction failure".to_string()))
+        })],
+        &journal,
+        RetryPolicy { max_attempts: 3 },
+    );
+    let entries = journal.read().unwrap();
+
+    assert_eq!(report.cancelled(), 1);
+    assert_eq!(report.completed(), 0);
+    assert_eq!(attempts.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].status, TaskStatus::Started);
+    assert!(matches!(entries[1].status, TaskStatus::Failed(_)));
+    assert_eq!(entries[2].status, TaskStatus::Cancelled);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn job_journal_append_creates_parent_directory() {
     let root = temp_path("gfm-job-journal-parent", "root");
     let path = root.join("nested").join("jobs.journal");
