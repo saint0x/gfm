@@ -1688,6 +1688,52 @@ fn streams_hot_then_deep_search_batches_from_binary() {
 }
 
 #[test]
+fn search_refuses_unreachable_network_volume_before_indexing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-unreachable-volume");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(root.join("Needle.md"), "needle should not be indexed").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search", root.to_str().unwrap(), "needle"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("Needle.md"), "{stdout}");
+    assert!(
+        stderr.contains("search volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn search_stream_refuses_unreachable_network_volume_before_indexing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-stream-unreachable-volume");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(root.join("Needle.md"), "needle should not be streamed").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-stream", root.to_str().unwrap(), "needle"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("batch\t"), "{stdout}");
+    assert!(
+        stderr.contains("search stream volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn reports_package_traversal_policy_from_binary() {
     let root = unique_temp_dir("gfm-cli-package-root");
     fs::create_dir_all(root.join("GFMFixture.app").join("Contents")).unwrap();

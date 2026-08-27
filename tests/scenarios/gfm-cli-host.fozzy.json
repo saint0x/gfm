@@ -2681,6 +2681,28 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "search",
+        "tmp/gfm-fozzy-offline-volume",
+        "listed"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-stream",
+        "tmp/gfm-fozzy-offline-volume",
+        "listed"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-topology-diff",
         "tmp/gfm-fozzy-dist",
         "--",

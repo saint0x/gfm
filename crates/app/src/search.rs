@@ -1,3 +1,4 @@
+use crate::access::preflight_access_scope;
 use crate::content::run_content_search;
 use crate::extract::extraction_budget_profile;
 use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, required_string};
@@ -6,6 +7,7 @@ use gfm_index::{
     Indexer, LiveIndex, SearchLookupBudget, SearchRecordColumns, SearchStreamStage,
     SearchVolumeScope, SidecarIndexQuerySession, SidecarQuerySessionReport,
 };
+use gfm_mac::AccessIntent;
 use gfm_store::{
     ContentArchive, MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary,
     MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
@@ -19,6 +21,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "search" => {
             let root = required_path(args.next(), "search requires a root path")?;
             let query = required_string(args.next(), "search requires a query string")?;
+            let _access = preflight_access_scope(&root, AccessIntent::Index, "search")?;
             let snapshot = Indexer::default().build(root)?;
             let session = snapshot.query_session();
             for hit in session.search(&query, 50) {
@@ -28,6 +31,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "search-stream" => {
             let root = required_path(args.next(), "search-stream requires a root path")?;
             let query = required_string(args.next(), "search-stream requires a query string")?;
+            let _access = preflight_access_scope(&root, AccessIntent::Index, "search stream")?;
             let snapshot = Indexer::default().build(root)?;
             let session = snapshot.query_session();
             for batch in session.stream_search(&query, 50)? {
