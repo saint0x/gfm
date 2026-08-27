@@ -462,6 +462,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 stream.try_recv().is_some()
             );
         }
+        "volume-events-shutdown-probe" => {
+            let stream = VolumeEventStream::start();
+            let pending = stream.try_recv().is_some();
+            let shutdown = stream.shutdown();
+            println!("{}\tpending-before={}", shutdown.as_tsv(), pending);
+        }
         "volume-event-invalidation" => {
             let kind = parse_volume_event_kind(&required_string(
                 args.next(),

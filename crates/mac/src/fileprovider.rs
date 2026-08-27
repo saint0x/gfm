@@ -1851,7 +1851,8 @@ fn command_policy(
 }
 
 fn provider_commands_available(hints: &CloudHints) -> bool {
-    native_has_fileprovider_values(&hints.native)
+    hints.native.is_ubiquitous == Some(true)
+        || native_has_ubiquitous_materialization_evidence(&hints.native)
 }
 
 fn is_evicted_placeholder_path(path: &Path) -> bool {
@@ -2186,6 +2187,77 @@ mod tests {
         );
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_local_false_does_not_make_xattr_placeholder_command_capable() {
+        let path = PathBuf::from("/tmp/Evicted.icloud-placeholder");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(false);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: vec!["com.apple.icloud.placeholder".to_string()],
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name+native-url-resource+xattr".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::XattrFallback
+        );
+        assert_eq!(report.commands.download, CloudCommandState::Disabled);
+        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+        assert_eq!(
+            report.commands.reason.as_deref(),
+            Some("not-native-provider-backed")
+        );
+    }
+
+    #[test]
+    fn native_materialization_evidence_keeps_provider_commands_available() {
+        let path = PathBuf::from("/tmp/Remote.pdf");
+        let mut native = native_values();
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloaded = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.download_requested = Some(false);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(report.commands.download, CloudCommandState::Enabled);
+        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+        assert_eq!(report.commands.reason, None);
     }
 
     #[test]

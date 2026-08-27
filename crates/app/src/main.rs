@@ -702,6 +702,7 @@ fn print_usage() {
   gfm fileprovider-observer-probe <state.tsv> <root> <target>
   gfm volume-discovery [paths...]
   gfm volume-events-probe
+  gfm volume-events-shutdown-probe
   gfm volume-event-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-event-transition-invalidation <appeared|description-changed|disappeared|unavailable> <path> <previous-label> <current-label>
   gfm volume-operation <eject|unmount|mount> <path>

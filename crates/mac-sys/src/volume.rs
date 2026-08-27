@@ -355,6 +355,13 @@ pub struct NativeVolumeOperationResult {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeVolumeEventShutdown {
+    pub attached_before_shutdown: bool,
+    pub stop_requested: bool,
+    pub thread_joined: bool,
+}
+
 struct NativeVolumeOperationContext {
     operation: NativeVolumeOperation,
     run_loop: CFRunLoopRef,
@@ -432,10 +439,13 @@ impl NativeVolumeEventStream {
     pub fn try_recv(&self) -> Option<NativeVolumeEvent> {
         self.receiver.try_recv().ok()
     }
-}
 
-impl Drop for NativeVolumeEventStream {
-    fn drop(&mut self) {
+    pub fn shutdown(mut self) -> NativeVolumeEventShutdown {
+        self.shutdown_inner()
+    }
+
+    fn shutdown_inner(&mut self) -> NativeVolumeEventShutdown {
+        let attached_before_shutdown = self.run_loop.is_some();
         self.stop.store(true, Ordering::Release);
         if let Some(run_loop) = self.run_loop.take() {
             unsafe {
@@ -444,9 +454,22 @@ impl Drop for NativeVolumeEventStream {
                 CFRunLoopWakeUp(run_loop);
             }
         }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        let thread_joined = self
+            .thread
+            .take()
+            .map(|thread| thread.join().is_ok())
+            .unwrap_or(true);
+        NativeVolumeEventShutdown {
+            attached_before_shutdown,
+            stop_requested: true,
+            thread_joined,
         }
+    }
+}
+
+impl Drop for NativeVolumeEventStream {
+    fn drop(&mut self) {
+        let _ = self.shutdown_inner();
     }
 }
 

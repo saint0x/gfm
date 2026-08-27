@@ -2573,6 +2573,24 @@ fn probes_volume_event_stream_from_binary() {
 }
 
 #[test]
+fn probes_volume_event_stream_shutdown_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-events-shutdown-probe")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("volume-events-shutdown\tattached-before="));
+    assert!(stdout.contains("\tstop-requested=true\t"));
+    assert!(stdout.contains("\tthread-joined=true\t"));
+    assert!(stdout.contains("\tpending-before="));
+}
+
+#[test]
 fn reports_volume_event_invalidation_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-event-invalidation-{}",

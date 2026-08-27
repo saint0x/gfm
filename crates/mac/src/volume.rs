@@ -899,6 +899,13 @@ pub struct VolumeEventStream {
     stream: gfm_mac_sys::NativeVolumeEventStream,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VolumeEventShutdownReport {
+    pub attached_before_shutdown: bool,
+    pub stop_requested: bool,
+    pub thread_joined: bool,
+}
+
 impl VolumeEventKind {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -1131,6 +1138,24 @@ impl VolumeEventStream {
 
     pub fn try_recv(&self) -> Option<VolumeEventReport> {
         self.stream.try_recv().map(VolumeEventReport::from_native)
+    }
+
+    pub fn shutdown(self) -> VolumeEventShutdownReport {
+        let shutdown = self.stream.shutdown();
+        VolumeEventShutdownReport {
+            attached_before_shutdown: shutdown.attached_before_shutdown,
+            stop_requested: shutdown.stop_requested,
+            thread_joined: shutdown.thread_joined,
+        }
+    }
+}
+
+impl VolumeEventShutdownReport {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "volume-events-shutdown\tattached-before={}\tstop-requested={}\tthread-joined={}",
+            self.attached_before_shutdown, self.stop_requested, self.thread_joined
+        )
     }
 }
 
