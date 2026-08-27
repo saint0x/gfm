@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
+use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static CWD_LOCK: Mutex<()> = Mutex::new(());
@@ -790,6 +791,52 @@ fn retriable_worker_stops_retries_when_attempt_cancels_after_failure() {
 
     assert_eq!(report.cancelled(), 1);
     assert_eq!(report.completed(), 0);
+    assert_eq!(attempts.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].status, TaskStatus::Started);
+    assert!(matches!(entries[1].status, TaskStatus::Failed(_)));
+    assert_eq!(entries[2].status, TaskStatus::Cancelled);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn retriable_worker_stops_retry_backoff_when_cancelled() {
+    let path = temp_path("gfm-job-journal-cancel-backoff", "journal");
+    let journal = JobJournal::new(&path);
+    let mut scheduler = Scheduler::new();
+    let job = scheduler.schedule(Priority::Background, "cancelled offline index");
+    let cancellation = job.cancellation();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_task = Arc::clone(&attempts);
+    let started = Instant::now();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(20));
+            cancellation.cancel();
+        });
+
+        let report = WorkerPool::new(1).run_retriable(
+            vec![RetriableTask::new(job, move |_| {
+                attempts_task.fetch_add(1, AtomicOrdering::SeqCst);
+                Err(GfmError::Format(
+                    "volume is offline and not mounted".to_string(),
+                ))
+            })],
+            &journal,
+            RetryPolicy { max_attempts: 3 },
+        );
+
+        assert_eq!(report.cancelled(), 1);
+    });
+    let entries = journal.read().unwrap();
+
+    assert!(
+        started.elapsed() < Duration::from_millis(180),
+        "cancelled retry backoff waited too long: {:?}",
+        started.elapsed()
+    );
     assert_eq!(attempts.load(AtomicOrdering::SeqCst), 1);
     assert_eq!(entries.len(), 3);
     assert_eq!(entries[0].status, TaskStatus::Started);

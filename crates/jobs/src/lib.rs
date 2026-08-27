@@ -1191,12 +1191,39 @@ fn execute_retriable_task(
             if !decision.retryable {
                 break;
             }
-            if decision.next_delay_ms > 0 && attempt < attempts {
-                thread::sleep(Duration::from_millis(decision.next_delay_ms));
+            if decision.next_delay_ms > 0
+                && attempt < attempts
+                && !sleep_retry_backoff_cancellable(decision.next_delay_ms, &cancellation)
+            {
+                let cancelled = JournalEntry {
+                    id: task.job.id,
+                    label: task.job.label.clone(),
+                    attempt,
+                    status: TaskStatus::Cancelled,
+                };
+                if let Err(err) = journal.append(&cancelled) {
+                    final_status = TaskStatus::Failed(err.to_string());
+                    break;
+                }
+                final_status = TaskStatus::Cancelled;
+                break;
             }
         }
     }
     final_status
+}
+
+fn sleep_retry_backoff_cancellable(delay_ms: u64, cancellation: &Cancellation) -> bool {
+    let mut remaining = delay_ms;
+    while remaining > 0 {
+        if cancellation.is_cancelled() {
+            return false;
+        }
+        let chunk = remaining.min(5);
+        thread::sleep(Duration::from_millis(chunk));
+        remaining -= chunk;
+    }
+    !cancellation.is_cancelled()
 }
 
 impl Default for WorkerPool {
