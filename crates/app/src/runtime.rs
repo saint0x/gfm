@@ -270,6 +270,10 @@ fn drain_single_runtime_job(scheduler: &mut Scheduler, job: Job, label: &str) ->
         .ok_or_else(|| GfmError::Format(format!("{label} job did not become ready")))
 }
 
+fn runtime_progress_lock_error() -> GfmError {
+    GfmError::Format("runtime job progress state lock poisoned".to_string())
+}
+
 #[derive(Clone)]
 pub(crate) struct RuntimeJobHandle {
     progress_store: Option<JobProgressStore>,
@@ -338,7 +342,7 @@ impl RuntimeJobHandle {
         let detail = self
             .last_progress
             .lock()
-            .expect("runtime job progress lock poisoned")
+            .map_err(|_| runtime_progress_lock_error())?
             .detail
             .clone();
         self.persist_progress(JobProgressState::Running, 0, detail)
@@ -366,7 +370,7 @@ impl RuntimeJobHandle {
         let mut last = self
             .last_progress
             .lock()
-            .expect("runtime job progress lock poisoned");
+            .map_err(|_| runtime_progress_lock_error())?;
         let mut snapshot = last.clone();
         snapshot.total_units = total_units.max(1);
         snapshot.completed_units = snapshot.completed_units.min(snapshot.total_units);
@@ -388,7 +392,7 @@ impl RuntimeJobHandle {
         let total_units = self
             .last_progress
             .lock()
-            .expect("runtime job progress lock poisoned")
+            .map_err(|_| runtime_progress_lock_error())?
             .total_units;
         let (completed_units, detail) = match status {
             TaskStatus::Started => (0, "still-running".to_string()),
@@ -411,7 +415,7 @@ impl RuntimeJobHandle {
         let mut last = self
             .last_progress
             .lock()
-            .expect("runtime job progress lock poisoned");
+            .map_err(|_| runtime_progress_lock_error())?;
         let snapshot =
             last.clone()
                 .with_progress(state, completed_units, detail, job_timestamp_ms());
