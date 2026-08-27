@@ -379,16 +379,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let pressure = parse_optional_scheduling_pressure(args)?;
             let journal = JobJournal::new(default_job_journal_path());
-            let spec = ContentIndexJobSpec::new(&root, segment_dir, records, content)
-                .with_volume(detect_volume_id(&root)?);
+            let mut spec = ContentIndexJobSpec::new(&root, segment_dir, records, content);
             let spec_path = default_content_job_path();
-            let _access = retain_content_job_launch_access(
-                &spec,
-                &spec_path,
-                &journal,
-                pressure,
-                "background content index",
-            )?;
+            if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
+                let _access = preflight_access_scope(
+                    write_probe_path(&spec_path),
+                    AccessIntent::Write,
+                    "background content index",
+                )?;
+            } else {
+                let _access = retain_content_job_launch_access(
+                    &spec,
+                    &spec_path,
+                    &journal,
+                    pressure,
+                    "background content index",
+                )?;
+                spec = spec.with_volume(detect_volume_id(&root)?);
+            }
             spec.write(&spec_path)?;
             let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
             if outcome.deferred {
@@ -859,12 +867,11 @@ pub(crate) fn run_content_job(
     pressure: SchedulingPressure,
     spec_path: &Path,
 ) -> Result<ContentJobOutcome> {
-    let _access = retain_content_job_access(spec, spec_path, "background content index")?;
     let scheduling = pressure.decide(Priority::Background, 1, 1);
     let label = "background content index";
     if scheduling.action == SchedulingAction::Defer {
         let mut scheduler = Scheduler::new();
-        let volume = spec.volume.or_else(|| detect_volume_id(&spec.root).ok());
+        let volume = spec.volume;
         let job = if let Some(volume) = volume {
             scheduler.schedule_on_volume(Priority::Background, label, volume)
         } else {
@@ -886,6 +893,7 @@ pub(crate) fn run_content_job(
             deferred: true,
         });
     }
+    let _access = retain_content_job_access(spec, spec_path, "background content index")?;
     let _journal_access =
         preflight_access_scope(write_probe_path(journal.path()), AccessIntent::Write, label)?;
     let snapshot = Indexer::default().build(&spec.root)?;

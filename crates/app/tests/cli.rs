@@ -8091,10 +8091,6 @@ fn background_content_indexer_refuses_unreachable_outputs_before_job_state_from_
             segments.to_str().unwrap(),
             records.to_str().unwrap(),
             content.to_str().unwrap(),
-            "saturated",
-            "nominal",
-            "ac",
-            "idle",
         ])
         .output()
         .unwrap();
@@ -8116,6 +8112,146 @@ fn background_content_indexer_refuses_unreachable_outputs_before_job_state_from_
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(output_root).unwrap();
+}
+
+#[test]
+fn deferred_background_content_indexer_does_not_touch_unreachable_outputs_from_binary() {
+    let root = unique_temp_dir("gfm-cli-background-content-deferred-output-root");
+    let output_root = unique_temp_dir("gfm-cli-background-content-deferred-output-unreachable");
+    let segments = output_root.join("segments");
+    let records = output_root.join("records.gfmidx");
+    let content = output_root.join("content.gfmcontent");
+    let journal = unique_temp_path("gfm-cli-background-content-deferred-output", "journal");
+    let spec = unique_temp_path("gfm-cli-background-content-deferred-output", "job");
+    let catalog = unique_temp_path("gfm-cli-background-content-deferred-output", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-background-content-deferred-output", "gfmprogress");
+    fs::write(root.join("worker.md"), "deferred blocked worker marker").unwrap();
+    fs::write(
+        output_root.join(".gfm-volume-kind"),
+        "network-unreachable\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_CONTENT_JOB", &spec)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "index-content-background",
+            root.to_str().unwrap(),
+            segments.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("background-content-deferred action=Defer"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!segments.exists());
+    assert!(!records.exists());
+    assert!(!content.exists());
+    assert!(!journal.exists());
+    assert!(fs::read_to_string(&spec)
+        .unwrap()
+        .contains("gfm-content-job-v1"));
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
+        "{progress_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(output_root).unwrap();
+    fs::remove_file(spec).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+}
+
+#[test]
+fn deferred_background_content_indexer_does_not_touch_unreachable_root_from_binary() {
+    let root = unique_temp_dir("gfm-cli-background-content-deferred-root-unreachable");
+    let segments = unique_temp_dir("gfm-cli-background-content-deferred-root-segments");
+    let records = unique_temp_path("gfm-cli-background-content-deferred-root-records", "gfmidx");
+    let content = unique_temp_path(
+        "gfm-cli-background-content-deferred-root-content",
+        "gfmcontent",
+    );
+    let journal = unique_temp_path("gfm-cli-background-content-deferred-root", "journal");
+    let spec = unique_temp_path("gfm-cli-background-content-deferred-root", "job");
+    let catalog = unique_temp_path("gfm-cli-background-content-deferred-root", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-background-content-deferred-root", "gfmprogress");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(root.join("worker.md"), "deferred blocked worker marker").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_CONTENT_JOB", &spec)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "index-content-background",
+            root.to_str().unwrap(),
+            segments.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("background-content-deferred action=Defer"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(fs::read_dir(&segments).unwrap().next().is_none());
+    assert!(!records.exists());
+    assert!(!content.exists());
+    assert!(!journal.exists());
+    assert!(fs::read_to_string(&spec)
+        .unwrap()
+        .contains("gfm-content-job-v1"));
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
+        "{progress_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(spec).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
 }
 
 #[test]
