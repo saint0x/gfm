@@ -192,24 +192,37 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
-            let _root_access = enforce_index_access(&root)?;
             let append = args.next();
-            let _path_access = if append.is_some() {
-                Some(preflight_index_write(&path, "metadata update")?)
-            } else {
-                None
-            };
-            let snapshot = Indexer::default().build(root)?;
-            if let Some(append) = append {
-                let mut file = std::fs::OpenOptions::new()
-                    .append(true)
-                    .open(&path)
-                    .map_err(|err| GfmError::io(&path, err))?;
-                file.write_all(append.as_bytes())
-                    .map_err(|err| GfmError::io(&path, err))?;
+            preflight_index_volume_access(&root)?;
+            if append.is_some() {
+                preflight_index_write_volume(&path, "metadata update")?;
             }
-            let mut live = LiveIndex::from_records(snapshot.records);
-            let report = live.apply_metadata_update(&path)?;
+            let volume = detect_volume_id(&root).ok();
+            let report = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "index",
+                move |cancellation| {
+                    let _root_access = enforce_index_access(&root)?;
+                    let _path_access = if append.is_some() {
+                        Some(preflight_index_write(&path, "metadata update")?)
+                    } else {
+                        None
+                    };
+                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                    if let Some(append) = append {
+                        cancellation.check()?;
+                        let mut file = std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&path)
+                            .map_err(|err| GfmError::io(&path, err))?;
+                        file.write_all(append.as_bytes())
+                            .map_err(|err| GfmError::io(&path, err))?;
+                    }
+                    let mut live = LiveIndex::from_records(snapshot.records);
+                    live.apply_metadata_update(&path)
+                },
+            )?;
             println!("{}", report.as_tsv());
         }
         "event-backpressure" => {
