@@ -165,13 +165,25 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
-            let _root_access = enforce_index_access(&root)?;
-            let _from_access = preflight_index_write(&from, "rename correlation source")?;
-            let _to_access = preflight_index_write(&to, "rename correlation destination")?;
-            let snapshot = Indexer::default().build(root)?;
-            std::fs::rename(&from, &to).map_err(|err| GfmError::io(&from, err))?;
-            let mut live = LiveIndex::from_records(snapshot.records);
-            let report = live.apply_rename(&from, &to)?;
+            preflight_index_volume_access(&root)?;
+            preflight_index_write_volume(&from, "rename correlation source")?;
+            preflight_index_write_volume(&to, "rename correlation destination")?;
+            let volume = detect_volume_id(&root).ok();
+            let report = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "index",
+                move |cancellation| {
+                    let _root_access = enforce_index_access(&root)?;
+                    let _from_access = preflight_index_write(&from, "rename correlation source")?;
+                    let _to_access = preflight_index_write(&to, "rename correlation destination")?;
+                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                    cancellation.check()?;
+                    std::fs::rename(&from, &to).map_err(|err| GfmError::io(&from, err))?;
+                    let mut live = LiveIndex::from_records(snapshot.records);
+                    live.apply_rename(&from, &to)
+                },
+            )?;
             println!("{}", report.as_tsv());
         }
         "metadata-update" => {
@@ -363,6 +375,10 @@ fn preflight_index_read(path: &Path, worker: &str) -> Result<ScopedAccessGuard> 
 
 fn preflight_index_write(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
     preflight_access_scope(write_probe_path(path), AccessIntent::Write, worker)
+}
+
+fn preflight_index_write_volume(path: &Path, worker: &str) -> Result<()> {
+    preflight_volume_access_scope(write_probe_path(path), AccessIntent::Write, worker)
 }
 
 fn write_probe_path(path: &Path) -> &Path {

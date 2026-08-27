@@ -2021,6 +2021,14 @@ fn reports_rename_correlation_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_index_security_preflight(&output.stderr);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=index\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
     assert!(stdout.starts_with("rename-correlation\t"), "{stdout}");
     assert!(stdout.contains("\tremoved=1\t"), "{stdout}");
     assert!(stdout.contains("\tinserted=1\t"), "{stdout}");
@@ -2057,6 +2065,13 @@ fn rename_correlation_refuses_unreachable_destination_before_indexing_from_binar
         stderr.contains(
             "rename correlation destination volume access blocked: unreachable volume network"
         ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=index\tpath={}",
+            root.display()
+        )),
         "{stderr}"
     );
     assert_eq!(fs::read_to_string(&from).unwrap(), "rename identity");
