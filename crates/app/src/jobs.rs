@@ -1,4 +1,4 @@
-use crate::access::{preflight_access_scope, ScopedAccessGuard};
+use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
 use crate::runtime::{default_job_journal_path, run_scheduled_volume_task};
 use crate::{
     parent_volume, parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg,
@@ -215,7 +215,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "jobs-runtime-retry-probe requires an attempt state path",
             )?;
             let pressure = parse_optional_scheduling_pressure(args)?;
-            let _access = preflight_access_scope(
+            preflight_volume_access_scope(
                 write_probe_path(&state),
                 AccessIntent::Write,
                 "runtime retry probe",
@@ -225,7 +225,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Background,
                 "runtime retry probe",
                 pressure,
-                move || runtime_retry_probe(&state),
+                move || {
+                    let _access = preflight_access_scope(
+                        write_probe_path(&state),
+                        AccessIntent::Write,
+                        "runtime retry probe",
+                    )?;
+                    runtime_retry_probe(&state)
+                },
             )?;
             if outcome.deferred {
                 println!(
