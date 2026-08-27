@@ -472,7 +472,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "volume-operation requires an operation",
             )?)?;
             let path = required_path(args.next(), "volume-operation requires a path")?;
-            let _access = preflight_access_scope(&path, AccessIntent::Operate, "volume operation")?;
+            let _access = if path.exists() {
+                Some(preflight_access_scope(
+                    &path,
+                    AccessIntent::Operate,
+                    "volume operation",
+                )?)
+            } else {
+                None
+            };
             println!(
                 "{}",
                 VolumeOperationReport::execute(path, operation)?.as_tsv()
