@@ -242,29 +242,15 @@ impl VolumeDescriptor {
             .or_else(|| resource.as_ref().and_then(|resource| resource.is_ejectable))
             .or_else(|| native.as_ref().and_then(|native| native.media_ejectable))
             .unwrap_or(removable || network);
-        let marker_read_only = marker_read_only(marker_value);
-        let writable = marker_read_only
-            .map(|read_only| !read_only)
-            .or_else(|| {
-                mount_table
-                    .as_ref()
-                    .and_then(|mount_table| mount_table.is_read_only.map(|read_only| !read_only))
-            })
-            .or_else(|| {
-                resource
-                    .as_ref()
-                    .and_then(|resource| resource.is_read_only.map(|read_only| !read_only))
-            })
-            .or_else(|| native.as_ref().and_then(|native| native.media_writable))
-            .unwrap_or_else(|| !metadata.permissions().readonly());
-        let read_only = marker_read_only
-            .or_else(|| {
-                mount_table
-                    .as_ref()
-                    .and_then(|mount_table| mount_table.is_read_only)
-            })
-            .or_else(|| resource.as_ref().and_then(|resource| resource.is_read_only))
-            .unwrap_or(!writable);
+        let access = volume_access_state(
+            marker_value,
+            native.as_ref(),
+            resource.as_ref(),
+            mount_table.as_ref(),
+            !metadata.permissions().readonly(),
+        );
+        let writable = access.writable;
+        let read_only = access.read_only;
         let case_sensitive = resource
             .as_ref()
             .and_then(|resource| resource.supports_case_sensitive_names);
@@ -1623,6 +1609,58 @@ fn volume_reachability(
         .or_else(|| Some(path.exists()))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VolumeAccessState {
+    writable: bool,
+    read_only: bool,
+}
+
+fn volume_access_state(
+    marker: Option<&str>,
+    native: Option<&NativeVolumeDescription>,
+    resource: Option<&NativeVolumeResourceValues>,
+    mount_table: Option<&NativeVolumeMountTableEntry>,
+    filesystem_writable: bool,
+) -> VolumeAccessState {
+    if let Some(read_only) = mount_table
+        .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
+        .and_then(|mount_table| mount_table.is_read_only)
+    {
+        return VolumeAccessState {
+            writable: !read_only,
+            read_only,
+        };
+    }
+    if let Some(read_only) = resource
+        .filter(|resource| resource.status == NativeVolumeStatus::Available)
+        .and_then(|resource| resource.is_read_only)
+    {
+        return VolumeAccessState {
+            writable: !read_only,
+            read_only,
+        };
+    }
+    if let Some(writable) = native
+        .filter(|native| native.status == NativeVolumeStatus::Available)
+        .and_then(|native| native.media_writable)
+    {
+        return VolumeAccessState {
+            writable,
+            read_only: !writable,
+        };
+    }
+    if let Some(read_only) = marker_read_only(marker) {
+        return VolumeAccessState {
+            writable: !read_only,
+            read_only,
+        };
+    }
+    VolumeAccessState {
+        writable: filesystem_writable,
+        read_only: !filesystem_writable,
+    }
+}
+
 fn marker_reachability(
     marker: Option<&str>,
     network: bool,
@@ -2319,6 +2357,63 @@ mod tests {
         assert_eq!(reachable, Some(false));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_access_prefers_native_mount_table_over_read_only_marker() {
+        let mount_table = mount_table_entry(|entry| {
+            entry.is_read_only = Some(false);
+        });
+        let resource = resource_values(|values| {
+            values.is_read_only = Some(true);
+        });
+        let native = native_description(|description| {
+            description.media_writable = Some(false);
+        });
+
+        let access = volume_access_state(
+            Some("external-removable-read-only"),
+            Some(&native),
+            Some(&resource),
+            Some(&mount_table),
+            false,
+        );
+
+        assert_eq!(
+            access,
+            VolumeAccessState {
+                writable: true,
+                read_only: false
+            }
+        );
+    }
+
+    #[test]
+    fn volume_access_uses_marker_only_when_native_access_is_unknown() {
+        let access = volume_access_state(
+            Some("external-removable-read-only"),
+            Some(&native_description(|description| {
+                description.status = NativeVolumeStatus::Unavailable;
+                description.media_writable = Some(true);
+            })),
+            Some(&resource_values(|values| {
+                values.status = NativeVolumeStatus::Unavailable;
+                values.is_read_only = Some(false);
+            })),
+            Some(&mount_table_entry(|entry| {
+                entry.status = NativeVolumeStatus::Unavailable;
+                entry.is_read_only = Some(false);
+            })),
+            true,
+        );
+
+        assert_eq!(
+            access,
+            VolumeAccessState {
+                writable: false,
+                read_only: true
+            }
+        );
     }
 
     #[test]
