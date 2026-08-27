@@ -1000,15 +1000,27 @@ impl VolumeEventInvalidationReport {
                 previous,
                 native_reason,
             ),
-            VolumeEventKind::Unavailable => Self::from_parts(
-                kind,
-                native_status,
-                current
+            VolumeEventKind::Unavailable => {
+                let path = current
                     .or(previous)
-                    .map(|descriptor| descriptor.path.clone()),
-                current.or(previous),
-                native_reason,
-            ),
+                    .map(|descriptor| descriptor.path.clone());
+                let event_visible =
+                    path.is_some() || native_status != NativeVolumeStatus::Available;
+                Self {
+                    kind,
+                    native_status,
+                    path,
+                    previous_kind: previous.map(|descriptor| descriptor.kind),
+                    previous_mount_state: previous.map(|descriptor| descriptor.mount_state),
+                    current_kind: current.map(|descriptor| descriptor.kind),
+                    current_mount_state: current.map(|descriptor| descriptor.mount_state),
+                    invalidate_sidebar: event_visible,
+                    invalidate_operation_policy: event_visible,
+                    invalidate_index_admission: event_visible,
+                    rescan_index: event_visible,
+                    reason: native_reason.unwrap_or_else(|| "volume-event-unavailable".to_string()),
+                }
+            }
             VolumeEventKind::DescriptionChanged => {
                 let path = current
                     .or(previous)
@@ -2802,6 +2814,37 @@ mod tests {
         assert!(report
             .as_tsv()
             .contains("\treason=diskarbitration-session-unavailable"));
+    }
+
+    #[test]
+    fn unavailable_volume_transition_preserves_previous_descriptor_as_previous_state() {
+        let root = unique_temp_dir("gfm-volume-event-unavailable-transition");
+        fs::write(root.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        let previous = VolumeDescriptor::for_path(&root).unwrap();
+
+        let report = VolumeEventInvalidationReport::from_transition(
+            VolumeEventKind::Unavailable,
+            NativeVolumeStatus::Unavailable,
+            Some(&previous),
+            None,
+            Some("diskarbitration-description-unavailable".to_string()),
+        );
+
+        assert_eq!(report.path, Some(root.clone()));
+        assert_eq!(report.previous_kind, Some(VolumeKind::Network));
+        assert_eq!(report.previous_mount_state, Some(MountState::Mounted));
+        assert_eq!(report.current_kind, None);
+        assert_eq!(report.current_mount_state, None);
+        assert!(report.invalidate_sidebar);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert_eq!(report.reason, "diskarbitration-description-unavailable");
+        assert!(report.as_tsv().contains(
+            "\tprevious-kind=network\tprevious-mount=mounted\tcurrent-kind=-\tcurrent-mount=-\t"
+        ));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

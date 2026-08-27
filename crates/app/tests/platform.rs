@@ -2198,6 +2198,54 @@ fn reports_fileprovider_observer_probe_from_binary() {
 }
 
 #[test]
+fn reports_fileprovider_observer_metadata_probe_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-observer-metadata-probe-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v1\ndownloaded\t{}\n",
+            item.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-observer-metadata-probe")
+        .arg(&state)
+        .arg(&root)
+        .arg(&item)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("fileprovider-observed-invalidation\t"));
+    assert!(stdout.contains("\tpaths=1\n"));
+    assert!(stdout.contains("provider-metadata-invalidation\t"));
+    assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\t"));
+    assert!(stdout.contains(
+        "\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\t"
+    ));
+    assert!(stdout.ends_with("reason=provider-metadata-state-changed\n"));
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert!(state_text.contains("evicted\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_observer_probe_refuses_unreachable_volume_before_watching_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-observer-unreachable-{}",

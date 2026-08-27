@@ -425,29 +425,34 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "fileprovider-observer-probe requires a FileProvider target path",
             )?;
-            let _root_access =
-                preflight_access_scope(&root, AccessIntent::Index, "fileprovider observer root")?;
-            let _target_access = preflight_access_scope(
-                &write_probe_existing_ancestor(&target),
-                AccessIntent::Write,
-                "fileprovider observer target",
-            )?;
-            let _state_access = retain_fileprovider_snapshot_access(
+            let observed = run_fileprovider_observer_probe(
                 &state_path,
-                std::slice::from_ref(&target),
-                "fileprovider observer state",
+                &root,
+                &target,
+                "fileprovider observer",
             )?;
-            let previous = if state_path.is_file() {
-                Some(FileProviderStateSnapshot::read(&state_path)?)
-            } else {
-                None
-            };
-            let mut observer =
-                FileProviderStateObserver::watch(&[WatchRoot::tree(root)], previous)?;
-            std::fs::write(&target, b"observer-probe").map_err(|err| GfmError::io(&target, err))?;
-            let observed = drain_fileprovider_observer_probe(&mut observer)?;
-            observer.snapshot().write(&state_path)?;
             println!("{}", observed.as_tsv());
+        }
+        "fileprovider-observer-metadata-probe" => {
+            let state_path = required_path(
+                args.next(),
+                "fileprovider-observer-metadata-probe requires a state path",
+            )?;
+            let root = required_path(
+                args.next(),
+                "fileprovider-observer-metadata-probe requires a root",
+            )?;
+            let target = required_path(
+                args.next(),
+                "fileprovider-observer-metadata-probe requires a FileProvider target path",
+            )?;
+            let observed = run_fileprovider_observer_probe(
+                &state_path,
+                &root,
+                &target,
+                "fileprovider observer metadata",
+            )?;
+            println!("{}", observed_metadata_invalidation_tsv(&observed));
         }
         "volume-discovery" => {
             let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
@@ -1365,6 +1370,35 @@ fn observed_metadata_invalidation_tsv(observed: &FileProviderObservedInvalidatio
         .as_tsv()
     }));
     lines.join("\n")
+}
+
+fn run_fileprovider_observer_probe(
+    state_path: &Path,
+    root: &Path,
+    target: &Path,
+    worker: &str,
+) -> Result<FileProviderObservedInvalidation> {
+    let root_worker = format!("{worker} root");
+    let target_worker = format!("{worker} target");
+    let state_worker = format!("{worker} state");
+    let _root_access = preflight_access_scope(root, AccessIntent::Index, &root_worker)?;
+    let _target_access = preflight_access_scope(
+        &write_probe_existing_ancestor(target),
+        AccessIntent::Write,
+        &target_worker,
+    )?;
+    let _state_access =
+        retain_fileprovider_snapshot_access(state_path, &[target.to_path_buf()], &state_worker)?;
+    let previous = if state_path.is_file() {
+        Some(FileProviderStateSnapshot::read(state_path)?)
+    } else {
+        None
+    };
+    let mut observer = FileProviderStateObserver::watch(&[WatchRoot::tree(root)], previous)?;
+    std::fs::write(target, b"observer-probe").map_err(|err| GfmError::io(target, err))?;
+    let observed = drain_fileprovider_observer_probe(&mut observer)?;
+    observer.snapshot().write(state_path)?;
+    Ok(observed)
 }
 
 fn observed_preview_cache_invalidation_tsv(
