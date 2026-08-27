@@ -1370,7 +1370,7 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
         "{quicklook_stdout}"
     );
     assert!(
-        quicklook_stdout.ends_with("schedule=scheduled:visible\n"),
+        quicklook_stdout.ends_with("schedule=cancelled:metadata-only\n"),
         "{quicklook_stdout}"
     );
 
