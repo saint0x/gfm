@@ -772,6 +772,8 @@ pub struct VolumeEventInvalidationReport {
     pub kind: VolumeEventKind,
     pub native_status: NativeVolumeStatus,
     pub path: Option<PathBuf>,
+    pub previous_kind: Option<VolumeKind>,
+    pub previous_mount_state: Option<MountState>,
     pub current_kind: Option<VolumeKind>,
     pub current_mount_state: Option<MountState>,
     pub invalidate_sidebar: bool,
@@ -887,8 +889,20 @@ impl VolumeEventInvalidationReport {
             kind,
             native_status,
             path,
-            current_kind: descriptor.map(|descriptor| descriptor.kind),
-            current_mount_state: descriptor.map(|descriptor| descriptor.mount_state),
+            previous_kind: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.kind))
+                .flatten(),
+            previous_mount_state: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.mount_state))
+                .flatten(),
+            current_kind: (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.kind))
+                .flatten(),
+            current_mount_state: if kind == VolumeEventKind::Disappeared && event_visible {
+                Some(MountState::Unmounted)
+            } else {
+                descriptor.map(|descriptor| descriptor.mount_state)
+            },
             invalidate_sidebar: invalidates,
             invalidate_operation_policy: invalidates,
             invalidate_index_admission: invalidates,
@@ -899,13 +913,15 @@ impl VolumeEventInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tcurrent-kind={}\tcurrent-mount={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
+            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tprevious-kind={}\tprevious-mount={}\tcurrent-kind={}\tcurrent-mount={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
             self.kind.as_str(),
             self.native_status.as_str(),
             self.path
                 .as_ref()
                 .map(|path| escape_field(&path.to_string_lossy()))
                 .unwrap_or_else(|| "-".to_string()),
+            self.previous_kind.map(VolumeKind::as_str).unwrap_or("-"),
+            self.previous_mount_state.map(MountState::as_str).unwrap_or("-"),
             self.current_kind.map(VolumeKind::as_str).unwrap_or("-"),
             self.current_mount_state.map(MountState::as_str).unwrap_or("-"),
             self.invalidate_sidebar,
@@ -2179,6 +2195,8 @@ mod tests {
 
         assert_eq!(report.current_kind, Some(VolumeKind::External));
         assert_eq!(report.current_mount_state, Some(MountState::Mounted));
+        assert_eq!(report.previous_kind, None);
+        assert_eq!(report.previous_mount_state, None);
         assert!(report.invalidate_sidebar);
         assert!(report.invalidate_operation_policy);
         assert!(report.invalidate_index_admission);
@@ -2186,6 +2204,35 @@ mod tests {
         assert!(report
             .as_tsv()
             .starts_with("volume-event-invalidation\tkind=description-changed\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn disappeared_volume_event_reports_previous_volume_and_unmounted_current_state() {
+        let root = unique_temp_dir("gfm-volume-event-disappeared");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let descriptor = VolumeDescriptor::for_path(&root).unwrap();
+
+        let report = VolumeEventInvalidationReport::from_parts(
+            VolumeEventKind::Disappeared,
+            NativeVolumeStatus::Available,
+            Some(root.clone()),
+            Some(&descriptor),
+            None,
+        );
+
+        assert_eq!(report.previous_kind, Some(VolumeKind::External));
+        assert_eq!(report.previous_mount_state, Some(MountState::Mounted));
+        assert_eq!(report.current_kind, None);
+        assert_eq!(report.current_mount_state, Some(MountState::Unmounted));
+        assert!(report.invalidate_sidebar);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.as_tsv().contains(
+            "\tprevious-kind=external\tprevious-mount=mounted\tcurrent-kind=-\tcurrent-mount=unmounted\t"
+        ));
 
         fs::remove_dir_all(root).unwrap();
     }

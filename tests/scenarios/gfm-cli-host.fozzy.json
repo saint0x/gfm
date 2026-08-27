@@ -2542,7 +2542,20 @@
         "tmp/gfm-fozzy-dist"
       ],
       "exit_code": 0,
-      "stdout": "volume-event-invalidation\tkind=description-changed\tnative-status=available\tpath=tmp/gfm-fozzy-dist\tcurrent-kind=external\tcurrent-mount=mounted\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-event-description-changed\n",
+      "stdout": "volume-event-invalidation\tkind=description-changed\tnative-status=available\tpath=tmp/gfm-fozzy-dist\tprevious-kind=-\tprevious-mount=-\tcurrent-kind=external\tcurrent-mount=mounted\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-event-description-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-event-invalidation",
+        "disappeared",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-invalidation\tkind=disappeared\tnative-status=available\tpath=tmp/gfm-fozzy-dist\tprevious-kind=external\tprevious-mount=mounted\tcurrent-kind=-\tcurrent-mount=unmounted\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-event-disappeared\n",
       "stderr": "",
       "times": 1
     },
@@ -2567,7 +2580,7 @@
         "unavailable"
       ],
       "exit_code": 0,
-      "stdout": "volume-event-invalidation\tkind=unavailable\tnative-status=unavailable\tpath=-\tcurrent-kind=-\tcurrent-mount=-\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-event-unavailable\n",
+      "stdout": "volume-event-invalidation\tkind=unavailable\tnative-status=unavailable\tpath=-\tprevious-kind=-\tprevious-mount=-\tcurrent-kind=-\tcurrent-mount=-\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-event-unavailable\n",
       "stderr": "",
       "times": 1
     },
