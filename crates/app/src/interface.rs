@@ -290,12 +290,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 descriptor.as_ref(),
                 None,
             );
-            let current = descriptor.as_ref().map(sidebar_volume_spec);
+            let previous = (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.as_ref().map(sidebar_volume_spec))
+                .flatten();
+            let current = (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.as_ref().map(sidebar_volume_spec))
+                .flatten();
             println!(
                 "{}",
                 SidebarVolumeInvalidation::from_event(
                     sidebar_volume_event_kind(kind),
                     path,
+                    previous.as_ref(),
                     current.as_ref(),
                     platform.invalidate_sidebar,
                     platform.reason,

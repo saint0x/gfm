@@ -162,6 +162,11 @@ pub struct SidebarVolumeInvalidation {
     pub row_id: Option<String>,
     pub path: Option<PathBuf>,
     pub kind: SidebarVolumeEventKind,
+    pub previous_kind: Option<SidebarVolumeKind>,
+    pub previous_mount_state: Option<SidebarVolumeMountState>,
+    pub previous_read_only: Option<bool>,
+    pub previous_network: Option<bool>,
+    pub previous_reachable: Option<bool>,
     pub current_kind: Option<SidebarVolumeKind>,
     pub current_mount_state: Option<SidebarVolumeMountState>,
     pub current_read_only: Option<bool>,
@@ -178,11 +183,22 @@ impl SidebarVolumeInvalidation {
     pub fn from_event(
         kind: SidebarVolumeEventKind,
         path: Option<PathBuf>,
+        previous: Option<&SidebarVolumeSpec>,
         current: Option<&SidebarVolumeSpec>,
         platform_invalidated_sidebar: bool,
         platform_reason: impl Into<String>,
     ) -> Self {
-        let row_id = current.map(|volume| volume.id.clone());
+        let row = if matches!(kind, SidebarVolumeEventKind::Disappeared) {
+            previous.or(current)
+        } else {
+            current.or(previous)
+        };
+        let row_id = row.map(|volume| volume.id.clone());
+        let previous_kind = previous.map(|volume| volume.kind);
+        let previous_mount_state = previous.map(|volume| volume.mount_state);
+        let previous_read_only = previous.map(|volume| volume.read_only);
+        let previous_network = previous.map(|volume| volume.network);
+        let previous_reachable = previous.and_then(|volume| volume.reachable);
         let current_kind = current.map(|volume| volume.kind);
         let current_mount_state = current.map(|volume| volume.mount_state);
         let current_read_only = current.map(|volume| volume.read_only);
@@ -215,6 +231,11 @@ impl SidebarVolumeInvalidation {
             row_id,
             path,
             kind,
+            previous_kind,
+            previous_mount_state,
+            previous_read_only,
+            previous_network,
+            previous_reachable,
             current_kind,
             current_mount_state,
             current_read_only,
@@ -230,13 +251,26 @@ impl SidebarVolumeInvalidation {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "sidebar-volume-invalidation\trow={}\tpath={}\tkind={}\tcurrent-kind={}\tcurrent-mount={}\tread-only={}\tnetwork={}\treachable={}\tinvalidate-row={}\tinvalidate-section={}\tremove-row={}\tdisable-row={}\treason={}",
+            "sidebar-volume-invalidation\trow={}\tpath={}\tkind={}\tprevious-kind={}\tprevious-mount={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tcurrent-kind={}\tcurrent-mount={}\tread-only={}\tnetwork={}\treachable={}\tinvalidate-row={}\tinvalidate-section={}\tremove-row={}\tdisable-row={}\treason={}",
             self.row_id.as_deref().unwrap_or("-"),
             self.path
                 .as_ref()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.kind.as_str(),
+            self.previous_kind.map(SidebarVolumeKind::as_str).unwrap_or("-"),
+            self.previous_mount_state
+                .map(SidebarVolumeMountState::as_str)
+                .unwrap_or("-"),
+            self.previous_read_only
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.previous_network
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.previous_reachable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             self.current_kind.map(SidebarVolumeKind::as_str).unwrap_or("-"),
             self.current_mount_state
                 .map(SidebarVolumeMountState::as_str)
@@ -1115,6 +1149,7 @@ mod tests {
         let invalidation = SidebarVolumeInvalidation::from_event(
             SidebarVolumeEventKind::DescriptionChanged,
             Some(PathBuf::from("/Volumes/Team")),
+            None,
             Some(&volume),
             true,
             "volume-event-description-changed",
@@ -1130,6 +1165,7 @@ mod tests {
             Some(SidebarVolumeMountState::Stale)
         );
         assert_eq!(invalidation.current_reachable, Some(false));
+        assert_eq!(invalidation.previous_kind, None);
         assert!(invalidation.invalidate_row);
         assert!(invalidation.invalidate_section);
         assert!(!invalidation.remove_row);
@@ -1137,7 +1173,7 @@ mod tests {
         assert_eq!(invalidation.reason, "sidebar-volume-disabled");
         assert_eq!(
             invalidation.as_tsv(),
-            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tcurrent-kind=network\tcurrent-mount=stale\tread-only=true\tnetwork=true\treachable=false\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
+            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tprevious-kind=-\tprevious-mount=-\tprevious-read-only=-\tprevious-network=-\tprevious-reachable=-\tcurrent-kind=network\tcurrent-mount=stale\tread-only=true\tnetwork=true\treachable=false\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
         );
     }
 
@@ -1160,6 +1196,7 @@ mod tests {
         let invalidation = SidebarVolumeInvalidation::from_event(
             SidebarVolumeEventKind::DescriptionChanged,
             Some(PathBuf::from("/Volumes/Team")),
+            None,
             Some(&volume),
             true,
             "volume-event-description-changed",
@@ -1171,21 +1208,46 @@ mod tests {
         assert_eq!(invalidation.reason, "sidebar-volume-disabled");
         assert_eq!(
             invalidation.as_tsv(),
-            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tcurrent-kind=network\tcurrent-mount=mounted\tread-only=false\tnetwork=true\treachable=false\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
+            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tprevious-kind=-\tprevious-mount=-\tprevious-read-only=-\tprevious-network=-\tprevious-reachable=-\tcurrent-kind=network\tcurrent-mount=mounted\tread-only=false\tnetwork=true\treachable=false\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
         );
     }
 
     #[test]
     fn volume_invalidation_marks_disappeared_location_for_removal() {
+        let previous = SidebarVolumeSpec::from_native_seed(
+            "diskarbitration:uuid:Team",
+            "Team",
+            "/Volumes/Team",
+            true,
+        )
+        .with_volume_state(
+            SidebarVolumeKind::Network,
+            SidebarVolumeMountState::Mounted,
+            false,
+            true,
+            Some(true),
+        );
+
         let invalidation = SidebarVolumeInvalidation::from_event(
             SidebarVolumeEventKind::Disappeared,
             Some(PathBuf::from("/Volumes/Team")),
+            Some(&previous),
             None,
             true,
             "volume-event-disappeared",
         );
 
-        assert_eq!(invalidation.row_id, None);
+        assert_eq!(
+            invalidation.row_id.as_deref(),
+            Some("volume-diskarbitration-uuid-team")
+        );
+        assert_eq!(invalidation.previous_kind, Some(SidebarVolumeKind::Network));
+        assert_eq!(
+            invalidation.previous_mount_state,
+            Some(SidebarVolumeMountState::Mounted)
+        );
+        assert_eq!(invalidation.previous_reachable, Some(true));
+        assert_eq!(invalidation.current_kind, None);
         assert!(invalidation.invalidate_row);
         assert!(invalidation.invalidate_section);
         assert!(invalidation.remove_row);
@@ -1193,7 +1255,7 @@ mod tests {
         assert_eq!(invalidation.reason, "sidebar-volume-disappeared");
         assert_eq!(
             invalidation.as_tsv(),
-            "sidebar-volume-invalidation\trow=-\tpath=/Volumes/Team\tkind=disappeared\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared"
+            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=disappeared\tprevious-kind=network\tprevious-mount=mounted\tprevious-read-only=false\tprevious-network=true\tprevious-reachable=true\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared"
         );
     }
 

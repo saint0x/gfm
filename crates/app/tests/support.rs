@@ -761,18 +761,19 @@ fn reports_volume_invalidation_in_ui_sidebar_contract_from_binary() {
     let changed_stdout = String::from_utf8(changed.stdout).unwrap();
     assert!(changed_stdout.starts_with("sidebar-volume-invalidation\trow=volume-"));
     assert!(changed_stdout.contains(&format!("\tpath={}\t", root.display())));
-    assert!(changed_stdout.contains("\tkind=description-changed\tcurrent-kind=network\t"));
+    assert!(changed_stdout.contains("\tprevious-kind=-\tprevious-mount=-\t"));
+    assert!(changed_stdout.contains("\tkind=description-changed\t"));
+    assert!(changed_stdout.contains("\tcurrent-kind=network\t"));
     assert!(changed_stdout
         .contains("\tcurrent-mount=mounted\tread-only=false\tnetwork=true\treachable=true\t"));
     assert!(changed_stdout.contains(
         "\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=false\t"
     ));
 
-    let missing = root.join("gone");
     let disappeared = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("ui-sidebar-volume-invalidation")
         .arg("disappeared")
-        .arg(&missing)
+        .arg(&root)
         .output()
         .unwrap();
     assert!(
@@ -781,13 +782,17 @@ fn reports_volume_invalidation_in_ui_sidebar_contract_from_binary() {
         String::from_utf8_lossy(&disappeared.stderr)
     );
     let disappeared_stdout = String::from_utf8(disappeared.stdout).unwrap();
-    assert_eq!(
-        disappeared_stdout,
-        format!(
-            "sidebar-volume-invalidation\trow=-\tpath={}\tkind=disappeared\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared\n",
-            missing.display()
-        )
+    assert!(disappeared_stdout.starts_with("sidebar-volume-invalidation\trow=volume-"));
+    assert!(disappeared_stdout.contains(&format!("\tpath={}\t", root.display())));
+    assert!(
+        disappeared_stdout
+            .contains("\tkind=disappeared\tprevious-kind=network\tprevious-mount=mounted\t"),
+        "{disappeared_stdout}"
     );
+    assert!(disappeared_stdout.contains("\tprevious-read-only=false\tprevious-network=true\t"));
+    assert!(disappeared_stdout.contains("\tprevious-reachable=true\tcurrent-kind=-\t"));
+    assert!(disappeared_stdout.contains("\tremove-row=true\tdisable-row=false\t"));
+    assert!(disappeared_stdout.ends_with("reason=sidebar-volume-disappeared\n"));
 
     let _ = std::fs::remove_dir_all(root);
 }
