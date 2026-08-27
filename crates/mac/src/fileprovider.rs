@@ -106,7 +106,11 @@ impl CloudMaterialization {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloudMaterializationSource {
     NativeUrlResource,
+    NativeUrlResourceUnavailable,
+    NativeUrlResourceUnsupported,
     NativeFileProviderIdentityUnknown,
+    NativeFileProviderIdentityUnavailable,
+    NativeFileProviderIdentityUnsupported,
     XattrFallback,
     PathFallback,
     Filesystem,
@@ -117,7 +121,11 @@ impl CloudMaterializationSource {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::NativeUrlResource => "native-url-resource",
+            Self::NativeUrlResourceUnavailable => "native-url-resource:unavailable",
+            Self::NativeUrlResourceUnsupported => "native-url-resource:unsupported",
             Self::NativeFileProviderIdentityUnknown => "nsfileprovidermanager:unknown",
+            Self::NativeFileProviderIdentityUnavailable => "nsfileprovidermanager:unavailable",
+            Self::NativeFileProviderIdentityUnsupported => "nsfileprovidermanager:unsupported",
             Self::XattrFallback => "xattr-fallback",
             Self::PathFallback => "path-fallback",
             Self::Filesystem => "filesystem",
@@ -1417,10 +1425,31 @@ fn materialization_source_for_state(
         || native_has_ubiquitous_materialization_evidence(&hints.native)
     {
         CloudMaterializationSource::NativeUrlResource
+    } else if state == CloudStorageState::Unknown
+        && hints.native.status == gfm_mac_sys::NativeFileProviderStatus::UnsupportedPath
+    {
+        CloudMaterializationSource::NativeUrlResourceUnsupported
+    } else if state == CloudStorageState::Unknown
+        && hints.native.status == gfm_mac_sys::NativeFileProviderStatus::Missing
+    {
+        CloudMaterializationSource::NativeUrlResourceUnavailable
     } else if hints.native_identity.status == NativeFileProviderIdentityStatus::Available
         && state == CloudStorageState::Unknown
     {
         CloudMaterializationSource::NativeFileProviderIdentityUnknown
+    } else if state == CloudStorageState::Unknown
+        && matches!(
+            hints.native_identity.status,
+            NativeFileProviderIdentityStatus::ProviderUnavailable
+                | NativeFileProviderIdentityStatus::TimedOut
+                | NativeFileProviderIdentityStatus::Failed
+        )
+    {
+        CloudMaterializationSource::NativeFileProviderIdentityUnavailable
+    } else if state == CloudStorageState::Unknown
+        && hints.native_identity.status == NativeFileProviderIdentityStatus::UnsupportedPath
+    {
+        CloudMaterializationSource::NativeFileProviderIdentityUnsupported
     } else if !hints.xattrs.is_empty() {
         CloudMaterializationSource::XattrFallback
     } else if hints.source.contains("fixture-name") || hints.source.contains("icloud-extension") {
@@ -2505,6 +2534,67 @@ mod tests {
         assert_eq!(
             materialization_source_for_state(state, &hints),
             CloudMaterializationSource::NativeUrlResource
+        );
+    }
+
+    #[test]
+    fn native_url_unsupported_unknown_state_reports_typed_source() {
+        let path = PathBuf::from("/tmp/Remote.fileprovider");
+        let mut native = native_values();
+        native.status = gfm_mac_sys::NativeFileProviderStatus::UnsupportedPath;
+        native.reason = Some("native URL resource values unsupported".to_string());
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+
+        assert_eq!(domain, FileProviderDomain::FileProvider);
+        assert_eq!(state, CloudStorageState::Unknown);
+        assert_eq!(
+            materialization_for_state(state),
+            CloudMaterialization::Unknown
+        );
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            CloudMaterializationSource::NativeUrlResourceUnsupported
+        );
+    }
+
+    #[test]
+    fn native_identity_unavailable_unknown_state_reports_typed_source() {
+        let path = PathBuf::from("/tmp/Remote.fileprovider");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::TimedOut,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("NSFileProviderManager identity lookup timed out".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+
+        assert_eq!(domain, FileProviderDomain::FileProvider);
+        assert_eq!(state, CloudStorageState::Unknown);
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            CloudMaterializationSource::NativeFileProviderIdentityUnavailable
         );
     }
 
