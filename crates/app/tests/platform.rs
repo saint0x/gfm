@@ -1218,16 +1218,20 @@ fn reports_volume_discovery_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-volumes-{}", std::process::id()));
     let external = root.join("Work Drive");
     let network = root.join("Team Share");
+    let offline = root.join("Offline Share");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&external).unwrap();
     std::fs::create_dir_all(&network).unwrap();
+    std::fs::create_dir_all(&offline).unwrap();
     std::fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
     std::fs::write(network.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+    std::fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-discovery")
         .arg(&external)
         .arg(&network)
+        .arg(&offline)
         .output()
         .unwrap();
     assert!(
@@ -1237,7 +1241,7 @@ fn reports_volume_discovery_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    assert!(stdout.starts_with("volumes\tcount=2\n"));
+    assert!(stdout.starts_with("volumes\tcount=3\n"));
     assert!(stdout.contains("\tWork Drive\t"));
     assert!(stdout.contains(
         "\tkind=external\tmount=mounted\tremovable=true\tnetwork=false\treachable=true\tejectable=true\t"
@@ -1247,12 +1251,17 @@ fn reports_volume_discovery_from_binary() {
     assert!(stdout.contains(
         "\tkind=network\tmount=mounted\tremovable=false\tnetwork=true\treachable=true\tejectable=true\t"
     ));
+    assert!(stdout.contains("\tOffline Share\t"));
+    assert!(stdout.contains(
+        "\tkind=network\tmount=mounted\tremovable=false\tnetwork=true\treachable=false\tejectable=true\t"
+    ));
     assert!(stdout.contains("\tstable-id=dev:"));
     assert!(stdout.contains("\tnative-status=-\twritable="));
     assert!(stdout.contains("\tread-only="));
     assert!(stdout.contains("\tresource-status=-"));
     assert!(stdout.contains("\tmount-status=-\t"));
     assert!(stdout.contains("source=fixture-marker:network-smb"));
+    assert!(stdout.contains("source=fixture-marker:network-unreachable"));
 
     let _ = std::fs::remove_dir_all(root);
 }

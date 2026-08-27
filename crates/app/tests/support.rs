@@ -1222,6 +1222,36 @@ fn reports_quicklook_session_from_binary() {
 }
 
 #[test]
+fn quicklook_refuses_unreachable_network_volume_before_preview_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-quicklook-unreachable-volume-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("Project")).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Project").join("Preview.pdf");
+    std::fs::write(&path, b"%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("quicklook-session")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("quicklook-session\t"), "{stdout}");
+    assert!(
+        stderr.contains("quicklook preview volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn adaptive_quicklook_session_stays_visible_under_pressure_from_binary() {
     let path =
         std::env::temp_dir().join(format!("gfm-quicklook-adaptive-{}.pdf", std::process::id()));
@@ -1303,6 +1333,36 @@ fn reports_thumbnail_generation_from_binary() {
     assert!(stdout.ends_with("schedule=scheduled:visible\n"));
 
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn thumbnail_refuses_unreachable_network_volume_before_generation_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-thumbnail-unreachable-volume-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("Project")).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Project").join("Preview.png");
+    std::fs::write(&path, b"png").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("thumbnail-generation")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("thumbnail-generation\t"), "{stdout}");
+    assert!(
+        stderr.contains("thumbnail generation volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

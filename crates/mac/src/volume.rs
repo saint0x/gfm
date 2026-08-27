@@ -204,7 +204,13 @@ impl VolumeDescriptor {
             .map(|local| !local)
             .or_else(|| native.as_ref().and_then(|native| native.volume_network))
             .unwrap_or(kind == VolumeKind::Network);
-        let reachable = volume_reachability(network, mount_state, resource.as_ref(), &path);
+        let reachable = marker_reachability(
+            marker.as_deref(),
+            network,
+            mount_state,
+            resource.as_ref(),
+            &path,
+        );
         let ejectable = resource
             .as_ref()
             .and_then(|resource| resource.is_ejectable)
@@ -1291,6 +1297,19 @@ fn volume_reachability(
         .or_else(|| Some(path.exists()))
 }
 
+fn marker_reachability(
+    marker: Option<&str>,
+    network: bool,
+    mount_state: MountState,
+    resource: Option<&NativeVolumeResourceValues>,
+    path: &Path,
+) -> Option<bool> {
+    match marker {
+        Some("network-unreachable") | Some("network-offline") => Some(false),
+        _ => volume_reachability(network, mount_state, resource, path),
+    }
+}
+
 fn classify_volume(
     path: &Path,
     marker: Option<&str>,
@@ -1299,9 +1318,12 @@ fn classify_volume(
     mount_table: Option<&NativeVolumeMountTableEntry>,
 ) -> VolumeKind {
     match marker {
-        Some("network") | Some("network-smb") | Some("network-afp") | Some("network-nfs") => {
-            return VolumeKind::Network;
-        }
+        Some("network")
+        | Some("network-smb")
+        | Some("network-afp")
+        | Some("network-nfs")
+        | Some("network-unreachable")
+        | Some("network-offline") => return VolumeKind::Network,
         Some("external") | Some("external-removable") => return VolumeKind::External,
         Some("removable") => return VolumeKind::Removable,
         Some("disk-image") => return VolumeKind::DiskImage,
@@ -1801,6 +1823,21 @@ mod tests {
         assert_eq!(volume.kind, VolumeKind::Network);
 
         fs::remove_dir_all(volume.path.clone()).unwrap();
+    }
+
+    #[test]
+    fn network_unreachable_marker_reports_offline_reachability() {
+        let root = unique_temp_dir("gfm-volume-network-offline");
+        fs::write(root.join(VOLUME_MARKER), "network-unreachable\n").unwrap();
+
+        let descriptor = VolumeDescriptor::for_path(&root).unwrap();
+
+        assert_eq!(descriptor.kind, VolumeKind::Network);
+        assert!(descriptor.network);
+        assert_eq!(descriptor.reachable, Some(false));
+        assert!(descriptor.as_tsv().contains("\treachable=false\t"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
