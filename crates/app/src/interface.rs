@@ -15,11 +15,11 @@ use gfm_ui::{
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
     MenuContract, OperationProgressContract, OperationProgressInput, OperationProgressState,
-    PermissionRefreshContract, ProviderConflictContract, ProviderConflictInput, SearchResultsBatch,
-    SearchResultsContract, SearchResultsOptions, SearchResultsStage, SidebarCloudState,
-    SidebarContract, SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata,
-    TrashViewContract, TrashViewOptions, VirtualSurface, VirtualizationContract,
-    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    PermissionPromptKind, PermissionRefreshContract, ProviderConflictContract,
+    ProviderConflictInput, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
+    SearchResultsStage, SidebarCloudState, SidebarContract, SidebarVolumeSpec, TitlebarContract,
+    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
+    VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -383,10 +383,7 @@ fn print_permission_onboarding_contract(
     plan: gfm_mac::PermissionOnboardingPlan,
     refresh: Option<PermissionRefreshContract>,
 ) {
-    println!(
-        "{}",
-        DialogContract::finder_default(DialogSurface::Permission).as_tsv()
-    );
+    println!("{}", permission_dialog_for_plan(&plan).as_tsv());
     println!(
         "permission-onboarding\taction={}\tprompt-mode={}\tfinder-parity-default={}\tmachine-search-ready={}",
         plan.action.as_str(),
@@ -431,6 +428,14 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
         .map(AppLaunchSpec::new)
         .unwrap_or_default()
         .with_sidebar_volumes(native_sidebar_volumes());
+    if let Some(store) = crate::runtime::runtime_progress_store() {
+        let progress_surfaces = store
+            .restorable()?
+            .iter()
+            .map(operation_progress_contract)
+            .collect();
+        spec = spec.with_progress_surfaces(progress_surfaces);
+    }
     let refresh = crate::permission_refresh::refresh_permission_state(
         crate::permission_refresh::PermissionRefreshAudience::Ui,
         "window-lifecycle",
@@ -440,7 +445,7 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
     }
     let plan = current_permission_onboarding()?;
     if plan.finder_parity_default || plan.action != gfm_mac::PermissionAction::ContinueNormally {
-        Ok(spec.with_permission_dialog(DialogContract::finder_default(DialogSurface::Permission)))
+        Ok(spec.with_permission_dialog(permission_dialog_for_plan(&plan)))
     } else {
         Ok(spec)
     }
@@ -456,6 +461,43 @@ fn permission_refresh_contract(
         report.refresh_workers,
         report.refresh_operations,
     )
+}
+
+fn permission_dialog_for_plan(plan: &gfm_mac::PermissionOnboardingPlan) -> DialogContract {
+    DialogContract::permission_prompt(permission_prompt_kind(plan))
+}
+
+fn permission_prompt_kind(plan: &gfm_mac::PermissionOnboardingPlan) -> PermissionPromptKind {
+    let full_disk_denied = plan
+        .denied_scopes()
+        .any(|item| item.scope == gfm_mac::PermissionScope::FullDiskAccess);
+    if full_disk_denied
+        || matches!(
+            plan.action,
+            gfm_mac::PermissionAction::ExplainFullDiskAccess
+        )
+    {
+        return PermissionPromptKind::FullDiskAccess;
+    }
+    match plan.action {
+        gfm_mac::PermissionAction::ContinueNormally => PermissionPromptKind::General,
+        gfm_mac::PermissionAction::ContinueDegraded => PermissionPromptKind::DegradedSearch,
+        gfm_mac::PermissionAction::ExplainFullDiskAccess => PermissionPromptKind::FullDiskAccess,
+        gfm_mac::PermissionAction::BlockUntilGranted => {
+            if plan.denied_scopes().any(|item| {
+                matches!(
+                    item.scope,
+                    gfm_mac::PermissionScope::Desktop
+                        | gfm_mac::PermissionScope::Documents
+                        | gfm_mac::PermissionScope::Downloads
+                )
+            }) {
+                PermissionPromptKind::BookmarkAcquisition
+            } else {
+                PermissionPromptKind::Blocked
+            }
+        }
+    }
 }
 
 fn default_current_path(path: Option<String>) -> PathBuf {

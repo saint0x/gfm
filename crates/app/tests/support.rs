@@ -1,3 +1,4 @@
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 #[test]
@@ -129,6 +130,42 @@ fn reports_permission_onboarding_dialog_contract_from_binary() {
 }
 
 #[test]
+fn permission_onboarding_contract_uses_full_disk_access_prompt_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-permission-fda-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let home = root.join("home");
+    let mail = home.join("Library").join("Mail");
+    std::fs::create_dir_all(&mail).unwrap();
+    std::fs::set_permissions(&mail, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .arg("ui-permission-onboarding-contract")
+        .output()
+        .unwrap();
+
+    let _ = std::fs::set_permissions(&mail, std::fs::Permissions::from_mode(0o700));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+    assert!(
+        stdout.contains("\ttitle=Allow Full Disk Access\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("button\topen-settings\tOpen Settings\tdefault\tenabled=true"),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_permission_ui_refresh_in_onboarding_contract_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-permission-refresh-onboarding-{}",
@@ -195,6 +232,55 @@ fn reports_permission_ui_refresh_in_lifecycle_contract_from_binary() {
     );
 
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
+    let progress = std::env::temp_dir().join(format!(
+        "gfm-ui-lifecycle-progress-{}.gfmprogress",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&progress);
+
+    let seed = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("jobs-progress-snapshot")
+        .arg(&progress)
+        .output()
+        .unwrap();
+    assert!(
+        seed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&seed.stderr)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["ui-contract", "/tmp/gfm"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("window\tGFM\t/tmp/gfm\t"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "\noperation-progress\tlabel=copy selected files\tstate=running\tcompleted=42\ttotal=100\tpercent=42\t"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "\noperation-progress\tlabel=index content\tstate=paused\tcompleted=128\ttotal=250\tpercent=51\t"
+        ),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("compact content segments"), "{stdout}");
+
+    let _ = std::fs::remove_file(progress);
 }
 
 #[test]

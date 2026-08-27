@@ -35,7 +35,7 @@ pub use context::{
 pub use dialog::{
     render as render_dialog, DialogButtonRole, DialogButtonSpec, DialogContract, DialogFieldKind,
     DialogFieldSpec, DialogPresentation, DialogSurface, OperationProgressContract,
-    OperationProgressInput, OperationProgressState, ProviderConflictContract,
+    OperationProgressInput, OperationProgressState, PermissionPromptKind, ProviderConflictContract,
     ProviderConflictInput,
 };
 pub use gallery::{
@@ -90,6 +90,7 @@ pub struct AppLaunchSpec {
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
+    pub progress_surfaces: Vec<OperationProgressContract>,
     pub permission_dialog: Option<DialogContract>,
     pub permission_refresh: Option<PermissionRefreshContract>,
 }
@@ -176,6 +177,14 @@ impl AppLaunchSpec {
                 )));
             }
         }
+        for progress in &self.progress_surfaces {
+            if !progress.state.is_cancellable() {
+                return Err(GfmError::Format(format!(
+                    "native app progress surface `{}` is not restorable",
+                    progress.label
+                )));
+            }
+        }
         if let Some(dialog) = &self.permission_dialog {
             if dialog.surface != DialogSurface::Permission {
                 return Err(GfmError::Format(
@@ -202,6 +211,11 @@ impl AppLaunchSpec {
         self
     }
 
+    pub fn with_progress_surfaces(mut self, surfaces: Vec<OperationProgressContract>) -> Self {
+        self.progress_surfaces = surfaces;
+        self
+    }
+
     pub fn with_permission_refresh(mut self, refresh: PermissionRefreshContract) -> Self {
         self.permission_refresh = Some(refresh);
         self
@@ -221,6 +235,7 @@ impl Default for AppLaunchSpec {
             activate_on_launch: true,
             tabbing_identifier: "gfm-main-window".to_string(),
             sidebar_volumes: Vec::new(),
+            progress_surfaces: Vec::new(),
             permission_dialog: None,
             permission_refresh: None,
         }
@@ -239,6 +254,7 @@ pub struct WindowLifecycleContract {
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
+    pub progress_surfaces: Vec<OperationProgressContract>,
     pub permission_dialog: Option<DialogSurface>,
     pub permission_refresh: Option<PermissionRefreshContract>,
 }
@@ -257,6 +273,7 @@ impl WindowLifecycleContract {
             activate_on_launch: spec.activate_on_launch,
             tabbing_identifier: spec.tabbing_identifier.clone(),
             sidebar_volumes: spec.sidebar_volumes.clone(),
+            progress_surfaces: spec.progress_surfaces.clone(),
             permission_dialog: spec.permission_dialog.as_ref().map(|dialog| dialog.surface),
             permission_refresh: spec.permission_refresh.clone(),
         })
@@ -278,6 +295,11 @@ impl WindowLifecycleContract {
                 .map(DialogSurface::as_str)
                 .unwrap_or("none")
         )];
+        lines.extend(
+            self.progress_surfaces
+                .iter()
+                .map(|progress| progress.as_tsv()),
+        );
         if let Some(refresh) = &self.permission_refresh {
             lines.push(refresh.as_tsv());
         }
@@ -317,6 +339,7 @@ fn open_main_window(
                 spec.sidebar_volumes.clone(),
             ),
             icon_view: IconViewContract::from_records(&[], IconViewOptions::default()),
+            progress_surfaces: spec.progress_surfaces,
             permission_dialog: spec.permission_dialog,
             permission_refresh: spec.permission_refresh,
             initial_path: spec.initial_path,
@@ -383,6 +406,7 @@ struct RootView {
     session_writer: WindowSessionWriter,
     sidebar: SidebarContract,
     icon_view: IconViewContract,
+    progress_surfaces: Vec<OperationProgressContract>,
     permission_dialog: Option<DialogContract>,
     permission_refresh: Option<PermissionRefreshContract>,
     initial_path: PathBuf,
@@ -414,6 +438,11 @@ impl Render for RootView {
         if let Some(dialog) = &self.permission_dialog {
             root = root.child(dialog::render(dialog));
         }
+        for progress in &self.progress_surfaces {
+            root = root
+                .child(dialog::render(&progress.dialog))
+                .child(div().invisible().child(progress.as_tsv()));
+        }
         if let Some(refresh) = &self.permission_refresh {
             root = root.child(
                 div()
@@ -441,6 +470,7 @@ mod tests {
         assert!(contract.transparent_titlebar);
         assert_eq!(contract.tabbing_identifier, "gfm-main-window");
         assert!(contract.sidebar_volumes.is_empty());
+        assert!(contract.progress_surfaces.is_empty());
         assert_eq!(contract.permission_dialog, None);
         assert_eq!(contract.permission_refresh, None);
     }
@@ -503,6 +533,39 @@ mod tests {
 
         let err = WindowLifecycleContract::from_spec(&spec).unwrap_err();
         assert!(err.to_string().contains("duplicated"));
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_restorable_progress_surfaces() {
+        let progress = OperationProgressContract::from_input(OperationProgressInput::new(
+            "copy selected files",
+            OperationProgressState::Running,
+            42,
+            100,
+            "copy:/source->/target",
+        ));
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_progress_surfaces(vec![progress.clone()]);
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert_eq!(contract.progress_surfaces, vec![progress]);
+        assert!(contract
+            .as_tsv()
+            .contains("\noperation-progress\tlabel=copy selected files\tstate=running\t"));
+    }
+
+    #[test]
+    fn rejects_terminal_progress_surfaces_on_native_launch() {
+        let progress = OperationProgressContract::from_input(OperationProgressInput::new(
+            "finished copy",
+            OperationProgressState::Completed,
+            100,
+            100,
+            "done",
+        ));
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_progress_surfaces(vec![progress]);
+
+        let err = WindowLifecycleContract::from_spec(&spec).unwrap_err();
+        assert!(err.to_string().contains("not restorable"));
     }
 
     #[test]

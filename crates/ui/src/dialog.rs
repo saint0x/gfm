@@ -105,6 +105,27 @@ impl DialogFieldKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionPromptKind {
+    General,
+    FullDiskAccess,
+    BookmarkAcquisition,
+    DegradedSearch,
+    Blocked,
+}
+
+impl PermissionPromptKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::FullDiskAccess => "full-disk-access",
+            Self::BookmarkAcquisition => "bookmark-acquisition",
+            Self::DegradedSearch => "degraded-search",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DialogButtonSpec {
     pub id: &'static str,
@@ -378,6 +399,76 @@ impl DialogContract {
         contract
     }
 
+    pub fn permission_prompt(kind: PermissionPromptKind) -> Self {
+        let mut contract = permission_contract();
+        match kind {
+            PermissionPromptKind::General => {}
+            PermissionPromptKind::FullDiskAccess => {
+                contract.title = "Allow Full Disk Access";
+                contract.message =
+                    "Open macOS Privacy settings to grant Full Disk Access for protected locations.";
+                contract.buttons = vec![
+                    button(
+                        "open-settings",
+                        "Open Settings",
+                        DialogButtonRole::Default,
+                        true,
+                    ),
+                    button("not-now", "Not Now", DialogButtonRole::Cancel, true),
+                ];
+            }
+            PermissionPromptKind::BookmarkAcquisition => {
+                contract.title = "Choose a Folder to Continue";
+                contract.message =
+                    "Select the protected location so GFM can retain least-privilege access.";
+                contract.buttons = vec![
+                    button(
+                        "choose-location",
+                        "Choose...",
+                        DialogButtonRole::Default,
+                        true,
+                    ),
+                    button("not-now", "Not Now", DialogButtonRole::Cancel, true),
+                ];
+            }
+            PermissionPromptKind::DegradedSearch => {
+                contract.title = "Search Will Use Metadata Only";
+                contract.message =
+                    "Some protected locations are unavailable, so content search will continue in degraded mode.";
+                contract.buttons = vec![
+                    button("continue", "Continue", DialogButtonRole::Default, true),
+                    button(
+                        "open-settings",
+                        "Open Settings",
+                        DialogButtonRole::Alternate,
+                        true,
+                    ),
+                ];
+            }
+            PermissionPromptKind::Blocked => {
+                contract.title = "Permission Required";
+                contract.message =
+                    "Grant access before continuing with this protected file operation.";
+                contract.buttons = vec![
+                    button(
+                        "choose-location",
+                        "Choose...",
+                        DialogButtonRole::Default,
+                        true,
+                    ),
+                    button(
+                        "open-settings",
+                        "Open Settings",
+                        DialogButtonRole::Alternate,
+                        true,
+                    ),
+                    button("not-now", "Not Now", DialogButtonRole::Cancel, true),
+                ];
+            }
+        }
+        contract
+    }
+
     pub fn as_tsv(&self) -> String {
         let mut lines = Vec::with_capacity(self.buttons.len() + self.fields.len() + 1);
         lines.push(format!(
@@ -414,6 +505,15 @@ impl DialogContract {
 }
 
 pub fn render(contract: &DialogContract) -> impl IntoElement {
+    let sheet_id = match contract.surface {
+        DialogSurface::Alert => "alert-sheet",
+        DialogSurface::Rename => "rename-sheet",
+        DialogSurface::Popover => "popover-sheet",
+        DialogSurface::Disclosure => "disclosure-sheet",
+        DialogSurface::Progress => "progress-sheet",
+        DialogSurface::Conflict => "conflict-sheet",
+        DialogSurface::Permission => "permission-sheet",
+    };
     div()
         .absolute()
         .inset_0()
@@ -424,7 +524,7 @@ pub fn render(contract: &DialogContract) -> impl IntoElement {
         .bg(rgb(0x111113))
         .child(
             div()
-                .id("permission-sheet")
+                .id(sheet_id)
                 .w(px(420.0))
                 .p(px(18.0))
                 .rounded(px(8.0))
@@ -884,5 +984,23 @@ mod tests {
         assert!(tsv.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
         assert!(tsv.contains("button\topen-settings\tOpen Settings\tdefault\tenabled=true"));
         assert!(tsv.contains("button\tnot-now\tNot Now\tcancel\tenabled=true"));
+    }
+
+    #[test]
+    fn permission_prompt_variants_expose_distinct_actions() {
+        let full_disk =
+            DialogContract::permission_prompt(PermissionPromptKind::FullDiskAccess).as_tsv();
+        assert!(full_disk.contains("\ttitle=Allow Full Disk Access\t"));
+        assert!(full_disk.contains("button\topen-settings\tOpen Settings\tdefault"));
+
+        let bookmark =
+            DialogContract::permission_prompt(PermissionPromptKind::BookmarkAcquisition).as_tsv();
+        assert!(bookmark.contains("\ttitle=Choose a Folder to Continue\t"));
+        assert!(bookmark.contains("button\tchoose-location\tChoose...\tdefault"));
+
+        let degraded =
+            DialogContract::permission_prompt(PermissionPromptKind::DegradedSearch).as_tsv();
+        assert!(degraded.contains("\ttitle=Search Will Use Metadata Only\t"));
+        assert!(degraded.contains("button\tcontinue\tContinue\tdefault"));
     }
 }
