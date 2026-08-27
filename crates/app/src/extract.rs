@@ -11,7 +11,7 @@ use gfm_jobs::{
     Cancellation, JobBatteryState, JobIoPressure, JobThermalState, JobUserActivity,
     SchedulingPressure,
 };
-use gfm_mac::AccessIntent;
+use gfm_mac::{AccessIntent, VolumeDescriptor, VolumeDiscoveryReport, VolumeKind};
 use gfm_types::{GfmError, Result};
 use std::env;
 use std::os::unix::process::CommandExt;
@@ -47,6 +47,53 @@ pub(crate) fn extraction_budget_profile(
 }
 
 fn extraction_volume_class_for_path(path: &Path) -> ExtractionVolumeClass {
+    let report = VolumeDiscoveryReport::for_containing_path(path);
+    extraction_volume_class_from_report(path, &report)
+}
+
+fn extraction_volume_class_from_report(
+    path: &Path,
+    report: &VolumeDiscoveryReport,
+) -> ExtractionVolumeClass {
+    if let Some(volume) = report.volume_for_path(path) {
+        return extraction_volume_class_for_descriptor(volume);
+    }
+    fallback_extraction_volume_class_for_path(path)
+}
+
+fn extraction_volume_class_for_descriptor(volume: &VolumeDescriptor) -> ExtractionVolumeClass {
+    if volume.network || volume.local == Some(false) || volume.kind == VolumeKind::Network {
+        return ExtractionVolumeClass::Network;
+    }
+    if descriptor_reports_cloud_storage(volume) {
+        return ExtractionVolumeClass::Cloud;
+    }
+    match volume.kind {
+        VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage => {
+            ExtractionVolumeClass::External
+        }
+        VolumeKind::System | VolumeKind::Internal | VolumeKind::Unknown => {
+            ExtractionVolumeClass::Local
+        }
+        VolumeKind::Network => ExtractionVolumeClass::Network,
+    }
+}
+
+fn descriptor_reports_cloud_storage(volume: &VolumeDescriptor) -> bool {
+    [
+        volume.source.as_str(),
+        volume.filesystem.as_deref().unwrap_or_default(),
+        volume.volume_type.as_deref().unwrap_or_default(),
+        volume.media_kind.as_deref().unwrap_or_default(),
+        volume.media_type.as_deref().unwrap_or_default(),
+        volume.mount_from.as_deref().unwrap_or_default(),
+        volume.resource_remount_url.as_deref().unwrap_or_default(),
+    ]
+    .into_iter()
+    .any(extraction_cloud_token)
+}
+
+fn fallback_extraction_volume_class_for_path(path: &Path) -> ExtractionVolumeClass {
     let normalized = path
         .to_string_lossy()
         .to_ascii_lowercase()
@@ -67,6 +114,14 @@ fn extraction_volume_class_for_path(path: &Path) -> ExtractionVolumeClass {
     } else {
         ExtractionVolumeClass::Local
     }
+}
+
+fn extraction_cloud_token(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("mobile documents")
+        || value.contains("icloud")
+        || value.contains("cloud")
+        || value.contains("fileprovider")
 }
 
 pub(crate) fn run_adaptive_extraction_worker_cancellable(
@@ -569,6 +624,62 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn extraction_volume_class_uses_discovered_network_descriptor() {
+        let root = unique_temp_dir("gfm-extract-volume-network-descriptor");
+        let volume_root = root.join("TeamShare");
+        fs::create_dir_all(&volume_root).unwrap();
+        fs::write(volume_root.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+        let input = volume_root.join("Project.md");
+        fs::write(&input, "network").unwrap();
+        let report = VolumeDiscoveryReport::from_paths(vec![volume_root.clone()]);
+
+        assert_eq!(
+            extraction_volume_class_from_report(&input, &report),
+            ExtractionVolumeClass::Network
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extraction_volume_class_uses_discovered_external_descriptor() {
+        let root = unique_temp_dir("gfm-extract-volume-external-descriptor");
+        let volume_root = root.join("CameraCard");
+        fs::create_dir_all(&volume_root).unwrap();
+        fs::write(volume_root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+        let input = volume_root.join("Clip.mov");
+        fs::write(&input, "external").unwrap();
+        let report = VolumeDiscoveryReport::from_paths(vec![volume_root.clone()]);
+
+        assert_eq!(
+            extraction_volume_class_from_report(&input, &report),
+            ExtractionVolumeClass::External
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extraction_volume_class_uses_cloud_provider_descriptor_before_path_text() {
+        let root = unique_temp_dir("gfm-extract-volume-cloud-descriptor");
+        let volume_root = root.join("ProviderRoot");
+        fs::create_dir_all(&volume_root).unwrap();
+        let input = volume_root.join("Remote.md");
+        fs::write(&input, "cloud").unwrap();
+        let mut report = VolumeDiscoveryReport::from_paths(vec![volume_root.clone()]);
+        report.volumes[0].source = "native:fileprovider".to_string();
+        report.volumes[0].filesystem = Some("apfs".to_string());
+        report.volumes[0].kind = VolumeKind::Internal;
+
+        assert_eq!(
+            extraction_volume_class_from_report(&input, &report),
+            ExtractionVolumeClass::Cloud
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn extraction_sandbox_profile_default_confines_writes_without_read_deny() {

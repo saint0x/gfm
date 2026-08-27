@@ -6644,6 +6644,64 @@ fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
 }
 
 #[test]
+fn adaptive_extraction_worker_applies_network_volume_descriptor_budget_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-worker-network-budget-root");
+    fs::write(root.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+    let path = root.join("network-large.txt");
+    let catalog = unique_temp_path("gfm-cli-extract-worker-network-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-extract-worker-network-runtime", "gfmprogress");
+    fs::write(&path, "x".repeat(1024 * 1024 + 1)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "extract-worker-adaptive",
+            path.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=adaptive extraction worker\tpath={}",
+            path.display()
+        )),
+        "{stderr}"
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\tformat=text\t"), "{stdout}");
+    assert!(stdout.contains("\tstatus=skipped\t"), "{stdout}");
+    assert!(stdout.contains("\treason=too-large\t"), "{stdout}");
+    assert!(stdout.contains("\tbytes-read=0\t"), "{stdout}");
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains("adaptive extraction"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("\tcompleted\t1\t1\tcompleted\t"),
+        "{progress_text}"
+    );
+
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn deferred_adaptive_extraction_worker_does_not_touch_unreachable_target_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-worker-deferred-unreachable");
     let path = root.join("document.txt");
