@@ -89,6 +89,7 @@ fn retained_security_accesses(
         return Ok(Vec::new());
     }
     let store = SecurityScopedBookmarkStore::new(default_security_bookmarks_path());
+    preflight_volume_reachability(store.path(), "security bookmark store")?;
     let lookup =
         store.start_access_for_path(&report.path, read_only_intent(report.intent), true)?;
     let Some(access) = lookup.access else {

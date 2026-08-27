@@ -75,8 +75,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .transpose()?
                 .unwrap_or(AccessIntent::Read);
             let report = SecurityScopedAccessReport::evaluate(&path, intent).create_bookmark();
-            println!("{}", report.as_tsv());
             if report.status == SecurityScopedBookmarkStatus::Created {
+                let store = SecurityScopedBookmarkStore::new(
+                    crate::runtime::default_security_bookmarks_path(),
+                );
+                let _store_access = preflight_access_scope(
+                    write_probe_path(store.path()),
+                    AccessIntent::Write,
+                    "security bookmark store",
+                )?;
                 let bookmark = gfm_mac::SecurityScopedBookmark::create(&path, report.read_only)
                     .map_err(|failure| GfmError::Permission {
                         path: path.clone(),
@@ -84,10 +91,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                             "security-scoped bookmark creation failed".to_string()
                         }),
                     })?;
-                let store = SecurityScopedBookmarkStore::new(
-                    crate::runtime::default_security_bookmarks_path(),
-                );
+                println!("{}", report.as_tsv());
                 println!("{}", store.upsert(bookmark)?.as_tsv());
+            } else {
+                println!("{}", report.as_tsv());
             }
         }
         "mac-bridges" => {

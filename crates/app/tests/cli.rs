@@ -382,6 +382,78 @@ fn extraction_preflight_retains_security_scoped_bookmark_from_binary() {
 }
 
 #[test]
+fn security_bookmark_create_refuses_unreachable_store_before_persisting_from_binary() {
+    let root = unique_temp_dir("gfm-cli-security-bookmark-store-create-root");
+    let offline = unique_temp_dir("gfm-cli-security-bookmark-store-create-offline");
+    let home = root.join("home");
+    let documents = home.join("Documents");
+    let protected = documents.join("Plan.md");
+    let bookmarks = offline.join("bookmarks.tsv");
+    fs::create_dir_all(&documents).unwrap();
+    fs::write(&protected, "alpha protected content").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .args([
+            "security-bookmark-create",
+            protected.to_str().unwrap(),
+            "read",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("security-bookmark\t"), "{stdout}");
+    assert!(
+        stderr
+            .contains("security bookmark store volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!bookmarks.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn bookmark_required_preview_refuses_unreachable_store_before_reading_from_binary() {
+    let root = unique_temp_dir("gfm-cli-security-bookmark-store-read-root");
+    let offline = unique_temp_dir("gfm-cli-security-bookmark-store-read-offline");
+    let home = root.join("home");
+    let documents = home.join("Documents");
+    let protected = documents.join("Plan.pdf");
+    let bookmarks = offline.join("bookmarks.tsv");
+    fs::create_dir_all(&documents).unwrap();
+    fs::write(&protected, "%PDF-1.7\nalpha protected preview").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&bookmarks, "gfm-security-bookmarks-v1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .args(["quicklook-session", protected.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("quicklook-session\t"), "{stdout}");
+    assert!(
+        stderr
+            .contains("security bookmark store volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn quicklook_preflight_retains_security_scoped_bookmark_from_binary() {
     let root = unique_temp_dir("gfm-cli-quicklook-bookmark");
     let home = root.join("home");
