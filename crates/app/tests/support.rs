@@ -1422,6 +1422,7 @@ fn reports_fileprovider_state_in_ui_sidebar_contract_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let downloading = root.join("Downloading.icloud-downloading");
     std::fs::write(&downloading, "downloading").unwrap();
+    xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("ui-sidebar-fileprovider-contract")
@@ -1510,6 +1511,7 @@ fn reports_fileprovider_conflict_in_ui_dialog_contract_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let conflict = root.join("Conflict.icloud-conflict.md");
     std::fs::write(&conflict, "conflict").unwrap();
+    xattr::set(&conflict, "com.apple.fileprovider.state", b"conflict").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("ui-fileprovider-conflict-contract")

@@ -1215,6 +1215,7 @@ fn weak_path_hint_without_provider_evidence(hints: &CloudHints) -> bool {
     path_only_provider_hint(&hints.source)
         && hints.xattrs.is_empty()
         && !native_has_fileprovider_values(&hints.native)
+        && !native_provider_state_unavailable(hints)
         && hints.native_identity.status != NativeFileProviderIdentityStatus::Available
 }
 
@@ -1584,7 +1585,7 @@ fn domain_for_path(path: &Path, hints: &CloudHints) -> FileProviderDomain {
         || path_components(path)
             .iter()
             .any(|component| component == ICLOUD_DRIVE_COMPONENT)
-        || file_name_lower(path).contains("icloud")
+        || evidence_backed_icloud_name_hint(path, hints)
         || hints
             .xattrs
             .iter()
@@ -1596,12 +1597,22 @@ fn domain_for_path(path: &Path, hints: &CloudHints) -> FileProviderDomain {
             .xattrs
             .iter()
             .any(|attr| attr.contains("fileprovider"))
-        || file_name_lower(path).contains("fileprovider")
+        || (native_provider_state_unavailable(hints)
+            && file_name_lower(path).contains("fileprovider"))
     {
         FileProviderDomain::FileProvider
     } else {
         FileProviderDomain::Local
     }
+}
+
+fn evidence_backed_icloud_name_hint(path: &Path, hints: &CloudHints) -> bool {
+    file_name_lower(path).contains("icloud")
+        && (hints
+            .xattrs
+            .iter()
+            .any(|attr| attr.contains("fileprovider"))
+            || native_provider_state_unavailable(hints))
 }
 
 fn native_proves_local_only(hints: &CloudHints) -> bool {
@@ -1610,6 +1621,21 @@ fn native_proves_local_only(hints: &CloudHints) -> bool {
         && !native_has_ubiquitous_materialization_evidence(&hints.native)
         && hints.native_identity.status != NativeFileProviderIdentityStatus::Available
         && hints.xattrs.is_empty()
+}
+
+fn native_provider_state_unavailable(hints: &CloudHints) -> bool {
+    matches!(
+        hints.native.status,
+        gfm_mac_sys::NativeFileProviderStatus::UnsupportedPath
+            | gfm_mac_sys::NativeFileProviderStatus::Missing
+            | gfm_mac_sys::NativeFileProviderStatus::Unavailable
+    ) || matches!(
+        hints.native_identity.status,
+        NativeFileProviderIdentityStatus::ProviderUnavailable
+            | NativeFileProviderIdentityStatus::TimedOut
+            | NativeFileProviderIdentityStatus::Failed
+            | NativeFileProviderIdentityStatus::UnsupportedPath
+    )
 }
 
 fn is_icloud_domain_identifier(identifier: &str) -> bool {
@@ -1743,6 +1769,9 @@ fn materialization_source_for_state(
     state: CloudStorageState,
     hints: &CloudHints,
 ) -> CloudMaterializationSource {
+    if state == CloudStorageState::LocalOnly && !native_proves_local_only(hints) {
+        return CloudMaterializationSource::Filesystem;
+    }
     if (state == CloudStorageState::LocalOnly && native_proves_local_only(hints))
         || hints.native.is_ubiquitous == Some(true)
         || native_has_ubiquitous_materialization_evidence(&hints.native)
@@ -2256,72 +2285,76 @@ mod tests {
     static CWD_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn reports_path_only_icloud_file_as_unknown_without_native_evidence() {
+    fn reports_path_only_icloud_file_as_local_without_native_evidence() {
         let root = unique_temp_dir();
         let path = root.join("Downloaded.icloud.md");
         fs::write(&path, "downloaded").unwrap();
 
         let report = FileProviderStateReport::read_path(&path).unwrap();
 
-        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
-        assert_eq!(report.storage_state, CloudStorageState::Unknown);
-        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_eq!(report.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::NotProviderBacked
+        );
         assert_eq!(
             report.materialization_source,
-            CloudMaterializationSource::PathFallback
+            CloudMaterializationSource::Filesystem
         );
         assert_eq!(
             report.materialization_confidence,
-            CloudMaterializationConfidence::PathFallback
+            CloudMaterializationConfidence::Filesystem
         );
         assert_eq!(report.progress.direction, CloudTransferDirection::Idle);
         assert_eq!(report.progress.percent_milli, None);
         assert!(!report.progress.complete);
         assert_eq!(
             report.progress.reason.as_deref(),
-            Some("unknown-provider-state")
+            Some("not-fileprovider-backed")
         );
-        assert_eq!(report.badges, vec![CloudBadge::Waiting]);
-        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
-        assert_eq!(report.commands.download, CloudCommandState::Disabled);
+        assert!(report.badges.is_empty());
+        assert_eq!(report.commands.evict, CloudCommandState::Hidden);
+        assert_eq!(report.commands.download, CloudCommandState::Hidden);
         assert_eq!(
             report.commands.reason.as_deref(),
-            Some("unknown-provider-state")
+            Some("not-fileprovider-backed")
         );
 
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn reports_path_only_placeholder_as_unknown_without_provider_evidence() {
+    fn reports_path_only_placeholder_as_local_without_provider_evidence() {
         let root = unique_temp_dir();
         let path = root.join("Evicted.icloud-placeholder");
         fs::write(&path, "placeholder").unwrap();
 
         let report = FileProviderStateReport::read_path(&path).unwrap();
 
-        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_eq!(report.storage_state, CloudStorageState::LocalOnly);
         assert_eq!(
             report.materialization_source,
-            CloudMaterializationSource::PathFallback
+            CloudMaterializationSource::Filesystem
         );
         assert_eq!(
             report.materialization_confidence,
-            CloudMaterializationConfidence::PathFallback
+            CloudMaterializationConfidence::Filesystem
         );
         assert_eq!(report.progress.direction, CloudTransferDirection::Idle);
         assert_eq!(report.progress.percent_milli, None);
         assert_eq!(
             report.progress.reason.as_deref(),
-            Some("unknown-provider-state")
+            Some("not-fileprovider-backed")
         );
-        assert_eq!(report.badges, vec![CloudBadge::Waiting]);
+        assert!(report.badges.is_empty());
         assert!(!report.offline);
-        assert_eq!(report.commands.download, CloudCommandState::Disabled);
-        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+        assert_eq!(report.commands.download, CloudCommandState::Hidden);
+        assert_eq!(report.commands.evict, CloudCommandState::Hidden);
         assert_eq!(
             report.commands.reason.as_deref(),
-            Some("unknown-provider-state")
+            Some("not-fileprovider-backed")
         );
 
         fs::remove_dir_all(root).unwrap();
@@ -2549,6 +2582,7 @@ mod tests {
         let root = unique_temp_dir();
         let path = root.join("Conflict.icloud-conflict.md");
         fs::write(&path, "conflict").unwrap();
+        xattr::set(&path, "com.apple.fileprovider.state", b"conflict").unwrap();
 
         let report = FileProviderStateReport::read_path(&path).unwrap();
 
@@ -2568,6 +2602,7 @@ mod tests {
         let root = unique_temp_dir();
         let path = root.join("Conflict.icloud-conflict.md");
         fs::write(&path, "conflict").unwrap();
+        xattr::set(&path, "com.apple.fileprovider.state", b"conflict").unwrap();
 
         let report = FileProviderConflictReport::read_path(&path).unwrap();
 
@@ -2599,7 +2634,7 @@ mod tests {
         assert!(report.affected_paths.is_empty());
         assert_eq!(report.reveal_command, CloudCommandState::Hidden);
         assert!(!report.block_operations);
-        assert_eq!(report.reason, "no-provider-conflict");
+        assert_eq!(report.reason, "not-fileprovider-backed");
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -3133,8 +3168,8 @@ mod tests {
             .source
             .split('+')
             .any(|source| source == "nsfileprovidermanager"));
-        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
-        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_eq!(report.storage_state, CloudStorageState::LocalOnly);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -3365,7 +3400,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_provider_path_fallback_without_materialization_evidence_is_unknown() {
+    fn generic_provider_name_without_materialization_evidence_is_local() {
         let root = unique_temp_dir();
         let path = root.join("Remote.fileprovider");
         fs::write(&path, "provider").unwrap();
@@ -3385,20 +3420,23 @@ mod tests {
 
         let report = FileProviderStateReport::from_hints(path.clone(), hints);
 
-        assert_eq!(report.domain, FileProviderDomain::FileProvider);
-        assert_eq!(report.storage_state, CloudStorageState::Unknown);
-        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_eq!(report.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::NotProviderBacked
+        );
         assert_eq!(
             report.materialization_source,
-            CloudMaterializationSource::PathFallback
+            CloudMaterializationSource::Filesystem
         );
         assert_eq!(
             report.commands.reason.as_deref(),
-            Some("unknown-provider-state")
+            Some("not-fileprovider-backed")
         );
         assert_eq!(
             report.progress.reason.as_deref(),
-            Some("unknown-provider-state")
+            Some("not-fileprovider-backed")
         );
 
         fs::remove_dir_all(root).unwrap();
@@ -3423,7 +3461,7 @@ mod tests {
             download.reason.as_deref(),
             Some("operation-disabled-for-current-state")
         );
-        assert_eq!(download.before.storage_state, CloudStorageState::Unknown);
+        assert_eq!(download.before.storage_state, CloudStorageState::LocalOnly);
 
         let evict = FileProviderOperationReport::execute(&downloaded, FileProviderOperation::Evict)
             .unwrap();
@@ -3432,7 +3470,7 @@ mod tests {
             evict.reason.as_deref(),
             Some("operation-disabled-for-current-state")
         );
-        assert_eq!(evict.before.storage_state, CloudStorageState::Unknown);
+        assert_eq!(evict.before.storage_state, CloudStorageState::LocalOnly);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -3442,6 +3480,7 @@ mod tests {
         let root = unique_temp_dir();
         let downloading = root.join("Downloading.icloud-downloading.md");
         fs::write(&downloading, "downloading").unwrap();
+        xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
 
         let report =
             FileProviderOperationReport::execute(&downloading, FileProviderOperation::Download)
@@ -3465,6 +3504,7 @@ mod tests {
         let root = unique_temp_dir();
         let conflict = root.join("Conflict.icloud-conflict.md");
         fs::write(&conflict, "conflict").unwrap();
+        xattr::set(&conflict, "com.apple.fileprovider.state", b"conflict").unwrap();
 
         let report =
             FileProviderOperationReport::execute(&conflict, FileProviderOperation::Evict).unwrap();
@@ -3487,6 +3527,7 @@ mod tests {
         let root = unique_temp_dir();
         let downloading = root.join("Downloading.icloud-downloading.md");
         fs::write(&downloading, "downloading").unwrap();
+        xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
 
         let report = FileProviderProgressReport::read_path(&downloading).unwrap();
 
@@ -3539,16 +3580,16 @@ mod tests {
         fs::write(&downloaded, "downloaded").unwrap();
 
         let report =
-            FileProviderInvalidationReport::evaluate(&downloaded, CloudStorageState::Unknown)
+            FileProviderInvalidationReport::evaluate(&downloaded, CloudStorageState::LocalOnly)
                 .unwrap();
 
         assert!(!report.state_changed);
         assert!(!report.invalidate_icon);
         assert!(!report.invalidate_preview_memory);
         assert!(!report.invalidate_preview_disk);
-        assert!(report.invalidate_sidebar);
+        assert!(!report.invalidate_sidebar);
         assert!(!report.reindex_metadata);
-        assert_eq!(report.reason, "fileprovider-state-unchanged");
+        assert_eq!(report.reason, "not-provider-visible");
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -4070,7 +4111,7 @@ mod tests {
     }
 
     #[test]
-    fn path_only_icloud_name_does_not_claim_materialized_without_native_evidence() {
+    fn path_only_icloud_name_is_local_without_native_evidence() {
         let path = PathBuf::from("/tmp/Downloaded.icloud.md");
         let hints = CloudHints {
             native: native_values(),
@@ -4088,12 +4129,15 @@ mod tests {
 
         let report = FileProviderStateReport::from_hints(path, hints);
 
-        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
-        assert_eq!(report.storage_state, CloudStorageState::Unknown);
-        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_eq!(report.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::NotProviderBacked
+        );
         assert_eq!(
             report.materialization_source,
-            CloudMaterializationSource::PathFallback
+            CloudMaterializationSource::Filesystem
         );
     }
 

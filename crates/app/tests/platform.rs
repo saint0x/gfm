@@ -995,6 +995,7 @@ fn reports_fileprovider_state_from_binary() {
     )
     .unwrap();
     std::fs::write(&conflict, "conflict").unwrap();
+    xattr::set(&conflict, "com.apple.fileprovider.state", b"conflict").unwrap();
 
     let downloaded_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-state")
@@ -1010,13 +1011,13 @@ fn reports_fileprovider_state_from_binary() {
     let downloaded_stderr = String::from_utf8_lossy(&downloaded_output.stderr);
     assert_worker_admitted(&downloaded_stderr, "fileprovider state", &downloaded);
     assert!(downloaded_stdout.starts_with("fileprovider-state\t"));
-    assert!(downloaded_stdout.contains("\tdomain=icloud-drive\tstate=unknown\t"));
-    assert!(downloaded_stdout.contains("\tmaterialization=unknown\t"));
-    assert!(downloaded_stdout.contains("\tmaterialization-source=path-fallback\t"));
-    assert!(downloaded_stdout.contains("\tmaterialization-reason=unknown-provider-state\t"));
-    assert!(downloaded_stdout.contains("\tbadges=waiting\t"));
-    assert!(downloaded_stdout.contains("\tdownload=disabled\tevict=disabled\t"));
-    assert!(downloaded_stdout.contains("\treason=unknown-provider-state"));
+    assert!(downloaded_stdout
+        .contains("\tdomain=local\tstate=local-only\tmaterialization=not-provider-backed\t"));
+    assert!(downloaded_stdout.contains("\tmaterialization-source=filesystem\t"));
+    assert!(downloaded_stdout.contains("\tmaterialization-reason=not-fileprovider-backed\t"));
+    assert!(downloaded_stdout.contains("\tbadges=\t"));
+    assert!(downloaded_stdout.contains("\tdownload=hidden\tevict=hidden\t"));
+    assert!(downloaded_stdout.contains("\treason=not-fileprovider-backed"));
     assert!(!downloaded_stdout.contains("nsfileprovidermanager"));
 
     let identity_state_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -1037,8 +1038,8 @@ fn reports_fileprovider_state_from_binary() {
         &downloaded,
     );
     assert!(identity_state_stdout.starts_with("fileprovider-state\t"));
-    assert!(identity_state_stdout.contains("\tdomain=icloud-drive\tstate=unknown\t"));
-    assert!(identity_state_stdout.contains("\tmaterialization=unknown\t"));
+    assert!(identity_state_stdout
+        .contains("\tdomain=local\tstate=local-only\tmaterialization=not-provider-backed\t"));
     assert!(identity_state_stdout.contains("\tsource="));
 
     let domain_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -1055,7 +1056,7 @@ fn reports_fileprovider_state_from_binary() {
     let domain_stderr = String::from_utf8_lossy(&domain_output.stderr);
     assert_worker_admitted(&domain_stderr, "fileprovider domain", &downloaded);
     assert!(domain_stdout.starts_with("fileprovider-domain\t"));
-    assert!(domain_stdout.contains("\tdomain=icloud-drive\t"));
+    assert!(domain_stdout.contains("\tdomain=local\t"));
     assert!(domain_stdout.contains("\tidentity-status="));
     assert!(domain_stdout.contains("\tmanager-status="));
     assert!(domain_stdout.contains("\tresource-status=available\t"));
@@ -1190,6 +1191,7 @@ fn reports_fileprovider_progress_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let downloading = root.join("Downloading.icloud-downloading.md");
     std::fs::write(&downloading, "downloading").unwrap();
+    xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-progress")
@@ -1226,6 +1228,7 @@ fn publishes_fileprovider_progress_to_runtime_job_store_from_binary() {
     let progress = root.join("progress.gfmprogress");
     let catalog = root.join("payloads.gfmjobs");
     std::fs::write(&downloading, "downloading").unwrap();
+    xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_JOB_PROGRESS_STORE", &progress)
@@ -1344,6 +1347,7 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
     std::fs::write(&evicted, "%PDF-1.7\nplaceholder").unwrap();
     mark_evicted_fixture(&evicted);
     std::fs::write(&downloading, "png").unwrap();
+    xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
 
     let quicklook = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("quicklook-session")
@@ -1453,11 +1457,12 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     let evict_stderr = String::from_utf8_lossy(&evict_output.stderr);
     assert_worker_admitted(&evict_stderr, "fileprovider operation", &downloaded);
     assert!(evict_stdout.contains("\toperation=evict\tdisposition=refused\t"));
-    assert!(evict_stdout.contains("\tbefore-state=unknown\tafter-state=-\t"));
+    assert!(evict_stdout.contains("\tbefore-state=local-only\tafter-state=-\t"));
     assert!(evict_stdout.ends_with("reason=operation-disabled-for-current-state\n"));
 
     let conflict = root.join("Conflict.icloud-conflict.md");
     std::fs::write(&conflict, "conflict").unwrap();
+    xattr::set(&conflict, "com.apple.fileprovider.state", b"conflict").unwrap();
     let conflict_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-operation")
         .arg("evict")
@@ -2259,6 +2264,7 @@ fn reports_fileprovider_invalidation_scan_from_binary() {
     let downloaded = root.join("Remote.icloud-downloaded");
     std::fs::rename(&item, &downloaded).unwrap();
     xattr::remove(&downloaded, "com.apple.icloud.placeholder").unwrap();
+    xattr::set(&downloaded, "com.apple.fileprovider.state", b"downloaded").unwrap();
     let changed = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-invalidation-scan")
         .arg(&state)
@@ -2273,7 +2279,7 @@ fn reports_fileprovider_invalidation_scan_from_binary() {
     let changed_stdout = String::from_utf8(changed.stdout).unwrap();
     assert!(changed_stdout
         .starts_with("fileprovider-state-invalidation\tinitialized=false\tchanged=1\t"));
-    assert!(changed_stdout.contains("\tcurrent=unknown\tchanged=true\t"));
+    assert!(changed_stdout.contains("\tcurrent=downloaded\tchanged=true\t"));
     assert!(changed_stdout.contains("\ticon=true\tpreview-memory=true\tpreview-disk=true\t"));
 
     let _ = std::fs::remove_dir_all(root);
