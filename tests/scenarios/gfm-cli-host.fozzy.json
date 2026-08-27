@@ -4002,6 +4002,27 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-protected-home/Documents/Preview.md",
+      "data": "protected preview\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "HOME": "tmp/gfm-fozzy-protected-home",
+        "GFM_SECURITY_BOOKMARKS": "tmp/gfm-fozzy-protected-bookmarks.tsv"
+      },
+      "args": [
+        "native-icon",
+        "tmp/gfm-fozzy-protected-home/Documents/Preview.md"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "security-scope\ttmp/gfm-fozzy-protected-home/Documents/Preview.md\tintent=preview\tscope=documents\tprobe=granted\tmode=security-scoped-bookmark\taction=allow\tbookmark-required=true\tcan-read=true\tcan-write=false\tleast-privilege=true\treason=path is readable now but should be retained with a security-scoped bookmark\nsecurity-worker-admission\tworker=native icon\tpath=tmp/gfm-fozzy-protected-home/Documents/Preview.md\tintent=preview\tscope=documents\tprobe=granted\tmode=security-scoped-bookmark\taccess-action=allow\tworker-action=start\tcan-touch-filesystem=true\tbookmark-access=true\trefresh-on-permission-change=false\treason=native icon may start after retained security-scoped bookmark access\nsecurity-scope-access\ttmp/gfm-fozzy-protected-home/Documents/Preview.md\tstatus=missing\tread-only=true\taccess-started=false\treason=current-access-without-retained-bookmark\ngfm: tmp/gfm-fozzy-protected-home/Documents/Preview.md: retained security-scoped bookmark required before touching filesystem: path is readable now but should be retained with a security-scoped bookmark\n",
+      "times": 1
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

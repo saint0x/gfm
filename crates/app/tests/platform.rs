@@ -237,6 +237,44 @@ fn reports_security_worker_admission_from_binary() {
 }
 
 #[test]
+fn protected_worker_route_fails_closed_without_retained_bookmark_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-protected-worker-missing-bookmark-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let protected = root.join("Documents").join("Preview.md");
+    std::fs::create_dir_all(protected.parent().unwrap()).unwrap();
+    std::fs::write(&protected, "protected preview").unwrap();
+    let bookmarks = root.join("bookmarks.tsv");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &root)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .arg("native-icon")
+        .arg(&protected)
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("security-worker-admission\tworker=native icon\t"));
+    assert!(stderr.contains("\tscope=documents\t"));
+    assert!(stderr.contains("\tbookmark-access=true\t"));
+    assert!(stderr.contains("security-scope-access\t"));
+    assert!(stderr.contains("\tstatus=missing\t"));
+    assert!(
+        stderr.contains("retained security-scoped bookmark required before touching filesystem")
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn quicklook_refuses_missing_path_before_preview_from_binary() {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

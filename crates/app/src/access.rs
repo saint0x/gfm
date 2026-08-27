@@ -89,6 +89,13 @@ fn retained_security_accesses(
         return Ok(Vec::new());
     }
     let store = SecurityScopedBookmarkStore::new(default_security_bookmarks_path());
+    retained_security_accesses_from_store(report, &store)
+}
+
+fn retained_security_accesses_from_store(
+    report: &SecurityScopedAccessReport,
+    store: &SecurityScopedBookmarkStore,
+) -> Result<Vec<SecurityScopedBookmarkAccess>> {
     preflight_volume_reachability(store.path(), "security bookmark store")?;
     let lookup =
         store.start_access_for_path(&report.path, read_only_intent(report.intent), true)?;
@@ -98,7 +105,13 @@ fn retained_security_accesses(
             report.path.display(),
             read_only_intent(report.intent)
         );
-        return Ok(Vec::new());
+        return Err(GfmError::Permission {
+            path: report.path.clone(),
+            message: format!(
+                "retained security-scoped bookmark required before touching filesystem: {}",
+                report.reason
+            ),
+        });
     };
     eprintln!(
         "security-scope-access\t{}\tstatus={}\tread-only={}\taccess-started={}\tstale={}\treason=bookmark-resolved",
@@ -108,6 +121,17 @@ fn retained_security_accesses(
         access.report.access_started,
         access.report.stale
     );
+    if access.report.stale || !access.report.access_started {
+        return Err(GfmError::Permission {
+            path: report.path.clone(),
+            message: format!(
+                "retained security-scoped bookmark did not provide current filesystem access: status={}; stale={}; access-started={}",
+                access.report.status.as_str(),
+                access.report.stale,
+                access.report.access_started
+            ),
+        });
+    }
     Ok(vec![access])
 }
 
@@ -149,6 +173,41 @@ mod tests {
             .to_string()
             .contains("quicklook preview volume access blocked"));
         assert!(err.to_string().contains("unreachable volume network"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retained_bookmark_preflight_fails_closed_when_store_has_no_match() {
+        let root = unique_temp_dir("gfm-access-missing-bookmark");
+        let path = root.join("Documents").join("Plan.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "plan").unwrap();
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        let report = SecurityScopedAccessReport {
+            path: path.clone(),
+            intent: AccessIntent::Index,
+            scope: gfm_mac::ProtectedScope::Documents,
+            probe: gfm_mac::AccessProbeState::Granted,
+            mode: gfm_mac::SecurityAccessMode::SecurityScopedBookmark,
+            action: SecurityDecisionAction::Allow,
+            bookmark_required: true,
+            can_read: true,
+            can_write: false,
+            least_privilege: true,
+            reason: "path is readable now but should be retained with a security-scoped bookmark"
+                .to_string(),
+        };
+
+        let err = match retained_security_accesses_from_store(&report, &store) {
+            Ok(_) => panic!("missing retained bookmark must fail closed"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err
+            .to_string()
+            .contains("retained security-scoped bookmark required before touching filesystem"));
 
         fs::remove_dir_all(root).unwrap();
     }
