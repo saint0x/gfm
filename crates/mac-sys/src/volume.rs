@@ -8,8 +8,8 @@ use core_foundation_sys::array::CFArrayRef;
 use core_foundation_sys::base::{CFAllocatorRef, CFGetTypeID, CFRelease, CFTypeRef};
 use core_foundation_sys::dictionary::{CFDictionaryGetValueIfPresent, CFDictionaryRef};
 use core_foundation_sys::runloop::{
-    kCFRunLoopDefaultMode, CFRunLoopGetCurrent, CFRunLoopRef, CFRunLoopRun, CFRunLoopStop,
-    CFRunLoopWakeUp,
+    kCFRunLoopDefaultMode, CFRunLoopGetCurrent, CFRunLoopRef, CFRunLoopRun, CFRunLoopRunInMode,
+    CFRunLoopStop, CFRunLoopWakeUp,
 };
 use core_foundation_sys::string::CFStringRef;
 use core_foundation_sys::url::CFURLRef;
@@ -32,6 +32,12 @@ type DADiskDescriptionChangedCallback =
 type DADiskEjectCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef, *mut c_void)>;
 type DADiskUnmountCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef, *mut c_void)>;
 
+const DA_RETURN_BUSY: u32 = 0xF8DA0002;
+const DA_RETURN_NOT_MOUNTED: u32 = 0xF8DA0007;
+const DA_RETURN_NOT_PERMITTED: u32 = 0xF8DA0008;
+const DA_RETURN_NOT_PRIVILEGED: u32 = 0xF8DA0009;
+const DA_RETURN_UNSUPPORTED: u32 = 0xF8DA000C;
+
 #[link(name = "DiskArbitration", kind = "framework")]
 extern "C" {
     fn DASessionCreate(allocator: CFAllocatorRef) -> DASessionRef;
@@ -53,6 +59,8 @@ extern "C" {
         callback: DADiskUnmountCallback,
         context: *mut c_void,
     );
+    fn DADissenterGetStatus(dissenter: DADissenterRef) -> i32;
+    fn DADissenterGetStatusString(dissenter: DADissenterRef) -> CFStringRef;
     fn DASessionScheduleWithRunLoop(
         session: DASessionRef,
         run_loop: CFRunLoopRef,
@@ -261,7 +269,14 @@ impl NativeVolumeOperation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeVolumeOperationStatus {
+    Succeeded,
     Submitted,
+    Busy,
+    NotMounted,
+    NotPermitted,
+    NotPrivileged,
+    Unsupported,
+    Failed,
     Missing,
     Unavailable,
 }
@@ -269,7 +284,14 @@ pub enum NativeVolumeOperationStatus {
 impl NativeVolumeOperationStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Succeeded => "succeeded",
             Self::Submitted => "submitted",
+            Self::Busy => "busy",
+            Self::NotMounted => "not-mounted",
+            Self::NotPermitted => "not-permitted",
+            Self::NotPrivileged => "not-privileged",
+            Self::Unsupported => "unsupported",
+            Self::Failed => "failed",
             Self::Missing => "missing",
             Self::Unavailable => "unavailable",
         }
@@ -280,7 +302,14 @@ impl NativeVolumeOperationStatus {
 pub struct NativeVolumeOperationResult {
     pub operation: NativeVolumeOperation,
     pub status: NativeVolumeOperationStatus,
+    pub dissenter_status: Option<u32>,
     pub reason: Option<String>,
+}
+
+struct NativeVolumeOperationContext {
+    operation: NativeVolumeOperation,
+    run_loop: CFRunLoopRef,
+    sender: mpsc::Sender<NativeVolumeOperationResult>,
 }
 
 impl NativeVolumeEventStream {
@@ -500,6 +529,7 @@ pub fn submit_volume_operation(
             } else {
                 NativeVolumeOperationStatus::Missing
             },
+            dissenter_status: None,
             reason: Some(if path.exists() {
                 format!(
                     "DiskArbitration did not return a disk for {}",
@@ -511,24 +541,105 @@ pub fn submit_volume_operation(
         };
     };
 
+    let run_loop = unsafe { CFRunLoopGetCurrent() };
+    let (tx, rx) = mpsc::channel();
+    let context = Box::into_raw(Box::new(NativeVolumeOperationContext {
+        operation,
+        run_loop,
+        sender: tx,
+    }));
+    unsafe {
+        DASessionScheduleWithRunLoop(session, run_loop, kCFRunLoopDefaultMode);
+    }
     match operation {
         NativeVolumeOperation::Eject => unsafe {
-            DADiskEject(disk, 0, None, ptr::null_mut());
+            DADiskEject(disk, 0, Some(volume_operation_callback), context.cast());
         },
         NativeVolumeOperation::Unmount => unsafe {
-            DADiskUnmount(disk, 0, None, ptr::null_mut());
+            DADiskUnmount(disk, 0, Some(volume_operation_callback), context.cast());
         },
     }
+
+    unsafe {
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 30.0, 0);
+        DASessionUnscheduleFromRunLoop(session, run_loop, kCFRunLoopDefaultMode);
+    }
+    let result = if let Ok(result) = rx.try_recv() {
+        unsafe {
+            drop(Box::from_raw(context));
+        }
+        result
+    } else {
+        NativeVolumeOperationResult {
+            operation,
+            status: NativeVolumeOperationStatus::Submitted,
+            dissenter_status: None,
+            reason: Some("submitted-to-diskarbitration".to_string()),
+        }
+    };
 
     unsafe {
         CFRelease(disk as CFTypeRef);
         CFRelease(session as CFTypeRef);
     }
 
-    NativeVolumeOperationResult {
-        operation,
-        status: NativeVolumeOperationStatus::Submitted,
-        reason: Some("submitted-to-diskarbitration".to_string()),
+    result
+}
+
+unsafe extern "C" fn volume_operation_callback(
+    _disk: DADiskRef,
+    dissenter: DADissenterRef,
+    context: *mut c_void,
+) {
+    if context.is_null() {
+        return;
+    }
+    let context = &*(context as *const NativeVolumeOperationContext);
+    let (status, dissenter_status, reason) = if dissenter.is_null() {
+        (
+            NativeVolumeOperationStatus::Succeeded,
+            None,
+            Some("diskarbitration-operation-succeeded".to_string()),
+        )
+    } else {
+        let code = DADissenterGetStatus(dissenter) as u32;
+        (
+            native_operation_status_for_dissenter(code),
+            Some(code),
+            Some(dissenter_reason(dissenter, code)),
+        )
+    };
+    let _ = context.sender.send(NativeVolumeOperationResult {
+        operation: context.operation,
+        status,
+        dissenter_status,
+        reason,
+    });
+    CFRunLoopStop(context.run_loop);
+    CFRunLoopWakeUp(context.run_loop);
+}
+
+fn native_operation_status_for_dissenter(code: u32) -> NativeVolumeOperationStatus {
+    match code {
+        DA_RETURN_BUSY => NativeVolumeOperationStatus::Busy,
+        DA_RETURN_NOT_MOUNTED => NativeVolumeOperationStatus::NotMounted,
+        DA_RETURN_NOT_PERMITTED => NativeVolumeOperationStatus::NotPermitted,
+        DA_RETURN_NOT_PRIVILEGED => NativeVolumeOperationStatus::NotPrivileged,
+        DA_RETURN_UNSUPPORTED => NativeVolumeOperationStatus::Unsupported,
+        _ => NativeVolumeOperationStatus::Failed,
+    }
+}
+
+fn dissenter_reason(dissenter: DADissenterRef, code: u32) -> String {
+    let status = unsafe { DADissenterGetStatusString(dissenter) };
+    if status.is_null() {
+        return format!("diskarbitration-dissenter-0x{code:08x}");
+    }
+    let status = unsafe { CFString::wrap_under_get_rule(status) }.to_string();
+    if status.is_empty() {
+        format!("diskarbitration-dissenter-0x{code:08x}")
+    } else {
+        format!("diskarbitration-dissenter-0x{code:08x}:{status}")
     }
 }
 
@@ -914,6 +1025,34 @@ mod tests {
     }
 
     #[test]
+    fn maps_diskarbitration_dissenter_codes_to_typed_operation_status() {
+        assert_eq!(
+            native_operation_status_for_dissenter(DA_RETURN_BUSY),
+            NativeVolumeOperationStatus::Busy
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(DA_RETURN_NOT_PERMITTED),
+            NativeVolumeOperationStatus::NotPermitted
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(DA_RETURN_NOT_PRIVILEGED),
+            NativeVolumeOperationStatus::NotPrivileged
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(DA_RETURN_NOT_MOUNTED),
+            NativeVolumeOperationStatus::NotMounted
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(DA_RETURN_UNSUPPORTED),
+            NativeVolumeOperationStatus::Unsupported
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(0xF8DA0001),
+            NativeVolumeOperationStatus::Failed
+        );
+    }
+
+    #[test]
     fn missing_volume_operation_does_not_submit_to_diskarbitration() {
         let result = submit_volume_operation(
             Path::new("/tmp/gfm-native-volume-operation-missing"),
@@ -922,6 +1061,7 @@ mod tests {
 
         assert_eq!(result.operation, NativeVolumeOperation::Eject);
         assert_eq!(result.status, NativeVolumeOperationStatus::Missing);
+        assert_eq!(result.dissenter_status, None);
         assert!(result.reason.unwrap().contains("does not exist"));
     }
 }

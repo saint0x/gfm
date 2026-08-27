@@ -933,8 +933,11 @@ impl VolumeOperation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VolumeOperationDisposition {
+    Completed,
     Submitted,
     Refused,
+    Busy,
+    Denied,
     Unsupported,
     Failed,
 }
@@ -942,8 +945,11 @@ pub enum VolumeOperationDisposition {
 impl VolumeOperationDisposition {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Completed => "completed",
             Self::Submitted => "submitted",
             Self::Refused => "refused",
+            Self::Busy => "busy",
+            Self::Denied => "denied",
             Self::Unsupported => "unsupported",
             Self::Failed => "failed",
         }
@@ -1034,12 +1040,7 @@ impl VolumeOperationReport {
             VolumeOperation::Mount => unreachable!("mount is handled before native submission"),
         };
         let native = gfm_mac_sys::submit_volume_operation(&path, native_operation);
-        let disposition = match native.status {
-            NativeVolumeOperationStatus::Submitted => VolumeOperationDisposition::Submitted,
-            NativeVolumeOperationStatus::Missing | NativeVolumeOperationStatus::Unavailable => {
-                VolumeOperationDisposition::Failed
-            }
-        };
+        let disposition = disposition_for_native_operation(native.status);
         Ok(Self::with_volume(
             operation,
             disposition,
@@ -1107,6 +1108,24 @@ impl VolumeOperationReport {
             stable_identity,
             escape_field(&self.reason)
         )
+    }
+}
+
+fn disposition_for_native_operation(
+    status: NativeVolumeOperationStatus,
+) -> VolumeOperationDisposition {
+    match status {
+        NativeVolumeOperationStatus::Succeeded => VolumeOperationDisposition::Completed,
+        NativeVolumeOperationStatus::Submitted => VolumeOperationDisposition::Submitted,
+        NativeVolumeOperationStatus::Busy => VolumeOperationDisposition::Busy,
+        NativeVolumeOperationStatus::NotPermitted | NativeVolumeOperationStatus::NotPrivileged => {
+            VolumeOperationDisposition::Denied
+        }
+        NativeVolumeOperationStatus::Unsupported => VolumeOperationDisposition::Unsupported,
+        NativeVolumeOperationStatus::NotMounted
+        | NativeVolumeOperationStatus::Failed
+        | NativeVolumeOperationStatus::Missing
+        | NativeVolumeOperationStatus::Unavailable => VolumeOperationDisposition::Failed,
     }
 }
 
@@ -1929,6 +1948,34 @@ mod tests {
         assert_eq!(report.native_status, None);
         assert_eq!(report.reason, "volume-path-missing");
         assert!(report.as_tsv().contains("\tdisposition=refused\t"));
+    }
+
+    #[test]
+    fn native_volume_operation_status_maps_to_typed_dispositions() {
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::Succeeded),
+            VolumeOperationDisposition::Completed
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::Busy),
+            VolumeOperationDisposition::Busy
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::NotPermitted),
+            VolumeOperationDisposition::Denied
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::NotPrivileged),
+            VolumeOperationDisposition::Denied
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::Unsupported),
+            VolumeOperationDisposition::Unsupported
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::NotMounted),
+            VolumeOperationDisposition::Failed
+        );
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
