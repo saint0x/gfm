@@ -546,22 +546,16 @@ mod tests {
     }
 
     #[test]
-    fn downloaded_icloud_items_carry_available_offline_badge() {
-        let path = temp_path("gfm-native-downloaded-icon", "icloud.md");
-        fs::write(&path, "downloaded").unwrap();
-        let mut record = record("Downloaded.icloud.md", FileKind::File);
+    fn path_only_icloud_items_carry_waiting_badge_until_native_materialization_is_known() {
+        let path = temp_path("gfm-native-path-only-icon", "icloud.md");
+        fs::write(&path, "path-only iCloud hint").unwrap();
+        let mut record = record("MaybeDownloaded.icloud.md", FileKind::File);
         record.path = path.clone();
 
         let descriptor = NativeIconDescriptor::for_record(&record);
 
-        assert_eq!(
-            descriptor.badges,
-            vec![NativeIconBadge::CloudAvailableOffline]
-        );
-        assert_eq!(
-            descriptor.cache_key,
-            "document:extension:md:cloud-available-offline"
-        );
+        assert_eq!(descriptor.badges, vec![NativeIconBadge::CloudWaiting]);
+        assert_eq!(descriptor.cache_key, "document:extension:md:cloud-waiting");
         fs::remove_file(path).unwrap();
     }
 

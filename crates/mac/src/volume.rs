@@ -1274,6 +1274,7 @@ fn topology_change_reason(
         || previous.media_uuid != current.media_uuid
         || previous.resource_uuid != current.resource_uuid
         || previous.bsd_name != current.bsd_name
+        || previous.mount_from != current.mount_from
         || previous.media_content != current.media_content
         || previous.media_name != current.media_name
         || previous.media_path != current.media_path
@@ -1289,13 +1290,19 @@ fn topology_change_reason(
         || previous.media_block_size_bytes != current.media_block_size_bytes
         || previous.media_size_bytes != current.media_size_bytes
         || previous.mount_filesystem != current.mount_filesystem
+        || previous.mount_flags != current.mount_flags
+        || previous.mount_local != current.mount_local
         || previous.case_sensitive != current.case_sensitive
         || previous.case_preserving != current.case_preserving
         || previous.resource_automounted != current.resource_automounted
         || previous.resource_browsable != current.resource_browsable
+        || previous.resource_reachable != current.resource_reachable
         || previous.resource_remount_url != current.resource_remount_url
         || previous.device_protocol != current.device_protocol
         || previous.device_path != current.device_path
+        || previous.device_model != current.device_model
+        || previous.device_vendor != current.device_vendor
+        || previous.internal != current.internal
     {
         Some("volume-filesystem-changed")
     } else if previous.label != current.label {
@@ -2105,6 +2112,10 @@ mod tests {
         current_volume.volume_uuid = Some("APFS-VOLUME-UUID".to_string());
         current_volume.media_uuid = Some("APFS-CONTAINER-UUID".to_string());
         current_volume.media_content = Some("Apple_APFS".to_string());
+        current_volume.bsd_name = Some("disk4s1".to_string());
+        current_volume.mount_from = Some("/dev/disk4s1".to_string());
+        current_volume.media_name = Some("Container disk4".to_string());
+        current_volume.media_path = Some("IODeviceTree:/PCI0@0/AppleAPFSMedia".to_string());
         let previous = VolumeDiscoveryReport {
             volumes: vec![previous_volume],
         };
@@ -2132,9 +2143,14 @@ mod tests {
         let mut current_volume = previous_volume.clone();
         current_volume.filesystem = Some("apfs".to_string());
         current_volume.mount_filesystem = Some("apfs".to_string());
+        current_volume.mount_flags = Some(0x0000_1000);
+        current_volume.mount_local = Some(true);
         current_volume.case_sensitive = Some(true);
         current_volume.case_preserving = Some(true);
+        current_volume.resource_reachable = Some(true);
         current_volume.device_protocol = Some("USB".to_string());
+        current_volume.device_model = Some("External SSD".to_string());
+        current_volume.device_vendor = Some("Samsung".to_string());
         current_volume.volume_type = Some("apfs".to_string());
         current_volume.media_kind = Some("IOMedia".to_string());
         current_volume.media_type = Some("Generic".to_string());
@@ -2144,6 +2160,7 @@ mod tests {
         current_volume.media_block_size_bytes = Some(4096);
         current_volume.media_size_bytes = Some(1024 * 1024 * 1024);
         current_volume.device_path = Some("IODeviceTree:/PCI0".to_string());
+        current_volume.internal = Some(false);
         let previous = VolumeDiscoveryReport {
             volumes: vec![previous_volume],
         };

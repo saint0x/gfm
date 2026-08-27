@@ -276,11 +276,16 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
         "resource-uuid",
         volume.resource_uuid.as_deref(),
     );
+    push_signature_str(&mut tokens, "bsd", volume.bsd_name.as_deref());
+    push_signature_str(&mut tokens, "mount-from", volume.mount_from.as_deref());
+    push_signature_u32(&mut tokens, "mount-flags", volume.mount_flags);
     push_signature_str(
         &mut tokens,
         "media-content",
         volume.media_content.as_deref(),
     );
+    push_signature_str(&mut tokens, "media-name", volume.media_name.as_deref());
+    push_signature_str(&mut tokens, "media-path", volume.media_path.as_deref());
     push_signature_str(&mut tokens, "volume-type", volume.volume_type.as_deref());
     push_signature_str(&mut tokens, "media-kind", volume.media_kind.as_deref());
     push_signature_str(&mut tokens, "media-type", volume.media_type.as_deref());
@@ -288,8 +293,13 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
     push_signature_bool(&mut tokens, "case-preserving", volume.case_preserving);
     push_signature_bool(&mut tokens, "automounted", volume.resource_automounted);
     push_signature_bool(&mut tokens, "browsable", volume.resource_browsable);
+    push_signature_bool(&mut tokens, "resource-reachable", volume.resource_reachable);
+    push_signature_bool(&mut tokens, "local", volume.local);
+    push_signature_bool(&mut tokens, "mount-local", volume.mount_local);
+    push_signature_bool(&mut tokens, "internal", volume.internal);
     push_signature_bool(&mut tokens, "writable", Some(volume.writable));
     push_signature_bool(&mut tokens, "read-only", Some(volume.read_only));
+    push_signature_bool(&mut tokens, "mount-read-only", volume.mount_read_only);
     push_signature_bool(&mut tokens, "ejectable", Some(volume.ejectable));
     push_signature_bool(&mut tokens, "mountable", volume.mountable);
     push_signature_str(
@@ -298,6 +308,9 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
         volume.resource_remount_url.as_deref(),
     );
     push_signature_str(&mut tokens, "protocol", volume.device_protocol.as_deref());
+    push_signature_str(&mut tokens, "model", volume.device_model.as_deref());
+    push_signature_str(&mut tokens, "vendor", volume.device_vendor.as_deref());
+    push_signature_str(&mut tokens, "device-path", volume.device_path.as_deref());
     push_signature_bool(&mut tokens, "encrypted", volume.media_encrypted);
     push_signature_u64(&mut tokens, "block-size", volume.media_block_size_bytes);
     push_signature_u64(&mut tokens, "media-size", volume.media_size_bytes);
@@ -313,6 +326,12 @@ fn push_signature_str(tokens: &mut Vec<String>, key: &str, value: Option<&str>) 
 fn push_signature_bool(tokens: &mut Vec<String>, key: &str, value: Option<bool>) {
     if let Some(value) = value {
         tokens.push(format!("{key}={}", if value { "1" } else { "0" }));
+    }
+}
+
+fn push_signature_u32(tokens: &mut Vec<String>, key: &str, value: Option<u32>) {
+    if let Some(value) = value {
+        tokens.push(format!("{key}=0x{value:08x}"));
     }
 }
 
@@ -691,7 +710,12 @@ mod tests {
         descriptor.volume_uuid = Some("VOLUME-UUID".to_string());
         descriptor.media_uuid = Some("APFS-CONTAINER-UUID".to_string());
         descriptor.resource_uuid = Some("RESOURCE-UUID".to_string());
+        descriptor.bsd_name = Some("disk4s1".to_string());
+        descriptor.mount_from = Some("/dev/disk4s1".to_string());
+        descriptor.mount_flags = Some(0x0000_1000);
         descriptor.media_content = Some("Apple_APFS".to_string());
+        descriptor.media_name = Some("Container disk4".to_string());
+        descriptor.media_path = Some("IODeviceTree:/PCI0@0/AppleAPFSMedia".to_string());
         descriptor.volume_type = Some("apfs".to_string());
         descriptor.media_kind = Some("IOMedia".to_string());
         descriptor.media_type = Some("Generic".to_string());
@@ -699,12 +723,20 @@ mod tests {
         descriptor.case_preserving = Some(true);
         descriptor.resource_automounted = Some(false);
         descriptor.resource_browsable = Some(true);
+        descriptor.resource_reachable = Some(true);
+        descriptor.local = Some(true);
+        descriptor.mount_local = Some(true);
+        descriptor.internal = Some(false);
         descriptor.resource_remount_url = Some("file:///Volumes/Work".to_string());
         descriptor.writable = true;
         descriptor.read_only = false;
+        descriptor.mount_read_only = Some(false);
         descriptor.ejectable = true;
         descriptor.mountable = Some(false);
         descriptor.device_protocol = Some("PCI-Express".to_string());
+        descriptor.device_model = Some("External SSD".to_string());
+        descriptor.device_vendor = Some("Samsung".to_string());
+        descriptor.device_path = Some("IODeviceTree:/PCI0@0".to_string());
         descriptor.media_encrypted = Some(true);
         descriptor.media_block_size_bytes = Some(4096);
         descriptor.media_size_bytes = Some(1024 * 1024 * 1024);
@@ -717,7 +749,12 @@ mod tests {
             "volume-uuid=VOLUME-UUID",
             "media-uuid=APFS-CONTAINER-UUID",
             "resource-uuid=RESOURCE-UUID",
+            "bsd=disk4s1",
+            "mount-from=/dev/disk4s1",
+            "mount-flags=0x00001000",
             "media-content=Apple_APFS",
+            "media-name=Container disk4",
+            "media-path=IODeviceTree:/PCI0@0/AppleAPFSMedia",
             "volume-type=apfs",
             "media-kind=IOMedia",
             "media-type=Generic",
@@ -725,12 +762,20 @@ mod tests {
             "case-preserving=1",
             "automounted=0",
             "browsable=1",
+            "resource-reachable=1",
+            "local=1",
+            "mount-local=1",
+            "internal=0",
             "writable=1",
             "read-only=0",
+            "mount-read-only=0",
             "ejectable=1",
             "mountable=0",
             "remount-url=file:///Volumes/Work",
             "protocol=PCI-Express",
+            "model=External SSD",
+            "vendor=Samsung",
+            "device-path=IODeviceTree:/PCI0@0",
             "encrypted=1",
             "block-size=4096",
             "media-size=1073741824",
