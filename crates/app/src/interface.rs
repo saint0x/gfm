@@ -243,9 +243,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "ui-sidebar-fileprovider-contract requires a FileProvider path",
             )?;
-            let _access =
-                preflight_ui_fileprovider_read(&provider_path, "ui fileprovider sidebar state")?;
-            let report = FileProviderStateReport::read_path(&provider_path)?;
+            let report = read_ui_fileprovider_sidebar_state(provider_path.clone())?;
             println!(
                 "{}",
                 SidebarContract::discover_with_icloud_state(
@@ -266,11 +264,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "ui-sidebar-fileprovider-invalidation requires a FileProvider path",
             )?;
-            let _access = preflight_ui_fileprovider_read(
-                &provider_path,
-                "ui fileprovider sidebar invalidation",
-            )?;
-            let report = FileProviderInvalidationReport::evaluate(&provider_path, previous)?;
+            let report = read_ui_fileprovider_sidebar_invalidation(provider_path, previous)?;
             println!(
                 "{}",
                 SidebarCloudInvalidation::new(
@@ -1070,6 +1064,47 @@ fn run_ui_fileprovider_observed_invalidation(
                 FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
             snapshot.write(&state_path)?;
             Ok(observed)
+        },
+    )
+}
+
+fn read_ui_fileprovider_sidebar_state(path: PathBuf) -> Result<FileProviderStateReport> {
+    const WORKER: &str = "ui fileprovider sidebar state";
+    crate::access::preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
+    let volume = crate::detect_volume_id(&path)
+        .ok()
+        .or_else(|| crate::parent_volume(&path));
+    crate::runtime::run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        WORKER,
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = preflight_ui_fileprovider_read(&path, WORKER)?;
+            cancellation.check()?;
+            FileProviderStateReport::read_path(&path)
+        },
+    )
+}
+
+fn read_ui_fileprovider_sidebar_invalidation(
+    path: PathBuf,
+    previous: CloudStorageState,
+) -> Result<FileProviderInvalidationReport> {
+    const WORKER: &str = "ui fileprovider sidebar invalidation";
+    crate::access::preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
+    let volume = crate::detect_volume_id(&path)
+        .ok()
+        .or_else(|| crate::parent_volume(&path));
+    crate::runtime::run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        WORKER,
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = preflight_ui_fileprovider_read(&path, WORKER)?;
+            cancellation.check()?;
+            FileProviderInvalidationReport::evaluate(&path, previous)
         },
     )
 }

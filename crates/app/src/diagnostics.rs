@@ -7,12 +7,13 @@ use crate::{
     config_store, detect_volume_id, existing_read_probe_path, parent_volume,
     parse_required_scheduling_pressure, preflight_config_write, required_path,
 };
+use gfm_config::ConfigStore;
 use gfm_diagnostics::{
     export_operator_trace, inspect_storage, plan_index_recovery, rebuild_index_cancellable,
     recover_index_cancellable, select_parity_baseline, PersistentIndexRecoverySpec, RebuildSpec,
     StorageInspection,
 };
-use gfm_index::PersistentIndexRecovery;
+use gfm_index::{PersistentIndexPlan, PersistentIndexRecovery};
 use gfm_jobs::{Priority, SchedulingAction};
 use gfm_mac::AccessIntent;
 use gfm_types::{GfmError, Result};
@@ -36,12 +37,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&spec.root)
                 .ok()
                 .or_else(|| parent_volume(&spec.records_path));
-            let _access = retain_rebuild_access(&spec)?;
+            preflight_rebuild_volumes(&spec)?;
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "index rebuild",
-                move |cancellation| rebuild_index_cancellable(&spec, &cancellation),
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access = retain_rebuild_access(&spec)?;
+                    cancellation.check()?;
+                    rebuild_index_cancellable(&spec, &cancellation)
+                },
             )?;
             print_index_rebuild_report(report);
         }
@@ -117,8 +123,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or_else(|| records.with_extension("quarantine"));
             let spec = PersistentIndexRecoverySpec::new(root, records, state, quarantine);
-            let _access = retain_recovery_plan_access(&spec)?;
-            println!("{}", plan_index_recovery(&spec).as_tsv());
+            println!("{}", run_recovery_plan(spec)?.as_tsv());
         }
         "diagnostics-index-recover" => {
             let root = required_path(
@@ -141,12 +146,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&spec.root)
                 .ok()
                 .or_else(|| parent_volume(&spec.records_path));
-            let _access = retain_recovery_access(&spec)?;
+            preflight_recovery_volumes(&spec)?;
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "persistent index repair",
-                move |cancellation| recover_index_cancellable(&spec, &cancellation),
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access = retain_recovery_access(&spec)?;
+                    cancellation.check()?;
+                    recover_index_cancellable(&spec, &cancellation)
+                },
             )?;
             print_persistent_index_recovery_report(report);
         }
@@ -217,13 +227,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "diagnostics-trace-export requires an output path",
             )?;
-            let _access = preflight_access_scope(
-                write_probe_path(&output),
-                AccessIntent::Write,
-                "diagnostics trace export",
-            )?;
-            let report = export_operator_trace(output)?;
-            println!("{}\t{}", report.path.display(), report.bytes_written);
+            println!("{}", run_trace_export(output)?);
         }
         "diagnostics-parity-baseline" => {
             let store = config_store(args.next())?;
@@ -234,46 +238,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let macos_build = args.next().ok_or_else(|| {
                 GfmError::Format("diagnostics-parity-baseline requires a macOS build".to_string())
             })?;
-            let _config_access = preflight_config_write(&store, "diagnostics parity config")?;
-            let _baseline_access = preflight_access_scope(
-                existing_read_probe_path(&baseline),
-                AccessIntent::Read,
-                "diagnostics parity baseline",
-            )?;
-            let report = select_parity_baseline(&store, baseline, macos_build)?;
-            println!(
-                "{}\t{}\t{}",
-                report.config_path.display(),
-                report.baseline_root.display(),
-                report.macos_build
-            );
+            println!("{}", run_parity_baseline(store, baseline, macos_build)?);
         }
         "diagnostics-storage-inspect" => {
             let storage = required_path(
                 args.next(),
                 "diagnostics-storage-inspect requires a storage path",
             )?;
-            let _access =
-                preflight_access_scope(&storage, AccessIntent::Read, "diagnostics storage")?;
-            match inspect_storage(storage)? {
-                StorageInspection::Records(report) => println!(
-                    "records\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                    report.path.display(),
-                    report.bytes,
-                    report.records,
-                    report.files,
-                    report.directories,
-                    report.symlinks,
-                    report.hidden,
-                    report.tagged
-                ),
-                StorageInspection::Content(report) => println!(
-                    "content\t{}\t{}\t{}",
-                    report.path.display(),
-                    report.bytes,
-                    report.terms
-                ),
-            }
+            println!("{}", run_storage_inspect(storage)?);
         }
         _ => return Ok(false),
     }
@@ -317,6 +289,20 @@ fn preflight_rebuild_volumes(spec: &RebuildSpec) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+fn run_recovery_plan(spec: PersistentIndexRecoverySpec) -> Result<PersistentIndexPlan> {
+    const WORKER: &str = "persistent index repair plan";
+    preflight_volume_access_scope(&spec.root, AccessIntent::Index, WORKER)?;
+    let volume = detect_volume_id(&spec.root)
+        .ok()
+        .or_else(|| parent_volume(&spec.records_path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_recovery_plan_access(&spec)?;
+        cancellation.check()?;
+        Ok(plan_index_recovery(&spec))
+    })
 }
 
 fn retain_recovery_plan_access(
@@ -377,6 +363,97 @@ fn preflight_recovery_volumes(spec: &PersistentIndexRecoverySpec) -> Result<()> 
         "persistent index repair quarantine",
     )?;
     Ok(())
+}
+
+fn run_trace_export(output: PathBuf) -> Result<String> {
+    const WORKER: &str = "diagnostics trace export";
+    preflight_volume_access_scope(write_probe_path(&output), AccessIntent::Write, WORKER)?;
+    let volume = parent_volume(write_probe_path(&output));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access =
+            preflight_access_scope(write_probe_path(&output), AccessIntent::Write, WORKER)?;
+        cancellation.check()?;
+        let report = export_operator_trace(output)?;
+        Ok(format!(
+            "{}\t{}",
+            report.path.display(),
+            report.bytes_written
+        ))
+    })
+}
+
+fn run_parity_baseline(
+    store: ConfigStore,
+    baseline: PathBuf,
+    macos_build: String,
+) -> Result<String> {
+    preflight_volume_access_scope(
+        write_probe_path(store.path()),
+        AccessIntent::Write,
+        "diagnostics parity config",
+    )?;
+    preflight_volume_access_scope(
+        existing_read_probe_path(&baseline),
+        AccessIntent::Read,
+        "diagnostics parity baseline",
+    )?;
+    let volume = parent_volume(write_probe_path(store.path()))
+        .or_else(|| parent_volume(existing_read_probe_path(&baseline)));
+    run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        "diagnostics parity baseline",
+        move |cancellation| {
+            cancellation.check()?;
+            let _config_access = preflight_config_write(&store, "diagnostics parity config")?;
+            let _baseline_access = preflight_access_scope(
+                existing_read_probe_path(&baseline),
+                AccessIntent::Read,
+                "diagnostics parity baseline",
+            )?;
+            cancellation.check()?;
+            let report = select_parity_baseline(&store, baseline, macos_build)?;
+            Ok(format!(
+                "{}\t{}\t{}",
+                report.config_path.display(),
+                report.baseline_root.display(),
+                report.macos_build
+            ))
+        },
+    )
+}
+
+fn run_storage_inspect(storage: PathBuf) -> Result<String> {
+    const WORKER: &str = "diagnostics storage";
+    preflight_volume_access_scope(&storage, AccessIntent::Read, WORKER)?;
+    let volume = detect_volume_id(&storage)
+        .ok()
+        .or_else(|| parent_volume(&storage));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_access_scope(&storage, AccessIntent::Read, WORKER)?;
+        cancellation.check()?;
+        match inspect_storage(storage)? {
+            StorageInspection::Records(report) => Ok(format!(
+                "records\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                report.path.display(),
+                report.bytes,
+                report.records,
+                report.files,
+                report.directories,
+                report.symlinks,
+                report.hidden,
+                report.tagged
+            )),
+            StorageInspection::Content(report) => Ok(format!(
+                "content\t{}\t{}\t{}",
+                report.path.display(),
+                report.bytes,
+                report.terms
+            )),
+        }
+    })
 }
 
 fn write_probe_path(path: &Path) -> &Path {

@@ -7474,6 +7474,118 @@ fn fileprovider_progress_job_persists_runtime_payload_and_progress_from_binary()
 }
 
 #[test]
+fn ui_fileprovider_sidebar_state_reads_on_visible_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ui-fileprovider-sidebar-state-root");
+    let current = root.join("Desktop");
+    let item = root.join("Remote.icloud-placeholder");
+    fs::create_dir_all(&current).unwrap();
+    fs::write(&item, "remote placeholder").unwrap();
+    xattr::set(&item, "com.apple.icloud.placeholder", b"1").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-sidebar-fileprovider-contract",
+            current.to_str().unwrap(),
+            item.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "ui fileprovider sidebar state", &item);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("sidebar\t"), "{stdout}");
+    assert!(stdout.contains("icloud"), "{stdout}");
+    assert!(stdout.contains("cloud"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn ui_fileprovider_sidebar_invalidation_reads_on_visible_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ui-fileprovider-sidebar-invalidation-root");
+    let item = root.join("Remote.icloud-placeholder");
+    fs::write(&item, "remote placeholder").unwrap();
+    xattr::set(&item, "com.apple.icloud.placeholder", b"1").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-sidebar-fileprovider-invalidation",
+            "downloaded",
+            item.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "ui fileprovider sidebar invalidation", &item);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("sidebar-cloud-invalidation\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tprevious=available-offline\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tcurrent=cloud-only\t"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn ui_fileprovider_sidebar_routes_refuse_unreachable_provider_before_reading_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ui-fileprovider-sidebar-unreachable");
+    let current = root.join("Desktop");
+    let item = root.join("Remote.icloud-placeholder");
+    fs::create_dir_all(&current).unwrap();
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&item, "remote placeholder").unwrap();
+
+    for args in [
+        vec![
+            "ui-sidebar-fileprovider-contract".to_string(),
+            current.display().to_string(),
+            item.display().to_string(),
+        ],
+        vec![
+            "ui-sidebar-fileprovider-invalidation".to_string(),
+            "downloaded".to_string(),
+            item.display().to_string(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(&args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{args:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stdout.is_empty(), "{args:?}: {stdout}");
+        assert!(
+            stderr.contains("volume access blocked: unreachable volume network"),
+            "{args:?}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("security-worker-admission\tworker=ui fileprovider sidebar"),
+            "{args:?}: {stderr}"
+        );
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn ui_fileprovider_observed_invalidation_persists_snapshot_on_visible_worker_from_binary() {
     let root = unique_temp_dir("gfm-cli-ui-fileprovider-observed-root");
     let state = root.join("fileprovider-state.tsv");

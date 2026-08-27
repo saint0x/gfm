@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -58,6 +58,10 @@ fn diagnostics_rebuilds_and_inspects_indexes_from_binary() {
         "{}",
         String::from_utf8_lossy(&rebuild.stderr)
     );
+    let rebuild_stderr = String::from_utf8_lossy(&rebuild.stderr);
+    assert_worker_admitted(&rebuild_stderr, "index rebuild root", &root);
+    assert_worker_admitted(&rebuild_stderr, "index rebuild records", &root);
+    assert_worker_admitted(&rebuild_stderr, "index rebuild content", &root);
     let rebuild_stdout = String::from_utf8(rebuild.stdout).unwrap();
     assert!(
         rebuild_stdout.contains("records.gfmidx"),
@@ -73,6 +77,8 @@ fn diagnostics_rebuilds_and_inspects_indexes_from_binary() {
         .output()
         .unwrap();
     assert!(records_inspect.status.success());
+    let records_stderr = String::from_utf8_lossy(&records_inspect.stderr);
+    assert_worker_admitted(&records_stderr, "diagnostics storage", &records);
     let records_stdout = String::from_utf8(records_inspect.stdout).unwrap();
     assert!(records_stdout.starts_with("records\t"), "{records_stdout}");
 
@@ -81,6 +87,8 @@ fn diagnostics_rebuilds_and_inspects_indexes_from_binary() {
         .output()
         .unwrap();
     assert!(content_inspect.status.success());
+    let content_stderr = String::from_utf8_lossy(&content_inspect.stderr);
+    assert_worker_admitted(&content_stderr, "diagnostics storage", &content);
     let content_stdout = String::from_utf8(content_inspect.stdout).unwrap();
     assert!(content_stdout.starts_with("content\t"), "{content_stdout}");
 
@@ -229,6 +237,10 @@ fn diagnostics_trace_and_storage_refuse_unreachable_paths_before_io_from_binary(
             .contains("diagnostics trace export volume access blocked: unreachable volume network"),
         "{trace_stderr}"
     );
+    assert!(
+        !trace_stderr.contains("security-worker-admission\tworker=diagnostics trace export\t"),
+        "{trace_stderr}"
+    );
     assert!(!trace.exists());
 
     let storage_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -242,6 +254,10 @@ fn diagnostics_trace_and_storage_refuse_unreachable_paths_before_io_from_binary(
     assert!(
         storage_stderr
             .contains("diagnostics storage volume access blocked: unreachable volume network"),
+        "{storage_stderr}"
+    );
+    assert!(
+        !storage_stderr.contains("security-worker-admission\tworker=diagnostics storage\t"),
         "{storage_stderr}"
     );
 
@@ -283,6 +299,8 @@ fn diagnostics_plans_and_recovers_persistent_index_from_binary() {
         .output()
         .unwrap();
     assert!(plan.status.success());
+    let plan_stderr = String::from_utf8_lossy(&plan.stderr);
+    assert_worker_admitted(&plan_stderr, "persistent index repair root", &root);
     let plan_stdout = String::from_utf8(plan.stdout).unwrap();
     assert!(
         plan_stdout.contains("action=rebuild-state"),
@@ -343,6 +361,11 @@ fn diagnostics_plans_and_recovers_persistent_index_from_binary() {
         "{}",
         String::from_utf8_lossy(&recover.stderr)
     );
+    let recover_stderr = String::from_utf8_lossy(&recover.stderr);
+    assert_worker_admitted(&recover_stderr, "persistent index repair root", &root);
+    assert_worker_admitted(&recover_stderr, "persistent index repair records", &root);
+    assert_worker_admitted(&recover_stderr, "persistent index repair state", &root);
+    assert_worker_admitted(&recover_stderr, "persistent index repair quarantine", &root);
     let recover_stdout = String::from_utf8(recover.stdout).unwrap();
     assert!(
         recover_stdout.contains("rebuilt-records=false"),
@@ -524,6 +547,8 @@ fn diagnostics_exports_trace_and_selects_parity_baseline_from_binary() {
         "{}",
         String::from_utf8_lossy(&trace_output.stderr)
     );
+    let trace_stderr = String::from_utf8_lossy(&trace_output.stderr);
+    assert_worker_admitted(&trace_stderr, "diagnostics trace export", &root);
     assert!(trace.exists());
     let encoded = fs::read_to_string(&trace).unwrap();
     assert!(encoded.contains("\"schema_version\""));
@@ -542,6 +567,9 @@ fn diagnostics_exports_trace_and_selects_parity_baseline_from_binary() {
         "{}",
         String::from_utf8_lossy(&parity_output.stderr)
     );
+    let parity_stderr = String::from_utf8_lossy(&parity_output.stderr);
+    assert_worker_admitted(&parity_stderr, "diagnostics parity config", &root);
+    assert_worker_admitted(&parity_stderr, "diagnostics parity baseline", &root);
     let saved = fs::read_to_string(config).unwrap();
     assert!(saved.contains("25A354"), "{saved}");
     assert!(saved.contains("baselines"), "{saved}");
@@ -604,6 +632,19 @@ fn diagnostics_parity_baseline_refuses_unreachable_paths_before_config_write_fro
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(offline).unwrap();
+}
+
+fn assert_worker_admitted(stderr: &str, worker: &str, path: &Path) {
+    let expected_worker = format!("worker={worker}");
+    let expected_path = format!("path={}", path.display());
+    assert!(
+        stderr.lines().any(|line| {
+            line.starts_with("security-worker-admission\t")
+                && line.split('\t').any(|field| field == expected_worker)
+                && line.split('\t').any(|field| field == expected_path)
+        }),
+        "{stderr}"
+    );
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
