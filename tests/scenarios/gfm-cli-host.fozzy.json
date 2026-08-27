@@ -2380,6 +2380,25 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-observed-metadata-state.tsv",
+      "data": "gfm-fileprovider-state-v1\ndownloaded\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-observed-metadata-invalidation",
+        "tmp/gfm-fozzy-fileprovider-observed-metadata-state.tsv",
+        "metadata",
+        "tmp/gfm-fozzy-fileprovider-event.icloud-placeholder"
+      ],
+      "exit_code": 0,
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nprovider-metadata-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\treason=provider-metadata-state-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-fileprovider-remove-state.tsv",
       "data": "gfm-fileprovider-state-v1\ndownloaded\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\n"
     },
@@ -2469,7 +2488,7 @@
         "tmp/gfm-fozzy-local-notes.txt"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tpaths=0\nfileprovider-state-invalidation\tinitialized=false\tchanged=0\ticon=false\tpreview-memory=false\tpreview-disk=false\tsidebar=false\treindex-metadata=false\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=0\nfileprovider-state-invalidation\tinitialized=false\tchanged=0\ticon=false\tpreview-memory=false\tpreview-disk=false\tsidebar=false\treindex-metadata=false\n",
       "stderr": "",
       "times": 1
     },

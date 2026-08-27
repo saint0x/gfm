@@ -1605,6 +1605,95 @@ fn reports_fileprovider_invalidation_event_from_binary() {
 }
 
 #[test]
+fn reports_observed_fileprovider_metadata_invalidation_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-observed-metadata-invalidation-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    std::fs::write(&item, "placeholder").unwrap();
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v1\ndownloaded\t{}\n",
+            item.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-observed-metadata-invalidation")
+        .arg(&state)
+        .arg("metadata")
+        .arg(&item)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(
+        "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\n"
+    ));
+    assert!(stdout.contains("provider-metadata-invalidation\t"));
+    assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\t"));
+    assert!(stdout.contains(
+        "\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\t"
+    ));
+    assert!(stdout.ends_with("reason=provider-metadata-state-changed\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn observed_fileprovider_metadata_invalidation_preserves_noop_events_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-observed-metadata-noop-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let provider = root.join("Remote.icloud-placeholder");
+    let local = root.join("Notes.txt");
+    std::fs::write(&provider, "placeholder").unwrap();
+    std::fs::write(&local, "local").unwrap();
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v1\nevicted\t{}\n",
+            provider.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-observed-metadata-invalidation")
+        .arg(&state)
+        .arg("modify")
+        .arg(&local)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=0\nfileprovider-state-invalidation\tinitialized=false\tchanged=0\ticon=false\tpreview-memory=false\tpreview-disk=false\tsidebar=false\treindex-metadata=false\n"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_invalidation_event_removes_deleted_tracked_item_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-invalidation-remove-{}",

@@ -601,6 +601,7 @@ fn print_usage() {
   gfm preview-cache-fileprovider-invalidation <cache-root> <previous-state> <path> [icon|thumbnail|quick-look|text]
   gfm fileprovider-invalidation-scan <state.tsv> <paths...>
   gfm fileprovider-invalidation-event <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
+  gfm fileprovider-observed-metadata-invalidation <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
   gfm fileprovider-observer-probe <state.tsv> <root> <target>
   gfm volume-discovery [paths...]
   gfm volume-events-probe

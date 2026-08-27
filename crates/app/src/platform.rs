@@ -331,6 +331,41 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             snapshot.write(&state_path)?;
             println!("{}", observed.as_tsv());
         }
+        "fileprovider-observed-metadata-invalidation" => {
+            let state_path = required_path(
+                args.next(),
+                "fileprovider-observed-metadata-invalidation requires a state path",
+            )?;
+            let event_kind = required_string(
+                args.next(),
+                "fileprovider-observed-metadata-invalidation requires an event kind",
+            )?;
+            let path = required_path(
+                args.next(),
+                "fileprovider-observed-metadata-invalidation requires a path",
+            )?;
+            let event =
+                parse_fileprovider_event(&event_kind, path, args.next().map(PathBuf::from))?;
+            let mut access = vec![preflight_access_scope(
+                write_probe_path(&state_path),
+                AccessIntent::Write,
+                "fileprovider observed metadata invalidation",
+            )?];
+            let previous = if state_path.is_file() {
+                Some(FileProviderStateSnapshot::read(&state_path)?)
+            } else {
+                None
+            };
+            access.extend(retain_fileprovider_event_access(
+                &event,
+                previous.as_ref(),
+                "fileprovider observed metadata invalidation",
+            )?);
+            let (observed, snapshot) =
+                FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
+            snapshot.write(&state_path)?;
+            println!("{}", observed_metadata_invalidation_tsv(&observed));
+        }
         "fileprovider-observer-probe" => {
             let state_path = required_path(
                 args.next(),
@@ -1060,6 +1095,22 @@ fn parse_fileprovider_event(kind: &str, path: PathBuf, to: Option<PathBuf>) -> R
         }
     };
     Ok(FileEvent::new(path, event_kind))
+}
+
+fn observed_metadata_invalidation_tsv(observed: &FileProviderObservedInvalidation) -> String {
+    let mut lines = vec![observed.as_tsv()];
+    lines.extend(observed.report.changes.iter().map(|report| {
+        ProviderMetadataInvalidationReport::from_provider_transition(
+            report.path.clone(),
+            report.previous.as_str(),
+            report.current.storage_state.as_str(),
+            report.reindex_metadata,
+            report.state_changed,
+            report.reason,
+        )
+        .as_tsv()
+    }));
+    lines.join("\n")
 }
 
 fn drain_fileprovider_observer_probe(
