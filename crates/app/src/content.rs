@@ -27,7 +27,7 @@ use gfm_jobs::{
     RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, TaskStatus, WorkerPool,
 };
 use gfm_mac::AccessIntent;
-use gfm_store::read_records;
+use gfm_store::{read_records, ContentArchiveManifest};
 use gfm_types::{GfmError, Result, SearchHit};
 use std::collections::HashSet;
 use std::path::Path;
@@ -666,7 +666,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             spec.fuzzy = fuzzy;
             spec.content_manifest = content_manifest;
             spec.content_segments = args.map(PathBuf::from).collect();
-            let report = gfm_index::inspect_index_footprint(&spec)?;
+            let report = run_index_footprint_inspect(spec, "index footprint")?;
             eprintln!(
                 "index-footprint\trecords={}\ttotal-bytes={}\tbytes-per-record={}\tsegments={}\tsegment-bytes={}\tcompaction-scheduled={}\treason={:?}",
                 report.record_count,
@@ -762,7 +762,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 battery,
                 user_activity,
             };
-            let report = gfm_index::inspect_index_footprint(&spec)?;
+            let report = run_index_footprint_inspect(spec, "index compaction plan")?;
             eprintln!(
                 "index-compaction-plan\taction={:?}\tscheduled={}\treason={:?}\tpressure={:?}\tmerge-bytes={}\teffective-max-bytes={}",
                 report.compaction.action,
@@ -817,6 +817,160 @@ pub(crate) fn run_content_search(
             Ok((indexed, hits))
         },
     )
+}
+
+fn run_index_footprint_inspect(
+    spec: IndexFootprintSpec,
+    worker: &'static str,
+) -> Result<gfm_index::IndexFootprintReport> {
+    preflight_index_footprint_volumes(&spec, worker)?;
+    let volume = detect_volume_id(&spec.records)
+        .ok()
+        .or_else(|| parent_volume(&spec.records));
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_index_footprint_access(&spec, worker)?;
+        let archive_paths = index_footprint_content_archive_paths(&spec)?;
+        preflight_index_footprint_archive_volumes(&archive_paths, worker)?;
+        cancellation.check()?;
+        let _archive_access = retain_index_footprint_archive_access(&archive_paths, worker)?;
+        cancellation.check()?;
+        gfm_index::inspect_index_footprint(&spec)
+    })
+}
+
+fn index_footprint_content_archive_paths(spec: &IndexFootprintSpec) -> Result<Vec<PathBuf>> {
+    let Some(manifest_path) = &spec.content_manifest else {
+        return Ok(Vec::new());
+    };
+    let manifest = ContentArchiveManifest::read(manifest_path)?;
+    Ok(manifest.resolved_archive_paths(manifest_path))
+}
+
+fn retain_index_footprint_access(
+    spec: &IndexFootprintSpec,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = Vec::new();
+    guards.push(preflight_access_scope(
+        &spec.records,
+        AccessIntent::Read,
+        &format!("{worker} records"),
+    )?);
+    if let Some(path) = &spec.columns {
+        guards.push(preflight_access_scope(
+            path,
+            AccessIntent::Read,
+            &format!("{worker} columns"),
+        )?);
+    }
+    if let Some(path) = &spec.metadata {
+        guards.push(preflight_access_scope(
+            path,
+            AccessIntent::Read,
+            &format!("{worker} metadata"),
+        )?);
+    }
+    if let Some(path) = &spec.prefixes {
+        guards.push(preflight_access_scope(
+            path,
+            AccessIntent::Read,
+            &format!("{worker} prefixes"),
+        )?);
+    }
+    if let Some(path) = &spec.substrings {
+        guards.push(preflight_access_scope(
+            path,
+            AccessIntent::Read,
+            &format!("{worker} substrings"),
+        )?);
+    }
+    if let Some(path) = &spec.fuzzy {
+        guards.push(preflight_access_scope(
+            path,
+            AccessIntent::Read,
+            &format!("{worker} fuzzy"),
+        )?);
+    }
+    if let Some(path) = &spec.content_manifest {
+        guards.push(preflight_access_scope(
+            path,
+            AccessIntent::Read,
+            &format!("{worker} content manifest"),
+        )?);
+    }
+    for path in &spec.content_segments {
+        guards.push(preflight_access_scope(
+            path,
+            AccessIntent::Read,
+            &format!("{worker} content segment"),
+        )?);
+    }
+    Ok(guards)
+}
+
+fn retain_index_footprint_archive_access(
+    paths: &[PathBuf],
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = Vec::new();
+    for path in paths {
+        guards.push(preflight_access_scope(
+            path,
+            AccessIntent::Read,
+            &format!("{worker} content archive"),
+        )?);
+    }
+    Ok(guards)
+}
+
+fn preflight_index_footprint_volumes(spec: &IndexFootprintSpec, worker: &str) -> Result<()> {
+    preflight_volume_access_scope(
+        &spec.records,
+        AccessIntent::Read,
+        &format!("{worker} records"),
+    )?;
+    if let Some(path) = &spec.columns {
+        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} columns"))?;
+    }
+    if let Some(path) = &spec.metadata {
+        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} metadata"))?;
+    }
+    if let Some(path) = &spec.prefixes {
+        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} prefixes"))?;
+    }
+    if let Some(path) = &spec.substrings {
+        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} substrings"))?;
+    }
+    if let Some(path) = &spec.fuzzy {
+        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} fuzzy"))?;
+    }
+    if let Some(path) = &spec.content_manifest {
+        preflight_volume_access_scope(
+            path,
+            AccessIntent::Read,
+            &format!("{worker} content manifest"),
+        )?;
+    }
+    for path in &spec.content_segments {
+        preflight_volume_access_scope(
+            path,
+            AccessIntent::Read,
+            &format!("{worker} content segment"),
+        )?;
+    }
+    Ok(())
+}
+
+fn preflight_index_footprint_archive_volumes(paths: &[PathBuf], worker: &str) -> Result<()> {
+    for path in paths {
+        preflight_volume_access_scope(
+            path,
+            AccessIntent::Read,
+            &format!("{worker} content archive"),
+        )?;
+    }
+    Ok(())
 }
 
 fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<usize> {

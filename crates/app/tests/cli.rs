@@ -9479,6 +9479,22 @@ fn compacts_content_segments_from_binary() {
         String::from_utf8_lossy(&footprint_output.stderr)
     );
     let footprint_stderr = String::from_utf8(footprint_output.stderr).unwrap();
+    assert_worker_admitted(&footprint_stderr, "index footprint records", &records);
+    assert_worker_admitted(
+        &footprint_stderr,
+        "index footprint content manifest",
+        &manifest,
+    );
+    assert_worker_admitted(
+        &footprint_stderr,
+        "index footprint content archive",
+        &content,
+    );
+    assert_worker_admitted(
+        &footprint_stderr,
+        "index footprint content segment",
+        &segment,
+    );
     assert!(
         footprint_stderr.contains("index-footprint")
             && footprint_stderr.contains("compaction-scheduled=true")
@@ -9514,6 +9530,22 @@ fn compacts_content_segments_from_binary() {
         String::from_utf8_lossy(&adaptive_output.stderr)
     );
     let adaptive_stderr = String::from_utf8(adaptive_output.stderr).unwrap();
+    assert_worker_admitted(&adaptive_stderr, "index compaction plan records", &records);
+    assert_worker_admitted(
+        &adaptive_stderr,
+        "index compaction plan content manifest",
+        &manifest,
+    );
+    assert_worker_admitted(
+        &adaptive_stderr,
+        "index compaction plan content archive",
+        &content,
+    );
+    assert_worker_admitted(
+        &adaptive_stderr,
+        "index compaction plan content segment",
+        &segment,
+    );
     assert!(
         adaptive_stderr.contains("index-compaction-plan")
             && adaptive_stderr.contains("action=Defer")
@@ -9629,6 +9661,77 @@ fn compacts_content_segments_from_binary() {
     fs::remove_file(tiered_content).unwrap();
     fs::remove_file(maintained_content).unwrap();
     fs::remove_file(manifest).unwrap();
+}
+
+#[test]
+fn index_footprint_refuses_unreachable_manifest_archive_before_mapping_from_binary() {
+    let root = unique_temp_dir("gfm-cli-footprint-source");
+    let offline = unique_temp_dir("gfm-cli-footprint-archive-unreachable");
+    fs::write(root.join("note.md"), "footprint source").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = unique_temp_path("gfm-cli-footprint-records", "gfmidx");
+    let manifest = root.join("content.gfmmanifest");
+    let content = offline.join("offline.gfmcontent");
+    fs::write(&content, "not a mmap content archive").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: content.clone(),
+    }])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-footprint",
+            records.to_str().unwrap(),
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            manifest.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("records\tcount="), "{stdout}");
+    assert!(
+        stderr.contains(
+            "index footprint content archive volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert_worker_admitted(&stderr, "index footprint records", &records);
+    assert_worker_admitted(&stderr, "index footprint content manifest", &manifest);
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=index footprint content archive\tpath={}",
+            content.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("invalid magic") && !stderr.contains("not mmap content"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+    fs::remove_file(records).unwrap();
 }
 
 #[test]
