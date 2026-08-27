@@ -8,6 +8,7 @@ use gfm_store::{
 use gfm_types::{ContentPosting, FileId, VolumeId};
 use std::fs;
 use std::io::{Cursor, Write};
+use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use zip::write::SimpleFileOptions;
@@ -2985,6 +2986,16 @@ fn searches_persisted_tags_from_binary() {
     let substrings = unique_temp_path("gfm-cli-tags", "gfmsubstr");
     let fuzzy = unique_temp_path("gfm-cli-tags", "gfmfuzzy");
     let content = unique_temp_path("gfm-cli-tags", "gfmcontent");
+    let assert_worker_admitted = |stderr: &[u8], worker: &str, path: &Path| {
+        let stderr = String::from_utf8_lossy(stderr);
+        assert!(
+            stderr.contains(&format!(
+                "security-worker-admission\tworker={worker}\tpath={}",
+                path.display()
+            )),
+            "{stderr}"
+        );
+    };
     fs::write(
         &index,
         "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\tImportant,Client\t/tmp/tagged.md\n2\t2\t0\tf\t5\t0\t0\t0\t0\tLater\t/tmp/other.md\n",
@@ -3033,6 +3044,7 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&ids_output.stderr)
     );
+    assert_worker_admitted(&ids_output.stderr, "metadata ids mmap", &metadata);
     assert_eq!(String::from_utf8(ids_output.stdout).unwrap(), "1\t1\n");
 
     let block_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -3050,6 +3062,7 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&block_output.stderr)
     );
+    assert_worker_admitted(&block_output.stderr, "metadata id block mmap", &metadata);
     assert_eq!(String::from_utf8(block_output.stdout).unwrap(), "1\t1\n");
 
     let verify_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -3061,6 +3074,7 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&verify_output.stderr)
     );
+    assert_worker_admitted(&verify_output.stderr, "metadata verify", &metadata);
     let verify_stdout = String::from_utf8(verify_output.stdout).unwrap();
     assert!(
         verify_stdout.contains("\tchecksum=verified"),
@@ -3105,6 +3119,7 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&lookup_output.stderr)
     );
+    assert_worker_admitted(&lookup_output.stderr, "dictionary lookup", &dictionary);
     let lookup_stdout = String::from_utf8(lookup_output.stdout).unwrap();
     assert!(
         lookup_stdout.starts_with("dictionary\tfound\t"),
@@ -3119,6 +3134,11 @@ fn searches_persisted_tags_from_binary() {
         prefix_lookup_output.status.success(),
         "{}",
         String::from_utf8_lossy(&prefix_lookup_output.stderr)
+    );
+    assert_worker_admitted(
+        &prefix_lookup_output.stderr,
+        "dictionary lookup",
+        &dictionary,
     );
     let prefix_lookup_stdout = String::from_utf8(prefix_lookup_output.stdout).unwrap();
     assert!(
@@ -3135,6 +3155,7 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&dictionary_verify.stderr)
     );
+    assert_worker_admitted(&dictionary_verify.stderr, "dictionary verify", &dictionary);
     let dictionary_verify_stdout = String::from_utf8(dictionary_verify.stdout).unwrap();
     assert!(
         dictionary_verify_stdout.contains("\tchecksum=verified"),
@@ -3164,6 +3185,7 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&prefix_ids.stderr)
     );
+    assert_worker_admitted(&prefix_ids.stderr, "prefix ids mmap", &prefixes);
     assert_eq!(String::from_utf8(prefix_ids.stdout).unwrap(), "1\t1\n");
 
     let prefix_block = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -3180,6 +3202,7 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&prefix_block.stderr)
     );
+    assert_worker_admitted(&prefix_block.stderr, "prefix id block mmap", &prefixes);
     assert_eq!(String::from_utf8(prefix_block.stdout).unwrap(), "1\t1\n");
 
     let prefix_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -3191,6 +3214,7 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&prefix_verify.stderr)
     );
+    assert_worker_admitted(&prefix_verify.stderr, "prefix verify", &prefixes);
     let prefix_verify_stdout = String::from_utf8(prefix_verify.stdout).unwrap();
     assert!(
         prefix_verify_stdout.contains("\tchecksum=true"),
@@ -3220,6 +3244,7 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&substring_ids.stderr)
     );
+    assert_worker_admitted(&substring_ids.stderr, "substring ids mmap", &substrings);
     assert_eq!(String::from_utf8(substring_ids.stdout).unwrap(), "1\t1\n");
 
     let substring_block = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -3236,6 +3261,11 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&substring_block.stderr)
     );
+    assert_worker_admitted(
+        &substring_block.stderr,
+        "substring id block mmap",
+        &substrings,
+    );
     assert_eq!(String::from_utf8(substring_block.stdout).unwrap(), "1\t1\n");
 
     let substring_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -3247,6 +3277,7 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&substring_verify.stderr)
     );
+    assert_worker_admitted(&substring_verify.stderr, "substring verify", &substrings);
     let substring_verify_stdout = String::from_utf8(substring_verify.stdout).unwrap();
     assert!(
         substring_verify_stdout.contains("\tchecksum=true"),
@@ -3276,6 +3307,7 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&fuzzy_terms.stderr)
     );
+    assert_worker_admitted(&fuzzy_terms.stderr, "fuzzy terms mmap", &fuzzy);
     assert_eq!(String::from_utf8(fuzzy_terms.stdout).unwrap(), "tagged\n");
 
     let fuzzy_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -3287,6 +3319,7 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&fuzzy_verify.stderr)
     );
+    assert_worker_admitted(&fuzzy_verify.stderr, "fuzzy verify", &fuzzy);
     let fuzzy_verify_stdout = String::from_utf8(fuzzy_verify.stdout).unwrap();
     assert!(
         fuzzy_verify_stdout.contains("\tchecksum=true"),
@@ -3861,6 +3894,13 @@ fn direct_search_archives_refuse_unreachable_volume_before_mapping_from_binary()
         assert!(
             stderr.contains(&format!(
                 "{worker} volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(
+            !stderr.contains(&format!(
+                "security-worker-admission\tworker={worker}\tpath={}",
+                archive.display()
             )),
             "{route}: {stderr}"
         );
