@@ -1368,7 +1368,6 @@ fn storage_state_for_path(
     } else if name.contains("waiting") || attr_blob.contains("waiting") {
         CloudStorageState::Waiting
     } else if domain == FileProviderDomain::FileProvider
-        && hints.native_identity.status == NativeFileProviderIdentityStatus::Available
         && !native_has_fileprovider_values(&hints.native)
     {
         CloudStorageState::Unknown
@@ -2145,6 +2144,45 @@ mod tests {
         assert_eq!(domain, FileProviderDomain::FileProvider);
         assert_eq!(state, CloudStorageState::Unknown);
         assert_eq!(progress.reason.as_deref(), Some("unknown-provider-state"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generic_provider_path_fallback_without_materialization_evidence_is_unknown() {
+        let root = unique_temp_dir();
+        let path = root.join("Remote.fileprovider");
+        fs::write(&path, "provider").unwrap();
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path.clone(), hints);
+
+        assert_eq!(report.domain, FileProviderDomain::FileProvider);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::PathFallback
+        );
+        assert_eq!(
+            report.commands.reason.as_deref(),
+            Some("unknown-provider-state")
+        );
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("unknown-provider-state")
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
