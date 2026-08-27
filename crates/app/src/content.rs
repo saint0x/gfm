@@ -1,4 +1,4 @@
-use crate::access::{preflight_access_scope, ScopedAccessGuard};
+use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
 use crate::extract::{
     extraction_budget_profile, read_extraction_quarantine,
     run_adaptive_extraction_worker_cancellable,
@@ -88,10 +88,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "adaptive extraction",
                 pressure,
                 move || {
-                    let _access = preflight_access_scope(
+                    preflight_volume_access_scope(
                         &volume_path,
                         AccessIntent::Read,
-                        "adaptive extraction worker",
+                        "adaptive extraction",
                     )?;
                     Ok(detect_volume_id(&volume_path)
                         .ok()
@@ -176,9 +176,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "quarantined adaptive extraction",
                 pressure,
                 move || {
-                    let _access = retain_extraction_quarantine_access(
+                    preflight_volume_access_scope(
                         &volume_path,
-                        &volume_store,
+                        AccessIntent::Read,
+                        "quarantined adaptive extraction",
+                    )?;
+                    preflight_volume_access_scope(
+                        write_probe_path(&volume_store),
+                        AccessIntent::Write,
                         "quarantined adaptive extraction",
                     )?;
                     Ok(detect_volume_id(&volume_path)

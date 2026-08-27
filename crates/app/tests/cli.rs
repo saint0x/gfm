@@ -6042,6 +6042,16 @@ fn reports_compressed_pdf_extraction_from_binary() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert_eq!(
+        stderr
+            .matches(&format!(
+                "security-worker-admission\tworker=adaptive extraction worker\tpath={}",
+                path.display()
+            ))
+            .count(),
+        1,
+        "{stderr}"
+    );
     assert!(stderr.contains("\tintent=read\t"), "{stderr}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("extract\tpath="), "{stdout}");
@@ -6073,6 +6083,7 @@ fn extract_report_refuses_missing_path_before_extraction_from_binary() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert_eq!(stderr.matches("security-scope\t").count(), 1, "{stderr}");
     assert!(stderr.contains("\tintent=read\t"), "{stderr}");
     assert!(stderr.contains("\taction=deny\t"), "{stderr}");
     assert!(
@@ -6180,6 +6191,13 @@ fn deferred_adaptive_extraction_worker_does_not_touch_unreachable_target_from_bi
         !stderr.contains("volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains(&format!(
+            "\tworker=adaptive extraction worker\tpath={}",
+            path.display()
+        )),
+        "{stderr}"
+    );
     let catalog_text = fs::read_to_string(&catalog).unwrap();
     assert!(catalog_text.contains("\textraction\t"), "{catalog_text}");
     assert!(
@@ -6234,6 +6252,13 @@ fn adaptive_extraction_worker_refuses_unreachable_scratch_before_launch_from_bin
     assert!(!stdout.contains("extract\t"), "{stdout}");
     assert!(
         stderr.contains("adaptive extraction volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "\tworker=adaptive extraction worker\tpath={}",
+            path.display()
+        )),
         "{stderr}"
     );
     assert_eq!(
@@ -6411,6 +6436,27 @@ fn quarantined_adaptive_extraction_worker_records_timeout_from_binary() {
             String::from_utf8_lossy(&output.stderr)
         );
         let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr
+                .matches(&format!(
+                    "security-worker-admission\tworker=quarantined adaptive extraction\tpath={}\tintent=read",
+                    path.display()
+                ))
+                .count(),
+            1,
+            "{stderr}"
+        );
+        assert_eq!(
+            stderr
+                .matches(&format!(
+                    "security-worker-admission\tworker=quarantined adaptive extraction\tpath={}\tintent=write",
+                    root.display()
+                ))
+                .count(),
+            1,
+            "{stderr}"
+        );
         assert!(stdout.starts_with(expected), "{stdout}");
         assert!(stdout.contains("\treason=worker-timeout\t") || expected == "quarantine\tallow");
     }
@@ -6467,6 +6513,20 @@ fn deferred_quarantined_adaptive_extraction_worker_does_not_touch_unreachable_st
     );
     assert!(
         !stderr.contains("volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "\tworker=quarantined adaptive extraction\tpath={}",
+            path.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "\tworker=quarantined adaptive extraction\tpath={}",
+            store_root.display()
+        )),
         "{stderr}"
     );
     assert!(!store.exists());
@@ -6529,6 +6589,20 @@ fn quarantined_adaptive_extraction_worker_refuses_unreachable_store_before_recor
         stderr.contains(
             "quarantined adaptive extraction volume access blocked: unreachable volume network"
         ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "\tworker=quarantined adaptive extraction\tpath={}",
+            path.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "\tworker=quarantined adaptive extraction\tpath={}",
+            store_root.display()
+        )),
         "{stderr}"
     );
     assert!(!store.exists());
