@@ -2590,6 +2590,73 @@ fn search_stream_refuses_unreachable_network_volume_before_indexing_from_binary(
 }
 
 #[test]
+fn ui_search_results_contract_runs_through_visible_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ui-search-root");
+    fs::write(root.join("Needle.md"), "needle").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-search-results-contract",
+            root.to_str().unwrap(),
+            "Needle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("Needle.md"), "{stdout}");
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=ui search\tpath={}\tintent=index",
+            root.display()
+        )),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn ui_search_results_contract_refuses_unreachable_root_before_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ui-search-unreachable-volume");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(root.join("Needle.md"), "needle should not reach ui results").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-search-results-contract",
+            root.to_str().unwrap(),
+            "Needle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("Needle.md"), "{stdout}");
+    assert!(
+        stderr.contains("ui search volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=ui search\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn search_content_refuses_unreachable_network_volume_before_extracting_from_binary() {
     let root = unique_temp_dir("gfm-cli-search-content-unreachable-volume");
     fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();

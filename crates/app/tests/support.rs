@@ -1679,6 +1679,14 @@ fn reports_ui_search_results_contract_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=ui search\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
 
     assert!(stdout
         .starts_with("search-results\tquery=PLAN\tscope=this-mac\tgrouping=kind\trow-height=24px"));
@@ -1688,6 +1696,43 @@ fn reports_ui_search_results_contract_from_binary() {
     assert!(stdout.contains("\tPLAN.md\t"));
     assert!(stdout.contains("reason="));
     assert!(stdout.contains("stage="));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn ui_search_results_refuses_unreachable_volume_before_worker_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-search-results-unreachable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    std::fs::write(root.join("PLAN.md"), "plan").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-search-results-contract")
+        .arg(&root)
+        .args(["PLAN", "6", "0"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("search-results\t"), "{stdout}");
+    assert!(
+        stderr.contains("ui search volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=ui search\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

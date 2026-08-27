@@ -3,7 +3,7 @@ use gfm_fs::{
     ScanOptions,
 };
 use gfm_index::Indexer;
-use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore};
+use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore, Priority};
 use gfm_mac::{
     current_permission_onboarding, AccessIntent, CloudCommandState, CloudStorageState,
     FileProviderConflictReport, FileProviderInvalidationReport, FileProviderObservedInvalidation,
@@ -459,15 +459,33 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let viewport_rows = optional_u16(args.next(), "viewport-rows", 24)?;
             let scroll_row = optional_u32(args.next(), "scroll-row", 0)?;
-            let _access =
-                crate::access::preflight_access_scope(&root, AccessIntent::Index, "ui search")?;
-            let snapshot = Indexer::default().build(root)?;
-            let session = snapshot.query_session();
-            let batches = session
-                .stream_search(&query, 50)?
-                .into_iter()
-                .map(|batch| SearchResultsBatch::new(search_results_stage(batch.stage), batch.hits))
-                .collect();
+            crate::access::preflight_volume_access_scope(&root, AccessIntent::Index, "ui search")?;
+            let volume = crate::detect_volume_id(&root)
+                .ok()
+                .or_else(|| crate::parent_volume(&root));
+            let query_for_worker = query.clone();
+            let batches = crate::runtime::run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "ui search",
+                move |cancellation| {
+                    let _access = crate::access::preflight_access_scope(
+                        &root,
+                        AccessIntent::Index,
+                        "ui search",
+                    )?;
+                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                    let session = snapshot.query_session();
+                    let batches = session
+                        .stream_search(&query_for_worker, 50)?
+                        .into_iter()
+                        .map(|batch| {
+                            SearchResultsBatch::new(search_results_stage(batch.stage), batch.hits)
+                        })
+                        .collect();
+                    Ok(batches)
+                },
+            )?;
             let options = SearchResultsOptions::new(query)
                 .with_viewport_rows(viewport_rows)
                 .with_scroll_row(scroll_row);
