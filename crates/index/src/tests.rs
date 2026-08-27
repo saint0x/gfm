@@ -1844,6 +1844,7 @@ fn volume_event_index_invalidation_rescans_connected_volume_without_cancelling_j
     let report = VolumeEventIndexInvalidationReport::from_event(
         IndexVolumeEventKind::Appeared,
         Some(PathBuf::from("/Volumes/Work")),
+        None,
         Some(&current),
         true,
         true,
@@ -1854,24 +1855,34 @@ fn volume_event_index_invalidation_rescans_connected_volume_without_cancelling_j
     assert!(!report.cancel_index_jobs);
     assert!(report.clear_fsevents_cursor);
     assert_eq!(report.current_volume_id, Some(VolumeId(7)));
+    assert_eq!(report.previous_volume_id, None);
     assert_eq!(report.current_class, Some(IndexVolumeClass::External));
     assert_eq!(report.reason, "volume-event-connected");
     assert!(report
         .as_tsv()
-        .contains("\tcurrent-volume=7\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\t"));
+        .contains("\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tcurrent-volume=7\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\t"));
 }
 
 #[test]
 fn volume_event_index_invalidation_cancels_jobs_for_disconnect_and_unavailable_events() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(7));
     let disconnected = VolumeEventIndexInvalidationReport::from_event(
         IndexVolumeEventKind::Disappeared,
         Some(PathBuf::from("/Volumes/Work")),
+        Some(&previous),
         None,
         true,
         true,
     );
     let unavailable = VolumeEventIndexInvalidationReport::from_event(
         IndexVolumeEventKind::Unavailable,
+        None,
         None,
         None,
         true,
@@ -1884,11 +1895,20 @@ fn volume_event_index_invalidation_cancels_jobs_for_disconnect_and_unavailable_e
         assert!(report.cancel_index_jobs);
         assert!(report.clear_fsevents_cursor);
     }
+    assert_eq!(disconnected.previous_volume_id, Some(VolumeId(7)));
+    assert_eq!(
+        disconnected.previous_class,
+        Some(IndexVolumeClass::External)
+    );
+    assert_eq!(
+        disconnected.previous_mount_state,
+        Some(IndexMountState::Mounted)
+    );
     assert_eq!(disconnected.reason, "volume-event-disconnected");
     assert_eq!(unavailable.reason, "volume-event-native-unavailable");
     assert!(unavailable
         .as_tsv()
-        .contains("\tpath=-\tcurrent-volume=-\tcurrent-class=-\t"));
+        .contains("\tpath=-\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tcurrent-volume=-\tcurrent-class=-\t"));
 }
 
 #[test]

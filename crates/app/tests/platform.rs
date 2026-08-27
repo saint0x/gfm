@@ -2027,6 +2027,7 @@ fn reports_volume_event_index_invalidation_from_binary() {
     );
     let connected_stdout = String::from_utf8(connected.stdout).unwrap();
     assert!(connected_stdout.starts_with("volume-event-index-invalidation\tkind=appeared\t"));
+    assert!(connected_stdout.contains("\tprevious-volume=-\t"));
     assert!(connected_stdout.contains("\tcurrent-volume="));
     assert!(connected_stdout.contains("\tcurrent-class=external\tcurrent-mount=mounted\t"));
     assert!(connected_stdout.contains("\tindex-admission=true\trescan-index=true\t"));
@@ -2046,6 +2047,7 @@ fn reports_volume_event_index_invalidation_from_binary() {
     let unavailable_stdout = String::from_utf8(unavailable.stdout).unwrap();
     assert!(unavailable_stdout
         .starts_with("volume-event-index-invalidation\tkind=unavailable\tpath=-\t"));
+    assert!(unavailable_stdout.contains("\tprevious-volume=-\t"));
     assert!(unavailable_stdout.contains("\tcurrent-volume=-\t"));
     assert!(unavailable_stdout.contains("\tcancel-index-jobs=true\t"));
     assert!(unavailable_stdout.contains("\tclear-fsevents-cursor=true\t"));
@@ -2085,6 +2087,25 @@ fn reports_volume_event_runtime_cancellation_from_binary() {
         .contains("cancelled-job\t1\tbackground\tbackground\tindex invalidated volume"));
     assert!(!cancelled_stdout.contains("render visible volume previews"));
     assert!(!cancelled_stdout.contains("index unrelated volume"));
+
+    let disappeared = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-runtime-invalidation")
+        .arg("disappeared")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        disappeared.status.success(),
+        "{}",
+        String::from_utf8_lossy(&disappeared.stderr)
+    );
+    let disappeared_stdout = String::from_utf8(disappeared.stdout).unwrap();
+    assert!(disappeared_stdout.starts_with("volume-event-index-invalidation\tkind=disappeared\t"));
+    assert!(disappeared_stdout.contains("\tprevious-volume="));
+    assert!(disappeared_stdout.contains("\tcurrent-volume=-\t"));
+    assert!(disappeared_stdout.contains("\tcancel-index-jobs=true\t"));
+    assert!(disappeared_stdout.contains("\nvolume-job-cancellation\tvolume="));
+    assert!(disappeared_stdout.contains("\tclass=background\tcancelled=1\n"));
 
     let kept = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-event-runtime-invalidation")

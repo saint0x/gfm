@@ -439,6 +439,10 @@ pub struct VolumeInvalidationReport {
 pub struct VolumeEventIndexInvalidationReport {
     pub kind: IndexVolumeEventKind,
     pub path: Option<PathBuf>,
+    pub previous_volume_id: Option<VolumeId>,
+    pub previous_class: Option<IndexVolumeClass>,
+    pub previous_mount_state: Option<IndexMountState>,
+    pub previous_reachable: Option<bool>,
     pub current_volume_id: Option<VolumeId>,
     pub current_class: Option<IndexVolumeClass>,
     pub current_mount_state: Option<IndexMountState>,
@@ -611,12 +615,15 @@ impl VolumeEventIndexInvalidationReport {
     pub fn from_event(
         kind: IndexVolumeEventKind,
         path: Option<PathBuf>,
+        previous: Option<&IndexVolumeDescriptor>,
         current: Option<&IndexVolumeDescriptor>,
         source_invalidates_index_admission: bool,
         source_rescans_index: bool,
     ) -> Self {
-        let event_visible =
-            path.is_some() || current.is_some() || source_invalidates_index_admission;
+        let event_visible = path.is_some()
+            || previous.is_some()
+            || current.is_some()
+            || source_invalidates_index_admission;
         let invalidate_index_admission = event_visible && source_invalidates_index_admission;
         let rescan_index = event_visible && source_rescans_index;
         let cancel_index_jobs = event_visible
@@ -641,6 +648,10 @@ impl VolumeEventIndexInvalidationReport {
         Self {
             kind,
             path,
+            previous_volume_id: previous.and_then(|volume| volume.id),
+            previous_class: previous.map(|volume| volume.class),
+            previous_mount_state: previous.map(|volume| volume.mount_state),
+            previous_reachable: previous.and_then(|volume| volume.reachable),
             current_volume_id: current.and_then(|volume| volume.id),
             current_class: current.map(|volume| volume.class),
             current_mount_state: current.map(|volume| volume.mount_state),
@@ -655,11 +666,23 @@ impl VolumeEventIndexInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-index-invalidation\tkind={}\tpath={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
+            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
             self.kind.as_str(),
             self.path
                 .as_ref()
                 .map(|path| escape_field(&path.to_string_lossy()))
+                .unwrap_or_else(|| "-".to_string()),
+            self.previous_volume_id
+                .map(|id| id.0.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.previous_class
+                .map(IndexVolumeClass::as_str)
+                .unwrap_or("-"),
+            self.previous_mount_state
+                .map(IndexMountState::as_str)
+                .unwrap_or("-"),
+            self.previous_reachable
+                .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.current_volume_id
                 .map(|id| id.0.to_string())

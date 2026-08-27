@@ -923,10 +923,16 @@ fn volume_event_index_invalidation_from_args(
         descriptor.as_ref(),
         None,
     );
-    let current = descriptor.as_ref().map(index_volume_descriptor);
+    let previous = (kind == VolumeEventKind::Disappeared)
+        .then(|| descriptor.as_ref().map(index_volume_descriptor))
+        .flatten();
+    let current = (kind != VolumeEventKind::Disappeared)
+        .then(|| descriptor.as_ref().map(index_volume_descriptor))
+        .flatten();
     Ok(VolumeEventIndexInvalidationReport::from_event(
         index_volume_event_kind(kind),
         path,
+        previous.as_ref(),
         current.as_ref(),
         event_report.invalidate_index_admission,
         event_report.rescan_index,
@@ -939,7 +945,7 @@ fn runtime_volume_cancellation(
     if !report.cancel_index_jobs {
         return None;
     }
-    let volume = report.current_volume_id?;
+    let volume = report.current_volume_id.or(report.previous_volume_id)?;
     let mut scheduler = Scheduler::new();
     scheduler.schedule_on_volume_in_class(
         Priority::Background,
