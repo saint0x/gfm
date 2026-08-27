@@ -3761,7 +3761,17 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-copy-policy-disk-image/.gfm-volume-kind",
+      "data": "disk-image\n"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-copy-policy-network/source.bin",
+      "data": "policy\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-copy-policy-disk-image/source.bin",
       "data": "policy\n"
     },
     {
@@ -3771,6 +3781,17 @@
         "operation-volume-copy-policy",
         "tmp/gfm-fozzy-copy-policy-network/source.bin",
         "tmp/gfm-fozzy-copy-policy-external/destination.bin"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "operation-volume-copy-policy",
+        "tmp/gfm-fozzy-copy-policy-disk-image/source.bin",
+        "tmp/gfm-fozzy-copy-policy-external/disk-image-destination.bin"
       ],
       "exit_code": 0,
       "times": 1

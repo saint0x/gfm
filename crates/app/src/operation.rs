@@ -823,10 +823,10 @@ fn slow_operation_volume(volume: &gfm_mac::VolumeDescriptor) -> bool {
     if volume.network || volume.reachable == Some(false) {
         return false;
     }
-    if !matches!(
-        volume.kind,
-        VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage
-    ) {
+    if volume.kind == VolumeKind::DiskImage {
+        return true;
+    }
+    if !matches!(volume.kind, VolumeKind::External | VolumeKind::Removable) {
         return false;
     }
     let protocol = volume
@@ -844,11 +844,12 @@ fn slow_operation_volume(volume: &gfm_mac::VolumeDescriptor) -> bool {
         .as_deref()
         .unwrap_or_default()
         .to_ascii_lowercase();
-    volume.removable
-        && (protocol.contains("usb")
-            || protocol.contains("firewire")
-            || media_kind.contains("removable")
-            || media_type.contains("removable"))
+    volume.resource_automounted == Some(true)
+        || volume.removable
+            && (protocol.contains("usb")
+                || protocol.contains("firewire")
+                || media_kind.contains("removable")
+                || media_type.contains("removable"))
 }
 
 fn operation_volume(operation: &Operation) -> Option<VolumeId> {
@@ -994,6 +995,63 @@ mod tests {
             policy.class_for_path(&destination),
             OperationVolumeClass::Local
         );
+        assert_eq!(
+            policy.copy_buffer_bytes_for_paths(&source, &destination),
+            64 * 1024
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_policy_uses_slow_class_for_disk_image_descriptor() {
+        let root = unique_temp_dir("gfm-app-op-volume-policy-disk-image");
+        let image = root.join("Installer");
+        let local = root.join("LocalWork");
+        fs::create_dir_all(&image).unwrap();
+        fs::create_dir_all(&local).unwrap();
+        fs::write(image.join(".gfm-volume-kind"), "disk-image\n").unwrap();
+        let source = image.join("source.bin");
+        let destination = local.join("destination.bin");
+        let report = VolumeDiscoveryReport::from_paths(vec![image.clone()]);
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert_eq!(policy.class_for_path(&source), OperationVolumeClass::Slow);
+        assert_eq!(
+            policy.copy_buffer_bytes_for_paths(&source, &destination),
+            64 * 1024
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_policy_uses_slow_class_for_automounted_external_descriptor() {
+        let root = unique_temp_dir("gfm-app-op-volume-policy-automounted");
+        let external = root.join("AutoMounted");
+        let local = root.join("LocalWork");
+        fs::create_dir_all(&external).unwrap();
+        fs::create_dir_all(&local).unwrap();
+        fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+        let source = external.join("source.bin");
+        let destination = local.join("destination.bin");
+        let mut report = VolumeDiscoveryReport::from_paths(vec![external.clone()]);
+        report.volumes[0].resource_automounted = Some(true);
+        report.volumes[0].removable = false;
+        report.volumes[0].device_protocol = Some("PCI-Express".to_string());
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert_eq!(policy.class_for_path(&source), OperationVolumeClass::Slow);
         assert_eq!(
             policy.copy_buffer_bytes_for_paths(&source, &destination),
             64 * 1024

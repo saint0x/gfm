@@ -4330,6 +4330,45 @@ fn operation_volume_copy_policy_reports_descriptor_classes_from_binary() {
 }
 
 #[test]
+fn operation_volume_copy_policy_reports_disk_image_as_slow_from_binary() {
+    let root = unique_temp_dir("gfm-cli-operation-copy-policy-disk-image");
+    let image = root.join("Installer");
+    let local = root.join("Local");
+    fs::create_dir_all(&image).unwrap();
+    fs::create_dir_all(&local).unwrap();
+    fs::write(image.join(".gfm-volume-kind"), "disk-image\n").unwrap();
+    let source = image.join("source.bin");
+    let destination = local.join("destination.bin");
+    fs::write(&source, "policy only").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "operation-volume-copy-policy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.starts_with("operation-volume-copy-policy\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tsource-class=slow\t"), "{stdout}");
+    assert!(stdout.contains("\tdestination-class=local\t"), "{stdout}");
+    assert!(stdout.contains("\tbuffer-bytes=65536\t"), "{stdout}");
+    assert!(!destination.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn operation_volume_copy_policy_refuses_unreachable_destination_from_binary() {
     let root = unique_temp_dir("gfm-cli-operation-copy-policy-unreachable");
     let source_root = root.join("Source");
