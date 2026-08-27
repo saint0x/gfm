@@ -8650,6 +8650,12 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{}",
         String::from_utf8_lossy(&ready_recovery_plan_output.stderr)
     );
+    let ready_recovery_plan_stderr = String::from_utf8_lossy(&ready_recovery_plan_output.stderr);
+    assert_worker_admitted(
+        &ready_recovery_plan_stderr,
+        "content manifest promotion recovery plan",
+        &manifest,
+    );
     let ready_recovery_plan_stdout = String::from_utf8(ready_recovery_plan_output.stdout).unwrap();
     assert!(
         ready_recovery_plan_stdout.contains("action=ready"),
@@ -8726,6 +8732,23 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         pending_recovery_plan_output.status.success(),
         "{}",
         String::from_utf8_lossy(&pending_recovery_plan_output.stderr)
+    );
+    let pending_recovery_plan_stderr =
+        String::from_utf8_lossy(&pending_recovery_plan_output.stderr);
+    assert_worker_admitted(
+        &pending_recovery_plan_stderr,
+        "content manifest promotion recovery plan",
+        &crash_manifest,
+    );
+    assert_worker_admitted(
+        &pending_recovery_plan_stderr,
+        "content manifest promotion recovery journal",
+        &promotion_journal_path,
+    );
+    assert_worker_admitted(
+        &pending_recovery_plan_stderr,
+        "content manifest promotion recovery archive",
+        &crash_new,
     );
     let pending_recovery_plan_stdout =
         String::from_utf8(pending_recovery_plan_output.stdout).unwrap();
@@ -8940,6 +8963,92 @@ fn content_manifest_inspect_refuses_unreachable_archive_before_mapping_from_bina
 }
 
 #[test]
+fn content_manifest_promotion_recovery_plan_refuses_unreachable_archive_before_mapping_from_binary()
+{
+    let root = unique_temp_dir("gfm-cli-content-promotion-recovery-plan-unreachable");
+    let local = root.join("local");
+    let offline = root.join("offline");
+    fs::create_dir_all(&local).unwrap();
+    fs::create_dir_all(&offline).unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let manifest = local.join("content.gfmmanifest");
+    let old = local.join("old.gfmcontent");
+    let new_archive = offline.join("new.gfmcontent");
+    write_content_postings(
+        &old,
+        &[ContentPosting {
+            term: "oldneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    fs::write(&new_archive, "not mmap content").unwrap();
+    let previous = ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: old.clone(),
+    }])
+    .unwrap();
+    previous.write(&manifest).unwrap();
+    let journal = ContentManifestPromotionJournal::new(
+        previous,
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: new_archive.clone(),
+        },
+        vec![old.clone()],
+    )
+    .unwrap();
+    let journal_path = content_manifest_promotion_journal_path(&manifest);
+    journal.write(&journal_path).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-promotion-recovery-plan",
+            manifest.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("content-manifest-promotion-recovery-plan\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(
+            "content manifest promotion recovery archive volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert_worker_admitted(
+        &stderr,
+        "content manifest promotion recovery plan",
+        &manifest,
+    );
+    assert_worker_admitted(
+        &stderr,
+        "content manifest promotion recovery journal",
+        &journal_path,
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content manifest promotion recovery archive\tpath={}",
+            new_archive.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("invalid magic") && !stderr.contains("not readable"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn content_manifest_recovery_plan_refuses_unreachable_archive_before_classifying_from_binary() {
     let root = unique_temp_dir("gfm-cli-content-manifest-recovery-plan-unreachable");
     let local = root.join("local");
@@ -9043,6 +9152,23 @@ fn recovers_corrupt_content_manifest_from_binary() {
         recover_output.status.success(),
         "{}",
         String::from_utf8_lossy(&recover_output.stderr)
+    );
+    let recover_stderr = String::from_utf8_lossy(&recover_output.stderr);
+    assert_worker_admitted(&recover_stderr, "content manifest recovery plan", &manifest);
+    assert_worker_admitted(
+        &recover_stderr,
+        "content manifest recovery discovered archive",
+        &content,
+    );
+    assert_worker_admitted(
+        &recover_stderr,
+        "content manifest recovery manifest",
+        manifest.parent().unwrap(),
+    );
+    assert_worker_admitted(
+        &recover_stderr,
+        "content manifest recovery quarantine",
+        &quarantine,
     );
     let recover_stdout = String::from_utf8(recover_output.stdout).unwrap();
     assert!(
@@ -9174,6 +9300,70 @@ fn content_manifest_recover_refuses_unreachable_volume_before_quarantine_from_bi
         stderr.contains(
             "content manifest recovery plan volume access blocked: unreachable volume network"
         ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content manifest recovery plan\tpath={}",
+            manifest.display()
+        )),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), original_manifest);
+    assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_manifest_recover_refuses_unreachable_quarantine_before_writing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-recover-quarantine-unreachable");
+    let local = root.join("local");
+    let offline = root.join("offline");
+    fs::create_dir_all(&local).unwrap();
+    fs::create_dir_all(&offline).unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let manifest = local.join("content.gfmmanifest");
+    let content = local.join("content.gfmcontent");
+    let quarantine = offline.join("quarantine");
+    fs::create_dir_all(&quarantine).unwrap();
+    write_content_postings(
+        &content,
+        &[ContentPosting {
+            term: "recoverneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 7)],
+            positions: Vec::new(),
+        }],
+    )
+    .unwrap();
+    fs::write(&manifest, "not-a-content-manifest").unwrap();
+    let original_manifest = fs::read_to_string(&manifest).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-recover",
+            manifest.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("content-manifest-recovery\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "content manifest recovery quarantine volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content manifest recovery manifest\tpath={}",
+            manifest.parent().unwrap().display()
+        )),
         "{stderr}"
     );
     assert_eq!(fs::read_to_string(&manifest).unwrap(), original_manifest);
@@ -12195,11 +12385,14 @@ fn write_tar_octal(field: &mut [u8], value: u64) {
 }
 
 fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
+    let expected_worker = format!("worker={worker}");
+    let expected_path = format!("path={}", path.display());
     assert!(
-        stderr.contains(&format!(
-            "security-worker-admission\tworker={worker}\tpath={}",
-            path.display()
-        )),
+        stderr.lines().any(|line| {
+            line.starts_with("security-worker-admission\t")
+                && line.split('\t').any(|field| field == expected_worker)
+                && line.split('\t').any(|field| field == expected_path)
+        }),
         "{stderr}"
     );
 }

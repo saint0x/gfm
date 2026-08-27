@@ -8,9 +8,10 @@ use gfm_index::{
 use gfm_jobs::Priority;
 use gfm_mac::AccessIntent;
 use gfm_store::{
-    plan_content_manifest_promotion_recovery, plan_content_manifest_recovery,
-    promote_content_archive_manifest, recover_content_manifest, recover_content_manifest_promotion,
-    ContentArchiveHealth, MmapContentSet,
+    content_manifest_promotion_journal_path, plan_content_manifest_promotion_recovery,
+    plan_content_manifest_recovery, promote_content_archive_manifest, recover_content_manifest,
+    recover_content_manifest_promotion, ContentArchiveHealth, ContentManifestPromotionJournal,
+    MmapContentSet,
 };
 use gfm_types::{GfmError, Result};
 use std::path::{Path, PathBuf};
@@ -63,21 +64,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let discovered = args
                 .map(|spec| parse_content_manifest_archive_spec(&spec))
                 .collect::<Result<Vec<_>>>()?;
-            let _access =
-                retain_manifest_recovery_access(&manifest_path, &quarantine, discovered.iter())?;
-            let report = recover_content_manifest(&manifest_path, &discovered, &quarantine)?;
-            println!("{}", report.before.as_tsv());
-            println!(
-                "content-manifest-recovery\twrote-manifest={}\tquarantined-manifest={}",
-                report.wrote_manifest,
-                report
-                    .quarantined_manifest_path
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "-".to_string())
-            );
-            println!("{}", report.after.as_tsv());
-            print_content_archive_health("invalid-before", &report.before.invalid_archives);
+            for line in run_manifest_recover(manifest_path, quarantine, discovered)? {
+                println!("{line}");
+            }
         }
         "content-manifest-promote" => {
             let manifest_path = required_path(
@@ -114,11 +103,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "content-manifest-promotion-recovery-plan requires a manifest path",
             )?;
-            let _access = retain_manifest_promotion_recovery_plan_access(&manifest_path)?;
-            println!(
-                "{}",
-                plan_content_manifest_promotion_recovery(manifest_path).as_tsv()
-            );
+            println!("{}", run_manifest_promotion_recovery_plan(manifest_path)?);
         }
         "content-manifest-promotion-recover" => {
             let manifest_path = required_path(
@@ -366,6 +351,63 @@ fn run_manifest_recovery_plan(
     )
 }
 
+fn preflight_manifest_recovery_volumes(
+    manifest_path: &Path,
+    quarantine: &Path,
+    discovered: &[ContentArchiveManifestEntry],
+) -> Result<()> {
+    preflight_manifest_recovery_plan_volumes(manifest_path, discovered)?;
+    preflight_volume_access_scope(
+        write_probe_path(manifest_path),
+        AccessIntent::Write,
+        "content manifest recovery manifest",
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(quarantine),
+        AccessIntent::Write,
+        "content manifest recovery quarantine",
+    )
+}
+
+fn run_manifest_recover(
+    manifest_path: PathBuf,
+    quarantine: PathBuf,
+    discovered: Vec<ContentArchiveManifestEntry>,
+) -> Result<Vec<String>> {
+    preflight_manifest_recovery_volumes(&manifest_path, &quarantine, &discovered)?;
+    let volume = detect_volume_id(&manifest_path).ok();
+    run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        "content manifest recovery",
+        move |cancellation| {
+            cancellation.check()?;
+            let _access =
+                retain_manifest_recovery_access(&manifest_path, &quarantine, discovered.iter())?;
+            cancellation.check()?;
+            let report = recover_content_manifest(&manifest_path, &discovered, &quarantine)?;
+            let mut lines = vec![
+                report.before.as_tsv(),
+                format!(
+                    "content-manifest-recovery\twrote-manifest={}\tquarantined-manifest={}",
+                    report.wrote_manifest,
+                    report
+                        .quarantined_manifest_path
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| "-".to_string())
+                ),
+                report.after.as_tsv(),
+            ];
+            lines.extend(format_content_archive_health(
+                "invalid-before",
+                &report.before.invalid_archives,
+            ));
+            Ok(lines)
+        },
+    )
+}
+
 fn retain_manifest_recovery_access<'a>(
     manifest_path: &Path,
     quarantine: &Path,
@@ -420,11 +462,87 @@ fn retain_manifest_promotion_access(
 fn retain_manifest_promotion_recovery_plan_access(
     manifest_path: &Path,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    Ok(vec![preflight_access_scope(
+    let journal_path = content_manifest_promotion_journal_path(manifest_path);
+    Ok(vec![
+        preflight_access_scope(
+            manifest_path,
+            AccessIntent::Read,
+            "content manifest promotion recovery plan",
+        )?,
+        preflight_access_scope(
+            existing_read_probe_path(&journal_path),
+            AccessIntent::Read,
+            "content manifest promotion recovery journal",
+        )?,
+    ])
+}
+
+fn preflight_manifest_promotion_recovery_plan_volumes(manifest_path: &Path) -> Result<()> {
+    let journal_path = content_manifest_promotion_journal_path(manifest_path);
+    preflight_volume_access_scope(
         manifest_path,
         AccessIntent::Read,
         "content manifest promotion recovery plan",
-    )?])
+    )?;
+    preflight_volume_access_scope(
+        existing_read_probe_path(&journal_path),
+        AccessIntent::Read,
+        "content manifest promotion recovery journal",
+    )
+}
+
+fn preflight_manifest_promotion_recovery_archives(paths: &[PathBuf], worker: &str) -> Result<()> {
+    for path in paths {
+        preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
+    }
+    Ok(())
+}
+
+fn retain_manifest_promotion_recovery_archive_access(
+    paths: &[PathBuf],
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = Vec::new();
+    for path in paths {
+        guards.push(preflight_access_scope(path, AccessIntent::Read, worker)?);
+    }
+    Ok(guards)
+}
+
+fn run_manifest_promotion_recovery_plan(manifest_path: PathBuf) -> Result<String> {
+    const WORKER: &str = "content manifest promotion recovery plan";
+    const ARCHIVE_WORKER: &str = "content manifest promotion recovery archive";
+    preflight_manifest_promotion_recovery_plan_volumes(&manifest_path)?;
+    let volume = detect_volume_id(&manifest_path).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_manifest_promotion_recovery_plan_access(&manifest_path)?;
+        let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+        let archive_paths = if journal_path.exists() {
+            let journal = ContentManifestPromotionJournal::read(&journal_path)?;
+            promotion_recovery_archive_paths(&manifest_path, &journal)?
+        } else {
+            Vec::new()
+        };
+        preflight_manifest_promotion_recovery_archives(&archive_paths, ARCHIVE_WORKER)?;
+        cancellation.check()?;
+        let _archive_access =
+            retain_manifest_promotion_recovery_archive_access(&archive_paths, ARCHIVE_WORKER)?;
+        cancellation.check()?;
+        Ok(plan_content_manifest_promotion_recovery(manifest_path).as_tsv())
+    })
+}
+
+fn promotion_recovery_archive_paths(
+    manifest_path: &Path,
+    journal: &ContentManifestPromotionJournal,
+) -> Result<Vec<PathBuf>> {
+    let promotion = journal.previous.promote_archive(
+        manifest_path,
+        journal.new_archive.clone(),
+        &journal.retired_paths,
+    )?;
+    Ok(promotion.manifest.resolved_archive_paths(manifest_path))
 }
 
 fn retain_manifest_promotion_recovery_access(
@@ -527,12 +645,6 @@ fn content_tier_name(tier: ContentMergeTier) -> &'static str {
         ContentMergeTier::Hot => "hot",
         ContentMergeTier::Warm => "warm",
         ContentMergeTier::Cold => "cold",
-    }
-}
-
-fn print_content_archive_health(label: &str, archives: &[ContentArchiveHealth]) {
-    for line in format_content_archive_health(label, archives) {
-        println!("{line}");
     }
 }
 
