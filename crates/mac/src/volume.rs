@@ -1224,13 +1224,19 @@ fn disposition_for_native_operation(
     match status {
         NativeVolumeOperationStatus::Succeeded => VolumeOperationDisposition::Completed,
         NativeVolumeOperationStatus::Submitted => VolumeOperationDisposition::Submitted,
-        NativeVolumeOperationStatus::Busy => VolumeOperationDisposition::Busy,
+        NativeVolumeOperationStatus::Busy
+        | NativeVolumeOperationStatus::ExclusiveAccess
+        | NativeVolumeOperationStatus::NoResources
+        | NativeVolumeOperationStatus::NotReady => VolumeOperationDisposition::Busy,
         NativeVolumeOperationStatus::NotPermitted | NativeVolumeOperationStatus::NotPrivileged => {
             VolumeOperationDisposition::Denied
         }
         NativeVolumeOperationStatus::Unsupported => VolumeOperationDisposition::Unsupported,
-        NativeVolumeOperationStatus::NotMounted => VolumeOperationDisposition::Refused,
+        NativeVolumeOperationStatus::BadArgument
+        | NativeVolumeOperationStatus::NotMounted
+        | NativeVolumeOperationStatus::NotWritable => VolumeOperationDisposition::Refused,
         NativeVolumeOperationStatus::Failed
+        | NativeVolumeOperationStatus::NotFound
         | NativeVolumeOperationStatus::Missing
         | NativeVolumeOperationStatus::Unavailable => VolumeOperationDisposition::Failed,
     }
@@ -2368,6 +2374,18 @@ mod tests {
             VolumeOperationDisposition::Busy
         );
         assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::ExclusiveAccess),
+            VolumeOperationDisposition::Busy
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::NoResources),
+            VolumeOperationDisposition::Busy
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::NotReady),
+            VolumeOperationDisposition::Busy
+        );
+        assert_eq!(
             disposition_for_native_operation(NativeVolumeOperationStatus::NotPermitted),
             VolumeOperationDisposition::Denied
         );
@@ -2382,6 +2400,18 @@ mod tests {
         assert_eq!(
             disposition_for_native_operation(NativeVolumeOperationStatus::NotMounted),
             VolumeOperationDisposition::Refused
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::BadArgument),
+            VolumeOperationDisposition::Refused
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::NotWritable),
+            VolumeOperationDisposition::Refused
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::NotFound),
+            VolumeOperationDisposition::Failed
         );
     }
 

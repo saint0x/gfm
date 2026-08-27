@@ -39,9 +39,15 @@ type DADiskMountCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef
 type DADiskUnmountCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef, *mut c_void)>;
 
 const DA_RETURN_BUSY: u32 = 0xF8DA0002;
+const DA_RETURN_BAD_ARGUMENT: u32 = 0xF8DA0003;
+const DA_RETURN_EXCLUSIVE_ACCESS: u32 = 0xF8DA0004;
+const DA_RETURN_NO_RESOURCES: u32 = 0xF8DA0005;
+const DA_RETURN_NOT_FOUND: u32 = 0xF8DA0006;
 const DA_RETURN_NOT_MOUNTED: u32 = 0xF8DA0007;
 const DA_RETURN_NOT_PERMITTED: u32 = 0xF8DA0008;
 const DA_RETURN_NOT_PRIVILEGED: u32 = 0xF8DA0009;
+const DA_RETURN_NOT_READY: u32 = 0xF8DA000A;
+const DA_RETURN_NOT_WRITABLE: u32 = 0xF8DA000B;
 const DA_RETURN_UNSUPPORTED: u32 = 0xF8DA000C;
 const VOLUME_OPERATION_CALLBACK_TIMEOUT_SECONDS: f64 = 0.5;
 const VOLUME_OPERATION_CALLBACK_TIMEOUT_MILLIS: u64 =
@@ -303,9 +309,15 @@ pub enum NativeVolumeOperationStatus {
     Succeeded,
     Submitted,
     Busy,
+    BadArgument,
+    ExclusiveAccess,
+    NoResources,
+    NotFound,
     NotMounted,
     NotPermitted,
     NotPrivileged,
+    NotReady,
+    NotWritable,
     Unsupported,
     Failed,
     Missing,
@@ -318,9 +330,15 @@ impl NativeVolumeOperationStatus {
             Self::Succeeded => "succeeded",
             Self::Submitted => "submitted",
             Self::Busy => "busy",
+            Self::BadArgument => "bad-argument",
+            Self::ExclusiveAccess => "exclusive-access",
+            Self::NoResources => "no-resources",
+            Self::NotFound => "not-found",
             Self::NotMounted => "not-mounted",
             Self::NotPermitted => "not-permitted",
             Self::NotPrivileged => "not-privileged",
+            Self::NotReady => "not-ready",
+            Self::NotWritable => "not-writable",
             Self::Unsupported => "unsupported",
             Self::Failed => "failed",
             Self::Missing => "missing",
@@ -784,9 +802,15 @@ unsafe extern "C" fn volume_operation_callback(
 fn native_operation_status_for_dissenter(code: u32) -> NativeVolumeOperationStatus {
     match code {
         DA_RETURN_BUSY => NativeVolumeOperationStatus::Busy,
+        DA_RETURN_BAD_ARGUMENT => NativeVolumeOperationStatus::BadArgument,
+        DA_RETURN_EXCLUSIVE_ACCESS => NativeVolumeOperationStatus::ExclusiveAccess,
+        DA_RETURN_NO_RESOURCES => NativeVolumeOperationStatus::NoResources,
+        DA_RETURN_NOT_FOUND => NativeVolumeOperationStatus::NotFound,
         DA_RETURN_NOT_MOUNTED => NativeVolumeOperationStatus::NotMounted,
         DA_RETURN_NOT_PERMITTED => NativeVolumeOperationStatus::NotPermitted,
         DA_RETURN_NOT_PRIVILEGED => NativeVolumeOperationStatus::NotPrivileged,
+        DA_RETURN_NOT_READY => NativeVolumeOperationStatus::NotReady,
+        DA_RETURN_NOT_WRITABLE => NativeVolumeOperationStatus::NotWritable,
         DA_RETURN_UNSUPPORTED => NativeVolumeOperationStatus::Unsupported,
         _ => NativeVolumeOperationStatus::Failed,
     }
@@ -1212,6 +1236,22 @@ mod tests {
             NativeVolumeOperationStatus::Busy
         );
         assert_eq!(
+            native_operation_status_for_dissenter(DA_RETURN_BAD_ARGUMENT),
+            NativeVolumeOperationStatus::BadArgument
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(DA_RETURN_EXCLUSIVE_ACCESS),
+            NativeVolumeOperationStatus::ExclusiveAccess
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(DA_RETURN_NO_RESOURCES),
+            NativeVolumeOperationStatus::NoResources
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(DA_RETURN_NOT_FOUND),
+            NativeVolumeOperationStatus::NotFound
+        );
+        assert_eq!(
             native_operation_status_for_dissenter(DA_RETURN_NOT_PERMITTED),
             NativeVolumeOperationStatus::NotPermitted
         );
@@ -1222,6 +1262,14 @@ mod tests {
         assert_eq!(
             native_operation_status_for_dissenter(DA_RETURN_NOT_MOUNTED),
             NativeVolumeOperationStatus::NotMounted
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(DA_RETURN_NOT_READY),
+            NativeVolumeOperationStatus::NotReady
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(DA_RETURN_NOT_WRITABLE),
+            NativeVolumeOperationStatus::NotWritable
         );
         assert_eq!(
             native_operation_status_for_dissenter(DA_RETURN_UNSUPPORTED),
