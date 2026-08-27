@@ -41,21 +41,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             preflight_index_volume_access(&root)?;
             let _output_access = preflight_index_write(&output, "index records")?;
             let volume = detect_volume_id(&root).ok();
-            let snapshot = run_volume_task_cancellable(
+            let (record_count, inaccessible_count) = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "index",
                 move |cancellation| {
                     let _root_access = enforce_index_access(&root)?;
-                    Indexer::default().build_cancellable(root, &cancellation)
+                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                    let record_count = snapshot.records.len();
+                    let inaccessible_count = snapshot.inaccessible.len();
+                    snapshot.save(output)?;
+                    Ok((record_count, inaccessible_count))
                 },
             )?;
-            snapshot.save(output)?;
-            eprintln!(
-                "indexed {} records; {} inaccessible",
-                snapshot.records.len(),
-                snapshot.inaccessible.len()
-            );
+            eprintln!("indexed {record_count} records; {inaccessible_count} inaccessible");
         }
         "index-state" => {
             let root = required_path(args.next(), "index-state requires a root path")?;
