@@ -30,6 +30,7 @@ type DADiskDisappearedCallback = Option<unsafe extern "C" fn(DADiskRef, *mut c_v
 type DADiskDescriptionChangedCallback =
     Option<unsafe extern "C" fn(DADiskRef, CFArrayRef, *mut c_void)>;
 type DADiskEjectCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef, *mut c_void)>;
+type DADiskMountCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef, *mut c_void)>;
 type DADiskUnmountCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef, *mut c_void)>;
 
 const DA_RETURN_BUSY: u32 = 0xF8DA0002;
@@ -46,11 +47,23 @@ extern "C" {
         session: DASessionRef,
         path: CFURLRef,
     ) -> DADiskRef;
+    fn DADiskCreateFromBSDName(
+        allocator: CFAllocatorRef,
+        session: DASessionRef,
+        name: *const libc::c_char,
+    ) -> DADiskRef;
     fn DADiskCopyDescription(disk: DADiskRef) -> CFDictionaryRef;
     fn DADiskEject(
         disk: DADiskRef,
         options: u32,
         callback: DADiskEjectCallback,
+        context: *mut c_void,
+    );
+    fn DADiskMount(
+        disk: DADiskRef,
+        path: CFURLRef,
+        options: u32,
+        callback: DADiskMountCallback,
         context: *mut c_void,
     );
     fn DADiskUnmount(
@@ -255,6 +268,7 @@ pub enum NativeVolumeStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeVolumeOperation {
     Eject,
+    Mount,
     Unmount,
 }
 
@@ -262,6 +276,7 @@ impl NativeVolumeOperation {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Eject => "eject",
+            Self::Mount => "mount",
             Self::Unmount => "unmount",
         }
     }
@@ -555,12 +570,100 @@ pub fn submit_volume_operation(
         NativeVolumeOperation::Eject => unsafe {
             DADiskEject(disk, 0, Some(volume_operation_callback), context.cast());
         },
+        NativeVolumeOperation::Mount => unsafe {
+            DADiskMount(
+                disk,
+                ptr::null(),
+                0,
+                Some(volume_operation_callback),
+                context.cast(),
+            );
+        },
         NativeVolumeOperation::Unmount => unsafe {
             DADiskUnmount(disk, 0, Some(volume_operation_callback), context.cast());
         },
     }
 
     unsafe {
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 30.0, 0);
+        DASessionUnscheduleFromRunLoop(session, run_loop, kCFRunLoopDefaultMode);
+    }
+    let result = if let Ok(result) = rx.try_recv() {
+        unsafe {
+            drop(Box::from_raw(context));
+        }
+        result
+    } else {
+        NativeVolumeOperationResult {
+            operation,
+            status: NativeVolumeOperationStatus::Submitted,
+            dissenter_status: None,
+            reason: Some("submitted-to-diskarbitration".to_string()),
+        }
+    };
+
+    unsafe {
+        CFRelease(disk as CFTypeRef);
+        CFRelease(session as CFTypeRef);
+    }
+
+    result
+}
+
+pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationResult {
+    let operation = NativeVolumeOperation::Mount;
+    if bsd_name.is_empty() || bsd_name.contains('/') || bsd_name.as_bytes().contains(&0) {
+        return NativeVolumeOperationResult {
+            operation,
+            status: NativeVolumeOperationStatus::Unsupported,
+            dissenter_status: None,
+            reason: Some("diskarbitration-mount-requires-bsd-name".to_string()),
+        };
+    }
+
+    let session = unsafe { DASessionCreate(kCFAllocatorDefault) };
+    if session.is_null() {
+        return NativeVolumeOperationResult {
+            operation,
+            status: NativeVolumeOperationStatus::Unavailable,
+            dissenter_status: None,
+            reason: Some("DiskArbitration did not create an operation session".to_string()),
+        };
+    }
+
+    let bsd_name = CString::new(bsd_name).expect("BSD name was checked for interior NUL");
+    let disk = unsafe { DADiskCreateFromBSDName(kCFAllocatorDefault, session, bsd_name.as_ptr()) };
+    if disk.is_null() {
+        unsafe {
+            CFRelease(session as CFTypeRef);
+        }
+        return NativeVolumeOperationResult {
+            operation,
+            status: NativeVolumeOperationStatus::Missing,
+            dissenter_status: None,
+            reason: Some(format!(
+                "DiskArbitration did not return a disk for {}",
+                bsd_name.to_string_lossy()
+            )),
+        };
+    }
+
+    let run_loop = unsafe { CFRunLoopGetCurrent() };
+    let (tx, rx) = mpsc::channel();
+    let context = Box::into_raw(Box::new(NativeVolumeOperationContext {
+        operation,
+        run_loop,
+        sender: tx,
+    }));
+    unsafe {
+        DASessionScheduleWithRunLoop(session, run_loop, kCFRunLoopDefaultMode);
+        DADiskMount(
+            disk,
+            ptr::null(),
+            0,
+            Some(volume_operation_callback),
+            context.cast(),
+        );
         CFRunLoopRunInMode(kCFRunLoopDefaultMode, 30.0, 0);
         DASessionUnscheduleFromRunLoop(session, run_loop, kCFRunLoopDefaultMode);
     }
@@ -1063,5 +1166,18 @@ mod tests {
         assert_eq!(result.status, NativeVolumeOperationStatus::Missing);
         assert_eq!(result.dissenter_status, None);
         assert!(result.reason.unwrap().contains("does not exist"));
+    }
+
+    #[test]
+    fn invalid_bsd_mount_identity_does_not_submit_to_diskarbitration() {
+        let result = submit_volume_mount_by_bsd_name("not/a/disk");
+
+        assert_eq!(result.operation, NativeVolumeOperation::Mount);
+        assert_eq!(result.status, NativeVolumeOperationStatus::Unsupported);
+        assert_eq!(result.dissenter_status, None);
+        assert_eq!(
+            result.reason.as_deref(),
+            Some("diskarbitration-mount-requires-bsd-name")
+        );
     }
 }

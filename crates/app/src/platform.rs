@@ -22,8 +22,8 @@ use gfm_mac::{
     NativeIconInvalidationReport, SecurityScopedAccessReport, SecurityScopedBookmarkStatus,
     SecurityScopedBookmarkStore, SecurityWorkerAdmissionReport, SpotlightMetadataReader,
     SpotlightReconciliationReport, VolumeDescriptor, VolumeDiscoveryReport,
-    VolumeEventInvalidationReport, VolumeEventKind, VolumeEventStream, VolumeOperation,
-    VolumeOperationReport, VolumeTopologyDiff,
+    VolumeEventInvalidationReport, VolumeEventKind, VolumeEventStream, VolumeMountIdentityReport,
+    VolumeOperation, VolumeOperationReport, VolumeTopologyDiff,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
@@ -316,42 +316,26 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             );
         }
         "volume-event-index-invalidation" => {
-            let kind = parse_volume_event_kind(&required_string(
-                args.next(),
-                "volume-event-index-invalidation requires an event kind",
-            )?)?;
-            let path = args.next().map(PathBuf::from);
-            let descriptor = path
-                .as_ref()
-                .filter(|path| path.exists())
-                .map(VolumeDescriptor::for_path)
-                .transpose()?;
-            let native_status = if descriptor.is_some() {
-                gfm_mac::NativeVolumeStatus::Available
-            } else if path.is_some() {
-                gfm_mac::NativeVolumeStatus::Missing
-            } else {
-                gfm_mac::NativeVolumeStatus::Unavailable
-            };
-            let event_report = VolumeEventInvalidationReport::from_parts(
-                kind,
-                native_status,
-                path.clone(),
-                descriptor.as_ref(),
-                None,
-            );
-            let current = descriptor.as_ref().map(index_volume_descriptor);
             println!(
                 "{}",
-                VolumeEventIndexInvalidationReport::from_event(
-                    index_volume_event_kind(kind),
-                    path,
-                    current.as_ref(),
-                    event_report.invalidate_index_admission,
-                    event_report.rescan_index,
-                )
-                .as_tsv()
+                volume_event_index_invalidation_from_args(args)?.as_tsv()
             );
+        }
+        "volume-event-runtime-invalidation" => {
+            let report = volume_event_index_invalidation_from_args(args)?;
+            println!("{}", report.as_tsv());
+            if let Some(cancellation) = runtime_volume_cancellation(&report) {
+                println!("{}", cancellation.as_tsv());
+            } else {
+                println!(
+                    "volume-job-cancellation\tvolume=-\tclass=background\tcancelled=0\treason={}",
+                    if report.cancel_index_jobs {
+                        "missing-volume-id"
+                    } else {
+                        "index-jobs-still-valid"
+                    }
+                );
+            }
         }
         "volume-operation" => {
             let operation = VolumeOperation::parse(&required_string(
@@ -363,6 +347,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "{}",
                 VolumeOperationReport::execute(path, operation)?.as_tsv()
             );
+        }
+        "volume-mount-bsd" => {
+            let bsd_name = required_string(
+                args.next(),
+                "volume-mount-bsd requires a BSD disk name such as disk4s1",
+            )?;
+            println!("{}", VolumeMountIdentityReport::execute(bsd_name).as_tsv());
         }
         "volume-index-policy" => {
             let external = parse_volume_indexing_policy(&required_string(
@@ -801,6 +792,72 @@ fn fileprovider_progress_label(direction: CloudTransferDirection) -> &'static st
         CloudTransferDirection::Upload => "fileprovider upload",
         CloudTransferDirection::Materialize => "fileprovider materialize",
     }
+}
+
+fn volume_event_index_invalidation_from_args(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<VolumeEventIndexInvalidationReport> {
+    let kind = parse_volume_event_kind(&required_string(
+        args.next(),
+        "volume event index invalidation requires an event kind",
+    )?)?;
+    let path = args.next().map(PathBuf::from);
+    let descriptor = path
+        .as_ref()
+        .filter(|path| path.exists())
+        .map(VolumeDescriptor::for_path)
+        .transpose()?;
+    let native_status = if descriptor.is_some() {
+        gfm_mac::NativeVolumeStatus::Available
+    } else if path.is_some() {
+        gfm_mac::NativeVolumeStatus::Missing
+    } else {
+        gfm_mac::NativeVolumeStatus::Unavailable
+    };
+    let event_report = VolumeEventInvalidationReport::from_parts(
+        kind,
+        native_status,
+        path.clone(),
+        descriptor.as_ref(),
+        None,
+    );
+    let current = descriptor.as_ref().map(index_volume_descriptor);
+    Ok(VolumeEventIndexInvalidationReport::from_event(
+        index_volume_event_kind(kind),
+        path,
+        current.as_ref(),
+        event_report.invalidate_index_admission,
+        event_report.rescan_index,
+    ))
+}
+
+fn runtime_volume_cancellation(
+    report: &VolumeEventIndexInvalidationReport,
+) -> Option<gfm_jobs::VolumeCancellationReport> {
+    if !report.cancel_index_jobs {
+        return None;
+    }
+    let volume = report.current_volume_id?;
+    let mut scheduler = Scheduler::new();
+    scheduler.schedule_on_volume_in_class(
+        Priority::Background,
+        JobClass::Background,
+        "index invalidated volume",
+        volume,
+    );
+    scheduler.schedule_on_volume_in_class(
+        Priority::Visible,
+        JobClass::Visible,
+        "render visible volume previews",
+        volume,
+    );
+    scheduler.schedule_on_volume_in_class(
+        Priority::Background,
+        JobClass::Background,
+        "index unrelated volume",
+        VolumeId(volume.0 + 1),
+    );
+    Some(scheduler.cancel_volume_jobs(volume, Some(JobClass::Background)))
 }
 
 fn fileprovider_progress_total_units(report: &FileProviderProgressReport) -> u64 {

@@ -1415,6 +1415,7 @@ fn reports_volume_event_index_invalidation_from_binary() {
     );
     let connected_stdout = String::from_utf8(connected.stdout).unwrap();
     assert!(connected_stdout.starts_with("volume-event-index-invalidation\tkind=appeared\t"));
+    assert!(connected_stdout.contains("\tcurrent-volume="));
     assert!(connected_stdout.contains("\tcurrent-class=external\tcurrent-mount=mounted\t"));
     assert!(connected_stdout.contains("\tindex-admission=true\trescan-index=true\t"));
     assert!(connected_stdout.contains("\tcancel-index-jobs=false\t"));
@@ -1433,8 +1434,62 @@ fn reports_volume_event_index_invalidation_from_binary() {
     let unavailable_stdout = String::from_utf8(unavailable.stdout).unwrap();
     assert!(unavailable_stdout
         .starts_with("volume-event-index-invalidation\tkind=unavailable\tpath=-\t"));
+    assert!(unavailable_stdout.contains("\tcurrent-volume=-\t"));
     assert!(unavailable_stdout.contains("\tcancel-index-jobs=true\t"));
     assert!(unavailable_stdout.contains("\tclear-fsevents-cursor=true\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn reports_volume_event_runtime_cancellation_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-event-runtime-invalidation-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let cancelled = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-runtime-invalidation")
+        .arg("description-changed")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        cancelled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cancelled.stderr)
+    );
+    let cancelled_stdout = String::from_utf8(cancelled.stdout).unwrap();
+    assert!(
+        cancelled_stdout.starts_with("volume-event-index-invalidation\tkind=description-changed\t")
+    );
+    assert!(cancelled_stdout.contains("\tcancel-index-jobs=true\t"));
+    assert!(cancelled_stdout.contains("\nvolume-job-cancellation\tvolume="));
+    assert!(cancelled_stdout.contains("\tclass=background\tcancelled=1\n"));
+    assert!(cancelled_stdout
+        .contains("cancelled-job\t1\tbackground\tbackground\tindex invalidated volume"));
+    assert!(!cancelled_stdout.contains("render visible volume previews"));
+    assert!(!cancelled_stdout.contains("index unrelated volume"));
+
+    let kept = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-runtime-invalidation")
+        .arg("appeared")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        kept.status.success(),
+        "{}",
+        String::from_utf8_lossy(&kept.stderr)
+    );
+    let kept_stdout = String::from_utf8(kept.stdout).unwrap();
+    assert!(kept_stdout.contains("\tcancel-index-jobs=false\t"));
+    assert!(kept_stdout.ends_with(
+        "volume-job-cancellation\tvolume=-\tclass=background\tcancelled=0\treason=index-jobs-still-valid\n"
+    ));
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -1465,4 +1520,24 @@ fn reports_volume_operation_refusal_from_binary() {
     assert!(stdout.contains("\treason=fixture-volume-native-operation-disabled\n"));
 
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn reports_volume_mount_bsd_refusal_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-mount-bsd")
+        .arg("not/a/disk")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-mount-bsd\tbsd-name=not/a/disk\t"));
+    assert!(stdout.contains("\tdisposition=unsupported\tnative-status=unsupported\t"));
+    assert!(stdout.contains("\tdissenter-status=-\t"));
+    assert!(stdout.contains("\treason=diskarbitration-mount-requires-bsd-name\n"));
 }

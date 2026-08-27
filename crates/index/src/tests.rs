@@ -1776,7 +1776,8 @@ fn volume_event_index_invalidation_rescans_connected_volume_without_cancelling_j
         "/Volumes/Work",
         IndexVolumeClass::External,
         IndexMountState::Mounted,
-    );
+    )
+    .with_volume_id(VolumeId(7));
 
     let report = VolumeEventIndexInvalidationReport::from_event(
         IndexVolumeEventKind::Appeared,
@@ -1790,11 +1791,12 @@ fn volume_event_index_invalidation_rescans_connected_volume_without_cancelling_j
     assert!(report.rescan_index);
     assert!(!report.cancel_index_jobs);
     assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.current_volume_id, Some(VolumeId(7)));
     assert_eq!(report.current_class, Some(IndexVolumeClass::External));
     assert_eq!(report.reason, "volume-event-connected");
     assert!(report
         .as_tsv()
-        .contains("\tcurrent-class=external\tcurrent-mount=mounted\t"));
+        .contains("\tcurrent-volume=7\tcurrent-class=external\tcurrent-mount=mounted\t"));
 }
 
 #[test]
@@ -1822,7 +1824,9 @@ fn volume_event_index_invalidation_cancels_jobs_for_disconnect_and_unavailable_e
     }
     assert_eq!(disconnected.reason, "volume-event-disconnected");
     assert_eq!(unavailable.reason, "volume-event-native-unavailable");
-    assert!(unavailable.as_tsv().contains("\tpath=-\tcurrent-class=-\t"));
+    assert!(unavailable
+        .as_tsv()
+        .contains("\tpath=-\tcurrent-volume=-\tcurrent-class=-\t"));
 }
 
 #[test]

@@ -415,6 +415,7 @@ pub struct VolumeInvalidationReport {
 pub struct VolumeEventIndexInvalidationReport {
     pub kind: IndexVolumeEventKind,
     pub path: Option<PathBuf>,
+    pub current_volume_id: Option<VolumeId>,
     pub current_class: Option<IndexVolumeClass>,
     pub current_mount_state: Option<IndexMountState>,
     pub invalidate_index_admission: bool,
@@ -592,6 +593,7 @@ impl VolumeEventIndexInvalidationReport {
         Self {
             kind,
             path,
+            current_volume_id: current.and_then(|volume| volume.id),
             current_class: current.map(|volume| volume.class),
             current_mount_state: current.map(|volume| volume.mount_state),
             invalidate_index_admission,
@@ -604,11 +606,14 @@ impl VolumeEventIndexInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-index-invalidation\tkind={}\tpath={}\tcurrent-class={}\tcurrent-mount={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
+            "volume-event-index-invalidation\tkind={}\tpath={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
             self.kind.as_str(),
             self.path
                 .as_ref()
                 .map(|path| escape_field(&path.to_string_lossy()))
+                .unwrap_or_else(|| "-".to_string()),
+            self.current_volume_id
+                .map(|id| id.0.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.current_class.map(IndexVolumeClass::as_str).unwrap_or("-"),
             self.current_mount_state

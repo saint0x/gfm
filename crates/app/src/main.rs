@@ -574,9 +574,11 @@ fn print_usage() {
   gfm volume-events-probe
   gfm volume-event-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-operation <eject|unmount|mount> <path>
+  gfm volume-mount-bsd <bsd-name>
   gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]
   gfm volume-invalidation <previous-class> <previous-mount> <path>
   gfm volume-event-index-invalidation <appeared|description-changed|disappeared|unavailable> [path]
+  gfm volume-event-runtime-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-topology-diff <previous-paths...> -- <current-paths...>
   gfm spotlight-reconcile <path> [spotlight-fixture.tsv]
   gfm preview-check <path> [icon|thumbnail|quick-look|text]

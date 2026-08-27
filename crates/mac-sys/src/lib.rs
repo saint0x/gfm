@@ -25,8 +25,9 @@ pub use spotlight::{
 };
 pub use volume::{
     copy_volume_description_for_path, copy_volume_mount_table, copy_volume_mount_table_entry,
-    copy_volume_resource_values, submit_volume_operation, NativeVolumeDescription,
-    NativeVolumeEvent, NativeVolumeEventKind, NativeVolumeEventStream, NativeVolumeMountTable,
-    NativeVolumeMountTableEntry, NativeVolumeOperation, NativeVolumeOperationResult,
-    NativeVolumeOperationStatus, NativeVolumeResourceValues, NativeVolumeStatus,
+    copy_volume_resource_values, submit_volume_mount_by_bsd_name, submit_volume_operation,
+    NativeVolumeDescription, NativeVolumeEvent, NativeVolumeEventKind, NativeVolumeEventStream,
+    NativeVolumeMountTable, NativeVolumeMountTableEntry, NativeVolumeOperation,
+    NativeVolumeOperationResult, NativeVolumeOperationStatus, NativeVolumeResourceValues,
+    NativeVolumeStatus,
 };

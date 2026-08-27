@@ -1111,6 +1111,45 @@ impl VolumeOperationReport {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeMountIdentityReport {
+    pub bsd_name: String,
+    pub disposition: VolumeOperationDisposition,
+    pub native_status: NativeVolumeOperationStatus,
+    pub dissenter_status: Option<u32>,
+    pub reason: String,
+}
+
+impl VolumeMountIdentityReport {
+    pub fn execute(bsd_name: impl Into<String>) -> Self {
+        let bsd_name = bsd_name.into();
+        let native = gfm_mac_sys::submit_volume_mount_by_bsd_name(&bsd_name);
+        let disposition = disposition_for_native_operation(native.status);
+        Self {
+            bsd_name,
+            disposition,
+            native_status: native.status,
+            dissenter_status: native.dissenter_status,
+            reason: native
+                .reason
+                .unwrap_or_else(|| native.status.as_str().to_string()),
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "volume-mount-bsd\tbsd-name={}\tdisposition={}\tnative-status={}\tdissenter-status={}\treason={}",
+            escape_field(&self.bsd_name),
+            self.disposition.as_str(),
+            self.native_status.as_str(),
+            self.dissenter_status
+                .map(|status| format!("0x{status:08x}"))
+                .unwrap_or_else(|| "-".to_string()),
+            escape_field(&self.reason)
+        )
+    }
+}
+
 fn disposition_for_native_operation(
     status: NativeVolumeOperationStatus,
 ) -> VolumeOperationDisposition {
@@ -1709,6 +1748,23 @@ mod tests {
         assert!(report.as_tsv().starts_with("volume-operation\tmount\t"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_mount_identity_refuses_invalid_bsd_name_before_native_call() {
+        let report = VolumeMountIdentityReport::execute("not/a/disk");
+
+        assert_eq!(report.bsd_name, "not/a/disk");
+        assert_eq!(report.disposition, VolumeOperationDisposition::Unsupported);
+        assert_eq!(
+            report.native_status,
+            NativeVolumeOperationStatus::Unsupported
+        );
+        assert_eq!(report.dissenter_status, None);
+        assert_eq!(report.reason, "diskarbitration-mount-requires-bsd-name");
+        assert!(report
+            .as_tsv()
+            .starts_with("volume-mount-bsd\tbsd-name=not/a/disk\t"));
     }
 
     #[test]
