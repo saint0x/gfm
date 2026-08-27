@@ -446,6 +446,69 @@ fn extraction_preflight_retains_security_scoped_bookmark_from_binary() {
 }
 
 #[test]
+fn worker_preflights_refresh_permission_state_before_content_and_preview_from_binary() {
+    let root = unique_temp_dir("gfm-cli-permission-content-preview-refresh");
+    let document = root.join("Report.md");
+    let preview = root.join("Preview.pdf");
+    let thumbnail = root.join("Thumbnail.png");
+    fs::write(&document, "alpha protected content").unwrap();
+    fs::write(&preview, "%PDF-1.7\nalpha preview").unwrap();
+    fs::write(&thumbnail, b"\x89PNG\r\n\x1a\nalpha thumbnail").unwrap();
+
+    for (state_name, args, subject) in [
+        (
+            "extract",
+            vec![
+                "extract-report".to_string(),
+                document.to_string_lossy().into_owned(),
+            ],
+            "content extraction",
+        ),
+        (
+            "quicklook",
+            vec![
+                "quicklook-session".to_string(),
+                preview.to_string_lossy().into_owned(),
+            ],
+            "quicklook preview",
+        ),
+        (
+            "thumbnail",
+            vec![
+                "thumbnail-generation".to_string(),
+                thumbnail.to_string_lossy().into_owned(),
+            ],
+            "thumbnail generation",
+        ),
+    ] {
+        let state = root.join(format!("{state_name}-permission-state.tsv"));
+        seed_stale_permission_state(&state);
+
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .env("GFM_PERMISSION_STATE", &state)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "permission-refresh\taudience=workers\tsubject={subject}\t"
+            )),
+            "{stderr}"
+        );
+        assert!(stderr.contains("\trefresh-workers=true\t"), "{stderr}");
+        assert!(stderr.contains("security-scope\t"), "{stderr}");
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn security_bookmark_create_refuses_unreachable_store_before_persisting_from_binary() {
     let root = unique_temp_dir("gfm-cli-security-bookmark-store-create-root");
     let offline = unique_temp_dir("gfm-cli-security-bookmark-store-create-offline");
