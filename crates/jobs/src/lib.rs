@@ -697,6 +697,8 @@ impl JobJournal {
     }
 
     pub fn append(&self, entry: &JournalEntry) -> Result<()> {
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         let file = OpenOptions::new()
             .create(true)
             .append(true)

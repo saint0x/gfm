@@ -674,6 +674,25 @@ fn retriable_worker_journals_attempts_until_success() {
 }
 
 #[test]
+fn job_journal_append_creates_parent_directory() {
+    let root = temp_path("gfm-job-journal-parent", "root");
+    let path = root.join("nested").join("jobs.journal");
+    let journal = JobJournal::new(&path);
+    let entry = JournalEntry {
+        id: JobId::from_raw(41),
+        label: "resume indexing".to_string(),
+        attempt: 1,
+        status: TaskStatus::Started,
+    };
+
+    journal.append(&entry).unwrap();
+
+    assert_eq!(journal.read().unwrap(), vec![entry]);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn journal_identifies_interrupted_and_retryable_jobs() {
     let path = temp_path("gfm-job-recovery", "journal");
     let journal = JobJournal::new(&path);
