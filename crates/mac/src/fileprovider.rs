@@ -1018,6 +1018,9 @@ fn storage_state_for_path(
     }
 
     if hints.native.is_ubiquitous == Some(true) {
+        if native_has_offline_error(&hints.native) {
+            return CloudStorageState::Offline;
+        }
         if let Some(state) = native_storage_state(&hints.native) {
             return state;
         }
@@ -1095,7 +1098,10 @@ fn materialization_source_for_state(
     state: CloudStorageState,
     hints: &CloudHints,
 ) -> CloudMaterializationSource {
-    if hints.native.is_ubiquitous == Some(true) && native_storage_state(&hints.native).is_some() {
+    if hints.native.is_ubiquitous == Some(true)
+        && (native_storage_state(&hints.native).is_some()
+            || native_has_offline_error(&hints.native))
+    {
         CloudMaterializationSource::NativeUrlResource
     } else if hints.native_identity.status == NativeFileProviderIdentityStatus::Available
         && state == CloudStorageState::Unknown
@@ -1260,6 +1266,25 @@ fn native_has_fileprovider_values(values: &NativeFileProviderResourceValues) -> 
         || values.percent_downloaded_milli.is_some()
         || values.percent_uploaded_milli.is_some()
         || values.downloading_status.is_some()
+        || values.downloading_error.is_some()
+        || values.uploading_error.is_some()
+}
+
+fn native_has_offline_error(values: &NativeFileProviderResourceValues) -> bool {
+    values
+        .downloading_error
+        .as_ref()
+        .or(values.uploading_error.as_ref())
+        .is_some_and(|error| {
+            error.code == Some(4_355)
+                || error.description.as_deref().is_some_and(|description| {
+                    let description = description.to_ascii_lowercase();
+                    description.contains("server")
+                        && (description.contains("unavailable") || description.contains("failed"))
+                        || description.contains("offline")
+                        || description.contains("network")
+                })
+        })
 }
 
 fn escape_field(value: &str) -> String {
@@ -1284,7 +1309,7 @@ fn affected_paths_field(paths: &[PathBuf]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gfm_mac_sys::NativeFileProviderStatus;
+    use gfm_mac_sys::{NativeFileProviderStatus, NativeUbiquitousError};
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1817,6 +1842,47 @@ mod tests {
     }
 
     #[test]
+    fn native_ubiquitous_error_reports_offline_materialization() {
+        let path = PathBuf::from("/tmp/Report.md");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.is_uploaded = Some(false);
+        native.downloading_error = Some(NativeUbiquitousError {
+            code: Some(4_355),
+            description: Some("The iCloud server is unavailable.".to_string()),
+        });
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NoProviderForPath,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("test fixture has no native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+
+        assert_eq!(domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(state, CloudStorageState::Offline);
+        assert_eq!(
+            materialization_for_state(state),
+            CloudMaterialization::Offline
+        );
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            CloudMaterializationSource::NativeUrlResource
+        );
+    }
+
+    #[test]
     fn materialization_report_marks_path_fallback_placeholders() {
         let path = PathBuf::from("/tmp/Remote.icloud-placeholder");
         let hints = CloudHints {
@@ -1868,6 +1934,8 @@ mod tests {
             percent_downloaded_milli: None,
             percent_uploaded_milli: None,
             downloading_status: None,
+            downloading_error: None,
+            uploading_error: None,
             status: NativeFileProviderStatus::Available,
             reason: None,
         }

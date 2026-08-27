@@ -27,6 +27,8 @@ extern "C" {
     static NSURLUbiquitousItemPercentDownloadedKey: CFStringRef;
     static NSURLUbiquitousItemPercentUploadedKey: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusKey: CFStringRef;
+    static NSURLUbiquitousItemDownloadingErrorKey: CFStringRef;
+    static NSURLUbiquitousItemUploadingErrorKey: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusNotDownloaded: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusDownloaded: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusCurrent: CFStringRef;
@@ -63,8 +65,16 @@ pub struct NativeFileProviderResourceValues {
     pub percent_downloaded_milli: Option<u32>,
     pub percent_uploaded_milli: Option<u32>,
     pub downloading_status: Option<NativeUbiquitousDownloadingStatus>,
+    pub downloading_error: Option<NativeUbiquitousError>,
+    pub uploading_error: Option<NativeUbiquitousError>,
     pub status: NativeFileProviderStatus,
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeUbiquitousError {
+    pub code: Option<i64>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -386,6 +396,12 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
         NSURLUbiquitousItemPercentUploadedKey
     });
     let downloading_status = copy_downloading_status(url.as_concrete_TypeRef());
+    let downloading_error = copy_error(url.as_concrete_TypeRef(), unsafe {
+        NSURLUbiquitousItemDownloadingErrorKey
+    });
+    let uploading_error = copy_error(url.as_concrete_TypeRef(), unsafe {
+        NSURLUbiquitousItemUploadingErrorKey
+    });
 
     NativeFileProviderResourceValues {
         is_ubiquitous,
@@ -397,6 +413,8 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
         percent_downloaded_milli,
         percent_uploaded_milli,
         downloading_status,
+        downloading_error,
+        uploading_error,
         status: NativeFileProviderStatus::Available,
         reason: None,
     }
@@ -563,6 +581,15 @@ fn copy_percent_milli(url: CFURLRef, key: CFStringRef) -> Option<u32> {
     }
     let bounded = percent.clamp(0.0, 100.0);
     Some((bounded * 1_000.0).round() as u32)
+}
+
+fn copy_error(url: CFURLRef, key: CFStringRef) -> Option<NativeUbiquitousError> {
+    let value = copy_resource_value(url, key)?;
+    let object = value.as_CFTypeRef() as *mut Object;
+    Some(NativeUbiquitousError {
+        code: unsafe { ns_error_code(object) },
+        description: unsafe { ns_error_description(object) },
+    })
 }
 
 fn copy_resource_value(url: CFURLRef, key: CFStringRef) -> Option<CFType> {
@@ -733,6 +760,15 @@ unsafe fn ns_error_description(error: *mut Object) -> Option<String> {
     ns_string_to_string(send(error, Sel::register("localizedDescription")))
 }
 
+unsafe fn ns_error_code(error: *mut Object) -> Option<i64> {
+    if error.is_null() {
+        return None;
+    }
+    let send: unsafe extern "C" fn(*mut Object, Sel) -> isize =
+        std::mem::transmute(objc_msgSend as *const ());
+    Some(send(error, Sel::register("code")) as i64)
+}
+
 fn identity_result(
     status: NativeFileProviderIdentityStatus,
     reason: impl Into<String>,
@@ -778,6 +814,8 @@ fn missing_values(reason: String) -> NativeFileProviderResourceValues {
         percent_downloaded_milli: None,
         percent_uploaded_milli: None,
         downloading_status: None,
+        downloading_error: None,
+        uploading_error: None,
         status: NativeFileProviderStatus::Missing,
         reason: Some(reason),
     }
@@ -794,6 +832,8 @@ fn unsupported(reason: String) -> NativeFileProviderResourceValues {
         percent_downloaded_milli: None,
         percent_uploaded_milli: None,
         downloading_status: None,
+        downloading_error: None,
+        uploading_error: None,
         status: NativeFileProviderStatus::UnsupportedPath,
         reason: Some(reason),
     }

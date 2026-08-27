@@ -16,6 +16,7 @@ pub use fileprovider::{
     NativeFileProviderIdentity, NativeFileProviderIdentityStatus,
     NativeFileProviderOperationResult, NativeFileProviderOperationStatus,
     NativeFileProviderResourceValues, NativeFileProviderStatus, NativeUbiquitousDownloadingStatus,
+    NativeUbiquitousError,
 };
 pub use finder::{copy_kind_string_for_path, NativeFinderKind, NativeFinderKindStatus};
 pub use spotlight::{
