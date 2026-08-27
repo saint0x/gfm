@@ -2277,6 +2277,75 @@ fn reports_fileprovider_observer_metadata_probe_from_binary() {
 }
 
 #[test]
+fn fileprovider_sidebar_observed_rename_updates_snapshot_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-sidebar-rename-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let old = root.join("Old.icloud-placeholder");
+    let new = root.join("New.icloud-placeholder");
+    std::fs::write(&new, "placeholder").unwrap();
+    mark_evicted_fixture(&new);
+    std::fs::write(
+        &state,
+        format!("gfm-fileprovider-state-v1\ndownloaded\t{}\n", old.display()),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-sidebar-fileprovider-observed-invalidation")
+        .arg(&state)
+        .arg("rename")
+        .arg(&old)
+        .arg(&new)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.starts_with(
+            "fileprovider-observed-invalidation\tevents=1\tevent-kinds=rename\tpaths=2\n"
+        ),
+        "{stdout}"
+    );
+    assert!(stdout.contains(&format!(
+        "fileprovider-invalidation\t{}\tprevious=downloaded\tcurrent=local-only\tchanged=true\t",
+        old.display()
+    )));
+    assert!(stdout.contains(&format!(
+        "fileprovider-invalidation\t{}\tprevious=local-only\tcurrent=evicted\tchanged=true\t",
+        new.display()
+    )));
+    assert!(stdout.contains(&format!(
+        "sidebar-cloud-invalidation\ticloud-drive\tpath={}\tprevious=available-offline\tcurrent=none\tprogress=-\tinvalidate-row=true\t",
+        old.display()
+    )));
+    assert!(stdout.contains(&format!(
+        "sidebar-cloud-invalidation\ticloud-drive\tpath={}\tprevious=none\tcurrent=cloud-only\tprogress=0\tinvalidate-row=true\t",
+        new.display()
+    )));
+
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert!(
+        !state_text.contains(&old.display().to_string()),
+        "{state_text}"
+    );
+    assert!(
+        state_text.contains(&format!("evicted\t{}\n", new.display())),
+        "{state_text}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_observer_probe_refuses_unreachable_volume_before_watching_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-observer-unreachable-{}",

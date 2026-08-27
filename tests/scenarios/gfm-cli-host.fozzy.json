@@ -2563,6 +2563,56 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-rename-new.icloud-placeholder",
+      "data": "renamed placeholder\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/usr/bin/xattr",
+      "args": [
+        "-w",
+        "com.apple.icloud.placeholder",
+        "1",
+        "tmp/gfm-fozzy-fileprovider-rename-new.icloud-placeholder"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-rename-state.tsv",
+      "data": "gfm-fileprovider-state-v1\ndownloaded\ttmp/gfm-fozzy-fileprovider-rename-old.icloud-placeholder\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-sidebar-fileprovider-observed-invalidation",
+        "tmp/gfm-fozzy-fileprovider-rename-state.tsv",
+        "rename",
+        "tmp/gfm-fozzy-fileprovider-rename-old.icloud-placeholder",
+        "tmp/gfm-fozzy-fileprovider-rename-new.icloud-placeholder"
+      ],
+      "exit_code": 0,
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=rename\tpaths=2\nfileprovider-state-invalidation\tinitialized=false\tchanged=2\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-rename-new.icloud-placeholder\tprevious=local-only\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-rename-old.icloud-placeholder\tprevious=downloaded\tcurrent=local-only\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nsidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-fileprovider-rename-new.icloud-placeholder\tprevious=none\tcurrent=cloud-only\tprogress=0\tinvalidate-row=true\treason=sidebar-cloud-state-changed\nsidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-fileprovider-rename-old.icloud-placeholder\tprevious=available-offline\tcurrent=none\tprogress=-\tinvalidate-row=true\treason=sidebar-cloud-state-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/bin/cat",
+      "args": [
+        "tmp/gfm-fozzy-fileprovider-rename-state.tsv"
+      ],
+      "exit_code": 0,
+      "stdout": "gfm-fileprovider-state-v1\nevicted\ttmp/gfm-fozzy-fileprovider-rename-new.icloud-placeholder\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-fileprovider-observer.icloud-placeholder",
       "data": "placeholder\n"
     },
