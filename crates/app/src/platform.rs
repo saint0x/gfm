@@ -592,9 +592,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "quicklook-session-cancel" => {
             let path = required_path(args.next(), "quicklook-session-cancel requires a path")?;
-            let record = record_for_path(&path, None, false)?;
             let cancellation = Cancellation::default();
             cancellation.cancel();
+            if let Err(GfmError::Cancelled) = cancellation.check() {
+                println!("quicklook-session\tstatus=cancelled\treason=cancelled-before-plan");
+                return Ok(true);
+            }
+            let record = record_for_path(&path, None, false)?;
             let input = QuickLookSessionInput::new(
                 PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
                 Rect::new(0, 0, 640, 480),
@@ -712,9 +716,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "thumbnail-generation-cancel" => {
             let path = required_path(args.next(), "thumbnail-generation-cancel requires a path")?;
-            let record = record_for_path(&path, None, false)?;
             let cancellation = Cancellation::default();
             cancellation.cancel();
+            if let Err(GfmError::Cancelled) = cancellation.check() {
+                println!("thumbnail-generation\tstatus=cancelled\treason=cancelled-before-plan");
+                return Ok(true);
+            }
+            let record = record_for_path(&path, None, false)?;
             let input = ThumbnailGenerationInput::new(
                 PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
                 Rect::new(0, 0, 160, 160),

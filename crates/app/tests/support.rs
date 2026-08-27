@@ -1338,6 +1338,37 @@ fn cancelled_quicklook_session_stops_before_planning_from_binary() {
 }
 
 #[test]
+fn cancelled_quicklook_session_stops_before_unreachable_volume_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-quicklook-cancel-unreachable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("Project")).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Project").join("Preview.pdf");
+    std::fs::write(&path, b"%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("quicklook-session-cancel")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "quicklook-session\tstatus=cancelled\treason=cancelled-before-plan\n"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_thumbnail_generation_from_binary() {
     let path = std::env::temp_dir().join(format!("gfm-thumbnail-{}.png", std::process::id()));
     std::fs::write(&path, b"png").unwrap();
@@ -1451,6 +1482,37 @@ fn cancelled_thumbnail_generation_stops_before_planning_from_binary() {
     );
 
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn cancelled_thumbnail_generation_stops_before_unreachable_volume_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-thumbnail-cancel-unreachable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("Project")).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Project").join("Preview.png");
+    std::fs::write(&path, b"png").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("thumbnail-generation-cancel")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "thumbnail-generation\tstatus=cancelled\treason=cancelled-before-plan\n"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
