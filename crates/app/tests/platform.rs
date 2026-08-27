@@ -1327,6 +1327,7 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
         quicklook_stderr.contains("\tintent=preview\t"),
         "{quicklook_stderr}"
     );
+    assert_worker_admitted(&quicklook_stderr, "quicklook preview", &evicted);
     let quicklook_stdout = String::from_utf8(quicklook.stdout).unwrap();
     assert!(
         quicklook_stdout.contains("\tallow-native\tcloud=metadata-only\tmetadata-only\t"),
@@ -1356,6 +1357,7 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
         thumbnail_stderr.contains("\tintent=preview\t"),
         "{thumbnail_stderr}"
     );
+    assert_worker_admitted(&thumbnail_stderr, "thumbnail generation", &downloading);
     let thumbnail_stdout = String::from_utf8(thumbnail.stdout).unwrap();
     assert!(
         thumbnail_stdout.contains("\tallow-native\tcloud=defer\tmetadata-only\t512px\t"),
