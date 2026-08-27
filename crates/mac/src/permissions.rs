@@ -261,18 +261,22 @@ impl PermissionStateInvalidationReport {
         let initialized = previous.is_none();
         let mut changed = Vec::new();
         for current_item in &current.readiness {
-            let previous_state = previous.and_then(|snapshot| {
+            let previous_item = previous.and_then(|snapshot| {
                 snapshot
                     .readiness
                     .iter()
                     .find(|item| item.scope == current_item.scope)
-                    .map(|item| item.state)
             });
-            if initialized || previous_state != Some(current_item.state) {
+            let changed_scope = previous_item.is_none_or(|previous_item| {
+                previous_item.state != current_item.state
+                    || previous_item.path != current_item.path
+                    || previous_item.reason != current_item.reason
+            });
+            if initialized || changed_scope {
                 changed.push(PermissionScopeChange {
                     scope: current_item.scope,
                     path: current_item.path.clone(),
-                    previous: previous_state,
+                    previous: previous_item.map(|item| item.state),
                     current: current_item.state,
                     reason: current_item.reason.clone(),
                 });
@@ -297,24 +301,7 @@ impl PermissionStateInvalidationReport {
                 });
             }
         }
-        let refresh_workers = changed.iter().any(|change| {
-            matches!(
-                (change.previous, change.current),
-                (
-                    _,
-                    PermissionState::Denied
-                        | PermissionState::Unavailable
-                        | PermissionState::Unknown
-                ) | (
-                    Some(
-                        PermissionState::Denied
-                            | PermissionState::Unavailable
-                            | PermissionState::Unknown
-                    ),
-                    _
-                )
-            )
-        });
+        let refresh_workers = !changed.is_empty();
         Self {
             initialized,
             refresh_ui: initialized || !changed.is_empty(),
@@ -729,6 +716,76 @@ mod tests {
         assert!(report.refresh_workers);
         assert!(report.refresh_operations);
         assert!(report.as_tsv().contains("previous=granted\tcurrent=denied"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permission_invalidation_marks_same_state_path_changes() {
+        let root = temp_root("permissions-path-change");
+        let previous = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: root.join("Old Documents"),
+                state: PermissionState::Granted,
+                reason: "readable".to_string(),
+            }],
+        };
+        let current = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: root.join("New Documents"),
+                state: PermissionState::Granted,
+                reason: "readable".to_string(),
+            }],
+        };
+
+        let report = PermissionStateInvalidationReport::evaluate(Some(&previous), &current);
+
+        assert_eq!(report.changed.len(), 1);
+        assert_eq!(report.changed[0].previous, Some(PermissionState::Granted));
+        assert_eq!(report.changed[0].current, PermissionState::Granted);
+        assert_eq!(report.changed[0].path, root.join("New Documents"));
+        assert!(report.refresh_ui);
+        assert!(report.refresh_workers);
+        assert!(report.refresh_operations);
+        assert!(report
+            .as_tsv()
+            .contains("permission-change\tdocuments\tprevious=granted\tcurrent=granted\t"));
+        assert!(report.as_tsv().contains("New Documents"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permission_invalidation_marks_same_state_reason_changes() {
+        let root = temp_root("permissions-reason-change");
+        let path = root.join("Documents");
+        let previous = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: path.clone(),
+                state: PermissionState::Granted,
+                reason: "readable via repaired bookmark".to_string(),
+            }],
+        };
+        let current = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path,
+                state: PermissionState::Granted,
+                reason: "readable via fresh grant".to_string(),
+            }],
+        };
+
+        let report = PermissionStateInvalidationReport::evaluate(Some(&previous), &current);
+
+        assert_eq!(report.changed.len(), 1);
+        assert_eq!(report.changed[0].previous, Some(PermissionState::Granted));
+        assert_eq!(report.changed[0].current, PermissionState::Granted);
+        assert_eq!(report.changed[0].reason, "readable via fresh grant");
+        assert!(report.refresh_ui);
+        assert!(report.refresh_workers);
+        assert!(report.refresh_operations);
+        assert!(report.as_tsv().contains("readable via fresh grant"));
         fs::remove_dir_all(root).unwrap();
     }
 
