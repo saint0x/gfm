@@ -43,6 +43,9 @@ const DA_RETURN_NOT_MOUNTED: u32 = 0xF8DA0007;
 const DA_RETURN_NOT_PERMITTED: u32 = 0xF8DA0008;
 const DA_RETURN_NOT_PRIVILEGED: u32 = 0xF8DA0009;
 const DA_RETURN_UNSUPPORTED: u32 = 0xF8DA000C;
+const VOLUME_OPERATION_CALLBACK_TIMEOUT_SECONDS: f64 = 0.5;
+const VOLUME_OPERATION_CALLBACK_TIMEOUT_MILLIS: u64 =
+    (VOLUME_OPERATION_CALLBACK_TIMEOUT_SECONDS * 1000.0) as u64;
 
 #[link(name = "DiskArbitration", kind = "framework")]
 extern "C" {
@@ -604,7 +607,11 @@ pub fn submit_volume_operation(
     }
 
     unsafe {
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 30.0, 0);
+        CFRunLoopRunInMode(
+            kCFRunLoopDefaultMode,
+            VOLUME_OPERATION_CALLBACK_TIMEOUT_SECONDS,
+            0,
+        );
         DASessionUnscheduleFromRunLoop(session, run_loop, kCFRunLoopDefaultMode);
     }
     let result = if let Ok(result) = rx.try_recv() {
@@ -617,7 +624,7 @@ pub fn submit_volume_operation(
             operation,
             status: NativeVolumeOperationStatus::Submitted,
             dissenter_status: None,
-            reason: Some("submitted-to-diskarbitration".to_string()),
+            reason: Some(volume_operation_submitted_reason()),
         }
     };
 
@@ -683,7 +690,11 @@ pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationR
             Some(volume_operation_callback),
             context.cast(),
         );
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 30.0, 0);
+        CFRunLoopRunInMode(
+            kCFRunLoopDefaultMode,
+            VOLUME_OPERATION_CALLBACK_TIMEOUT_SECONDS,
+            0,
+        );
         DASessionUnscheduleFromRunLoop(session, run_loop, kCFRunLoopDefaultMode);
     }
     let result = if let Ok(result) = rx.try_recv() {
@@ -696,7 +707,7 @@ pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationR
             operation,
             status: NativeVolumeOperationStatus::Submitted,
             dissenter_status: None,
-            reason: Some("submitted-to-diskarbitration".to_string()),
+            reason: Some(volume_operation_submitted_reason()),
         }
     };
 
@@ -779,6 +790,10 @@ fn native_operation_status_for_dissenter(code: u32) -> NativeVolumeOperationStat
         DA_RETURN_UNSUPPORTED => NativeVolumeOperationStatus::Unsupported,
         _ => NativeVolumeOperationStatus::Failed,
     }
+}
+
+fn volume_operation_submitted_reason() -> String {
+    format!("submitted-to-diskarbitration-timeout-{VOLUME_OPERATION_CALLBACK_TIMEOUT_MILLIS}ms")
 }
 
 fn dissenter_reason(dissenter: DADissenterRef, code: u32) -> String {
@@ -1264,5 +1279,13 @@ mod tests {
         assert!(valid_bsd_disk_name("disk4"));
         assert!(valid_bsd_disk_name("disk4s1"));
         assert!(!valid_bsd_disk_name("notadisk"));
+    }
+
+    #[test]
+    fn volume_operation_callback_grace_window_stays_interactive() {
+        assert_eq!(
+            volume_operation_submitted_reason(),
+            "submitted-to-diskarbitration-timeout-500ms"
+        );
     }
 }
