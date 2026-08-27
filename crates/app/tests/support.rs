@@ -301,10 +301,16 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let source = root.join("source.txt");
     let target = root.join("target.txt");
+    let source_dir = root.join("source-dir");
+    let target_dir = root.join("target-dir");
     let conflicts = root.join("operation-conflicts.tsv");
     let journal = root.join("ops.journal");
     std::fs::write(&source, "new").unwrap();
     std::fs::write(&target, "old").unwrap();
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::create_dir_all(&target_dir).unwrap();
+    std::fs::write(source_dir.join("child.txt"), "new").unwrap();
+    std::fs::write(target_dir.join("child.txt"), "old").unwrap();
 
     let failed_copy = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_OPERATION_CONFLICT_STORE", &conflicts)
@@ -324,11 +330,35 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
         "{}",
         String::from_utf8_lossy(&failed_copy.stderr)
     );
+    let failed_move = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPERATION_CONFLICT_STORE", &conflicts)
+        .env("GFM_OPS_JOURNAL", &journal)
+        .arg("move")
+        .arg(&source_dir)
+        .arg(&target_dir)
+        .output()
+        .unwrap();
+    assert!(
+        !failed_move.status.success(),
+        "{}",
+        String::from_utf8_lossy(&failed_move.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&failed_move.stderr).contains("destination already exists"),
+        "{}",
+        String::from_utf8_lossy(&failed_move.stderr)
+    );
     assert!(conflicts.is_file());
     let conflict_store = std::fs::read_to_string(&conflicts).unwrap();
     assert!(
         conflict_store.contains(
             "\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\t"
+        ),
+        "{conflict_store}"
+    );
+    assert!(
+        conflict_store.contains(
+            "\texists=true\tkind=directory\tpolicy=fail\tavailable=replace,keep-both,merge,skip\tblocks-operation=true\t"
         ),
         "{conflict_store}"
     );
@@ -347,7 +377,9 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
 
     assert!(stdout.starts_with("window\tGFM\t"), "{stdout}");
     assert!(
-        stdout.contains("\noperation-conflict-ui\toperation=copy\t"),
+        stdout.contains(
+            "\noperation-conflict-ui\toperation=batch\ttarget=2 items\tkind=mixed\tpolicy=fail\tavailable=replace,keep-both,skip\t"
+        ),
         "{stdout}"
     );
     assert!(
@@ -361,15 +393,100 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
         "{stdout}"
     );
     assert!(
-        stdout.contains(
-            "\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\t"
-        ),
+        stdout.contains("\noperation-conflict-row\t1\toperation=move\t"),
         "{stdout}"
     );
+    assert!(stdout.contains("\tblocks-operation=true\t"), "{stdout}");
     assert!(
         stdout.contains("button\tmerge\tMerge\talternate\tenabled=false"),
         "{stdout}"
     );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn resolves_operation_conflict_surface_before_next_lifecycle_contract() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-resolve-operation-conflict-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let source = root.join("source.txt");
+    let target = root.join("target.txt");
+    let conflicts = root.join("operation-conflicts.tsv");
+    let journal = root.join("ops.journal");
+    std::fs::write(&source, "new").unwrap();
+    std::fs::write(&target, "old").unwrap();
+
+    let failed_copy = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPERATION_CONFLICT_STORE", &conflicts)
+        .env("GFM_OPS_JOURNAL", &journal)
+        .arg("copy")
+        .arg(&source)
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        !failed_copy.status.success(),
+        "{}",
+        String::from_utf8_lossy(&failed_copy.stdout)
+    );
+
+    let invalid_resolve = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-operation-conflict-resolve")
+        .arg(&conflicts)
+        .arg(target.to_str().unwrap())
+        .arg("merge")
+        .output()
+        .unwrap();
+    assert!(!invalid_resolve.status.success());
+    let still_blocking = std::fs::read_to_string(&conflicts).unwrap();
+    assert!(
+        still_blocking.contains("\tblocks-operation=true\t"),
+        "{still_blocking}"
+    );
+
+    let resolve = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-operation-conflict-resolve")
+        .arg(&conflicts)
+        .arg(target.to_str().unwrap())
+        .arg("keep-both")
+        .output()
+        .unwrap();
+    assert!(
+        resolve.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+    let resolve_stdout = String::from_utf8(resolve.stdout).unwrap();
+    assert!(
+        resolve_stdout.contains("operation-conflict-control\tresolve\t"),
+        "{resolve_stdout}"
+    );
+    assert!(
+        resolve_stdout.contains("\tpolicy=keep-both\tblocks-operation=false\t"),
+        "{resolve_stdout}"
+    );
+    assert!(
+        resolve_stdout.contains("\noperation-conflict-ui\toperation=copy\t"),
+        "{resolve_stdout}"
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPERATION_CONFLICT_STORE", &conflicts)
+        .args(["ui-contract", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("window\tGFM\t"), "{stdout}");
+    assert!(!stdout.contains("\noperation-conflict-ui\t"), "{stdout}");
 
     let _ = std::fs::remove_dir_all(root);
 }

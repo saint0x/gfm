@@ -2574,6 +2574,36 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-conflicts.tsv",
+      "data": "operation-conflict\toperation=copy\ttarget=tmp/gfm-fozzy-operation-conflict-target.txt\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-operation-conflict-resolve",
+        "tmp/gfm-fozzy-operation-conflicts.tsv",
+        "tmp/gfm-fozzy-operation-conflict-target.txt",
+        "keep-both"
+      ],
+      "exit_code": 0,
+      "stdout": "operation-conflict-control\tresolve\ttarget=tmp/gfm-fozzy-operation-conflict-target.txt\tpolicy=keep-both\tblocks-operation=false\treason=destination-conflict-resolved-by-keep-both\ndialog\tsurface=conflict\tpresentation=window-sheet\ttitle=An item with the same name already exists\tmessage=Finder-compatible conflict sheet for replace, keep both, merge, stop, skip, and apply-to-all decisions.\ticon=system-alert\tblocks-parent=false\tescape-cancels=true\nfield\tapply-to-all\tApply to All\tcheckbox\trequired=false\tenabled=true\nbutton\treplace\tReplace\tdestructive\tenabled=true\nbutton\tkeep-both\tKeep Both\tdefault\tenabled=true\nbutton\tmerge\tMerge\talternate\tenabled=false\nbutton\tskip\tSkip\talternate\tenabled=true\nbutton\tstop\tStop\tcancel\tenabled=false\noperation-conflict-ui\toperation=copy\ttarget=tmp/gfm-fozzy-operation-conflict-target.txt\tkind=file\tpolicy=keep-both\tavailable=replace,keep-both,skip\tblocks-operation=false\tfocus=-\tdefault-action=keep-both\tcancel-action=-\tkeyboard=finder-conflict-sheet-return-default-escape-cancel-tab-cycle\treason=destination-conflict-resolved-by-keep-both\noperation-conflict-row\t0\toperation=copy\ttarget=tmp/gfm-fozzy-operation-conflict-target.txt\tkind=file\tpolicy=keep-both\treason=destination-conflict-resolved-by-keep-both\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-operation-conflict-resolve",
+        "tmp/gfm-fozzy-operation-conflicts.tsv",
+        "tmp/gfm-fozzy-operation-conflict-target.txt",
+        "keep-both"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

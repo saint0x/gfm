@@ -163,6 +163,30 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let report = OperationConflictReport::evaluate(&operation, conflict);
             println!("{}", operation_conflict_contract(&report).as_tsv());
         }
+        "ui-operation-conflict-resolve" => {
+            let store_path = required_path(
+                args.next(),
+                "ui-operation-conflict-resolve requires an operation conflict store path",
+            )?;
+            let target = required_string(
+                args.next(),
+                "ui-operation-conflict-resolve requires a target path",
+            )?;
+            let policy = parse_required_resolution_policy(args.next())?;
+            let store = crate::runtime::OperationConflictStore::new(store_path);
+            let resolved = store.resolve(&target, policy.as_str())?;
+            println!(
+                "operation-conflict-control\tresolve\ttarget={}\tpolicy={}\tblocks-operation={}\treason={}",
+                escape_interface_field(&resolved.target),
+                escape_interface_field(&resolved.selected_policy),
+                resolved.blocks_operation,
+                escape_interface_field(&resolved.reason)
+            );
+            println!(
+                "{}",
+                runtime_operation_conflict_contract(&resolved).as_tsv()
+            );
+        }
         "ui-titlebar-contract" => {
             let spec = app_launch_spec(args.next())?;
             println!("{}", TitlebarContract::from_spec(&spec)?.as_tsv());
@@ -450,6 +474,20 @@ fn parse_optional_conflict_policy(value: Option<&str>) -> Result<ConflictPolicy>
     }
 }
 
+fn parse_required_resolution_policy(value: Option<String>) -> Result<ConflictPolicy> {
+    let value = required_string(
+        value,
+        "ui-operation-conflict-resolve requires replace, keep-both, merge, or skip",
+    )?;
+    let policy = parse_optional_conflict_policy(Some(&value))?;
+    if policy == ConflictPolicy::Fail {
+        return Err(GfmError::Format(
+            "ui-operation-conflict-resolve requires replace, keep-both, merge, or skip".to_string(),
+        ));
+    }
+    Ok(policy)
+}
+
 fn operation_conflict_contract(report: &OperationConflictReport) -> OperationConflictContract {
     OperationConflictContract::from_input(OperationConflictInput::new(
         report.operation,
@@ -473,7 +511,13 @@ fn operation_conflict_contract(report: &OperationConflictReport) -> OperationCon
 fn runtime_operation_conflict_contract(
     conflict: &crate::runtime::RuntimeOperationConflict,
 ) -> OperationConflictContract {
-    OperationConflictContract::from_input(OperationConflictInput::new(
+    OperationConflictContract::from_input(runtime_operation_conflict_input(conflict))
+}
+
+fn runtime_operation_conflict_input(
+    conflict: &crate::runtime::RuntimeOperationConflict,
+) -> OperationConflictInput {
+    OperationConflictInput::new(
         conflict.operation.clone(),
         conflict.target.clone(),
         conflict.target_kind.clone(),
@@ -481,7 +525,7 @@ fn runtime_operation_conflict_contract(
         conflict.available_policies.clone(),
         conflict.blocks_operation,
         conflict.reason.clone(),
-    ))
+    )
 }
 
 fn native_sidebar_volumes() -> Vec<SidebarVolumeSpec> {
@@ -516,13 +560,15 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
         spec = spec.with_progress_surfaces(progress_surfaces);
     }
     if let Some(store) = crate::runtime::runtime_operation_conflict_store() {
-        let conflicts = store
+        let conflict_inputs = store
             .read()?
             .iter()
             .filter(|conflict| conflict.blocks_operation)
-            .map(runtime_operation_conflict_contract)
-            .collect();
-        spec = spec.with_operation_conflicts(conflicts);
+            .map(runtime_operation_conflict_input)
+            .collect::<Vec<_>>();
+        if let Some(conflict) = OperationConflictContract::from_inputs(conflict_inputs) {
+            spec = spec.with_operation_conflicts(vec![conflict]);
+        }
     }
     let refresh = crate::permission_refresh::refresh_permission_state(
         crate::permission_refresh::PermissionRefreshAudience::Ui,

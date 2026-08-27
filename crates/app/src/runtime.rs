@@ -406,6 +406,90 @@ impl OperationConflictStore {
             .map(|(line_index, line)| parse_operation_conflict_line(&self.path, line_index, line))
             .collect()
     }
+
+    pub(crate) fn resolve(
+        &self,
+        target: &str,
+        selected_policy: &str,
+    ) -> Result<RuntimeOperationConflict> {
+        let mut conflicts = self.read()?;
+        let conflict = conflicts
+            .iter_mut()
+            .find(|conflict| conflict.target == target && conflict.blocks_operation)
+            .ok_or_else(|| {
+                GfmError::Format(format!(
+                    "operation conflict store {} has no blocking conflict for `{target}`",
+                    self.path.display()
+                ))
+            })?;
+        if !conflict
+            .available_policies
+            .iter()
+            .any(|policy| policy == selected_policy)
+        {
+            return Err(GfmError::Format(format!(
+                "operation conflict for `{target}` cannot resolve with `{selected_policy}`; available={}",
+                conflict.available_policies.join(",")
+            )));
+        }
+        conflict.selected_policy = selected_policy.to_string();
+        conflict.blocks_operation = false;
+        conflict.reason = format!("destination-conflict-resolved-by-{selected_policy}");
+        let resolved = conflict.clone();
+        self.write_all(&conflicts)?;
+        Ok(resolved)
+    }
+
+    fn write_all(&self, conflicts: &[RuntimeOperationConflict]) -> Result<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+        }
+        let text = conflicts
+            .iter()
+            .map(RuntimeOperationConflict::as_tsv)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let text = if text.is_empty() {
+            String::new()
+        } else {
+            format!("{text}\n")
+        };
+        let temporary = operation_conflict_temp_path(&self.path);
+        fs::write(&temporary, text).map_err(|err| GfmError::io(&temporary, err))?;
+        if let Err(err) = fs::rename(&temporary, &self.path) {
+            let _ = fs::remove_file(&temporary);
+            return Err(GfmError::io(&self.path, err));
+        }
+        Ok(())
+    }
+}
+
+impl RuntimeOperationConflict {
+    pub(crate) fn as_tsv(&self) -> String {
+        format!(
+            "operation-conflict\toperation={}\ttarget={}\texists={}\tkind={}\tpolicy={}\tavailable={}\tblocks-operation={}\treason={}",
+            self.operation,
+            self.target,
+            self.target_kind != "none",
+            self.target_kind,
+            self.selected_policy,
+            self.available_policies.join(","),
+            self.blocks_operation,
+            self.reason
+        )
+    }
+}
+
+fn operation_conflict_temp_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("operation-conflicts.tsv");
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    path.with_file_name(format!(".{file_name}.{}.{nonce}.tmp", std::process::id()))
 }
 
 pub(crate) fn runtime_operation_conflict_store() -> Option<OperationConflictStore> {

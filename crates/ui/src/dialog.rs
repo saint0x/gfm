@@ -451,23 +451,55 @@ pub struct OperationConflictReviewRow {
 
 impl OperationConflictContract {
     pub fn from_input(input: OperationConflictInput) -> Self {
+        Self::from_inputs(vec![input]).expect("operation conflict input must produce a contract")
+    }
+
+    pub fn from_inputs(inputs: Vec<OperationConflictInput>) -> Option<Self> {
+        let first = inputs.first()?;
+        let available_policies = shared_available_policies(&inputs);
+        let blocks_operation = inputs.iter().any(|input| input.blocks_operation);
+        let operation = if inputs.len() == 1 {
+            first.operation.clone()
+        } else {
+            "batch".to_string()
+        };
+        let target = if inputs.len() == 1 {
+            first.target.clone()
+        } else {
+            format!("{} items", inputs.len())
+        };
+        let target_kind = if inputs.len() == 1 {
+            first.target_kind.clone()
+        } else {
+            "mixed".to_string()
+        };
+        let selected_policy = if inputs.len() == 1 {
+            first.selected_policy.clone()
+        } else {
+            "fail".to_string()
+        };
+        let reason = if inputs.len() == 1 {
+            first.reason.clone()
+        } else {
+            format!(
+                "{}-operation-conflicts-require-user-resolution",
+                inputs.len()
+            )
+        };
         let mut dialog = DialogContract::finder_default(DialogSurface::Conflict);
         dialog.buttons = dialog
             .buttons
             .into_iter()
             .map(|button| DialogButtonSpec {
                 enabled: if button.id == "stop" {
-                    input.blocks_operation
+                    blocks_operation
                 } else {
-                    input
-                        .available_policies
-                        .iter()
-                        .any(|policy| policy == button.id)
+                    available_policies.iter().any(|policy| policy == button.id)
                 },
                 ..button
             })
             .collect();
-        if !input.blocks_operation {
+        if !blocks_operation {
             dialog.blocks_parent_window = false;
         }
         let default_action = dialog
@@ -491,36 +523,40 @@ impl OperationConflictContract {
             .map(|button| button.id)
             .unwrap_or("-")
             .to_string();
-        let initial_focus = if input.blocks_operation {
+        let initial_focus = if blocks_operation {
             default_action.clone()
         } else {
             "-".to_string()
         };
-        let review_row = OperationConflictReviewRow {
-            ordinal: 0,
-            operation: input.operation.clone(),
-            target: input.target.clone(),
-            target_kind: input.target_kind.clone(),
-            selected_policy: input.selected_policy.clone(),
-            reason: input.reason.clone(),
-        };
+        let review_rows = inputs
+            .iter()
+            .enumerate()
+            .map(|(ordinal, input)| OperationConflictReviewRow {
+                ordinal,
+                operation: input.operation.clone(),
+                target: input.target.clone(),
+                target_kind: input.target_kind.clone(),
+                selected_policy: input.selected_policy.clone(),
+                reason: input.reason.clone(),
+            })
+            .collect();
 
-        Self {
+        Some(Self {
             dialog,
-            operation: input.operation,
-            target: input.target,
-            target_kind: input.target_kind,
-            selected_policy: input.selected_policy,
-            available_policies: input.available_policies,
-            blocks_operation: input.blocks_operation,
-            reason: input.reason,
+            operation,
+            target,
+            target_kind,
+            selected_policy,
+            available_policies,
+            blocks_operation,
+            reason,
             initial_focus,
             default_action,
             cancel_action,
             keyboard_model: "finder-conflict-sheet-return-default-escape-cancel-tab-cycle"
                 .to_string(),
-            review_rows: vec![review_row],
-        }
+            review_rows,
+        })
     }
 
     pub fn as_tsv(&self) -> String {
@@ -552,6 +588,22 @@ impl OperationConflictContract {
         }));
         lines.join("\n")
     }
+}
+
+fn shared_available_policies(inputs: &[OperationConflictInput]) -> Vec<String> {
+    let Some(first) = inputs.first() else {
+        return Vec::new();
+    };
+    first
+        .available_policies
+        .iter()
+        .filter(|policy| {
+            inputs
+                .iter()
+                .all(|input| input.available_policies.iter().any(|item| item == *policy))
+        })
+        .cloned()
+        .collect()
 }
 
 impl ProviderConflictContract {
@@ -1191,6 +1243,60 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\tfocus=-\tdefault-action=-\tcancel-action=-\t"));
+    }
+
+    #[test]
+    fn operation_conflict_contract_batches_review_rows_and_shared_actions() {
+        let contract = OperationConflictContract::from_inputs(vec![
+            OperationConflictInput::new(
+                "copy",
+                "/tmp/file-target",
+                "file",
+                "fail",
+                vec![
+                    "replace".to_string(),
+                    "keep-both".to_string(),
+                    "skip".to_string(),
+                ],
+                true,
+                "destination-conflict-requires-user-resolution",
+            ),
+            OperationConflictInput::new(
+                "move",
+                "/tmp/directory-target",
+                "directory",
+                "fail",
+                vec![
+                    "replace".to_string(),
+                    "keep-both".to_string(),
+                    "merge".to_string(),
+                    "skip".to_string(),
+                ],
+                true,
+                "destination-conflict-requires-user-resolution",
+            ),
+        ])
+        .unwrap();
+
+        assert_eq!(contract.operation, "batch");
+        assert_eq!(contract.target, "2 items");
+        assert_eq!(
+            contract.available_policies,
+            vec![
+                "replace".to_string(),
+                "keep-both".to_string(),
+                "skip".to_string()
+            ]
+        );
+        assert_eq!(contract.review_rows.len(), 2);
+        assert!(contract
+            .dialog
+            .buttons
+            .iter()
+            .any(|button| button.id == "merge" && !button.enabled));
+        assert!(contract
+            .as_tsv()
+            .contains("\noperation-conflict-row\t1\toperation=move\ttarget=/tmp/directory-target\tkind=directory\t"));
     }
 
     #[test]
