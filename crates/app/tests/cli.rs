@@ -305,6 +305,8 @@ fn search_typing_session_benchmark_reports_cache_reuse_from_binary() {
     assert!(stdout.contains("\tprefix-cache-hits="), "{stdout}");
     assert!(stdout.contains("\tcontent-cache-hits="), "{stdout}");
     assert!(stdout.contains("\trecord-cache-hits="), "{stdout}");
+    assert!(stdout.contains("\tresult-cache-hits="), "{stdout}");
+    assert!(stdout.contains("\tresult-cache-misses="), "{stdout}");
     assert!(stdout.contains("\tviolations=0\tpassed=true"), "{stdout}");
     assert!(root.join("gfm-search-typing-session-history.tsv").exists());
 
@@ -2139,11 +2141,15 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_session_stderr.contains("\tcontent-cache-misses=1")
             && sidecar_session_stderr.contains("\trecord-cache-hits=0")
             && sidecar_session_stderr.contains("\trecord-cache-misses=1")
+            && sidecar_session_stderr.contains("\tresult-cache-hits=0")
+            && sidecar_session_stderr.contains("\tresult-cache-misses=1")
             && sidecar_session_stderr.contains("sidecar-session-second")
-            && sidecar_session_stderr.contains("\tcontent-cache-hits=1")
+            && sidecar_session_stderr.contains("\tcontent-cache-hits=0")
             && sidecar_session_stderr.contains("\tcontent-cache-misses=0")
-            && sidecar_session_stderr.contains("\trecord-cache-hits=1")
-            && sidecar_session_stderr.contains("\trecord-cache-misses=0"),
+            && sidecar_session_stderr.contains("\trecord-cache-hits=0")
+            && sidecar_session_stderr.contains("\trecord-cache-misses=0")
+            && sidecar_session_stderr.contains("\tresult-cache-hits=1")
+            && sidecar_session_stderr.contains("\tresult-cache-misses=0"),
         "{sidecar_session_stderr}"
     );
     let sidecar_scoped_search = Command::new(env!("CARGO_BIN_EXE_gfm"))

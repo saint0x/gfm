@@ -20,6 +20,7 @@ use std::sync::{
 const SEARCH_ARCHIVE_LOOKUP_CACHE_CAPACITY: usize = 512;
 const SIDECAR_RECORD_CACHE_CAPACITY: usize = 8192;
 const SIDECAR_CONTENT_POSTING_CACHE_CAPACITY: usize = 512;
+const SIDECAR_QUERY_RESULT_CACHE_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SidecarQueryImport {
@@ -72,6 +73,8 @@ pub struct SidecarQuerySessionReport {
     pub content_cache_misses: usize,
     pub record_cache_hits: usize,
     pub record_cache_misses: usize,
+    pub result_cache_hits: usize,
+    pub result_cache_misses: usize,
 }
 
 #[derive(Debug)]
@@ -88,6 +91,9 @@ pub struct SidecarIndexQuerySession {
     record_cache: Mutex<RecordCache>,
     record_cache_hits: AtomicUsize,
     record_cache_misses: AtomicUsize,
+    result_cache: Mutex<LookupCache<SidecarQuerySessionReport>>,
+    result_cache_hits: AtomicUsize,
+    result_cache_misses: AtomicUsize,
 }
 
 impl SidecarIndexQuerySession {
@@ -114,6 +120,9 @@ impl SidecarIndexQuerySession {
             record_cache: Mutex::new(RecordCache::new(SIDECAR_RECORD_CACHE_CAPACITY)),
             record_cache_hits: AtomicUsize::new(0),
             record_cache_misses: AtomicUsize::new(0),
+            result_cache: Mutex::new(LookupCache::new(SIDECAR_QUERY_RESULT_CACHE_CAPACITY)),
+            result_cache_hits: AtomicUsize::new(0),
+            result_cache_misses: AtomicUsize::new(0),
         })
     }
 
@@ -152,6 +161,13 @@ impl SidecarIndexQuerySession {
         (
             self.content_cache_hits.load(Ordering::Relaxed),
             self.content_cache_misses.load(Ordering::Relaxed),
+        )
+    }
+
+    pub fn result_cache_telemetry(&self) -> (usize, usize) {
+        (
+            self.result_cache_hits.load(Ordering::Relaxed),
+            self.result_cache_misses.load(Ordering::Relaxed),
         )
     }
 
@@ -229,6 +245,19 @@ impl SidecarIndexQuerySession {
         cancellation: &Cancellation,
     ) -> Result<SidecarQuerySessionReport> {
         cancellation.check()?;
+        let result_cache_key = query_result_cache_key(query, limit, scope, budget);
+        if let Some(mut report) = self.result_cache_lock().get(&result_cache_key) {
+            self.result_cache_hits.fetch_add(1, Ordering::Relaxed);
+            report.search.lookup = SearchLookupTelemetry::default();
+            report.content_cache_hits = 0;
+            report.content_cache_misses = 0;
+            report.record_cache_hits = 0;
+            report.record_cache_misses = 0;
+            report.result_cache_hits = 1;
+            report.result_cache_misses = 0;
+            return Ok(report);
+        }
+        self.result_cache_misses.fetch_add(1, Ordering::Relaxed);
         let content_hits_before = self.content_cache_hits.load(Ordering::Relaxed);
         let content_misses_before = self.content_cache_misses.load(Ordering::Relaxed);
         let parsed = gfm_search::SearchQuery::parse(query);
@@ -268,7 +297,7 @@ impl SidecarIndexQuerySession {
             budget,
             cancellation,
         )?;
-        Ok(SidecarQuerySessionReport {
+        let report = SidecarQuerySessionReport {
             hydration,
             search,
             content_cache_hits: self
@@ -287,7 +316,12 @@ impl SidecarIndexQuerySession {
                 .record_cache_misses
                 .load(Ordering::Relaxed)
                 .saturating_sub(cache_misses_before),
-        })
+            result_cache_hits: 0,
+            result_cache_misses: 1,
+        };
+        self.result_cache_lock()
+            .insert(result_cache_key, report.clone());
+        Ok(report)
     }
 
     fn content_postings_for_terms(
@@ -596,6 +630,12 @@ impl SidecarIndexQuerySession {
 
     fn record_cache_lock(&self) -> MutexGuard<'_, RecordCache> {
         self.record_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn result_cache_lock(&self) -> MutexGuard<'_, LookupCache<SidecarQuerySessionReport>> {
+        self.result_cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -1472,6 +1512,43 @@ fn bounded_volume_posting_cache_key(term: &str, volume: VolumeId, limit: usize) 
     format!("{limit}:volume={}:{}", volume.0, term)
 }
 
+fn query_result_cache_key(
+    query: &str,
+    limit: usize,
+    scope: &SearchVolumeScope,
+    budget: SearchLookupBudget,
+) -> String {
+    format!(
+        "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        query,
+        limit,
+        search_volume_scope_cache_key(scope),
+        budget.max_prefix_ids_per_term,
+        budget.min_archive_prefix_chars,
+        budget.max_substring_grams_per_term,
+        budget.max_substring_ids_per_gram,
+        budget.max_fuzzy_keys_per_term,
+        budget.max_fuzzy_terms_per_key,
+        budget.max_fuzzy_candidates_per_term,
+        budget.max_metadata_ids_per_term,
+        budget.max_content_ids_per_term
+    )
+}
+
+fn search_volume_scope_cache_key(scope: &SearchVolumeScope) -> String {
+    match scope {
+        SearchVolumeScope::All => "all".to_string(),
+        SearchVolumeScope::Only(volumes) => {
+            let mut key = String::from("only:");
+            for volume in volumes {
+                key.push_str(&volume.0.to_string());
+                key.push(',');
+            }
+            key
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1511,12 +1588,28 @@ mod tests {
         assert_eq!(first.search.hits.len(), 1);
 
         poison_sidecar_record_cache(&session);
-        let second = session.search("finderlatency", 5).unwrap();
+        let second = session.search("finderlatency", 6).unwrap();
 
         assert_eq!(second.search.hits.len(), 1);
         assert_eq!(second.search.hits[0].record.id, fixture.record.id);
         assert_eq!(second.content_cache_hits, 1);
         assert_eq!(second.record_cache_hits, 1);
+    }
+
+    #[test]
+    fn sidecar_session_reuses_exact_query_results() {
+        let fixture = SidecarFixture::new("result-cache");
+        let session = fixture.session();
+
+        let first = session.search("finderlatency", 5).unwrap();
+        let second = session.search("finderlatency", 5).unwrap();
+
+        assert_eq!(first.search.hits, second.search.hits);
+        assert_eq!(first.result_cache_hits, 0);
+        assert_eq!(first.result_cache_misses, 1);
+        assert_eq!(second.result_cache_hits, 1);
+        assert_eq!(second.result_cache_misses, 0);
+        assert_eq!(session.result_cache_telemetry(), (1, 1));
     }
 
     #[test]
@@ -1619,8 +1712,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(cached.search.hits.len(), 1);
-        assert_eq!(cached.content_cache_hits, 1);
-        assert_eq!(cached.content_cache_misses, 0);
+        assert_eq!(cached.result_cache_hits, 1);
+        assert_eq!(cached.result_cache_misses, 0);
     }
 
     #[test]

@@ -840,9 +840,11 @@ fn sidecar_query_session_reuses_mmap_archives_and_lookup_cache() {
 
     let first = session.search("finderlatency", 5).unwrap();
     let lookup_before_second = session.lookup_telemetry();
+    let result_cache_before_second = session.result_cache_telemetry();
     let record_cache_before_second = session.record_cache_telemetry();
     let second = session.search("finderlatency", 5).unwrap();
     let lookup_after_second = session.lookup_telemetry();
+    let result_cache_after_second = session.result_cache_telemetry();
     let record_cache_after_second = session.record_cache_telemetry();
 
     assert_eq!(session.indexed_records(), 1);
@@ -852,20 +854,27 @@ fn sidecar_query_session_reuses_mmap_archives_and_lookup_cache() {
     assert_eq!(second.hydration.records_loaded, 1);
     assert_eq!(first.record_cache_hits, 0);
     assert_eq!(first.record_cache_misses, 1);
-    assert_eq!(second.record_cache_hits, 1);
+    assert_eq!(second.record_cache_hits, 0);
     assert_eq!(second.record_cache_misses, 0);
     assert_eq!(first.content_cache_hits, 0);
     assert_eq!(first.content_cache_misses, 1);
-    assert_eq!(second.content_cache_hits, 1);
+    assert_eq!(second.content_cache_hits, 0);
     assert_eq!(second.content_cache_misses, 0);
-    assert!(record_cache_after_second.0 > record_cache_before_second.0);
-    assert!(lookup_after_second.prefix_cache_hits > lookup_before_second.prefix_cache_hits);
+    assert_eq!(first.result_cache_hits, 0);
+    assert_eq!(first.result_cache_misses, 1);
+    assert_eq!(second.result_cache_hits, 1);
+    assert_eq!(second.result_cache_misses, 0);
+    assert_eq!(record_cache_after_second, record_cache_before_second);
+    assert_eq!(lookup_after_second, lookup_before_second);
+    assert!(result_cache_after_second.0 > result_cache_before_second.0);
 
     let absent_first = session.search("absentsidecarcontentneedle", 5).unwrap();
     let absent_content_before_second = session.content_cache_telemetry();
+    let absent_result_before_second = session.result_cache_telemetry();
     let absent_record_before_second = session.record_cache_telemetry();
     let absent_second = session.search("absentsidecarcontentneedle", 5).unwrap();
     let absent_content_after_second = session.content_cache_telemetry();
+    let absent_result_after_second = session.result_cache_telemetry();
     let absent_record_after_second = session.record_cache_telemetry();
 
     assert!(absent_first.search.hits.is_empty());
@@ -874,10 +883,15 @@ fn sidecar_query_session_reuses_mmap_archives_and_lookup_cache() {
     assert_eq!(absent_second.hydration.records_loaded, 0);
     assert_eq!(absent_first.content_cache_hits, 0);
     assert_eq!(absent_first.content_cache_misses, 1);
-    assert_eq!(absent_second.content_cache_hits, 1);
+    assert_eq!(absent_second.content_cache_hits, 0);
     assert_eq!(absent_second.content_cache_misses, 0);
+    assert_eq!(absent_first.result_cache_hits, 0);
+    assert_eq!(absent_first.result_cache_misses, 1);
+    assert_eq!(absent_second.result_cache_hits, 1);
+    assert_eq!(absent_second.result_cache_misses, 0);
     assert_eq!(absent_record_after_second, absent_record_before_second);
-    assert!(absent_content_after_second.0 > absent_content_before_second.0);
+    assert_eq!(absent_content_after_second, absent_content_before_second);
+    assert!(absent_result_after_second.0 > absent_result_before_second.0);
 
     fs::remove_file(records_path).unwrap();
     fs::remove_file(columns_path).unwrap();

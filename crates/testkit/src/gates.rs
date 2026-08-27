@@ -270,6 +270,8 @@ pub struct SearchTypingSessionBenchmarkReport {
     pub content_cache_misses: usize,
     pub record_cache_hits: usize,
     pub record_cache_misses: usize,
+    pub result_cache_hits: usize,
+    pub result_cache_misses: usize,
     pub violations: Vec<SearchTypingBenchmarkViolation>,
     pub passed: bool,
 }
@@ -588,6 +590,8 @@ pub fn run_search_typing_session_benchmark(
     let mut content_cache_misses = 0usize;
     let mut record_cache_hits = 0usize;
     let mut record_cache_misses = 0usize;
+    let mut result_cache_hits = 0usize;
+    let mut result_cache_misses = 0usize;
     for _ in 0..repetitions {
         for query in &queries {
             let lookup_before = session.lookup_telemetry();
@@ -602,6 +606,8 @@ pub fn run_search_typing_session_benchmark(
             content_cache_misses += report.content_cache_misses;
             record_cache_hits += report.record_cache_hits;
             record_cache_misses += report.record_cache_misses;
+            result_cache_hits += report.result_cache_hits;
+            result_cache_misses += report.result_cache_misses;
         }
     }
 
@@ -613,10 +619,11 @@ pub fn run_search_typing_session_benchmark(
     let violations = evaluate_search_typing_session_benchmark(
         p95,
         &lookup_telemetry,
-        content_cache_hits,
-        content_cache_misses,
-        record_cache_hits,
-        record_cache_misses,
+        SearchTypingSessionCacheReuse {
+            content_hits: content_cache_hits,
+            record_hits: record_cache_hits,
+            result_hits: result_cache_hits,
+        },
         options.max_p95_latency,
     );
     let passed = violations.is_empty();
@@ -642,6 +649,8 @@ pub fn run_search_typing_session_benchmark(
         content_cache_misses,
         record_cache_hits,
         record_cache_misses,
+        result_cache_hits,
+        result_cache_misses,
         violations: violations.len(),
         passed,
     })?;
@@ -667,6 +676,8 @@ pub fn run_search_typing_session_benchmark(
         content_cache_misses,
         record_cache_hits,
         record_cache_misses,
+        result_cache_hits,
+        result_cache_misses,
         violations,
         passed,
     })
@@ -833,14 +844,12 @@ fn evaluate_search_typing_benchmark(
 fn evaluate_search_typing_session_benchmark(
     p95: Duration,
     telemetry: &SearchLookupTelemetry,
-    content_cache_hits: usize,
-    _content_cache_misses: usize,
-    record_cache_hits: usize,
-    _record_cache_misses: usize,
+    cache: SearchTypingSessionCacheReuse,
     max_p95_latency: Duration,
 ) -> Vec<SearchTypingBenchmarkViolation> {
     let mut violations = evaluate_search_typing_benchmark(p95, telemetry, max_p95_latency);
-    if telemetry.prefix_cache_hits == 0
+    if cache.result_hits == 0
+        && telemetry.prefix_cache_hits == 0
         && telemetry.substring_cache_hits == 0
         && telemetry.fuzzy_cache_hits == 0
     {
@@ -848,17 +857,24 @@ fn evaluate_search_typing_session_benchmark(
             cache: "sidecar-lookup",
         });
     }
-    if content_cache_hits == 0 {
+    if cache.content_hits == 0 && cache.result_hits == 0 {
         violations.push(SearchTypingBenchmarkViolation::SessionCacheNotReused {
             cache: "content-posting",
         });
     }
-    if record_cache_hits == 0 {
+    if cache.record_hits == 0 && cache.result_hits == 0 {
         violations.push(SearchTypingBenchmarkViolation::SessionCacheNotReused {
             cache: "record-hydration",
         });
     }
     violations
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SearchTypingSessionCacheReuse {
+    content_hits: usize,
+    record_hits: usize,
+    result_hits: usize,
 }
 
 fn incremental_queries(query: &str, min_chars: usize) -> Vec<String> {
@@ -932,6 +948,8 @@ struct SearchTypingSessionHistoryRow<'a> {
     content_cache_misses: usize,
     record_cache_hits: usize,
     record_cache_misses: usize,
+    result_cache_hits: usize,
+    result_cache_misses: usize,
     violations: usize,
     passed: bool,
 }
@@ -1019,7 +1037,7 @@ fn append_search_typing_session_history(row: SearchTypingSessionHistoryRow<'_>) 
     }
     writeln!(
         file,
-        "search-typing-session-history\trun={run}\trecords={}\tindexed-records={}\tindexed-prefixes={}\tindexed-substring-grams={}\tindexed-fuzzy-keys={}\trepetitions={}\tqueries={}\tsamples={}\thits={}\tlimit={}\tp50-ns={}\tp95-ns={}\tp99-ns={}\tmax-ns={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tcontent-cache-hits={}\tcontent-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}\tprefix-truncated={}\tsubstring-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
+        "search-typing-session-history\trun={run}\trecords={}\tindexed-records={}\tindexed-prefixes={}\tindexed-substring-grams={}\tindexed-fuzzy-keys={}\trepetitions={}\tqueries={}\tsamples={}\thits={}\tlimit={}\tp50-ns={}\tp95-ns={}\tp99-ns={}\tmax-ns={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tcontent-cache-hits={}\tcontent-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}\tresult-cache-hits={}\tresult-cache-misses={}\tprefix-truncated={}\tsubstring-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
         row.options.records,
         row.indexed_records,
         row.indexed_prefixes,
@@ -1044,6 +1062,8 @@ fn append_search_typing_session_history(row: SearchTypingSessionHistoryRow<'_>) 
         row.content_cache_misses,
         row.record_cache_hits,
         row.record_cache_misses,
+        row.result_cache_hits,
+        row.result_cache_misses,
         row.telemetry.prefix_truncated_terms,
         row.telemetry.substring_term_truncated_grams + row.telemetry.substring_truncated_grams,
         row.telemetry.fuzzy_term_truncated_keys
@@ -1753,9 +1773,10 @@ mod tests {
         assert!(report.indexed_prefixes > 0);
         assert!(report.indexed_substring_grams > 0);
         assert!(report.indexed_fuzzy_keys > 0);
-        assert!(report.lookup.prefix_cache_hits > 0);
-        assert!(report.content_cache_hits > 0);
-        assert!(report.record_cache_hits > 0);
+        assert!(report.result_cache_hits > 0);
+        assert_eq!(report.result_cache_misses, 0);
+        assert_eq!(report.content_cache_hits, 0);
+        assert_eq!(report.record_cache_hits, 0);
         assert!(report.p95 >= report.p50);
         assert!(report.p99 >= report.p95);
         assert!(report.max >= report.p99);
@@ -1771,7 +1792,7 @@ mod tests {
         let history = fs::read_to_string(&report.history_path).unwrap();
         assert!(history.contains("search-typing-session-thresholds\tmax-p95-ns="));
         assert!(history.contains("search-typing-session-history\trun=1"));
-        assert!(history.contains("\tcontent-cache-hits="));
+        assert!(history.contains("\tresult-cache-hits="));
         assert!(history.contains("\trecord-cache-hits="));
 
         fs::remove_dir_all(root).unwrap();
@@ -1799,10 +1820,7 @@ mod tests {
         let violations = evaluate_search_typing_session_benchmark(
             Duration::from_millis(1),
             &SearchLookupTelemetry::default(),
-            0,
-            4,
-            0,
-            2,
+            SearchTypingSessionCacheReuse::default(),
             Duration::from_secs(1),
         );
 
