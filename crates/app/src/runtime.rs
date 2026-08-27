@@ -208,6 +208,7 @@ fn drain_single_runtime_job(scheduler: &mut Scheduler, job: Job, label: &str) ->
 pub(crate) struct RuntimeJobHandle {
     progress_store: Option<JobProgressStore>,
     snapshot: JobProgressSnapshot,
+    last_progress: Arc<Mutex<JobProgressSnapshot>>,
 }
 
 impl RuntimeJobHandle {
@@ -264,34 +265,21 @@ impl RuntimeJobHandle {
         }
         Ok(Self {
             progress_store,
-            snapshot,
+            snapshot: snapshot.clone(),
+            last_progress: Arc::new(Mutex::new(snapshot)),
         })
     }
 
     pub(crate) fn running(&self) -> Result<()> {
-        if let Some(store) = &self.progress_store {
-            let _access = preflight_runtime_write(store.path(), &self.snapshot.label)?;
-            store.upsert(self.snapshot.clone().with_progress(
-                JobProgressState::Running,
-                0,
-                self.snapshot.detail.clone(),
-                job_timestamp_ms(),
-            ))?;
-        }
-        Ok(())
+        self.persist_progress(JobProgressState::Running, 0, self.snapshot.detail.clone())
     }
 
     pub(crate) fn deferred(&self, action: SchedulingAction) -> Result<()> {
-        if let Some(store) = &self.progress_store {
-            let _access = preflight_runtime_write(store.path(), &self.snapshot.label)?;
-            store.upsert(self.snapshot.clone().with_progress(
-                JobProgressState::Paused,
-                0,
-                format!("deferred:{}", action.as_str()),
-                job_timestamp_ms(),
-            ))?;
-        }
-        Ok(())
+        self.persist_progress(
+            JobProgressState::Paused,
+            0,
+            format!("deferred:{}", action.as_str()),
+        )
     }
 
     pub(crate) fn progress(
@@ -300,35 +288,141 @@ impl RuntimeJobHandle {
         completed_units: u64,
         detail: impl Into<String>,
     ) -> Result<()> {
-        if let Some(store) = &self.progress_store {
-            let _access = preflight_runtime_write(store.path(), &self.snapshot.label)?;
-            store.upsert(self.snapshot.clone().with_progress(
-                state,
-                completed_units,
-                detail,
-                job_timestamp_ms(),
-            ))?;
-        }
-        Ok(())
+        self.persist_progress(state, completed_units, detail)
     }
 
     pub(crate) fn finish(&self, status: &TaskStatus) -> Result<()> {
-        if let Some(store) = &self.progress_store {
-            let _access = preflight_runtime_write(store.path(), &self.snapshot.label)?;
-            let (completed_units, detail) = match status {
-                TaskStatus::Started => (0, "still-running".to_string()),
-                TaskStatus::Completed => (self.snapshot.total_units, "completed".to_string()),
-                TaskStatus::Cancelled => (0, "cancelled".to_string()),
-                TaskStatus::Failed(message) => (0, message.clone()),
-            };
-            store.upsert(self.snapshot.clone().with_progress(
-                JobProgressState::from(status),
-                completed_units,
-                detail,
-                job_timestamp_ms(),
-            ))?;
+        let (completed_units, detail) = match status {
+            TaskStatus::Started => (0, "still-running".to_string()),
+            TaskStatus::Completed => (self.snapshot.total_units, "completed".to_string()),
+            TaskStatus::Cancelled => (0, "cancelled".to_string()),
+            TaskStatus::Failed(message) => (0, message.clone()),
+        };
+        self.persist_progress(JobProgressState::from(status), completed_units, detail)
+    }
+
+    fn persist_progress(
+        &self,
+        state: JobProgressState,
+        completed_units: u64,
+        detail: impl Into<String>,
+    ) -> Result<()> {
+        let Some(store) = &self.progress_store else {
+            return Ok(());
+        };
+        let snapshot =
+            self.snapshot
+                .clone()
+                .with_progress(state, completed_units, detail, job_timestamp_ms());
+        {
+            let last = self
+                .last_progress
+                .lock()
+                .expect("runtime job progress lock poisoned");
+            if progress_semantics_equal(&last, &snapshot) {
+                return Ok(());
+            }
         }
+
+        let _access = preflight_runtime_write(store.path(), &self.snapshot.label)?;
+        store.upsert(snapshot.clone())?;
+        *self
+            .last_progress
+            .lock()
+            .expect("runtime job progress lock poisoned") = snapshot;
         Ok(())
+    }
+}
+
+fn progress_semantics_equal(left: &JobProgressSnapshot, right: &JobProgressSnapshot) -> bool {
+    left.id == right.id
+        && left.class == right.class
+        && left.priority == right.priority
+        && left.label == right.label
+        && left.volume == right.volume
+        && left.state == right.state
+        && left.completed_units == right.completed_units
+        && left.total_units == right.total_units
+        && left.detail == right.detail
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gfm_jobs::{JobClass, JobId};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn progress_semantics_ignore_timestamp_only_drift() {
+        let first = sample_progress_snapshot(JobId::from_raw(7)).with_progress(
+            JobProgressState::Running,
+            1,
+            "copying",
+            100,
+        );
+        let second = sample_progress_snapshot(JobId::from_raw(7)).with_progress(
+            JobProgressState::Running,
+            1,
+            "copying",
+            200,
+        );
+
+        assert!(progress_semantics_equal(&first, &second));
+    }
+
+    #[test]
+    fn runtime_progress_skips_repeated_semantic_update_across_clones() {
+        let path = temp_path("gfm-runtime-progress-noop", "gfmprogress");
+        let store = JobProgressStore::new(&path);
+        let initial = sample_progress_snapshot(JobId::from_raw(11)).with_progress(
+            JobProgressState::Planned,
+            0,
+            "foreground:copy",
+            10,
+        );
+        store.write_all(std::slice::from_ref(&initial)).unwrap();
+        let handle = RuntimeJobHandle {
+            progress_store: Some(store.clone()),
+            snapshot: initial.clone(),
+            last_progress: Arc::new(Mutex::new(initial)),
+        };
+        let cloned = handle.clone();
+
+        handle.running().unwrap();
+        let before_noop = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        cloned.running().unwrap();
+
+        let after_noop = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let snapshots = store.read().unwrap();
+        assert_eq!(before_noop, after_noop);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].state, JobProgressState::Running);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    fn sample_progress_snapshot(id: JobId) -> JobProgressSnapshot {
+        JobProgressSnapshot::new(
+            id,
+            JobClass::Foreground,
+            Priority::Interactive,
+            "copy selected files",
+            Some(VolumeId(2)),
+            10,
+        )
+    }
+
+    fn temp_path(prefix: &str, extension: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "{}-{}-{}.{}",
+            prefix,
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst),
+            extension
+        ))
     }
 }
 
