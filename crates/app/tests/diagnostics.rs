@@ -113,6 +113,88 @@ fn diagnostics_rebuild_refuses_unreachable_volume_before_writing_indexes_from_bi
 }
 
 #[test]
+fn diagnostics_rebuild_adaptive_defers_before_unreachable_volume_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-rebuild-adaptive-unreachable");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(root.join("needle.md"), "diagnostic needle").unwrap();
+    let records = root.join("records.gfmidx");
+    let content = root.join("content.gfmcontent");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-index-rebuild-adaptive",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            "saturated",
+            "critical",
+            "low",
+            "active",
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("records.gfmidx"), "{stdout}");
+    assert!(
+        stderr.contains("index-rebuild-deferred") && stderr.contains("action=Defer"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!records.exists());
+    assert!(!content.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn adaptive_diagnostics_rebuild_refuses_unreachable_outputs_before_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-rebuild-adaptive-root");
+    let offline = unique_temp_dir("gfm-cli-diagnostics-rebuild-adaptive-offline");
+    fs::write(root.join("needle.md"), "diagnostic needle").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = offline.join("records.gfmidx");
+    let content = offline.join("content.gfmcontent");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-index-rebuild-adaptive",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("records.gfmidx"), "{stdout}");
+    assert!(
+        stderr.contains("index rebuild records volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!records.exists());
+    assert!(!content.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn diagnostics_trace_and_storage_refuse_unreachable_paths_before_io_from_binary() {
     let offline = unique_temp_dir("gfm-cli-diagnostics-io-preflight-offline");
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
@@ -305,6 +387,97 @@ fn diagnostics_recover_refuses_unreachable_volume_before_repair_from_binary() {
     assert!(!quarantine.exists());
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn diagnostics_recover_adaptive_defers_before_unreachable_volume_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-recovery-adaptive-unreachable");
+    let records = root.join("records.gfmidx");
+    let state = root.join("state.gfmstate");
+    let quarantine = root.join("quarantine");
+    fs::write(&records, "not-records").unwrap();
+    fs::write(&state, "not-state").unwrap();
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-index-recover-adaptive",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+            "saturated",
+            "critical",
+            "low",
+            "active",
+            quarantine.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("persistent-index-recovery"), "{stdout}");
+    assert!(
+        stderr.contains("persistent-index-recovery-deferred") && stderr.contains("action=Defer"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&records).unwrap(), "not-records");
+    assert_eq!(fs::read_to_string(&state).unwrap(), "not-state");
+    assert!(!quarantine.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn adaptive_diagnostics_recover_refuses_unreachable_outputs_before_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-recovery-adaptive-root");
+    let offline = unique_temp_dir("gfm-cli-diagnostics-recovery-adaptive-offline");
+    fs::write(root.join("needle.md"), "diagnostic needle").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = offline.join("records.gfmidx");
+    let state = offline.join("state.gfmstate");
+    let quarantine = offline.join("quarantine");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-index-recover-adaptive",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+            quarantine.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("persistent-index-recovery"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "persistent index repair records volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!records.exists());
+    assert!(!state.exists());
+    assert!(!quarantine.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
 }
 
 #[test]

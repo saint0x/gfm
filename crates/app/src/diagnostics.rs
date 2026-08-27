@@ -1,5 +1,8 @@
 use crate::access::{preflight_access_scope, ScopedAccessGuard};
-use crate::runtime::{run_scheduled_volume_task_cancellable, run_volume_task_cancellable};
+use crate::runtime::{
+    run_scheduled_volume_task_cancellable, run_scheduled_volume_task_cancellable_with_volume,
+    run_volume_task_cancellable,
+};
 use crate::{
     config_store, detect_volume_id, existing_read_probe_path, parent_volume,
     parse_required_scheduling_pressure, preflight_config_write, required_path,
@@ -10,7 +13,7 @@ use gfm_diagnostics::{
     StorageInspection,
 };
 use gfm_index::PersistentIndexRecovery;
-use gfm_jobs::Priority;
+use gfm_jobs::{Priority, SchedulingAction};
 use gfm_mac::AccessIntent;
 use gfm_types::{GfmError, Result};
 use std::path::{Path, PathBuf};
@@ -56,17 +59,37 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Some(content) => RebuildSpec::with_content(root, records, PathBuf::from(content)),
                 None => RebuildSpec::records(root, records),
             };
-            let volume = detect_volume_id(&spec.root)
-                .ok()
-                .or_else(|| parent_volume(&spec.records_path));
-            let _access = retain_rebuild_access(&spec)?;
-            let outcome = run_scheduled_volume_task_cancellable(
-                volume,
-                Priority::Background,
-                "index rebuild",
-                pressure,
-                move |cancellation| rebuild_index_cancellable(&spec, &cancellation),
-            )?;
+            let outcome =
+                if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
+                    run_scheduled_volume_task_cancellable(
+                        None,
+                        Priority::Background,
+                        "index rebuild",
+                        pressure,
+                        move |cancellation| rebuild_index_cancellable(&spec, &cancellation),
+                    )?
+                } else {
+                    let volume_spec = spec.clone();
+                    run_scheduled_volume_task_cancellable_with_volume(
+                        Priority::Background,
+                        "index rebuild",
+                        pressure,
+                        move || {
+                            let _access = preflight_access_scope(
+                                &volume_spec.root,
+                                AccessIntent::Index,
+                                "index rebuild root",
+                            )?;
+                            Ok(detect_volume_id(&volume_spec.root)
+                                .ok()
+                                .or_else(|| parent_volume(&volume_spec.records_path)))
+                        },
+                        move |cancellation| {
+                            let _access = retain_rebuild_access(&spec)?;
+                            rebuild_index_cancellable(&spec, &cancellation)
+                        },
+                    )?
+                };
             if outcome.deferred {
                 eprintln!(
                     "index-rebuild-deferred\taction={:?}",
@@ -150,17 +173,37 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or_else(|| records.with_extension("quarantine"));
             let spec = PersistentIndexRecoverySpec::new(root, records, state, quarantine);
-            let volume = detect_volume_id(&spec.root)
-                .ok()
-                .or_else(|| parent_volume(&spec.records_path));
-            let _access = retain_recovery_access(&spec)?;
-            let outcome = run_scheduled_volume_task_cancellable(
-                volume,
-                Priority::Background,
-                "persistent index repair",
-                pressure,
-                move |cancellation| recover_index_cancellable(&spec, &cancellation),
-            )?;
+            let outcome =
+                if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
+                    run_scheduled_volume_task_cancellable(
+                        None,
+                        Priority::Background,
+                        "persistent index repair",
+                        pressure,
+                        move |cancellation| recover_index_cancellable(&spec, &cancellation),
+                    )?
+                } else {
+                    let volume_spec = spec.clone();
+                    run_scheduled_volume_task_cancellable_with_volume(
+                        Priority::Background,
+                        "persistent index repair",
+                        pressure,
+                        move || {
+                            let _access = preflight_access_scope(
+                                &volume_spec.root,
+                                AccessIntent::Index,
+                                "persistent index repair root",
+                            )?;
+                            Ok(detect_volume_id(&volume_spec.root)
+                                .ok()
+                                .or_else(|| parent_volume(&volume_spec.records_path)))
+                        },
+                        move |cancellation| {
+                            let _access = retain_recovery_access(&spec)?;
+                            recover_index_cancellable(&spec, &cancellation)
+                        },
+                    )?
+                };
             if outcome.deferred {
                 eprintln!(
                     "persistent-index-recovery-deferred\taction={:?}",
