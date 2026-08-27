@@ -135,6 +135,50 @@ pub struct Scheduler {
     cancelled: HashSet<JobId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeCancellationReport {
+    pub volume: VolumeId,
+    pub class: Option<JobClass>,
+    pub cancelled: Vec<CancelledJob>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CancelledJob {
+    pub id: JobId,
+    pub label: String,
+    pub class: JobClass,
+    pub priority: Priority,
+}
+
+impl VolumeCancellationReport {
+    pub fn as_tsv(&self) -> String {
+        let header = format!(
+            "volume-job-cancellation\tvolume={}\tclass={}\tcancelled={}",
+            self.volume.0,
+            self.class.map(JobClass::as_str).unwrap_or("-"),
+            self.cancelled.len()
+        );
+        if self.cancelled.is_empty() {
+            return header;
+        }
+        let jobs = self
+            .cancelled
+            .iter()
+            .map(|job| {
+                format!(
+                    "cancelled-job\t{}\t{}\t{}\t{}",
+                    job.id.value(),
+                    job.class.as_str(),
+                    job.priority.as_str(),
+                    escape(&job.label)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{header}\n{jobs}")
+    }
+}
+
 impl Scheduler {
     pub fn new() -> Self {
         Self::default()
@@ -275,6 +319,36 @@ impl Scheduler {
 
     pub fn cancel(&mut self, id: JobId) {
         self.cancelled.insert(id);
+    }
+
+    pub fn cancel_volume_jobs(
+        &mut self,
+        volume: VolumeId,
+        class: Option<JobClass>,
+    ) -> VolumeCancellationReport {
+        let mut retained = BinaryHeap::new();
+        let mut cancelled = Vec::new();
+        while let Some(QueuedJob(job)) = self.queue.pop() {
+            if job.volume == Some(volume) && class.is_none_or(|class| class == job.class) {
+                self.cancelled.remove(&job.id);
+                job.cancel();
+                cancelled.push(CancelledJob {
+                    id: job.id,
+                    label: job.label,
+                    class: job.class,
+                    priority: job.priority,
+                });
+            } else {
+                retained.push(QueuedJob(job));
+            }
+        }
+        self.queue = retained;
+        cancelled.sort_by_key(|job| job.id.value());
+        VolumeCancellationReport {
+            volume,
+            class,
+            cancelled,
+        }
     }
 
     pub fn pop_next(&mut self) -> Option<Job> {

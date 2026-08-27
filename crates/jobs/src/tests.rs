@@ -178,6 +178,73 @@ fn scheduler_fair_drain_drops_cancelled_jobs_before_planning() {
 }
 
 #[test]
+fn scheduler_cancels_queued_jobs_for_volume_and_class_only() {
+    let mut scheduler = Scheduler::new();
+    let target_volume = VolumeId(7);
+    let other_volume = VolumeId(8);
+    let target_index = scheduler.schedule_on_volume_in_class(
+        Priority::Background,
+        JobClass::Background,
+        "index detached volume",
+        target_volume,
+    );
+    scheduler.schedule_on_volume_in_class(
+        Priority::Visible,
+        JobClass::Visible,
+        "render visible thumbnails",
+        target_volume,
+    );
+    scheduler.schedule_on_volume_in_class(
+        Priority::Background,
+        JobClass::Background,
+        "index other volume",
+        other_volume,
+    );
+
+    let report = scheduler.cancel_volume_jobs(target_volume, Some(JobClass::Background));
+
+    assert_eq!(report.volume, target_volume);
+    assert_eq!(report.class, Some(JobClass::Background));
+    assert_eq!(report.cancelled.len(), 1);
+    assert_eq!(report.cancelled[0].id, target_index.id);
+    assert!(target_index.cancellation().is_cancelled());
+    assert!(report.as_tsv().contains("cancelled=1\ncancelled-job\t"));
+
+    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    assert_eq!(
+        plan.labels(),
+        ["render visible thumbnails", "index other volume"]
+    );
+}
+
+#[test]
+fn scheduler_volume_cancellation_cancels_every_class_when_unfiltered() {
+    let mut scheduler = Scheduler::new();
+    let volume = VolumeId(9);
+    let visible = scheduler.schedule_on_volume_in_class(
+        Priority::Visible,
+        JobClass::Visible,
+        "preview\nselected",
+        volume,
+    );
+    let repair = scheduler.schedule_on_volume_in_class(
+        Priority::Background,
+        JobClass::Repair,
+        "repair\tindex",
+        volume,
+    );
+
+    let report = scheduler.cancel_volume_jobs(volume, None);
+
+    assert_eq!(report.cancelled.len(), 2);
+    assert!(visible.cancellation().is_cancelled());
+    assert!(repair.cancellation().is_cancelled());
+    assert!(report.as_tsv().contains("preview\\nselected"));
+    assert!(report.as_tsv().contains("repair\\tindex"));
+    assert!(scheduler.drain_ready().is_empty());
+}
+
+#[test]
 fn progress_store_round_trips_and_restores_active_snapshots() {
     let path = temp_path("gfm-job-progress", "gfmprogress");
     let store = JobProgressStore::new(&path);

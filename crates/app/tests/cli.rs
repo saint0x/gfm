@@ -6389,6 +6389,29 @@ fn reports_structured_cancellation_tree_from_binary() {
     );
 }
 
+#[test]
+fn reports_volume_scoped_job_cancellation_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("jobs-cancel-volume")
+        .arg("7")
+        .arg("background")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.starts_with("volume-job-cancellation\tvolume=7\tclass=background\tcancelled=1\n")
+    );
+    assert!(stdout.contains("cancelled-job\t1\tbackground\tbackground\tindex detached volume"));
+    assert!(!stdout.contains("render visible thumbnails"));
+    assert!(!stdout.contains("index mounted volume"));
+}
+
 fn run_gfm<const N: usize>(journal: &std::path::Path, args: [&str; N]) {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_OPS_JOURNAL", journal)

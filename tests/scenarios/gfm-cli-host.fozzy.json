@@ -1779,6 +1779,29 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-cancel-volume",
+        "7",
+        "background"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-job-cancellation\tvolume=7\tclass=background\tcancelled=1\ncancelled-job\t1\tbackground\tbackground\tindex detached volume\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-cancel-volume",
+        "7",
+        "background"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-host.icns",
       "data": "icns-test"

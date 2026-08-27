@@ -617,6 +617,7 @@ fn print_usage() {
   gfm jobs-progress-control <progress.gfmprogress> <job-id> <pause|resume|stop> [updated-ms]
   gfm jobs-payload-restore-plan <catalog.gfmjobs> <progress.gfmprogress> [updated-ms]
   gfm jobs-cancel-tree
+  gfm jobs-cancel-volume <volume-id> [foreground|visible|background|maintenance|repair]
   gfm jobs-runtime-retry-probe <attempt-state> [<nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>]
   gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
   gfm watch-once <root>

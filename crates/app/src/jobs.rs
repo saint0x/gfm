@@ -168,6 +168,23 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 println!("{line}");
             }
         }
+        "jobs-cancel-volume" => {
+            let volume = VolumeId(parse_u64_arg(
+                args.next(),
+                "jobs-cancel-volume requires a volume id",
+            )?);
+            let class = args
+                .next()
+                .map(|value| {
+                    JobClass::parse(&value)
+                        .ok_or_else(|| GfmError::Format(format!("unsupported job class `{value}`")))
+                })
+                .transpose()?;
+            println!(
+                "{}",
+                sample_volume_cancellation_report(volume, class).as_tsv()
+            );
+        }
         "jobs-runtime-retry-probe" => {
             let state = required_path(
                 args.next(),
@@ -314,6 +331,32 @@ fn sample_fairness_plan() -> gfm_jobs::JobFairnessPlan {
             .with_quota(JobClass::Repair, 1),
         [],
     )
+}
+
+fn sample_volume_cancellation_report(
+    volume: VolumeId,
+    class: Option<JobClass>,
+) -> gfm_jobs::VolumeCancellationReport {
+    let mut scheduler = Scheduler::new();
+    scheduler.schedule_on_volume_in_class(
+        Priority::Background,
+        JobClass::Background,
+        "index detached volume",
+        volume,
+    );
+    scheduler.schedule_on_volume_in_class(
+        Priority::Visible,
+        JobClass::Visible,
+        "render visible thumbnails",
+        volume,
+    );
+    scheduler.schedule_on_volume_in_class(
+        Priority::Background,
+        JobClass::Background,
+        "index mounted volume",
+        VolumeId(volume.0 + 1),
+    );
+    scheduler.cancel_volume_jobs(volume, class)
 }
 
 fn sample_progress_snapshots() -> Vec<JobProgressSnapshot> {
