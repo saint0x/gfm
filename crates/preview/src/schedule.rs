@@ -179,12 +179,16 @@ impl PreviewSchedulingPolicy {
 }
 
 pub struct PreviewScheduler {
+    base_policy: PreviewSchedulingPolicy,
     policy: PreviewSchedulingPolicy,
     inflight: HashMap<PreviewRequestKey, InflightTask>,
+    next_sequence: u64,
 }
 
 struct InflightTask {
     cancellation: Cancellation,
+    priority: PreviewPriority,
+    sequence: u64,
 }
 
 impl PreviewScheduler {
@@ -195,8 +199,10 @@ impl PreviewScheduler {
             ));
         }
         Ok(Self {
+            base_policy: policy,
             policy,
             inflight: HashMap::new(),
+            next_sequence: 0,
         })
     }
 
@@ -247,16 +253,21 @@ impl PreviewScheduler {
 
         for item in desired {
             let key = item.task.key.clone();
-            if self.inflight.contains_key(&key) {
+            if let Some(inflight) = self.inflight.get_mut(&key) {
+                inflight.priority = item.priority;
                 decisions.push(PreviewTaskDecision::Coalesced {
                     key,
                     priority: item.priority,
                 });
             } else {
+                let sequence = self.next_sequence;
+                self.next_sequence = self.next_sequence.saturating_add(1);
                 self.inflight.insert(
                     key.clone(),
                     InflightTask {
                         cancellation: Cancellation::default(),
+                        priority: item.priority,
+                        sequence,
                     },
                 );
                 decisions.push(PreviewTaskDecision::Scheduled {
@@ -266,6 +277,11 @@ impl PreviewScheduler {
             }
         }
         decisions
+    }
+
+    pub fn adapt_to_pressure(&mut self, pressure: SchedulingPressure) -> Vec<PreviewTaskDecision> {
+        self.policy = self.base_policy.adapted_for_pressure(pressure);
+        self.reconcile_inflight_limits("pressure-admission")
     }
 
     pub fn cancellation_for(&self, key: &PreviewRequestKey) -> Option<Cancellation> {
@@ -280,6 +296,10 @@ impl PreviewScheduler {
 
     pub fn inflight_len(&self) -> usize {
         self.inflight.len()
+    }
+
+    pub fn policy(&self) -> PreviewSchedulingPolicy {
+        self.policy
     }
 
     fn apply_limits(&self, desired: Vec<ScheduledTask>) -> Vec<ScheduledTask> {
@@ -297,6 +317,50 @@ impl PreviewScheduler {
                     prefetch <= self.policy.max_prefetch
                 }
                 PreviewPriority::Background => false,
+            })
+            .collect()
+    }
+
+    fn reconcile_inflight_limits(&mut self, reason: &'static str) -> Vec<PreviewTaskDecision> {
+        let mut visible = 0usize;
+        let mut prefetch = 0usize;
+        let mut inflight = self
+            .inflight
+            .iter()
+            .map(|(key, task)| (key.clone(), task.priority, task.sequence))
+            .collect::<Vec<_>>();
+        inflight.sort_by(|a, b| {
+            a.1.score()
+                .cmp(&b.1.score())
+                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| a.0.path.cmp(&b.0.path))
+        });
+
+        let mut cancelled = Vec::new();
+        for (key, priority, _) in inflight {
+            let keep = match priority {
+                PreviewPriority::Visible => {
+                    visible += 1;
+                    visible <= self.policy.max_visible
+                }
+                PreviewPriority::Prefetch => {
+                    prefetch += 1;
+                    prefetch <= self.policy.max_prefetch
+                }
+                PreviewPriority::Background => false,
+            };
+            if !keep {
+                cancelled.push(key);
+            }
+        }
+
+        cancelled
+            .into_iter()
+            .filter_map(|key| {
+                self.inflight.remove(&key).map(|inflight| {
+                    inflight.cancellation.cancel();
+                    PreviewTaskDecision::Cancelled { key, reason }
+                })
             })
             .collect()
     }
@@ -508,6 +572,109 @@ mod tests {
             }
         ));
         assert!(policy.cancel_offscreen);
+    }
+
+    #[test]
+    fn live_pressure_adaptation_cancels_prefetch_over_new_budget() {
+        let policy = PreviewSchedulingPolicy {
+            max_visible: 4,
+            max_prefetch: 4,
+            cancel_offscreen: false,
+        };
+        let mut scheduler = PreviewScheduler::new(policy).unwrap();
+        let visible = task(1, Rect::new(0, 0, 20, 20));
+        let first_prefetch = task(2, Rect::new(0, 120, 20, 20));
+        let second_prefetch = task(3, Rect::new(20, 120, 20, 20));
+        scheduler.schedule(
+            Viewport::new(Rect::new(0, 0, 100, 100), 100),
+            vec![
+                visible.clone(),
+                first_prefetch.clone(),
+                second_prefetch.clone(),
+            ],
+        );
+        let visible_cancel = scheduler
+            .cancellation_for(&visible.key)
+            .expect("visible task is inflight");
+        let first_prefetch_cancel = scheduler
+            .cancellation_for(&first_prefetch.key)
+            .expect("first prefetch task is inflight");
+        let second_prefetch_cancel = scheduler
+            .cancellation_for(&second_prefetch.key)
+            .expect("second prefetch task is inflight");
+
+        let decisions = scheduler.adapt_to_pressure(SchedulingPressure {
+            user_activity: JobUserActivity::Active,
+            ..SchedulingPressure::default()
+        });
+
+        assert_eq!(
+            scheduler.policy(),
+            PreviewSchedulingPolicy {
+                max_visible: 4,
+                max_prefetch: 2,
+                cancel_offscreen: true,
+            }
+        );
+        assert!(decisions.is_empty());
+        assert_eq!(scheduler.inflight_len(), 3);
+        assert!(!visible_cancel.is_cancelled());
+        assert!(!first_prefetch_cancel.is_cancelled());
+        assert!(!second_prefetch_cancel.is_cancelled());
+
+        let decisions = scheduler.adapt_to_pressure(SchedulingPressure {
+            io: JobIoPressure::Saturated,
+            ..SchedulingPressure::default()
+        });
+
+        assert_eq!(
+            decisions,
+            vec![
+                PreviewTaskDecision::Cancelled {
+                    key: first_prefetch.key.clone(),
+                    reason: "pressure-admission",
+                },
+                PreviewTaskDecision::Cancelled {
+                    key: second_prefetch.key.clone(),
+                    reason: "pressure-admission",
+                },
+            ]
+        );
+        assert_eq!(scheduler.inflight_len(), 1);
+        assert!(!visible_cancel.is_cancelled());
+        assert!(first_prefetch_cancel.is_cancelled());
+        assert!(second_prefetch_cancel.is_cancelled());
+    }
+
+    #[test]
+    fn coalesced_visible_work_updates_priority_before_pressure_reconcile() {
+        let policy = PreviewSchedulingPolicy {
+            max_visible: 2,
+            max_prefetch: 1,
+            cancel_offscreen: true,
+        };
+        let mut scheduler = PreviewScheduler::new(policy).unwrap();
+        let task = task(1, Rect::new(0, 120, 20, 20));
+        scheduler.schedule(
+            Viewport::new(Rect::new(0, 0, 100, 100), 100),
+            vec![task.clone()],
+        );
+        let cancellation = scheduler
+            .cancellation_for(&task.key)
+            .expect("prefetch task is inflight");
+
+        scheduler.schedule(
+            Viewport::new(Rect::new(0, 100, 100, 100), 0),
+            vec![task.clone()],
+        );
+        let decisions = scheduler.adapt_to_pressure(SchedulingPressure {
+            io: JobIoPressure::Saturated,
+            ..SchedulingPressure::default()
+        });
+
+        assert!(decisions.is_empty());
+        assert_eq!(scheduler.inflight_len(), 1);
+        assert!(!cancellation.is_cancelled());
     }
 
     fn task(node: u64, rect: Rect) -> PreviewTask {

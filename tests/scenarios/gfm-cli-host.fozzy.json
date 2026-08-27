@@ -4789,6 +4789,8 @@
         "preview-schedule"
       ],
       "exit_code": 0,
+      "stdout": "scheduled\tvisible\nscheduled\tprefetch\ncancelled\tpressure-admission\n",
+      "stderr": "",
       "times": 1
     },
     {

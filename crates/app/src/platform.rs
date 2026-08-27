@@ -10,7 +10,8 @@ use gfm_index::{
     VolumeIndexPolicy, VolumeInvalidationReport,
 };
 use gfm_jobs::{
-    Cancellation, JobClass, JobPayloadKind, JobProgressState, Priority, Scheduler, SchedulingAction,
+    Cancellation, JobClass, JobIoPressure, JobPayloadKind, JobProgressState, Priority, Scheduler,
+    SchedulingAction, SchedulingPressure,
 };
 use gfm_mac::{
     current_host_profile, parse_spotlight_fixture, AccessIntent, CloudStorageState,
@@ -832,6 +833,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     preview_task(3, 0, 260),
                 ],
             ) {
+                println!(
+                    "{}\t{}",
+                    decision.as_str(),
+                    preview_decision_priority(&decision)
+                );
+            }
+            for decision in scheduler.adapt_to_pressure(SchedulingPressure {
+                io: JobIoPressure::Saturated,
+                ..SchedulingPressure::default()
+            }) {
                 println!(
                     "{}\t{}",
                     decision.as_str(),
