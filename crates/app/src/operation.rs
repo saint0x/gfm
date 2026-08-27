@@ -795,11 +795,14 @@ fn operation_volume_copy_policy_from_report(
 }
 
 fn operation_volume_report(operation: &Operation) -> VolumeDiscoveryReport {
-    let mut report = VolumeDiscoveryReport::discover();
+    let mut report = VolumeDiscoveryReport {
+        volumes: Vec::new(),
+    };
     for path in operation_paths(operation) {
-        report
-            .volumes
-            .extend(VolumeDiscoveryReport::for_containing_path(path).volumes);
+        let containing = VolumeDiscoveryReport::for_containing_path(path);
+        if let Some(volume) = containing.volume_for_path(path) {
+            report.volumes.push(volume.clone());
+        }
     }
     report.volumes.sort_by(|left, right| {
         left.path

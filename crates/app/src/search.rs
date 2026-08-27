@@ -522,10 +522,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-ids-mmap-set requires at least one content archive".to_string(),
                 ));
             }
-            let _access =
-                preflight_content_archives_access(&content_paths, "content ids mmap set")?;
-            let archive = MmapContentSet::open(&content_paths)?;
-            print_file_ids(archive.ids_for_term(&term)?);
+            let ids = run_content_archive_set_read(
+                content_paths,
+                "content ids mmap set",
+                move |paths| {
+                    let archive = MmapContentSet::open(&paths)?;
+                    archive.ids_for_term(&term)
+                },
+            )?;
+            print_file_ids(ids);
         }
         "content-ids-mmap-manifest" => {
             let manifest = required_path(
@@ -533,10 +538,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "content-ids-mmap-manifest requires a manifest path",
             )?;
             let term = required_string(args.next(), "content-ids-mmap-manifest requires a term")?;
-            let _access =
-                preflight_content_manifest_access(&manifest, "content ids mmap manifest")?;
-            let archive = MmapContentSet::open_manifest(manifest)?;
-            print_file_ids(archive.ids_for_term(&term)?);
+            let ids = run_content_manifest_read(
+                manifest,
+                "content ids mmap manifest",
+                move |manifest| {
+                    let archive = MmapContentSet::open_manifest(manifest)?;
+                    archive.ids_for_term(&term)
+                },
+            )?;
+            print_file_ids(ids);
         }
         "content-id-block-mmap" => {
             let content =
@@ -779,6 +789,49 @@ where
         cancellation.check()?;
         read(path)
     })
+}
+
+fn run_content_archive_set_read<T>(
+    paths: Vec<PathBuf>,
+    worker: &'static str,
+    read: impl FnOnce(Vec<PathBuf>) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    preflight_content_archive_volumes(&paths, worker)?;
+    let volume = paths.iter().find_map(|path| detect_volume_id(path).ok());
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_content_archives_access(&paths, worker)?;
+        cancellation.check()?;
+        read(paths)
+    })
+}
+
+fn run_content_manifest_read<T>(
+    manifest: PathBuf,
+    worker: &'static str,
+    read: impl FnOnce(PathBuf) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    preflight_volume_access_scope(&manifest, AccessIntent::Read, worker)?;
+    let volume = detect_volume_id(&manifest).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_content_manifest_access(&manifest, worker)?;
+        cancellation.check()?;
+        read(manifest)
+    })
+}
+
+fn preflight_content_archive_volumes(paths: &[PathBuf], worker: &str) -> Result<()> {
+    for path in paths {
+        preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
+    }
+    Ok(())
 }
 
 fn run_search_archive_read<T>(

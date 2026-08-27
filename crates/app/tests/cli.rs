@@ -5239,6 +5239,7 @@ fn operation_volume_copy_policy_reports_descriptor_classes_from_binary() {
         "{stdout}"
     );
     assert!(stdout.contains("\tbuffer-bytes=65536\t"), "{stdout}");
+    assert!(stdout.contains("\tvolumes=2"), "{stdout}");
     assert!(
         !stderr.contains("security-access\t") && !stderr.contains("security-worker-admission\t"),
         "{stderr}"
@@ -5282,6 +5283,7 @@ fn operation_volume_copy_policy_reports_disk_image_as_slow_from_binary() {
     assert!(stdout.contains("\tsource-class=slow\t"), "{stdout}");
     assert!(stdout.contains("\tdestination-class=local\t"), "{stdout}");
     assert!(stdout.contains("\tbuffer-bytes=65536\t"), "{stdout}");
+    assert!(stdout.contains("\tvolumes=2"), "{stdout}");
     assert!(!destination.exists());
 
     fs::remove_dir_all(root).unwrap();
@@ -8145,6 +8147,38 @@ fn content_ids_mmap_refuses_unreachable_archive_before_mapping_from_binary() {
 }
 
 #[test]
+fn content_ids_mmap_set_refuses_unreachable_archive_before_mapping_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-ids-set-unreachable-root");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let content = root.join("content.gfmcontent");
+    fs::write(&content, "not a readable archive").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["content-ids-mmap-set", "term", content.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("content ids mmap set volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content ids mmap set\tpath={}",
+            content.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("invalid magic"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn content_ids_mmap_manifest_refuses_unreachable_archive_before_mapping_from_binary() {
     let manifest_root = unique_temp_dir("gfm-cli-content-manifest-access-local");
     let offline = unique_temp_dir("gfm-cli-content-manifest-access-offline");
@@ -8177,6 +8211,13 @@ fn content_ids_mmap_manifest_refuses_unreachable_archive_before_mapping_from_bin
         stderr.contains(
             "content ids mmap manifest volume access blocked: unreachable volume network"
         ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content ids mmap manifest\tpath={}",
+            content.display()
+        )),
         "{stderr}"
     );
     assert!(!stderr.contains("invalid magic"), "{stderr}");
@@ -8310,6 +8351,17 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{}",
         String::from_utf8_lossy(&ids_output.stderr)
     );
+    let ids_stderr = String::from_utf8_lossy(&ids_output.stderr);
+    assert!(
+        ids_stderr.contains(&format!(
+            "security-worker-admission\tworker=content ids mmap set\tpath={}",
+            first_content.display()
+        )) && ids_stderr.contains(&format!(
+            "security-worker-admission\tworker=content ids mmap set\tpath={}",
+            second_content.display()
+        )),
+        "{ids_stderr}"
+    );
     let ids_stdout = String::from_utf8(ids_output.stdout).unwrap();
     assert_eq!(ids_stdout.lines().count(), 2, "{ids_stdout}");
 
@@ -8395,6 +8447,20 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         manifest_ids_output.status.success(),
         "{}",
         String::from_utf8_lossy(&manifest_ids_output.stderr)
+    );
+    let manifest_ids_stderr = String::from_utf8_lossy(&manifest_ids_output.stderr);
+    assert!(
+        manifest_ids_stderr.contains(&format!(
+            "security-worker-admission\tworker=content ids mmap manifest\tpath={}",
+            manifest.display()
+        )) && manifest_ids_stderr.contains(&format!(
+            "security-worker-admission\tworker=content ids mmap manifest\tpath={}",
+            first_content.display()
+        )) && manifest_ids_stderr.contains(&format!(
+            "security-worker-admission\tworker=content ids mmap manifest\tpath={}",
+            second_content.display()
+        )),
+        "{manifest_ids_stderr}"
     );
     assert_eq!(
         String::from_utf8(manifest_ids_output.stdout).unwrap(),
