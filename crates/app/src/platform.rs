@@ -257,27 +257,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "preview-cache-fileprovider-invalidation requires a path",
             )?;
             let kind = parse_preview_kind(args.next())?;
-            let _cache_access = preflight_access_scope(
-                write_probe_path(&cache_root),
-                AccessIntent::Write,
-                "preview cache root",
-            )?;
-            let record =
-                record_for_path_with_access(&path, AccessIntent::Preview, "preview cache")?;
-            let report = FileProviderInvalidationReport::evaluate(path.clone(), previous)?;
-            let key = PreviewRequestKey::new(record.id, path, kind);
-            let mut cache = PreviewCache::new(PreviewCacheConfig::new(cache_root))?;
-            let invalidation_key = cache
-                .disk_key_for_path_kind(&key.path, key.kind)
-                .unwrap_or_else(|| key.clone());
             println!(
                 "{}",
-                cache
-                    .apply_invalidation(
-                        &invalidation_key,
-                        preview_invalidation_for_fileprovider(&report),
-                    )?
-                    .as_tsv()
+                run_preview_cache_fileprovider_invalidation(cache_root, previous, path, kind)?
             );
         }
         "preview-cache-fileprovider-observed-invalidation" => {
@@ -1451,6 +1433,46 @@ fn run_fileprovider_operation(
         let _access = preflight_access_scope(&path, AccessIntent::Operate, WORKER)?;
         cancellation.check()?;
         FileProviderOperationReport::execute(path, operation)
+    })
+}
+
+fn run_preview_cache_fileprovider_invalidation(
+    cache_root: PathBuf,
+    previous: CloudStorageState,
+    path: PathBuf,
+    kind: PreviewKind,
+) -> Result<String> {
+    const CACHE_WORKER: &str = "preview cache root";
+    const WORKER: &str = "preview cache";
+    let cache_probe = write_probe_path(&cache_root).to_path_buf();
+    preflight_volume_access_scope(&cache_probe, AccessIntent::Write, CACHE_WORKER)?;
+    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
+    let volume = detect_volume_id(&cache_probe)
+        .ok()
+        .or_else(|| parent_volume(&cache_probe))
+        .or_else(|| detect_volume_id(&path).ok())
+        .or_else(|| parent_volume(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _cache_access =
+            preflight_access_scope(&cache_probe, AccessIntent::Write, CACHE_WORKER)?;
+        cancellation.check()?;
+        let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
+        cancellation.check()?;
+        let report = FileProviderInvalidationReport::evaluate(path.clone(), previous)?;
+        let key = PreviewRequestKey::new(record.id, path, kind);
+        cancellation.check()?;
+        let mut cache = PreviewCache::new(PreviewCacheConfig::new(cache_root))?;
+        let invalidation_key = cache
+            .disk_key_for_path_kind(&key.path, key.kind)
+            .unwrap_or_else(|| key.clone());
+        cancellation.check()?;
+        Ok(cache
+            .apply_invalidation(
+                &invalidation_key,
+                preview_invalidation_for_fileprovider(&report),
+            )?
+            .as_tsv())
     })
 }
 

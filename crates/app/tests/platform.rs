@@ -1491,6 +1491,9 @@ fn reports_preview_cache_fileprovider_invalidation_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "preview cache root", &cache);
+    assert_worker_admitted(&stderr, "preview cache", &evicted);
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("preview-cache-invalidation\t"));
     assert!(stdout.contains("\tkind=thumbnail\treason=content-or-icloud\t"));
@@ -1598,6 +1601,7 @@ fn preview_cache_refuses_unreachable_network_volume_before_record_read_from_bina
         stderr.contains("preview cache volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    assert!(!stderr.contains("security-worker-admission\t"), "{stderr}");
 
     let _ = std::fs::remove_dir_all(root);
     let _ = std::fs::remove_dir_all(cache_root);
@@ -1640,6 +1644,7 @@ fn preview_cache_refuses_unreachable_cache_root_before_invalidation_from_binary(
         stderr.contains("preview cache root volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    assert!(!stderr.contains("security-worker-admission\t"), "{stderr}");
     assert!(!cache.exists());
 
     let _ = std::fs::remove_dir_all(root);
