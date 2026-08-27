@@ -220,6 +220,35 @@ fn release_policy_reports_private_defaults_from_binary() {
     assert!(stdout.contains("remote-allowed=false"), "{stdout}");
 }
 
+#[test]
+fn release_toolchain_reports_metal_smoke_test_or_actionable_xcode_guidance() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("release-toolchain")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if output.status.success() {
+        assert!(stdout.contains("developer-dir\t"), "{stdout}");
+        assert!(stdout.contains("tool\tmetal\t"), "{stdout}");
+        assert!(stdout.contains("tool\tmetallib\t"), "{stdout}");
+        assert!(stdout.contains("metal-smoke-test\ttrue"), "{stdout}");
+        return;
+    }
+
+    assert!(
+        stderr.contains("requires Apple's full Xcode Metal toolchain"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Command Line Tools do not ship the production `metal` and `metallib`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("GFM_RELEASE_DEVELOPER_DIR"), "{stderr}");
+    assert!(stderr.contains("xcode-select --switch"), "{stderr}");
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -232,7 +261,7 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 
 fn assert_worker_admitted(stderr: &str, worker: &str, path: &Path) {
     let expected_worker = format!("worker={worker}");
-    let expected_path = format!("path={}", path.display());
+    let expected_path = format!("path={}", canonical_or_original(path).display());
     assert!(
         stderr.lines().any(|line| {
             line.starts_with("security-worker-admission\t")
@@ -241,4 +270,8 @@ fn assert_worker_admitted(stderr: &str, worker: &str, path: &Path) {
         }),
         "{stderr}"
     );
+}
+
+fn canonical_or_original(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
