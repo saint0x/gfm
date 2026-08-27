@@ -4297,6 +4297,46 @@ fn quarantined_adaptive_extraction_worker_records_timeout_from_binary() {
 }
 
 #[test]
+fn quarantined_adaptive_extraction_worker_refuses_unreachable_store_before_recording_from_binary() {
+    let source_root = unique_temp_dir("gfm-cli-extract-worker-quarantine-source");
+    let store_root = unique_temp_dir("gfm-cli-extract-worker-quarantine-store-unreachable");
+    fs::write(store_root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = source_root.join("document.txt");
+    let store = store_root.join("quarantine.gfmquarantine");
+    fs::write(&path, "timeout worker marker").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "extract-worker-quarantine-adaptive",
+            path.to_str().unwrap(),
+            store.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+            "0",
+            "2",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("quarantine\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "quarantined adaptive extraction volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!store.exists());
+
+    fs::remove_dir_all(source_root).unwrap();
+    fs::remove_dir_all(store_root).unwrap();
+}
+
+#[test]
 fn reports_extraction_cache_hits_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-cache-root");
     let path = root.join("Cache.md");
@@ -4367,6 +4407,40 @@ fn reports_extraction_quarantine_from_binary() {
     assert!(store.is_file());
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extract_quarantine_refuses_unreachable_store_before_recording_from_binary() {
+    let source_root = unique_temp_dir("gfm-cli-extract-quarantine-source");
+    let store_root = unique_temp_dir("gfm-cli-extract-quarantine-store-unreachable");
+    fs::write(store_root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = source_root.join("Slow.pdf");
+    let store = store_root.join("quarantine.gfmquarantine");
+    fs::write(&path, minimal_pdf("slow worker")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "extract-quarantine",
+            path.to_str().unwrap(),
+            store.to_str().unwrap(),
+            "timeout",
+            "2",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("quarantine\t"), "{stdout}");
+    assert!(
+        stderr.contains("extraction quarantine volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!store.exists());
+
+    fs::remove_dir_all(source_root).unwrap();
+    fs::remove_dir_all(store_root).unwrap();
 }
 
 #[test]
@@ -5598,6 +5672,158 @@ fn compacts_content_segments_from_binary() {
     fs::remove_file(content).unwrap();
     fs::remove_file(tiered_content).unwrap();
     fs::remove_file(maintained_content).unwrap();
+    fs::remove_file(manifest).unwrap();
+}
+
+#[test]
+fn compact_content_refuses_unreachable_output_before_merge_from_binary() {
+    let source_root = unique_temp_dir("gfm-cli-segment-compact-source");
+    let output_root = unique_temp_dir("gfm-cli-segment-compact-output-unreachable");
+    let segment = unique_temp_path("gfm-cli-segment-compact-source", "gfmseg");
+    let content = output_root.join("content.gfmcontent");
+    fs::write(source_root.join("segment.md"), "offline segment marker").unwrap();
+
+    let segment_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-content-segment",
+            source_root.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        segment_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&segment_output.stderr)
+    );
+
+    fs::write(
+        output_root.join(".gfm-volume-kind"),
+        "network-unreachable\n",
+    )
+    .unwrap();
+    let compact_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "compact-content",
+            content.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!compact_output.status.success());
+    let stderr = String::from_utf8_lossy(&compact_output.stderr);
+    assert!(
+        stderr.contains("content compaction volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!content.exists());
+
+    fs::remove_dir_all(source_root).unwrap();
+    fs::remove_dir_all(output_root).unwrap();
+    fs::remove_file(segment).unwrap();
+}
+
+#[test]
+fn content_maintenance_refuses_unreachable_output_before_merge_from_binary() {
+    let source_root = unique_temp_dir("gfm-cli-segment-maintenance-source");
+    let output_root = unique_temp_dir("gfm-cli-segment-maintenance-output-unreachable");
+    let segment = unique_temp_path("gfm-cli-segment-maintenance-source", "gfmseg");
+    let content = unique_temp_path("gfm-cli-segment-maintenance-source", "gfmcontent");
+    let manifest = unique_temp_path("gfm-cli-segment-maintenance-source", "gfmmanifest");
+    let maintained_content = output_root.join("maintained.gfmcontent");
+    let deferred_content = output_root.join("deferred.gfmcontent");
+    fs::write(source_root.join("segment.md"), "offline maintenance marker").unwrap();
+
+    let segment_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-content-segment",
+            source_root.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        segment_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&segment_output.stderr)
+    );
+    let compact_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "compact-content",
+            content.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        compact_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compact_output.stderr)
+    );
+    let manifest_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-write",
+            manifest.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        manifest_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&manifest_output.stderr)
+    );
+
+    fs::write(
+        output_root.join(".gfm-volume-kind"),
+        "network-unreachable\n",
+    )
+    .unwrap();
+    let maintenance_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-maintain-segments",
+            manifest.to_str().unwrap(),
+            maintained_content.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!maintenance_output.status.success());
+    let maintenance_stderr = String::from_utf8_lossy(&maintenance_output.stderr);
+    assert!(
+        maintenance_stderr
+            .contains("content maintenance volume access blocked: unreachable volume network"),
+        "{maintenance_stderr}"
+    );
+    assert!(!maintained_content.exists());
+
+    let adaptive_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-maintain-segments-adaptive",
+            manifest.to_str().unwrap(),
+            deferred_content.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!adaptive_output.status.success());
+    let adaptive_stderr = String::from_utf8_lossy(&adaptive_output.stderr);
+    assert!(
+        adaptive_stderr
+            .contains("content maintenance volume access blocked: unreachable volume network"),
+        "{adaptive_stderr}"
+    );
+    assert!(!deferred_content.exists());
+
+    fs::remove_dir_all(source_root).unwrap();
+    fs::remove_dir_all(output_root).unwrap();
+    fs::remove_file(segment).unwrap();
+    fs::remove_file(content).unwrap();
     fs::remove_file(manifest).unwrap();
 }
 

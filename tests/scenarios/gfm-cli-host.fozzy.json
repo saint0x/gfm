@@ -2815,6 +2815,56 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "compact-content",
+        "tmp/gfm-fozzy-offline-volume/compacted.gfmcontent",
+        "/tmp/gfm-fozzy-host.gfmseg"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "compact-content-tiered",
+        "tmp/gfm-fozzy-offline-volume/tiered.gfmcontent",
+        "/tmp/gfm-fozzy-host.gfmseg"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-maintain-segments",
+        "tmp/gfm-fozzy-offline-volume/content.gfmmanifest",
+        "tmp/gfm-fozzy-offline-volume/maintained.gfmcontent",
+        "/tmp/gfm-fozzy-host.gfmseg"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-maintain-segments-adaptive",
+        "tmp/gfm-fozzy-offline-volume/content.gfmmanifest",
+        "tmp/gfm-fozzy-offline-volume/deferred.gfmcontent",
+        "saturated",
+        "nominal",
+        "ac",
+        "idle",
+        "/tmp/gfm-fozzy-host.gfmseg"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "thumbnail-generation",
         "tmp/gfm-fozzy-offline-volume/Project/Preview.png"
       ],
@@ -3891,6 +3941,36 @@
         "2"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "extract-quarantine",
+        "tmp/gfm-fozzy-preview.pdf",
+        "tmp/gfm-fozzy-offline-volume/extract.gfmquarantine",
+        "timeout",
+        "2"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "extract-worker-quarantine-adaptive",
+        "tmp/gfm-fozzy-preview.pdf",
+        "tmp/gfm-fozzy-offline-volume/extract-worker.gfmquarantine",
+        "nominal",
+        "nominal",
+        "ac",
+        "idle",
+        "0",
+        "2"
+      ],
+      "exit_code": 1,
+      "times": 1
     },
     {
       "type": "fs_write",

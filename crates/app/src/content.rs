@@ -1,4 +1,4 @@
-use crate::access::preflight_access_scope;
+use crate::access::{preflight_access_scope, ScopedAccessGuard};
 use crate::extract::{
     extraction_budget_profile, read_extraction_quarantine,
     run_adaptive_extraction_worker_cancellable,
@@ -143,9 +143,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(|value| parse_u32(&value, "failure threshold"))
                 .transpose()?
                 .unwrap_or(2);
-            let _access = preflight_access_scope(
+            let _access = retain_extraction_quarantine_access(
                 &path,
-                AccessIntent::Read,
+                &store,
                 "quarantined adaptive extraction",
             )?;
             let volume = detect_volume_id(&path)
@@ -184,7 +184,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "extract-quarantine requires a quarantine store path",
             )?;
             let _access =
-                preflight_access_scope(&path, AccessIntent::Read, "extraction quarantine")?;
+                retain_extraction_quarantine_access(&path, &store, "extraction quarantine")?;
             let kind = parse_quarantine_failure_kind(
                 args.next().as_deref().unwrap_or("timeout"),
                 "failure kind",
@@ -235,6 +235,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "compact-content requires at least one segment path".to_string(),
                 ));
             }
+            let _access =
+                retain_content_segments_access(None, &output, &segments, "content compaction")?;
             let terms = Indexer::default().compact_content_segments(output, &segments)?;
             eprintln!("compacted {terms} content terms");
         }
@@ -249,6 +251,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "compact-content-tiered requires at least one segment path".to_string(),
                 ));
             }
+            let _access = retain_content_segments_access(
+                None,
+                &output,
+                &segments,
+                "tiered content compaction",
+            )?;
             let outcome = Indexer::default().compact_content_segments_with_policy(
                 output,
                 &segments,
@@ -282,6 +290,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-maintain-segments requires at least one segment".to_string(),
                 ));
             }
+            let _access = retain_content_segments_access(
+                Some(&manifest_path),
+                &output_archive,
+                &segments,
+                "content maintenance",
+            )?;
             let worker = BackgroundContentIndexer::default();
             let report = worker.maintain_segments(
                 &manifest_path,
@@ -307,6 +321,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-maintain-segments-adaptive requires at least one segment".to_string(),
                 ));
             }
+            let _access = retain_content_segments_access(
+                Some(&manifest_path),
+                &output_archive,
+                &segments,
+                "content maintenance",
+            )?;
             let volume = detect_volume_id(&manifest_path)
                 .ok()
                 .or_else(|| parent_volume(&output_archive));
@@ -670,6 +690,49 @@ fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<usize> {
         }
     }
     Ok(ids.len())
+}
+
+fn retain_extraction_quarantine_access(
+    path: &Path,
+    store: &Path,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(path, AccessIntent::Read, worker)?,
+        preflight_access_scope(write_probe_path(store), AccessIntent::Write, worker)?,
+    ])
+}
+
+fn retain_content_segments_access(
+    manifest_path: Option<&Path>,
+    output_archive: &Path,
+    segments: &[PathBuf],
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = Vec::with_capacity(segments.len() + 1 + usize::from(manifest_path.is_some()));
+    if let Some(manifest_path) = manifest_path {
+        guards.push(preflight_access_scope(
+            manifest_path,
+            AccessIntent::Read,
+            worker,
+        )?);
+    }
+    guards.push(preflight_access_scope(
+        write_probe_path(output_archive),
+        AccessIntent::Write,
+        worker,
+    )?);
+    for segment in segments {
+        guards.push(preflight_access_scope(segment, AccessIntent::Read, worker)?);
+    }
+    Ok(guards)
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.is_dir() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
