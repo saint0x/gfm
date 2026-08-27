@@ -752,10 +752,18 @@ fn reports_fileprovider_state_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let downloaded = root.join("Downloaded.icloud.md");
     let evicted = root.join("Evicted.icloud-placeholder");
+    let value_evicted = root.join("ValueEvicted.icloud.md");
     let conflict = root.join("Conflict.icloud-conflict.md");
     std::fs::write(&downloaded, "downloaded").unwrap();
     std::fs::write(&evicted, "placeholder").unwrap();
     mark_evicted_fixture(&evicted);
+    std::fs::write(&value_evicted, "remote").unwrap();
+    xattr::set(
+        &value_evicted,
+        "com.apple.fileprovider.state",
+        b"not-downloaded",
+    )
+    .unwrap();
     std::fs::write(&conflict, "conflict").unwrap();
 
     let downloaded_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -847,6 +855,21 @@ fn reports_fileprovider_state_from_binary() {
     assert!(evicted_stdout.contains("\tbadges=cloud\t"));
     assert!(evicted_stdout.contains("\tdownload=disabled\tevict=disabled\t"));
     assert!(evicted_stdout.contains("\treason=not-native-provider-backed"));
+
+    let value_evicted_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-state")
+        .arg(&value_evicted)
+        .output()
+        .unwrap();
+    assert!(
+        value_evicted_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&value_evicted_output.stderr)
+    );
+    let value_evicted_stdout = String::from_utf8(value_evicted_output.stdout).unwrap();
+    assert!(value_evicted_stdout.contains("\tstate=evicted\tmaterialization=remote-placeholder\t"));
+    assert!(value_evicted_stdout.contains("\tmaterialization-source=xattr-fallback\t"));
+    assert!(value_evicted_stdout.contains("\tsource=fixture-name+xattr\t"));
 
     let conflict_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-state")

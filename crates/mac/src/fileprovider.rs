@@ -14,6 +14,7 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 const ICLOUD_DRIVE_COMPONENT: &str = "com~apple~CloudDocs";
+const MAX_PROVIDER_XATTR_VALUE_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileProviderDomain {
@@ -1367,6 +1368,7 @@ struct CloudHints {
     native: NativeFileProviderResourceValues,
     native_identity: NativeFileProviderIdentity,
     xattrs: Vec<String>,
+    xattr_values: Vec<String>,
     provider_identifier: Option<String>,
     source: String,
 }
@@ -1387,6 +1389,7 @@ impl CloudHints {
         let native = copy_fileprovider_resource_values(path);
         let native_identity = native_identity.unwrap_or_else(identity_not_queried);
         let mut xattrs = Vec::new();
+        let mut xattr_values = Vec::new();
         let mut provider_identifier = None;
         let mut sources = Vec::new();
 
@@ -1405,8 +1408,12 @@ impl CloudHints {
                     || attr.contains("fileprovider")
                     || attr.contains("ubiquit")
                 {
-                    if provider_identifier.is_none() {
-                        provider_identifier = provider_from_attr(path, &attr);
+                    if let Some(value) = xattr_string_value(path, &attr) {
+                        if provider_identifier.is_none() {
+                            provider_identifier =
+                                provider_identifier_from_xattr_value(&attr, &value);
+                        }
+                        xattr_values.push(value);
                     }
                     xattrs.push(attr);
                 }
@@ -1434,6 +1441,7 @@ impl CloudHints {
             native,
             native_identity,
             xattrs,
+            xattr_values,
             provider_identifier,
             source: if sources.is_empty() {
                 "filesystem".to_string()
@@ -1526,7 +1534,7 @@ fn storage_state_for_path(
     }
 
     let name = file_name_lower(path);
-    let attr_blob = hints.xattrs.join("\n").to_ascii_lowercase();
+    let attr_blob = xattr_signal_blob(hints);
     if name.contains("conflict") || attr_blob.contains("conflict") {
         CloudStorageState::Conflict
     } else if name.contains("offline") || attr_blob.contains("offline") {
@@ -1857,14 +1865,56 @@ fn has_evicted_materialization_evidence(path: &Path, hints: &CloudHints) -> bool
             let attr = attr.to_ascii_lowercase();
             attr.contains("placeholder") || attr.contains("evict")
         })
+        || hints.xattr_values.iter().any(|value| {
+            let value = value.to_ascii_lowercase();
+            value.contains("not-downloaded")
+                || value.contains("not_downloaded")
+                || value.contains("placeholder")
+                || value.contains("evict")
+        })
 }
 
-fn provider_from_attr(path: &Path, attr: &str) -> Option<String> {
-    xattr::get(path, attr)
-        .ok()
-        .flatten()
-        .and_then(|value| String::from_utf8(value).ok())
-        .and_then(non_empty)
+fn xattr_signal_blob(hints: &CloudHints) -> String {
+    hints
+        .xattrs
+        .iter()
+        .chain(hints.xattr_values.iter())
+        .map(|value| value.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase()
+}
+
+fn xattr_string_value(path: &Path, attr: &str) -> Option<String> {
+    let value = xattr::get(path, attr).ok().flatten()?;
+    if value.is_empty() || value.len() > MAX_PROVIDER_XATTR_VALUE_BYTES {
+        return None;
+    }
+    String::from_utf8(value).ok()
+}
+
+fn provider_identifier_from_xattr_value(attr: &str, value: &str) -> Option<String> {
+    let value = non_empty(value.to_string())?;
+    let attr = attr.to_ascii_lowercase();
+    let value_lower = value.to_ascii_lowercase();
+    if !(attr.contains("domain")
+        || attr.contains("provider")
+        || attr.contains("identifier")
+        || attr.contains("account"))
+    {
+        return None;
+    }
+    if value_lower.contains("download")
+        || value_lower.contains("placeholder")
+        || value_lower.contains("material")
+        || value_lower.contains("evict")
+        || value_lower.contains("offline")
+        || value_lower.contains("conflict")
+        || !value.contains('.')
+    {
+        return None;
+    }
+    Some(value)
 }
 
 fn matched_domain<'a>(
@@ -2442,6 +2492,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "fixture-name+native-url-resource".to_string(),
         };
@@ -2462,6 +2513,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "fixture-name".to_string(),
         };
@@ -2630,6 +2682,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "fixture-name+native-url-resource".to_string(),
         };
@@ -2670,6 +2723,7 @@ mod tests {
                 reason: None,
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: Some("com.apple.CloudDocs".to_string()),
             source: "fixture-name+native-url-resource+nsfileprovidermanager".to_string(),
         };
@@ -2718,6 +2772,7 @@ mod tests {
                 reason: None,
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "nsfileprovidermanager".to_string(),
         };
@@ -2820,6 +2875,7 @@ mod tests {
                 reason: None,
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: Some("com.example.drive.account".to_string()),
             source: "nsfileprovidermanager".to_string(),
         };
@@ -2849,6 +2905,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "fixture-name".to_string(),
         };
@@ -3090,6 +3147,7 @@ mod tests {
                 reason: Some("test fixture has no native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3133,6 +3191,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3172,6 +3231,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3210,6 +3270,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3249,6 +3310,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3290,6 +3352,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3327,6 +3390,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3367,6 +3431,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3408,6 +3473,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3446,6 +3512,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3485,6 +3552,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3510,6 +3578,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "fixture-name".to_string(),
         };
@@ -3543,6 +3612,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3580,6 +3650,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3616,6 +3687,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3657,6 +3729,7 @@ mod tests {
                 reason: Some("test fixture has no native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3694,6 +3767,7 @@ mod tests {
                 reason: Some("test fixture has no native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "native-url-resource".to_string(),
         };
@@ -3728,6 +3802,7 @@ mod tests {
                 reason: Some("hot path skipped native manager identity".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "fixture-name".to_string(),
         };
@@ -3768,6 +3843,7 @@ mod tests {
                 reason: Some("NSFileProviderManager identity lookup timed out".to_string()),
             },
             xattrs: Vec::new(),
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "fixture-name".to_string(),
         };
@@ -3804,6 +3880,7 @@ mod tests {
                 reason: Some("test fixture has no native manager identity".to_string()),
             },
             xattrs: vec!["com.apple.icloud.placeholder".to_string()],
+            xattr_values: Vec::new(),
             provider_identifier: None,
             source: "fixture-name+xattr".to_string(),
         };
@@ -3821,6 +3898,102 @@ mod tests {
             materialization_source_for_state(state, &hints),
             CloudMaterializationSource::XattrFallback
         );
+    }
+
+    #[test]
+    fn xattr_value_conflict_overrides_downloaded_fixture_name() {
+        let path = PathBuf::from("/tmp/Downloaded.icloud.md");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: vec!["com.apple.fileprovider.state".to_string()],
+            xattr_values: vec!["unresolved-conflict".to_string()],
+            provider_identifier: None,
+            source: "fixture-name+xattr".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Conflict);
+        assert_eq!(report.materialization, CloudMaterialization::Conflict);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::XattrFallback
+        );
+    }
+
+    #[test]
+    fn xattr_value_not_downloaded_marks_remote_placeholder() {
+        let path = PathBuf::from("/tmp/Remote.icloud.md");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: vec!["com.apple.fileprovider.state".to_string()],
+            xattr_values: vec!["not-downloaded".to_string()],
+            provider_identifier: None,
+            source: "fixture-name+xattr".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::RemotePlaceholder
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::XattrFallback
+        );
+        assert_eq!(report.commands.download, CloudCommandState::Disabled);
+        assert_eq!(
+            report.commands.reason.as_deref(),
+            Some("not-native-provider-backed")
+        );
+    }
+
+    #[test]
+    fn state_read_uses_bounded_provider_xattr_value_signal() {
+        let root = unique_temp_dir();
+        let path = root.join("Remote.icloud.md");
+        fs::write(&path, "remote").unwrap();
+        xattr::set(&path, "com.apple.fileprovider.state", b"not-downloaded").unwrap();
+        xattr::set(&path, "com.apple.fileprovider.domain", b"com.example.drive").unwrap();
+        let oversized_value = vec![b'a'; MAX_PROVIDER_XATTR_VALUE_BYTES + 1];
+        xattr::set(&path, "com.apple.fileprovider.large", &oversized_value).unwrap();
+
+        let report = FileProviderStateReport::read_path(&path).unwrap();
+
+        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::RemotePlaceholder
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::XattrFallback
+        );
+        assert!(report.source.split('+').any(|source| source == "xattr"));
+        assert_eq!(
+            report.provider_identifier.as_deref(),
+            Some("com.example.drive")
+        );
+        assert!(!report
+            .as_tsv()
+            .contains(&"a".repeat(MAX_PROVIDER_XATTR_VALUE_BYTES + 1)));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn mark_evicted_fixture(path: &Path) {
