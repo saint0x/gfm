@@ -320,6 +320,70 @@ fn operation_preflight_refreshes_permission_state_from_binary() {
 }
 
 #[test]
+fn operation_preflight_emits_denied_worker_admission_for_unreachable_destination_from_binary() {
+    let root = unique_temp_dir("gfm-cli-operation-unreachable-admission");
+    let source_root = root.join("source");
+    let offline = root.join("offline-share");
+    let journal = root.join("ops.journal");
+    let trash_metadata = root.join("trash.tsv");
+    let bookmarks = root.join("bookmarks.tsv");
+    let permission_state = root.join("permission-state.tsv");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&offline).unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&journal, "").unwrap();
+    fs::write(&trash_metadata, "gfm-trash-metadata-v1\n").unwrap();
+    fs::write(&bookmarks, "gfm-security-bookmarks-v1\n").unwrap();
+    fs::write(&permission_state, "gfm-permission-state-v1\n").unwrap();
+    let source = source_root.join("source.txt");
+    let destination = offline.join("destination.txt");
+    fs::write(&source, "alpha").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .env("GFM_TRASH_METADATA", &trash_metadata)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .env("GFM_PERMISSION_STATE", &permission_state)
+        .args([
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("security-worker-admission\tworker=copy destination-parent\t"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("\tworker-action=deny\t"), "{stderr}");
+    assert!(
+        stderr.contains("\tcan-touch-filesystem=false\t"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("\trefresh-on-permission-change=true\t"),
+        "{stderr}"
+    );
+    assert!(
+        stderr
+            .contains("copy destination-parent volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("refresh-on-permission-change=true"),
+        "{stderr}"
+    );
+    assert!(!destination.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extraction_preflight_retains_security_scoped_bookmark_from_binary() {
     let root = unique_temp_dir("gfm-cli-extraction-bookmark");
     let home = root.join("home");

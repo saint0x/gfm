@@ -352,6 +352,45 @@ fn security_worker_admission_refuses_unreachable_volume_from_binary() {
 }
 
 #[test]
+fn security_worker_admission_refuses_write_on_read_only_volume_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-security-worker-read-only-volume-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join(".gfm-volume-kind"),
+        "external-removable-read-only\n",
+    )
+    .unwrap();
+    let path = root.join("Export.pdf");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("security-worker-admission")
+        .arg("export worker")
+        .arg(&path)
+        .arg("write")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("security-worker-admission\t"));
+    assert!(stdout.contains("\tintent=write\tscope=none\tprobe=missing\t"));
+    assert!(stdout.contains("\taccess-action=deny\tworker-action=deny\t"));
+    assert!(stdout.contains("\tcan-touch-filesystem=false\t"));
+    assert!(stdout.contains("\trefresh-on-permission-change=true\t"));
+    assert!(stdout.contains("export worker volume access blocked"));
+    assert!(stdout.contains("read-only volume external"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn protected_worker_route_fails_closed_without_retained_bookmark_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-protected-worker-missing-bookmark-{}",

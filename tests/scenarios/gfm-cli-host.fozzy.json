@@ -4251,6 +4251,11 @@
       "data": "%PDF-1.7\nsecurity preview\n"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-read-only-volume/.gfm-volume-kind",
+      "data": "external-removable-read-only\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -4307,6 +4312,20 @@
       ],
       "exit_code": 0,
       "stdout": "security-worker-admission\tworker=preview worker\tpath=tmp/gfm-fozzy-offline-volume/SecurityPreview.pdf\tintent=preview\tscope=none\tprobe=granted\tmode=plain-filesystem\taccess-action=allow\tworker-action=deny\tcan-touch-filesystem=false\tbookmark-access=false\trefresh-on-permission-change=true\treason=preview worker volume access blocked: unreachable volume network; label=gfm-fozzy-offline-volume; root=tmp/gfm-fozzy-offline-volume; stable-id=fixture-marker:network-unreachable:dev:16777230:tmp/gfm-fozzy-offline-volume; mount=mounted\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "security-worker-admission",
+        "export worker",
+        "tmp/gfm-fozzy-read-only-volume/Export.pdf",
+        "write"
+      ],
+      "exit_code": 0,
+      "stdout": "security-worker-admission\tworker=export worker\tpath=tmp/gfm-fozzy-read-only-volume/Export.pdf\tintent=write\tscope=none\tprobe=missing\tmode=denied\taccess-action=deny\tworker-action=deny\tcan-touch-filesystem=false\tbookmark-access=false\trefresh-on-permission-change=true\treason=export worker volume access blocked: read-only volume external; label=gfm-fozzy-read-only-volume; root=tmp/gfm-fozzy-read-only-volume; stable-id=fixture-marker:external-removable-read-only:dev:16777230:tmp/gfm-fozzy-read-only-volume; mount=mounted\n",
       "stderr": "",
       "times": 1
     },

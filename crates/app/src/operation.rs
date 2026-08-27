@@ -1,4 +1,7 @@
-use crate::access::{preflight_access_scope, ScopedAccessGuard};
+use crate::access::{
+    preflight_access_scope, worker_admission_with_volume_gate, worker_admission_with_volume_report,
+    ScopedAccessGuard,
+};
 use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
 use crate::runtime::{
     default_journal_path, default_security_bookmarks_path, default_trash_metadata_path,
@@ -467,13 +470,44 @@ fn operation_access_gate(
     let bookmark_store = SecurityScopedBookmarkStore::new(default_security_bookmarks_path());
     for requirement in operation.access_requirements() {
         let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
-        let report = SecurityScopedAccessReport::evaluate(&probe_path, AccessIntent::Operate);
-        let admission = report.worker_admission(format!(
-            "{} {}",
-            operation_kind(operation),
-            requirement.role.as_str()
-        ));
+        let admission = worker_admission_with_volume_report(
+            &probe_path,
+            AccessIntent::Operate,
+            format!(
+                "{} {}",
+                operation_kind(operation),
+                requirement.role.as_str()
+            ),
+            volume_report,
+        );
+        let report = &admission.access;
         eprintln!("{}", admission.as_tsv());
+        if matches!(admission.worker_action, SecurityWorkerAction::Deny)
+            && !admission.can_touch_filesystem
+            && !matches!(
+                (report.action, report.probe),
+                (
+                    SecurityDecisionAction::Deny,
+                    gfm_mac::AccessProbeState::Missing
+                )
+            )
+        {
+            let reason = format!(
+                "{}; scope={}; mode={}; worker-action={}; role={}; probe={}",
+                admission.reason,
+                report.scope.as_str(),
+                report.mode.as_str(),
+                admission.worker_action.as_str(),
+                requirement.role.as_str(),
+                probe_path.display()
+            );
+            gate = gate.with_decision(
+                requirement.path,
+                OperationAccessDecision::deny(reason)
+                    .with_refresh_on_permission_change(admission.refresh_on_permission_change),
+            );
+            continue;
+        }
         if matches!(report.action, SecurityDecisionAction::Deny)
             && matches!(report.probe, gfm_mac::AccessProbeState::Missing)
             && !matches!(requirement.role, OperationAccessRole::DestinationParent)
@@ -549,7 +583,10 @@ fn operation_access_gate(
                 .unwrap_or_else(|| "unknown".to_string()),
             requirement.role.as_str()
         );
-        gate = gate.with_decision(requirement.path, OperationAccessDecision::deny(reason));
+        gate = gate.with_decision(
+            requirement.path,
+            OperationAccessDecision::deny(reason).with_refresh_on_permission_change(true),
+        );
     }
     for requirement in operation.access_requirements() {
         if !requirement_mutates_volume(operation, requirement.role) {
@@ -649,12 +686,16 @@ fn operation_security_accesses(operation: &Operation) -> Result<Vec<SecurityScop
     let mut accesses = Vec::new();
     for requirement in operation.access_requirements() {
         let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
-        let report = SecurityScopedAccessReport::evaluate(&probe_path, AccessIntent::Operate);
-        let admission = report.worker_admission(format!(
-            "{} {}",
-            operation_kind(operation),
-            requirement.role.as_str()
-        ));
+        let admission = worker_admission_with_volume_gate(
+            &probe_path,
+            AccessIntent::Operate,
+            format!(
+                "{} {}",
+                operation_kind(operation),
+                requirement.role.as_str()
+            ),
+        );
+        let report = &admission.access;
         if !admission.needs_bookmark_access {
             continue;
         }

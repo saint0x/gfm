@@ -19,9 +19,23 @@ pub(crate) fn worker_admission_with_volume_gate(
     intent: AccessIntent,
     worker: impl Into<String>,
 ) -> SecurityWorkerAdmissionReport {
+    let volume_path = absolute_volume_probe_path(path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    worker_admission_with_volume_report(path, intent, worker, &volume_report)
+}
+
+pub(crate) fn worker_admission_with_volume_report(
+    path: &Path,
+    intent: AccessIntent,
+    worker: impl Into<String>,
+    volume_report: &VolumeDiscoveryReport,
+) -> SecurityWorkerAdmissionReport {
     let worker = worker.into();
     let access = SecurityScopedAccessReport::evaluate(path, intent);
-    if let Some(reason) = volume_reachability_block_reason(path, &worker) {
+    let volume_path = absolute_volume_probe_path(path);
+    if let Some(reason) =
+        volume_access_block_reason_in_report(&volume_path, intent, &worker, volume_report)
+    {
         return SecurityWorkerAdmissionReport {
             worker,
             access,
@@ -41,7 +55,7 @@ pub(crate) fn preflight_access_scope(
     worker: &str,
 ) -> Result<ScopedAccessGuard> {
     let _ = refresh_permission_state(PermissionRefreshAudience::Workers, worker)?;
-    preflight_volume_reachability(path, worker)?;
+    preflight_volume_access(path, intent, worker)?;
     let report = SecurityScopedAccessReport::evaluate(path, intent);
     eprintln!("{}", report.as_tsv());
     let admission = report.worker_admission(worker);
@@ -64,19 +78,21 @@ pub(crate) fn preflight_access_scope(
     }
 }
 
-fn preflight_volume_reachability(path: &Path, worker: &str) -> Result<()> {
+fn preflight_volume_access(path: &Path, intent: AccessIntent, worker: &str) -> Result<()> {
     let volume_path = absolute_volume_probe_path(path);
     let report = VolumeDiscoveryReport::for_containing_path(&volume_path);
-    preflight_volume_reachability_in_report(path, &volume_path, worker, &report)
+    preflight_volume_access_in_report(path, &volume_path, intent, worker, &report)
 }
 
-fn preflight_volume_reachability_in_report(
+fn preflight_volume_access_in_report(
     user_path: &Path,
     volume_path: &Path,
+    intent: AccessIntent,
     worker: &str,
     report: &VolumeDiscoveryReport,
 ) -> Result<()> {
-    if let Some(reason) = volume_reachability_block_reason_in_report(volume_path, worker, report) {
+    if let Some(reason) = volume_access_block_reason_in_report(volume_path, intent, worker, report)
+    {
         return Err(GfmError::Permission {
             path: user_path.to_path_buf(),
             message: reason,
@@ -85,29 +101,53 @@ fn preflight_volume_reachability_in_report(
     Ok(())
 }
 
-fn volume_reachability_block_reason(path: &Path, worker: &str) -> Option<String> {
-    let volume_path = absolute_volume_probe_path(path);
-    let report = VolumeDiscoveryReport::for_containing_path(&volume_path);
-    volume_reachability_block_reason_in_report(&volume_path, worker, &report)
-}
-
-fn volume_reachability_block_reason_in_report(
+fn volume_access_block_reason_in_report(
     volume_path: &Path,
+    intent: AccessIntent,
     worker: &str,
     report: &VolumeDiscoveryReport,
 ) -> Option<String> {
     let volume = report.volume_for_path(volume_path)?;
-    if volume.reachable != Some(false) {
-        return None;
+    if volume.reachable == Some(false) {
+        return Some(format!(
+            "{worker} volume access blocked: unreachable volume {}; label={}; root={}; stable-id={}; mount={}",
+            volume.kind.as_str(),
+            volume.label,
+            volume.path.display(),
+            volume.stable_identity,
+            volume.mount_state.as_str()
+        ));
     }
-    Some(format!(
-        "{worker} volume access blocked: unreachable volume {}; label={}; root={}; stable-id={}; mount={}",
-        volume.kind.as_str(),
-        volume.label,
-        volume.path.display(),
-        volume.stable_identity,
-        volume.mount_state.as_str()
-    ))
+    if mutating_intent(intent)
+        && volume.read_only
+        && !broad_system_root_allows_path(volume, volume_path, intent)
+    {
+        return Some(format!(
+            "{worker} volume access blocked: read-only volume {}; label={}; root={}; stable-id={}; mount={}",
+            volume.kind.as_str(),
+            volume.label,
+            volume.path.display(),
+            volume.stable_identity,
+            volume.mount_state.as_str()
+        ));
+    }
+    None
+}
+
+const fn mutating_intent(intent: AccessIntent) -> bool {
+    matches!(intent, AccessIntent::Write | AccessIntent::Operate)
+}
+
+fn broad_system_root_allows_path(
+    volume: &gfm_mac::VolumeDescriptor,
+    path: &Path,
+    intent: AccessIntent,
+) -> bool {
+    volume.path == Path::new("/")
+        && matches!(
+            SecurityScopedAccessReport::evaluate(path, intent).action,
+            SecurityDecisionAction::Allow
+        )
 }
 
 fn absolute_volume_probe_path(path: &Path) -> std::path::PathBuf {
@@ -133,7 +173,7 @@ fn retained_security_accesses_from_store(
     report: &SecurityScopedAccessReport,
     store: &SecurityScopedBookmarkStore,
 ) -> Result<Vec<SecurityScopedBookmarkAccess>> {
-    preflight_volume_reachability(store.path(), "security bookmark store")?;
+    preflight_volume_access(store.path(), AccessIntent::Read, "security bookmark store")?;
     let lookup =
         store.start_access_for_path(&report.path, read_only_intent(report.intent), true)?;
     let Some(access) = lookup.access else {
@@ -201,9 +241,14 @@ mod tests {
             volumes: vec![volume],
         };
 
-        let err =
-            preflight_volume_reachability_in_report(&file, &file, "quicklook preview", &report)
-                .unwrap_err();
+        let err = preflight_volume_access_in_report(
+            &file,
+            &file,
+            AccessIntent::Read,
+            "quicklook preview",
+            &report,
+        )
+        .unwrap_err();
 
         assert!(matches!(err, GfmError::Permission { .. }));
         assert!(err
@@ -272,6 +317,91 @@ mod tests {
         assert!(admission
             .as_tsv()
             .contains("\tcan-touch-filesystem=false\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_gate_refuses_write_intent_on_read_only_volume() {
+        let root = unique_temp_dir("gfm-access-admission-read-only-volume");
+        fs::write(
+            root.join(".gfm-volume-kind"),
+            "external-removable-read-only\n",
+        )
+        .unwrap();
+        let path = root.join("Export.pdf");
+        let volume = VolumeDescriptor::for_path(&root).unwrap();
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let admission = worker_admission_with_volume_report(
+            &path,
+            AccessIntent::Write,
+            "export worker",
+            &report,
+        );
+
+        assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
+        assert!(!admission.can_touch_filesystem);
+        assert!(admission.refresh_on_permission_change);
+        assert_eq!(admission.access.action, SecurityDecisionAction::Deny);
+        assert!(admission
+            .reason
+            .contains("export worker volume access blocked"));
+        assert!(admission.reason.contains("read-only volume external"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_gate_allows_read_intent_on_read_only_volume() {
+        let root = unique_temp_dir("gfm-access-admission-read-only-read");
+        fs::write(
+            root.join(".gfm-volume-kind"),
+            "external-removable-read-only\n",
+        )
+        .unwrap();
+        let path = root.join("Preview.pdf");
+        fs::write(&path, "%PDF-1.7\n").unwrap();
+        let volume = VolumeDescriptor::for_path(&root).unwrap();
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let admission = worker_admission_with_volume_report(
+            &path,
+            AccessIntent::Preview,
+            "preview worker",
+            &report,
+        );
+
+        assert_eq!(admission.worker_action, SecurityWorkerAction::Start);
+        assert!(admission.can_touch_filesystem);
+        assert!(!admission.refresh_on_permission_change);
+        assert!(admission
+            .reason
+            .contains("preview worker may start with filesystem access"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_gate_allows_writable_path_under_broad_read_only_system_root() {
+        let root = unique_temp_dir("gfm-access-admission-system-root");
+        let mut volume = VolumeDescriptor::for_path("/").unwrap();
+        volume.read_only = true;
+        volume.writable = false;
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let admission =
+            worker_admission_with_volume_report(&root, AccessIntent::Write, "journal", &report);
+
+        assert_eq!(admission.worker_action, SecurityWorkerAction::Start);
+        assert!(admission.can_touch_filesystem);
+        assert!(!admission.refresh_on_permission_change);
 
         fs::remove_dir_all(root).unwrap();
     }

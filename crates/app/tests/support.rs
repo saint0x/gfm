@@ -268,6 +268,59 @@ fn permission_access_contract_refuses_unreachable_volume_from_binary() {
 }
 
 #[test]
+fn permission_access_contract_refuses_write_on_read_only_volume_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-read-only-volume-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join(".gfm-volume-kind"),
+        "external-removable-read-only\n",
+    )
+    .unwrap();
+    let path = root.join("Export.pdf");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-permission-access-contract",
+            path.to_str().unwrap(),
+            "write",
+            "export worker",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+    assert!(stdout.contains("\npermission-access\t"), "{stdout}");
+    assert!(stdout.contains("\tintent=write\tscope=none\t"), "{stdout}");
+    assert!(stdout.contains("\taccess-action=deny\t"), "{stdout}");
+    assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
+    assert!(
+        stdout.contains("\trefresh-on-permission-change=true\tprompt-kind=blocked\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\nsecurity-worker-admission\tworker=export worker\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("export worker volume access blocked"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("read-only volume external"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_permission_access_contract_for_protected_missing_path_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-permission-access-protected-{}",
