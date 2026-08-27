@@ -118,16 +118,28 @@ impl QuickLookSessionContract {
         let controller_mode = controller_mode(security, cloud);
         let invalidation = decide_invalidation(input.invalidation_event);
         check()?;
-        let schedule_decision = match cloud {
-            CloudPreviewDecision::Defer => PreviewTaskDecision::Cancelled {
+        let schedule_decision = match (cloud, controller_mode) {
+            (CloudPreviewDecision::Defer, _) => PreviewTaskDecision::Cancelled {
                 key: input.key.clone(),
                 reason: "fileprovider-in-flight",
             },
-            CloudPreviewDecision::Unavailable => PreviewTaskDecision::Cancelled {
+            (CloudPreviewDecision::Unavailable, _) => PreviewTaskDecision::Cancelled {
                 key: input.key.clone(),
                 reason: "fileprovider-unavailable",
             },
-            CloudPreviewDecision::NativeEligible | CloudPreviewDecision::MetadataOnly => {
+            (CloudPreviewDecision::MetadataOnly, _) => PreviewTaskDecision::Cancelled {
+                key: input.key.clone(),
+                reason: "metadata-only",
+            },
+            (_, QuickLookControllerMode::MetadataOnly) => PreviewTaskDecision::Cancelled {
+                key: input.key.clone(),
+                reason: "metadata-only",
+            },
+            (
+                CloudPreviewDecision::NativeEligible,
+                QuickLookControllerMode::NativePreviewController
+                | QuickLookControllerMode::SandboxedGenerator,
+            ) => {
                 let mut scheduler = PreviewScheduler::new(input.scheduling_policy)?;
                 check()?;
                 scheduler
@@ -142,6 +154,10 @@ impl QuickLookSessionContract {
                         reason: "outside-preview-budget",
                     })
             }
+            (_, QuickLookControllerMode::Denied) => PreviewTaskDecision::Cancelled {
+                key: input.key.clone(),
+                reason: "denied",
+            },
         };
         check()?;
 
@@ -240,6 +256,13 @@ mod tests {
             contract.controller_mode,
             QuickLookControllerMode::MetadataOnly
         );
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "metadata-only",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -299,7 +322,10 @@ mod tests {
         );
         assert!(matches!(
             contract.schedule_decision,
-            PreviewTaskDecision::Scheduled { .. }
+            PreviewTaskDecision::Cancelled {
+                reason: "metadata-only",
+                ..
+            }
         ));
     }
 

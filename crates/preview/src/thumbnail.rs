@@ -149,16 +149,28 @@ impl ThumbnailGenerationContract {
         let invalidation = decide_invalidation(input.invalidation_event);
         let cache_disposition = cache_disposition(generator_mode, &invalidation);
         check()?;
-        let schedule_decision = match cloud {
-            CloudPreviewDecision::Defer => PreviewTaskDecision::Cancelled {
+        let schedule_decision = match (cloud, generator_mode) {
+            (CloudPreviewDecision::Defer, _) => PreviewTaskDecision::Cancelled {
                 key: input.key.clone(),
                 reason: "fileprovider-in-flight",
             },
-            CloudPreviewDecision::Unavailable => PreviewTaskDecision::Cancelled {
+            (CloudPreviewDecision::Unavailable, _) => PreviewTaskDecision::Cancelled {
                 key: input.key.clone(),
                 reason: "fileprovider-unavailable",
             },
-            CloudPreviewDecision::NativeEligible | CloudPreviewDecision::MetadataOnly => {
+            (CloudPreviewDecision::MetadataOnly, _) => PreviewTaskDecision::Cancelled {
+                key: input.key.clone(),
+                reason: "metadata-only",
+            },
+            (_, ThumbnailGeneratorMode::MetadataOnly) => PreviewTaskDecision::Cancelled {
+                key: input.key.clone(),
+                reason: "metadata-only",
+            },
+            (
+                CloudPreviewDecision::NativeEligible,
+                ThumbnailGeneratorMode::QuickLookThumbnailing
+                | ThumbnailGeneratorMode::SandboxedGenerator,
+            ) => {
                 let mut scheduler = PreviewScheduler::new(input.scheduling_policy)?;
                 check()?;
                 scheduler
@@ -173,6 +185,10 @@ impl ThumbnailGenerationContract {
                         reason: "outside-thumbnail-budget",
                     })
             }
+            (_, ThumbnailGeneratorMode::Denied) => PreviewTaskDecision::Cancelled {
+                key: input.key.clone(),
+                reason: "denied",
+            },
         };
         check()?;
 
@@ -230,7 +246,10 @@ fn cache_disposition(
     mode: ThumbnailGeneratorMode,
     invalidation: &PreviewInvalidationDecision,
 ) -> ThumbnailCacheDisposition {
-    if mode == ThumbnailGeneratorMode::Denied {
+    if matches!(
+        mode,
+        ThumbnailGeneratorMode::Denied | ThumbnailGeneratorMode::MetadataOnly
+    ) {
         ThumbnailCacheDisposition::Bypass
     } else if invalidation.invalidate_disk {
         ThumbnailCacheDisposition::RefreshMemoryAndDisk
@@ -291,6 +310,17 @@ mod tests {
             contract.generator_mode,
             ThumbnailGeneratorMode::MetadataOnly
         );
+        assert_eq!(
+            contract.cache_disposition,
+            ThumbnailCacheDisposition::Bypass
+        );
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "metadata-only",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -352,8 +382,15 @@ mod tests {
         );
         assert_eq!(
             contract.cache_disposition,
-            ThumbnailCacheDisposition::ReadThrough
+            ThumbnailCacheDisposition::Bypass
         );
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "metadata-only",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -421,8 +458,17 @@ mod tests {
         assert_eq!(contract.invalidation.reason, "content-or-icloud");
         assert_eq!(
             contract.cache_disposition,
-            ThumbnailCacheDisposition::RefreshMemoryAndDisk
+            ThumbnailCacheDisposition::Bypass
         );
+        assert!(contract.invalidation.invalidate_memory);
+        assert!(contract.invalidation.invalidate_disk);
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "metadata-only",
+                ..
+            }
+        ));
     }
 
     #[test]
