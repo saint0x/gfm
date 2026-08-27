@@ -583,6 +583,7 @@ fn print_usage() {
   gfm jobs-runtime-retry-probe <attempt-state> [<nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>]
   gfm ops-recover [ops.journal] [--retry-failed] [--max-attempts N]
   gfm watch-once <root>
+  gfm operation-conflict-apply <operation-conflicts.tsv> <target> <replace|keep-both|merge|skip>
   gfm copy <source> <destination> [--replace|--keep-both|--merge|--skip]
   gfm move <source> <destination> [--replace|--keep-both|--merge|--skip]
   gfm rename <source> <destination> [--replace|--keep-both|--merge|--skip]

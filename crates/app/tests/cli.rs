@@ -2786,6 +2786,129 @@ fn copy_keep_both_from_binary_uses_actual_journal_destination() {
 }
 
 #[test]
+fn operation_conflict_apply_executes_resolved_copy_from_binary() {
+    let root = unique_temp_dir("gfm-cli-operation-conflict-apply-root");
+    let journal = root.join("ops.journal");
+    let conflicts = root.join("operation-conflicts.tsv");
+    let source = root.join("report.md");
+    let destination = root.join("destination.md");
+    let copied = root.join("destination copy.md");
+    fs::write(&source, "new report").unwrap();
+    fs::write(&destination, "old report").unwrap();
+
+    let failed_copy = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .env("GFM_OPERATION_CONFLICT_STORE", &conflicts)
+        .args([
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!failed_copy.status.success());
+    let conflict_store = fs::read_to_string(&conflicts).unwrap();
+    assert!(
+        conflict_store.contains(&format!("\tsource={}\t", source.display())),
+        "{conflict_store}"
+    );
+    assert!(
+        conflict_store.contains("\tblocks-operation=true\t"),
+        "{conflict_store}"
+    );
+
+    let apply = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "operation-conflict-apply",
+            conflicts.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            "keep-both",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let stdout = String::from_utf8(apply.stdout).unwrap();
+    assert!(stdout.contains("\tcompleted"), "{stdout}");
+    assert!(
+        stdout.contains("operation-conflict-control\tapply\t"),
+        "{stdout}"
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), "new report");
+    assert_eq!(fs::read_to_string(&destination).unwrap(), "old report");
+    assert_eq!(fs::read_to_string(&copied).unwrap(), "new report");
+    let resolved_store = fs::read_to_string(&conflicts).unwrap();
+    assert!(
+        resolved_store.contains("\tpolicy=keep-both\t"),
+        "{resolved_store}"
+    );
+    assert!(
+        resolved_store.contains("\tblocks-operation=false\t"),
+        "{resolved_store}"
+    );
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("destination copy.md"),
+        "{journal_text}"
+    );
+    assert!(journal_text.contains("\tcompleted\t"), "{journal_text}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn operation_conflict_apply_keeps_store_blocking_when_execution_fails() {
+    let root = unique_temp_dir("gfm-cli-operation-conflict-apply-failed-root");
+    let journal = root.join("ops.journal");
+    let conflicts = root.join("operation-conflicts.tsv");
+    let missing_source = root.join("missing-report.md");
+    let destination = root.join("destination.md");
+    fs::write(&destination, "old report").unwrap();
+    fs::write(
+        &conflicts,
+        format!(
+            "operation-conflict\toperation=copy\tsource={}\ttarget={}\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n",
+            missing_source.display(),
+            destination.display()
+        ),
+    )
+    .unwrap();
+
+    let apply = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "operation-conflict-apply",
+            conflicts.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            "keep-both",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !apply.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let unresolved_store = fs::read_to_string(&conflicts).unwrap();
+    assert!(
+        unresolved_store.contains("\tpolicy=fail\t"),
+        "{unresolved_store}"
+    );
+    assert!(
+        unresolved_store.contains("\tblocks-operation=true\t"),
+        "{unresolved_store}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn copy_merge_from_binary_combines_directories_without_overwrite() {
     let root = unique_temp_dir("gfm-cli-ops-merge-root");
     let journal = root.join("ops.journal");

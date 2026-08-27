@@ -1,7 +1,8 @@
 use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
 use crate::runtime::{
     default_journal_path, default_security_bookmarks_path, default_trash_metadata_path,
-    run_volume_task, runtime_operation_conflict_store,
+    run_volume_task, runtime_operation_conflict_store, OperationConflictStore,
+    RuntimeOperationConflict,
 };
 use crate::{detect_volume_id, parent_volume, required_path};
 use gfm_jobs::Priority;
@@ -32,6 +33,32 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     outcome.message.unwrap_or_default()
                 );
             }
+        }
+        "operation-conflict-apply" => {
+            let store_path = required_path(
+                args.next(),
+                "operation-conflict-apply requires an operation conflict store path",
+            )?;
+            let target = crate::required_string(
+                args.next(),
+                "operation-conflict-apply requires a target path",
+            )?;
+            let conflict = parse_required_conflict_policy(
+                args.next(),
+                "operation-conflict-apply requires replace, keep-both, merge, or skip",
+            )?;
+            let store = OperationConflictStore::new(store_path);
+            let pending = blocking_operation_conflict(&store, &target)?;
+            let operation = operation_from_runtime_conflict(&pending)?;
+            execute_operation(operation, conflict)?;
+            let resolved = store.resolve(&target, conflict.as_str())?;
+            println!(
+                "operation-conflict-control\tapply\ttarget={}\tpolicy={}\tblocks-operation={}\treason={}",
+                resolved.target,
+                resolved.selected_policy,
+                resolved.blocks_operation,
+                resolved.reason
+            );
         }
         "copy" => {
             let from = required_path(args.next(), "copy requires a source path")?;
@@ -140,6 +167,69 @@ fn parse_operation_conflict_args(
         }
     }
     Ok(conflict)
+}
+
+fn parse_required_conflict_policy(value: Option<String>, message: &str) -> Result<ConflictPolicy> {
+    match value.as_deref() {
+        Some("replace") => Ok(ConflictPolicy::Replace),
+        Some("keep-both") => Ok(ConflictPolicy::KeepBoth),
+        Some("merge") => Ok(ConflictPolicy::Merge),
+        Some("skip") => Ok(ConflictPolicy::Skip),
+        Some(other) => Err(GfmError::Format(format!(
+            "{message}; got unsupported policy `{other}`"
+        ))),
+        None => Err(GfmError::Format(message.to_string())),
+    }
+}
+
+fn blocking_operation_conflict(
+    store: &OperationConflictStore,
+    target: &str,
+) -> Result<RuntimeOperationConflict> {
+    store
+        .read()?
+        .into_iter()
+        .find(|conflict| conflict.target == target && conflict.blocks_operation)
+        .ok_or_else(|| {
+            GfmError::Format(format!(
+                "operation conflict store has no blocking conflict for `{target}`"
+            ))
+        })
+}
+
+fn operation_from_runtime_conflict(conflict: &RuntimeOperationConflict) -> Result<Operation> {
+    let source = conflict_path(&conflict.source, "source")?;
+    let target = conflict_path(&conflict.target, "target")?;
+    match conflict.operation.as_str() {
+        "copy" => Ok(Operation::Copy {
+            from: source,
+            to: target,
+        }),
+        "move" => Ok(Operation::Move {
+            from: source,
+            to: target,
+        }),
+        "rename" => Ok(Operation::Rename {
+            from: source,
+            to: target,
+        }),
+        "restore" => Ok(Operation::Restore {
+            from: source,
+            to: target,
+        }),
+        other => Err(GfmError::Format(format!(
+            "operation conflict apply does not support `{other}` records"
+        ))),
+    }
+}
+
+fn conflict_path(value: &str, field: &str) -> Result<PathBuf> {
+    if value.is_empty() || value == "-" {
+        return Err(GfmError::Format(format!(
+            "operation conflict record is missing `{field}` path"
+        )));
+    }
+    Ok(PathBuf::from(value))
 }
 
 fn restore_destination_from_metadata(trashed_path: &Path) -> Result<PathBuf> {

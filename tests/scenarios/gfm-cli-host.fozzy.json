@@ -48,6 +48,47 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-apply-source.txt",
+      "data": "apply source\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-apply-target.txt",
+      "data": "apply target\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-apply-conflicts.tsv",
+      "data": "operation-conflict\toperation=copy\tsource=tmp/gfm-fozzy-operation-apply-source.txt\ttarget=tmp/gfm-fozzy-operation-apply-target.txt\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_OPS_JOURNAL": "tmp/gfm-fozzy-operation-apply-journal.tsv"
+      },
+      "args": [
+        "operation-conflict-apply",
+        "tmp/gfm-fozzy-operation-apply-conflicts.tsv",
+        "tmp/gfm-fozzy-operation-apply-target.txt",
+        "keep-both"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/bin/cat",
+      "args": [
+        "tmp/gfm-fozzy-operation-apply-target copy.txt"
+      ],
+      "exit_code": 0,
+      "stdout": "apply source\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
