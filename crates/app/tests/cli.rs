@@ -576,6 +576,14 @@ fn extraction_preflight_retains_security_scoped_bookmark_from_binary() {
         "{}",
         String::from_utf8_lossy(&create.stderr)
     );
+    let create_stderr = String::from_utf8_lossy(&create.stderr);
+    assert!(
+        create_stderr.contains(&format!(
+            "security-worker-admission\tworker=security bookmark store\tpath={}",
+            root.display()
+        )),
+        "{create_stderr}"
+    );
     let create_stdout = String::from_utf8(create.stdout).unwrap();
     assert!(
         create_stdout.contains("security-bookmark\t")
@@ -708,6 +716,14 @@ fn security_bookmark_create_refuses_unreachable_store_before_persisting_from_bin
             .contains("security bookmark store volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=security bookmark store\t"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=security bookmark create\t"),
+        "{stderr}"
+    );
     assert!(!bookmarks.exists());
 
     fs::remove_dir_all(root).unwrap();
@@ -773,6 +789,8 @@ fn quicklook_preflight_retains_security_scoped_bookmark_from_binary() {
         "{}",
         String::from_utf8_lossy(&create.stderr)
     );
+    let create_stderr = String::from_utf8_lossy(&create.stderr);
+    assert_worker_admitted(&create_stderr, "security bookmark store", &root);
     let create_stdout = String::from_utf8(create.stdout).unwrap();
     assert!(
         create_stdout.contains("\tstatus=created\t"),
@@ -836,6 +854,8 @@ fn thumbnail_preflight_retains_security_scoped_bookmark_from_binary() {
         "{}",
         String::from_utf8_lossy(&create.stderr)
     );
+    let create_stderr = String::from_utf8_lossy(&create.stderr);
+    assert_worker_admitted(&create_stderr, "security bookmark store", &root);
     let create_stdout = String::from_utf8(create.stdout).unwrap();
     assert!(
         create_stdout.contains("\tstatus=created\t"),

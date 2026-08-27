@@ -79,27 +79,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(|value| AccessIntent::parse(&value))
                 .transpose()?
                 .unwrap_or(AccessIntent::Read);
-            let report = SecurityScopedAccessReport::evaluate(&path, intent).create_bookmark();
-            if report.status == SecurityScopedBookmarkStatus::Created {
-                let store = SecurityScopedBookmarkStore::new(
-                    crate::runtime::default_security_bookmarks_path(),
-                );
-                let _store_access = preflight_access_scope(
-                    write_probe_path(store.path()),
-                    AccessIntent::Write,
-                    "security bookmark store",
-                )?;
-                let bookmark = gfm_mac::SecurityScopedBookmark::create(&path, report.read_only)
-                    .map_err(|failure| GfmError::Permission {
-                        path: path.clone(),
-                        message: failure.reason.unwrap_or_else(|| {
-                            "security-scoped bookmark creation failed".to_string()
-                        }),
-                    })?;
-                println!("{}", report.as_tsv());
-                println!("{}", store.upsert(bookmark)?.as_tsv());
-            } else {
-                println!("{}", report.as_tsv());
+            for line in run_security_bookmark_create(path, intent)? {
+                println!("{line}");
             }
         }
         "mac-bridges" => {
@@ -1415,6 +1396,41 @@ fn run_fileprovider_operation(
         let _access = preflight_access_scope(&path, AccessIntent::Operate, WORKER)?;
         cancellation.check()?;
         FileProviderOperationReport::execute(path, operation)
+    })
+}
+
+fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<Vec<String>> {
+    const STORE_WORKER: &str = "security bookmark store";
+    const WORKER: &str = "security bookmark create";
+    let report = SecurityScopedAccessReport::evaluate(&path, intent).create_bookmark();
+    if report.status != SecurityScopedBookmarkStatus::Created {
+        return Ok(vec![report.as_tsv()]);
+    }
+    let store = SecurityScopedBookmarkStore::new(crate::runtime::default_security_bookmarks_path());
+    let store_probe = write_probe_path(store.path()).to_path_buf();
+    preflight_volume_access_scope(&store_probe, AccessIntent::Write, STORE_WORKER)?;
+    preflight_volume_access_scope(&path, intent, WORKER)?;
+    let volume = detect_volume_id(&store_probe)
+        .ok()
+        .or_else(|| parent_volume(&store_probe))
+        .or_else(|| detect_volume_id(&path).ok())
+        .or_else(|| parent_volume(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _store_access =
+            preflight_access_scope(&store_probe, AccessIntent::Write, STORE_WORKER)?;
+        cancellation.check()?;
+        let bookmark = gfm_mac::SecurityScopedBookmark::create(&path, report.read_only).map_err(
+            |failure| GfmError::Permission {
+                path: path.clone(),
+                message: failure
+                    .reason
+                    .unwrap_or_else(|| "security-scoped bookmark creation failed".to_string()),
+            },
+        )?;
+        cancellation.check()?;
+        let store_report = store.upsert(bookmark)?;
+        Ok(vec![report.as_tsv(), store_report.as_tsv()])
     })
 }
 
