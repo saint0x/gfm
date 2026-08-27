@@ -1,7 +1,9 @@
 use crate::{
-    access::{preflight_access_scope, ScopedAccessGuard},
-    parse_u32_arg, parse_usize_arg, required_path,
+    access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard},
+    detect_volume_id, parent_volume, parse_u32_arg, parse_usize_arg, required_path,
+    runtime::run_volume_task_cancellable,
 };
+use gfm_jobs::Priority;
 use gfm_mac::AccessIntent;
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_macrobench_fixture_report,
@@ -96,14 +98,28 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let height = parse_u32_arg(args.next(), "pixel-diff requires a height")?;
             let size = PixelSize::new(width, height);
             let mask_path = args.next().map(PathBuf::from);
-            let _access = retain_pixel_diff_access(&expected, &actual, mask_path.as_deref())?;
-            let masks = mask_path
-                .as_ref()
-                .map(|path| read_mask_file(path, size))
-                .transpose()?
-                .unwrap_or_default();
-            let options = PixelDiffOptions::strict(size).with_masks(masks);
-            let report = diff_rgba_files(expected, actual, &options)?;
+            preflight_pixel_diff_volumes(&expected, &actual, mask_path.as_deref())?;
+            let volume = primary_volume(&expected)
+                .or_else(|| primary_volume(&actual))
+                .or_else(|| mask_path.as_deref().and_then(primary_volume));
+            let report = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "pixel diff",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access =
+                        retain_pixel_diff_access(&expected, &actual, mask_path.as_deref())?;
+                    cancellation.check()?;
+                    let masks = mask_path
+                        .as_ref()
+                        .map(|path| read_mask_file(path, size))
+                        .transpose()?
+                        .unwrap_or_default();
+                    let options = PixelDiffOptions::strict(size).with_masks(masks);
+                    diff_rgba_files(expected, actual, &options)
+                },
+            )?;
             println!(
                 "pixel-diff\t{}x{}\ttotal={}\tmismatched={}\tunmasked={}\tmasked={}\tmax-channel-delta={}\tpassed={}",
                 report.size.width,
@@ -157,14 +173,28 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let height = parse_u32_arg(args.next(), "pixel-threshold-check requires a height")?;
             let size = PixelSize::new(width, height);
             let mask_path = args.next().map(PathBuf::from);
-            let _access = retain_pixel_diff_access(&expected, &actual, mask_path.as_deref())?;
-            let masks = mask_path
-                .as_ref()
-                .map(|path| read_governed_mask_file(path, size))
-                .transpose()?
-                .unwrap_or_default();
-            let options = PixelDiffOptions::strict(size).with_governed_masks(masks);
-            let report = diff_rgba_files(expected, actual, &options)?;
+            preflight_pixel_diff_volumes(&expected, &actual, mask_path.as_deref())?;
+            let volume = primary_volume(&expected)
+                .or_else(|| primary_volume(&actual))
+                .or_else(|| mask_path.as_deref().and_then(primary_volume));
+            let report = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "pixel threshold",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access =
+                        retain_pixel_diff_access(&expected, &actual, mask_path.as_deref())?;
+                    cancellation.check()?;
+                    let masks = mask_path
+                        .as_ref()
+                        .map(|path| read_governed_mask_file(path, size))
+                        .transpose()?
+                        .unwrap_or_default();
+                    let options = PixelDiffOptions::strict(size).with_governed_masks(masks);
+                    diff_rgba_files(expected, actual, &options)
+                },
+            )?;
             let threshold = PixelDriftThreshold::finder_strict(surface);
             let evaluation = evaluate_pixel_threshold(&report, threshold);
             println!(
@@ -189,8 +219,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "parity-gate" => {
             let manifest = required_path(args.next(), "parity-gate requires a manifest path")?;
-            let _access = preflight_access_scope(&manifest, AccessIntent::Read, "parity gate")?;
-            let report = run_parity_gate_manifest(&manifest)?;
+            preflight_volume_access_scope(&manifest, AccessIntent::Read, "parity gate")?;
+            let volume = primary_volume(&manifest);
+            let manifest_for_worker = manifest.clone();
+            let report = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "parity gate",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access = preflight_access_scope(
+                        &manifest_for_worker,
+                        AccessIntent::Read,
+                        "parity gate",
+                    )?;
+                    cancellation.check()?;
+                    run_parity_gate_manifest(&manifest_for_worker)
+                },
+            )?;
             println!(
                 "parity-gate\tmanifest={}\tentries={}\tviolations={}\tpassed={}",
                 manifest.display(),
@@ -225,8 +271,31 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let manifest = required_path(args.next(), "parity-review requires a manifest path")?;
             let output_dir =
                 required_path(args.next(), "parity-review requires an output directory")?;
-            let _access = retain_parity_review_access(&manifest, &output_dir)?;
-            let bundle = write_parity_review_bundle_manifest(&manifest, &output_dir)?;
+            preflight_volume_access_scope(&manifest, AccessIntent::Read, "parity review manifest")?;
+            preflight_volume_access_scope(
+                write_probe_path(&output_dir),
+                AccessIntent::Write,
+                "parity review output",
+            )?;
+            let volume =
+                primary_volume(&manifest).or_else(|| primary_volume(write_probe_path(&output_dir)));
+            let manifest_for_worker = manifest.clone();
+            let output_dir_for_worker = output_dir.clone();
+            let bundle = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "parity review",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access =
+                        retain_parity_review_access(&manifest_for_worker, &output_dir_for_worker)?;
+                    cancellation.check()?;
+                    write_parity_review_bundle_manifest(
+                        &manifest_for_worker,
+                        &output_dir_for_worker,
+                    )
+                },
+            )?;
             println!(
                 "parity-review\tmanifest={}\toutput={}\tentries={}\tviolations={}\tpassed={}",
                 manifest.display(),
@@ -475,6 +544,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn preflight_pixel_diff_volumes(expected: &Path, actual: &Path, mask: Option<&Path>) -> Result<()> {
+    preflight_volume_access_scope(expected, AccessIntent::Read, "pixel expected")?;
+    preflight_volume_access_scope(actual, AccessIntent::Read, "pixel actual")?;
+    if let Some(mask) = mask {
+        preflight_volume_access_scope(mask, AccessIntent::Read, "pixel mask")?;
+    }
+    Ok(())
+}
+
+fn primary_volume(path: &Path) -> Option<gfm_types::VolumeId> {
+    detect_volume_id(path).ok().or_else(|| parent_volume(path))
 }
 
 fn retain_pixel_diff_access(

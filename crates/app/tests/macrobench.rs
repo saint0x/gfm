@@ -197,11 +197,18 @@ fn compares_pixel_diff_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
 
     assert!(stdout.contains("pixel-diff\t3x1\t"), "{stdout}");
     assert!(
         stdout.contains("mismatched=1\tunmasked=0\tmasked=1\tmax-channel-delta=1\tpassed=true"),
         "{stdout}"
+    );
+    assert!(
+        stderr.contains("security-worker-admission\tworker=pixel expected\t")
+            && stderr.contains("security-worker-admission\tworker=pixel actual\t")
+            && stderr.contains("security-worker-admission\tworker=pixel mask\t"),
+        "{stderr}"
     );
 
     fs::remove_dir_all(root).unwrap();
@@ -235,6 +242,7 @@ fn checks_pixel_threshold_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
 
     assert!(
         stdout.contains("threshold\ttoolbar\tunmasked<=0"),
@@ -243,6 +251,12 @@ fn checks_pixel_threshold_from_binary() {
     assert!(
         stdout.contains("passed=true\tmismatched=1\tunmasked=0\tmasked=1"),
         "{stdout}"
+    );
+    assert!(
+        stderr.contains("security-worker-admission\tworker=pixel expected\t")
+            && stderr.contains("security-worker-admission\tworker=pixel actual\t")
+            && stderr.contains("security-worker-admission\tworker=pixel mask\t"),
+        "{stderr}"
     );
 
     fs::remove_dir_all(root).unwrap();
@@ -312,6 +326,10 @@ fn pixel_routes_refuse_unreachable_inputs_before_reading_from_binary() {
         diff_stderr.contains("pixel actual volume access blocked: unreachable volume network"),
         "{diff_stderr}"
     );
+    assert!(
+        !diff_stderr.contains("security-worker-admission\t"),
+        "{diff_stderr}"
+    );
     assert!(!diff_stderr.contains("RGBA"), "{diff_stderr}");
 
     let threshold = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -335,6 +353,10 @@ fn pixel_routes_refuse_unreachable_inputs_before_reading_from_binary() {
     );
     assert!(
         threshold_stderr.contains("pixel actual volume access blocked: unreachable volume network"),
+        "{threshold_stderr}"
+    );
+    assert!(
+        !threshold_stderr.contains("security-worker-admission\t"),
         "{threshold_stderr}"
     );
     assert!(
@@ -372,6 +394,7 @@ fn runs_parity_gate_from_binary_manifest() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
 
     assert!(stdout.contains("parity-gate\tmanifest="), "{stdout}");
     assert!(
@@ -381,6 +404,10 @@ fn runs_parity_gate_from_binary_manifest() {
     assert!(
         stdout.contains("threshold\ttoolbar\tunmasked<=0"),
         "{stdout}"
+    );
+    assert!(
+        stderr.contains("security-worker-admission\tworker=parity gate\t"),
+        "{stderr}"
     );
 
     fs::remove_dir_all(root).unwrap();
@@ -404,6 +431,10 @@ fn parity_routes_refuse_unreachable_paths_before_manifest_or_bundle_io_from_bina
     assert!(!gate_stdout.contains("parity-gate\t"), "{gate_stdout}");
     assert!(
         gate_stderr.contains("parity gate volume access blocked: unreachable volume network"),
+        "{gate_stderr}"
+    );
+    assert!(
+        !gate_stderr.contains("security-worker-admission\t"),
         "{gate_stderr}"
     );
     assert!(
@@ -432,6 +463,10 @@ fn parity_routes_refuse_unreachable_paths_before_manifest_or_bundle_io_from_bina
     assert!(
         review_stderr
             .contains("parity review output volume access blocked: unreachable volume network"),
+        "{review_stderr}"
+    );
+    assert!(
+        !review_stderr.contains("security-worker-admission\t"),
         "{review_stderr}"
     );
     assert!(
@@ -470,10 +505,16 @@ fn writes_parity_review_bundle_from_binary_manifest() {
         String::from_utf8_lossy(&output.stdout)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
 
     assert!(
         stdout.contains("entries=1\tviolations=1\tpassed=false"),
         "{stdout}"
+    );
+    assert!(
+        stderr.contains("security-worker-admission\tworker=parity review manifest\t")
+            && stderr.contains("security-worker-admission\tworker=parity review output\t"),
+        "{stderr}"
     );
     assert!(review.join("review.md").exists());
     assert!(review.join("entries.tsv").exists());
