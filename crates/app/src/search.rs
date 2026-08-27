@@ -157,23 +157,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "search-content-index-set requires at least one content archive".to_string(),
                 ));
             }
-            let _access = preflight_content_index_set_search_access(
-                &records,
-                &content_paths,
-                "content index set search",
-            )?;
-            let (live, report) =
-                Indexer::default().load_live_with_content_set(records, &content_paths, &query)?;
-            eprintln!(
-                "content-archives {} content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
-                content_paths.len(),
-                report.content_keys,
-                report.records_loaded,
-                report.records_missing,
-                report.candidate_ids,
-                report.full_hydration
-            );
-            for hit in live.search(&query, 50) {
+            let output = run_content_index_set_search(records, content_paths, query)?;
+            eprintln!("{}", output.diagnostics);
+            for hit in output.hits {
                 print_hit(&hit);
             }
         }
@@ -193,21 +179,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         .to_string(),
                 ));
             }
-            let _access = preflight_content_index_set_search_access(
-                &records,
-                &content_paths,
-                "content index set session",
-            )?;
-            let session =
-                Indexer::default().load_content_set_query_session(&records, &content_paths)?;
-            let first = session.search(&query, 50)?;
-            print_content_session_report("content-session-first", content_paths.len(), &first);
-            for hit in first.search.hits {
-                print_hit(&hit);
+            let output = run_content_index_set_session(records, content_paths, query)?;
+            for diagnostic in output.diagnostics {
+                eprintln!("{diagnostic}");
             }
-            let second = session.search(&query, 50)?;
-            print_content_session_report("content-session-second", content_paths.len(), &second);
-            for hit in second.search.hits {
+            for hit in output.hits {
                 print_hit(&hit);
             }
         }
@@ -224,22 +200,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-content-index-manifest requires a query string",
             )?;
-            let _access = preflight_content_index_manifest_search_access(
-                &records,
-                &manifest,
-                "content index manifest search",
-            )?;
-            let (live, report) =
-                Indexer::default().load_live_with_content_manifest(records, manifest, &query)?;
-            eprintln!(
-                "content-manifest-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
-                report.content_keys,
-                report.records_loaded,
-                report.records_missing,
-                report.candidate_ids,
-                report.full_hydration
-            );
-            for hit in live.search(&query, 50) {
+            let output = run_content_index_manifest_search(records, manifest, query)?;
+            eprintln!("{}", output.diagnostics);
+            for hit in output.hits {
                 print_hit(&hit);
             }
         }
@@ -256,29 +219,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-content-index-manifest-session requires a query string",
             )?;
-            let _access = preflight_content_index_manifest_search_access(
-                &records,
-                &manifest,
-                "content index manifest session",
-            )?;
-            let session =
-                Indexer::default().load_content_manifest_query_session(&records, &manifest)?;
-            let first = session.search(&query, 50)?;
-            print_content_session_report(
-                "content-manifest-session-first",
-                session.archive_count(),
-                &first,
-            );
-            for hit in first.search.hits {
-                print_hit(&hit);
+            let output = run_content_index_manifest_session(records, manifest, query)?;
+            for diagnostic in output.diagnostics {
+                eprintln!("{diagnostic}");
             }
-            let second = session.search(&query, 50)?;
-            print_content_session_report(
-                "content-manifest-session-second",
-                session.archive_count(),
-                &second,
-            );
-            for hit in second.search.hits {
+            for hit in output.hits {
                 print_hit(&hit);
             }
         }
@@ -864,6 +809,16 @@ struct ContentIndexSearchOutput {
     hits: Vec<SearchHit>,
 }
 
+struct ContentIndexSetSearchOutput {
+    diagnostics: String,
+    hits: Vec<SearchHit>,
+}
+
+struct ContentIndexSessionOutput {
+    diagnostics: Vec<String>,
+    hits: Vec<SearchHit>,
+}
+
 fn run_search_index_columns(
     records: PathBuf,
     columns: PathBuf,
@@ -938,6 +893,153 @@ fn run_content_index_search(
         let hits = live.search_with_snippets(&query, 50, &extractor, 96)?;
         Ok(ContentIndexSearchOutput { diagnostics, hits })
     })
+}
+
+fn run_content_index_set_search(
+    records: PathBuf,
+    content_paths: Vec<PathBuf>,
+    query: String,
+) -> Result<ContentIndexSetSearchOutput> {
+    const WORKER: &str = "content index set search";
+    preflight_content_index_set_volume_access(&records, &content_paths, WORKER)?;
+    let volume = detect_volume_id(&records).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_content_index_set_search_access(&records, &content_paths, WORKER)?;
+        cancellation.check()?;
+        let archive_count = content_paths.len();
+        let (live, report) =
+            Indexer::default().load_live_with_content_set(records, &content_paths, &query)?;
+        let diagnostics = format!(
+            "content-archives {} content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
+            archive_count,
+            report.content_keys,
+            report.records_loaded,
+            report.records_missing,
+            report.candidate_ids,
+            report.full_hydration
+        );
+        cancellation.check()?;
+        Ok(ContentIndexSetSearchOutput {
+            diagnostics,
+            hits: live.search(&query, 50),
+        })
+    })
+}
+
+fn run_content_index_set_session(
+    records: PathBuf,
+    content_paths: Vec<PathBuf>,
+    query: String,
+) -> Result<ContentIndexSessionOutput> {
+    const WORKER: &str = "content index set session";
+    preflight_content_index_set_volume_access(&records, &content_paths, WORKER)?;
+    let volume = detect_volume_id(&records).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_content_index_set_search_access(&records, &content_paths, WORKER)?;
+        cancellation.check()?;
+        let session =
+            Indexer::default().load_content_set_query_session(&records, &content_paths)?;
+        let first = session.search(&query, 50)?;
+        let mut diagnostics = vec![format_content_session_report(
+            "content-session-first",
+            content_paths.len(),
+            &first,
+        )];
+        let mut hits = first.search.hits;
+        cancellation.check()?;
+        let second = session.search(&query, 50)?;
+        diagnostics.push(format_content_session_report(
+            "content-session-second",
+            content_paths.len(),
+            &second,
+        ));
+        hits.extend(second.search.hits);
+        Ok(ContentIndexSessionOutput { diagnostics, hits })
+    })
+}
+
+fn run_content_index_manifest_search(
+    records: PathBuf,
+    manifest: PathBuf,
+    query: String,
+) -> Result<ContentIndexSetSearchOutput> {
+    const WORKER: &str = "content index manifest search";
+    preflight_volume_access_scope(&records, AccessIntent::Read, &format!("{WORKER} records"))?;
+    preflight_volume_access_scope(&manifest, AccessIntent::Read, &format!("{WORKER} manifest"))?;
+    let volume = detect_volume_id(&records)
+        .ok()
+        .or_else(|| detect_volume_id(&manifest).ok());
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_content_index_manifest_search_access(&records, &manifest, WORKER)?;
+        cancellation.check()?;
+        let (live, report) =
+            Indexer::default().load_live_with_content_manifest(records, manifest, &query)?;
+        let diagnostics = format!(
+            "content-manifest-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
+            report.content_keys,
+            report.records_loaded,
+            report.records_missing,
+            report.candidate_ids,
+            report.full_hydration
+        );
+        cancellation.check()?;
+        Ok(ContentIndexSetSearchOutput {
+            diagnostics,
+            hits: live.search(&query, 50),
+        })
+    })
+}
+
+fn run_content_index_manifest_session(
+    records: PathBuf,
+    manifest: PathBuf,
+    query: String,
+) -> Result<ContentIndexSessionOutput> {
+    const WORKER: &str = "content index manifest session";
+    preflight_volume_access_scope(&records, AccessIntent::Read, &format!("{WORKER} records"))?;
+    preflight_volume_access_scope(&manifest, AccessIntent::Read, &format!("{WORKER} manifest"))?;
+    let volume = detect_volume_id(&records)
+        .ok()
+        .or_else(|| detect_volume_id(&manifest).ok());
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_content_index_manifest_search_access(&records, &manifest, WORKER)?;
+        cancellation.check()?;
+        let session =
+            Indexer::default().load_content_manifest_query_session(&records, &manifest)?;
+        let archive_count = session.archive_count();
+        let first = session.search(&query, 50)?;
+        let mut diagnostics = vec![format_content_session_report(
+            "content-manifest-session-first",
+            archive_count,
+            &first,
+        )];
+        let mut hits = first.search.hits;
+        cancellation.check()?;
+        let second = session.search(&query, 50)?;
+        diagnostics.push(format_content_session_report(
+            "content-manifest-session-second",
+            archive_count,
+            &second,
+        ));
+        hits.extend(second.search.hits);
+        Ok(ContentIndexSessionOutput { diagnostics, hits })
+    })
+}
+
+fn preflight_content_index_set_volume_access(
+    records: &Path,
+    content_paths: &[PathBuf],
+    worker: &str,
+) -> Result<()> {
+    preflight_volume_access_scope(records, AccessIntent::Read, &format!("{worker} records"))?;
+    for content in content_paths {
+        preflight_volume_access_scope(content, AccessIntent::Read, &format!("{worker} content"))?;
+    }
+    Ok(())
 }
 
 fn preflight_search_archive_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
@@ -1333,12 +1435,12 @@ fn print_hit(hit: &SearchHit) {
     println!();
 }
 
-fn print_content_session_report(
+fn format_content_session_report(
     label: &str,
     content_archives: usize,
     report: &gfm_index::ContentQuerySessionReport,
-) {
-    eprintln!(
+) -> String {
+    format!(
         "{label}\tcontent-archives={content_archives}\tcontent-keys={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tposting-cache-hits={}\tposting-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}",
         report.load.content_keys,
         report.load.records_loaded,
@@ -1349,7 +1451,7 @@ fn print_content_session_report(
         report.posting_cache_misses,
         report.record_cache_hits,
         report.record_cache_misses
-    );
+    )
 }
 
 fn format_sidecar_session_report(

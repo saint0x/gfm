@@ -4199,6 +4199,10 @@ fn archive_plan_routes_refuse_unreachable_inputs_before_inspection_from_binary()
             )),
             "{route}: {stderr}"
         );
+        assert!(
+            !stderr.contains(&format!("security-worker-admission\tworker={worker}\t")),
+            "{route}: {stderr}"
+        );
         assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
     }
 
@@ -4504,6 +4508,20 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
         "{}",
         String::from_utf8_lossy(&plan_output.stderr)
     );
+    let plan_stderr = String::from_utf8_lossy(&plan_output.stderr);
+    assert!(
+        plan_stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar repair plan records\tpath={}",
+            records.display()
+        )) && plan_stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar repair plan sidecar\tpath={}",
+            prefixes.parent().unwrap().display()
+        )) && plan_stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar repair plan sidecar\tpath={}",
+            dictionary.parent().unwrap().display()
+        )),
+        "{plan_stderr}"
+    );
     let plan_stdout = String::from_utf8(plan_output.stdout).unwrap();
     assert!(
         plan_stdout.contains("action=rebuild")
@@ -4640,6 +4658,54 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
     fs::remove_file(progress).unwrap();
     fs::remove_file(journal).unwrap();
     fs::remove_dir_all(quarantine).unwrap();
+}
+
+#[test]
+fn sidecar_recovery_plan_refuses_unreachable_sidecar_before_inspection_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-recovery-plan-root");
+    let offline = unique_temp_dir("gfm-cli-sidecar-recovery-plan-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = root.join("records.gfmidx");
+    let prefixes = offline.join("prefixes.gfmprefix");
+    fs::write(
+        &records,
+        "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\t\t/tmp/tagged.md\n",
+    )
+    .unwrap();
+    fs::write(&prefixes, "not inspected").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "sidecar-recovery-plan",
+            records.to_str().unwrap(),
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            "-",
+            "-",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("sidecar-recovery-plan\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "sidecar repair plan sidecar volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=sidecar repair plan sidecar\t"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("invalid magic"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
 }
 
 #[test]
@@ -7910,6 +7976,13 @@ fn search_content_index_set_refuses_unreachable_content_before_loading_from_bina
         ),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content index set search content\tpath={}",
+            content.display()
+        )),
+        "{stderr}"
+    );
     assert!(!stderr.contains("invalid magic"), "{stderr}");
 
     fs::remove_dir_all(root).unwrap();
@@ -8150,6 +8223,13 @@ fn search_content_index_manifest_refuses_unreachable_archive_before_loading_from
         ),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content index manifest search content\tpath={}",
+            content.display()
+        )),
+        "{stderr}"
+    );
     assert!(!stderr.contains("invalid magic"), "{stderr}");
 
     fs::remove_dir_all(root).unwrap();
@@ -8286,7 +8366,16 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     assert!(stdout.contains("right.md"), "{stdout}");
     let stderr = String::from_utf8(search_output.stderr).unwrap();
     assert!(
-        stderr.contains("content-archives 2")
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=content index set search records\tpath={}",
+            records.display()
+        )) && stderr.contains(&format!(
+            "security-worker-admission\tworker=content index set search content\tpath={}",
+            first_content.display()
+        )) && stderr.contains(&format!(
+            "security-worker-admission\tworker=content index set search content\tpath={}",
+            second_content.display()
+        )) && stderr.contains("content-archives 2")
             && stderr.contains("content-keys 1")
             && stderr.contains("records-loaded 2")
             && stderr.contains("candidate-ids 2")
@@ -8332,7 +8421,19 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     );
     let manifest_stderr = String::from_utf8(manifest_search_output.stderr).unwrap();
     assert!(
-        manifest_stderr.contains("content-manifest-keys 1")
+        manifest_stderr.contains(&format!(
+            "security-worker-admission\tworker=content index manifest search records\tpath={}",
+            records.display()
+        )) && manifest_stderr.contains(&format!(
+            "security-worker-admission\tworker=content index manifest search manifest\tpath={}",
+            manifest.display()
+        )) && manifest_stderr.contains(&format!(
+            "security-worker-admission\tworker=content index manifest search content\tpath={}",
+            first_content.display()
+        )) && manifest_stderr.contains(&format!(
+            "security-worker-admission\tworker=content index manifest search content\tpath={}",
+            second_content.display()
+        )) && manifest_stderr.contains("content-manifest-keys 1")
             && manifest_stderr.contains("records-loaded 2")
             && manifest_stderr.contains("candidate-ids 2")
             && manifest_stderr.contains("full-hydration false"),
@@ -8359,7 +8460,16 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     assert!(session_stdout.contains("right.md"), "{session_stdout}");
     let session_stderr = String::from_utf8(session_search_output.stderr).unwrap();
     assert!(
-        session_stderr.contains(
+        session_stderr.contains(&format!(
+            "security-worker-admission\tworker=content index set session records\tpath={}",
+            records.display()
+        )) && session_stderr.contains(&format!(
+            "security-worker-admission\tworker=content index set session content\tpath={}",
+            first_content.display()
+        )) && session_stderr.contains(&format!(
+            "security-worker-admission\tworker=content index set session content\tpath={}",
+            second_content.display()
+        )) && session_stderr.contains(
             "content-session-first\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
         ) && session_stderr.contains("\tposting-cache-hits=0\tposting-cache-misses=1")
             && session_stderr.contains("\trecord-cache-hits=0\trecord-cache-misses=2")
@@ -8391,7 +8501,19 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     );
     let manifest_session_stderr = String::from_utf8(manifest_session_search_output.stderr).unwrap();
     assert!(
-        manifest_session_stderr.contains(
+        manifest_session_stderr.contains(&format!(
+            "security-worker-admission\tworker=content index manifest session records\tpath={}",
+            records.display()
+        )) && manifest_session_stderr.contains(&format!(
+            "security-worker-admission\tworker=content index manifest session manifest\tpath={}",
+            manifest.display()
+        )) && manifest_session_stderr.contains(&format!(
+            "security-worker-admission\tworker=content index manifest session content\tpath={}",
+            first_content.display()
+        )) && manifest_session_stderr.contains(&format!(
+            "security-worker-admission\tworker=content index manifest session content\tpath={}",
+            second_content.display()
+        )) && manifest_session_stderr.contains(
             "content-manifest-session-second\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
         ) && manifest_session_stderr.contains("\tposting-cache-hits=1\tposting-cache-misses=0")
             && manifest_session_stderr.contains("\trecord-cache-hits=2\trecord-cache-misses=0"),

@@ -19,7 +19,7 @@ use gfm_store::{
     sidecar_kind_name, substring_postings_from_records, write_dictionary, write_fuzzy_postings,
     write_metadata_postings, write_prefix_postings, write_record_columns, write_substring_postings,
     ArchiveRebuildInputs, ArchiveSchemaKind, MmapRecordArchive, MmapRecordColumns, SidecarHealth,
-    SidecarKind, SidecarPaths, SidecarRecovery,
+    SidecarKind, SidecarPaths, SidecarRecovery, SidecarRecoveryPlan,
 };
 use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
 use std::path::{Path, PathBuf};
@@ -97,8 +97,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 manifest_path: manifest,
                 discovered_content_archives: discovered_archives,
             };
-            let _access = retain_archive_rebuild_plan_access(&inputs)?;
-            for line in plan_archive_rebuilds(&inputs).as_tsv_lines() {
+            let lines = run_archive_rebuild_plan(inputs)?;
+            for line in lines {
                 println!("{line}");
             }
         }
@@ -164,11 +164,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 required_path(args.next(), "columns-rebuild-plan requires a records path")?;
             let columns =
                 required_path(args.next(), "columns-rebuild-plan requires a columns path")?;
-            let _access = retain_columns_rebuild_plan_access(&records, &columns)?;
-            println!(
-                "{}",
-                plan_columns_archive_rebuild(records, columns).as_tsv()
-            );
+            let report = run_columns_rebuild_plan(records, columns)?;
+            println!("{report}");
         }
         "columns-rebuild" => {
             let records = required_path(args.next(), "columns-rebuild requires a records path")?;
@@ -189,11 +186,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "derived-sidecar-rebuild-plan requires a sidecar path",
             )?;
-            let _access = retain_derived_sidecar_rebuild_plan_access(&records, &sidecar)?;
-            println!(
-                "{}",
-                plan_derived_sidecar_rebuild(records, kind, sidecar).as_tsv()
-            );
+            let report = run_derived_sidecar_rebuild_plan(records, kind, sidecar)?;
+            println!("{report}");
         }
         "derived-sidecar-rebuild" => {
             let records = required_path(
@@ -360,8 +354,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let records =
                 required_path(args.next(), "sidecar-recovery-plan requires a records path")?;
             let sidecars = parse_sidecar_paths(args, "sidecar-recovery-plan")?;
-            let _access = retain_sidecar_recovery_plan_access(&records)?;
-            let plan = plan_sidecar_recovery(&records, &sidecars);
+            let plan = run_sidecar_recovery_plan(records, sidecars)?;
             println!("{}", plan.as_tsv());
             print_sidecar_health("invalid", &plan.invalid_sidecars);
         }
@@ -466,6 +459,69 @@ where
     })
 }
 
+fn run_archive_rebuild_plan(inputs: ArchiveRebuildInputs) -> Result<Vec<String>> {
+    const WORKER: &str = "archive rebuild plan";
+    preflight_archive_rebuild_plan_volumes(&inputs)?;
+    let volume = detect_volume_id(&inputs.records_path)
+        .ok()
+        .or_else(|| parent_volume(&inputs.records_path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_archive_rebuild_plan_access(&inputs)?;
+        cancellation.check()?;
+        Ok(plan_archive_rebuilds(&inputs).as_tsv_lines())
+    })
+}
+
+fn run_columns_rebuild_plan(records: PathBuf, columns: PathBuf) -> Result<String> {
+    const WORKER: &str = "columns rebuild plan";
+    preflight_columns_rebuild_plan_volumes(&records, &columns)?;
+    let volume = detect_volume_id(&records)
+        .ok()
+        .or_else(|| parent_volume(&records));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_columns_rebuild_plan_access(&records, &columns)?;
+        cancellation.check()?;
+        Ok(plan_columns_archive_rebuild(records, columns).as_tsv())
+    })
+}
+
+fn run_derived_sidecar_rebuild_plan(
+    records: PathBuf,
+    kind: SidecarKind,
+    sidecar: PathBuf,
+) -> Result<String> {
+    const WORKER: &str = "derived sidecar rebuild plan";
+    preflight_derived_sidecar_rebuild_plan_volumes(&records, &sidecar)?;
+    let volume = detect_volume_id(&records)
+        .ok()
+        .or_else(|| parent_volume(&records));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_derived_sidecar_rebuild_plan_access(&records, &sidecar)?;
+        cancellation.check()?;
+        Ok(plan_derived_sidecar_rebuild(records, kind, sidecar).as_tsv())
+    })
+}
+
+fn run_sidecar_recovery_plan(
+    records: PathBuf,
+    sidecars: SidecarPaths,
+) -> Result<SidecarRecoveryPlan> {
+    const WORKER: &str = "sidecar repair plan";
+    preflight_sidecar_recovery_plan_volumes(&records, &sidecars)?;
+    let volume = detect_volume_id(&records)
+        .ok()
+        .or_else(|| parent_volume(&records));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_sidecar_recovery_plan_access(&records, &sidecars)?;
+        cancellation.check()?;
+        Ok(plan_sidecar_recovery(&records, &sidecars))
+    })
+}
+
 fn retain_record_sidecar_build_access(
     records: &Path,
     output: &Path,
@@ -551,6 +607,15 @@ fn retain_columns_rebuild_plan_access(
     ])
 }
 
+fn preflight_columns_rebuild_plan_volumes(records: &Path, columns: &Path) -> Result<()> {
+    preflight_volume_access_scope(records, AccessIntent::Read, "columns rebuild plan records")?;
+    preflight_volume_access_scope(
+        archive_probe_path(columns),
+        AccessIntent::Read,
+        "columns rebuild plan columns",
+    )
+}
+
 fn retain_columns_rebuild_access(
     records: &Path,
     columns: &Path,
@@ -592,6 +657,19 @@ fn retain_derived_sidecar_rebuild_plan_access(
             "derived sidecar rebuild plan sidecar",
         )?,
     ])
+}
+
+fn preflight_derived_sidecar_rebuild_plan_volumes(records: &Path, sidecar: &Path) -> Result<()> {
+    preflight_volume_access_scope(
+        records,
+        AccessIntent::Read,
+        "derived sidecar rebuild plan records",
+    )?;
+    preflight_volume_access_scope(
+        archive_probe_path(sidecar),
+        AccessIntent::Read,
+        "derived sidecar rebuild plan sidecar",
+    )
 }
 
 fn retain_archive_rebuild_plan_access(
@@ -654,6 +732,61 @@ fn retain_archive_rebuild_plan_access(
     Ok(guards)
 }
 
+fn preflight_archive_rebuild_plan_volumes(inputs: &ArchiveRebuildInputs) -> Result<()> {
+    for (path, worker) in archive_rebuild_plan_read_paths(inputs) {
+        preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
+    }
+    Ok(())
+}
+
+fn archive_rebuild_plan_read_paths(inputs: &ArchiveRebuildInputs) -> Vec<(&Path, &'static str)> {
+    let mut paths = vec![
+        (
+            archive_probe_path(&inputs.records_path),
+            "archive rebuild plan records",
+        ),
+        (
+            archive_probe_path(&inputs.columns_path),
+            "archive rebuild plan columns",
+        ),
+        (
+            archive_probe_path(&inputs.metadata_path),
+            "archive rebuild plan metadata",
+        ),
+        (
+            archive_probe_path(&inputs.prefixes_path),
+            "archive rebuild plan prefixes",
+        ),
+        (
+            archive_probe_path(&inputs.substrings_path),
+            "archive rebuild plan substrings",
+        ),
+        (
+            archive_probe_path(&inputs.fuzzy_path),
+            "archive rebuild plan fuzzy",
+        ),
+        (
+            archive_probe_path(&inputs.dictionary_path),
+            "archive rebuild plan dictionary",
+        ),
+        (
+            archive_probe_path(&inputs.content_path),
+            "archive rebuild plan content",
+        ),
+        (
+            archive_probe_path(&inputs.manifest_path),
+            "archive rebuild plan manifest",
+        ),
+    ];
+    paths.extend(inputs.discovered_content_archives.iter().map(|archive| {
+        (
+            archive_probe_path(&archive.path),
+            "archive rebuild plan discovered content",
+        )
+    }));
+    paths
+}
+
 fn retain_derived_sidecar_rebuild_access(
     records: &Path,
     sidecar: &Path,
@@ -700,12 +833,35 @@ fn preflight_derived_sidecar_rebuild_volumes(
     )
 }
 
-fn retain_sidecar_recovery_plan_access(records: &Path) -> Result<Vec<ScopedAccessGuard>> {
-    Ok(vec![preflight_access_scope(
+fn retain_sidecar_recovery_plan_access(
+    records: &Path,
+    sidecars: &SidecarPaths,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = vec![preflight_access_scope(
         records,
         AccessIntent::Read,
-        "sidecar repair records",
-    )?])
+        "sidecar repair plan records",
+    )?];
+    for path in sidecar_paths(sidecars) {
+        guards.push(preflight_access_scope(
+            archive_probe_path(path),
+            AccessIntent::Read,
+            "sidecar repair plan sidecar",
+        )?);
+    }
+    Ok(guards)
+}
+
+fn preflight_sidecar_recovery_plan_volumes(records: &Path, sidecars: &SidecarPaths) -> Result<()> {
+    preflight_volume_access_scope(records, AccessIntent::Read, "sidecar repair plan records")?;
+    for path in sidecar_paths(sidecars) {
+        preflight_volume_access_scope(
+            archive_probe_path(path),
+            AccessIntent::Read,
+            "sidecar repair plan sidecar",
+        )?;
+    }
+    Ok(())
 }
 
 fn retain_sidecar_recovery_access(
