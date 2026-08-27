@@ -289,7 +289,11 @@ fn permission_access_contract_refuses_unreachable_volume_from_binary() {
         stdout.contains("\tintent=preview\tscope=none\t"),
         "{stdout}"
     );
-    assert!(stdout.contains("\taccess-action=allow\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tprobe=unknown\tmode=denied\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\taccess-action=deny\t"), "{stdout}");
     assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
     assert!(
         stdout.contains(
@@ -359,10 +363,10 @@ fn permission_access_contract_honors_read_only_volume_marker_from_binary() {
     assert!(stdout.contains("\npermission-access\t"), "{stdout}");
     assert!(stdout.contains("\tintent=write\tscope=none\t"), "{stdout}");
     assert!(
-        stdout.contains("\tprobe=granted\tmode=plain-filesystem\t"),
+        stdout.contains("\tprobe=unknown\tmode=denied\t"),
         "{stdout}"
     );
-    assert!(stdout.contains("\taccess-action=allow\t"), "{stdout}");
+    assert!(stdout.contains("\taccess-action=deny\t"), "{stdout}");
     assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
     assert!(
         stdout.contains("\trefresh-on-permission-change=true\tprompt-kind=blocked\t"),
