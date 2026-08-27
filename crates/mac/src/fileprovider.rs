@@ -1110,25 +1110,37 @@ fn is_observable_fileprovider_path(
     previous: Option<&FileProviderStateSnapshot>,
     path: &Path,
 ) -> bool {
-    if previous.is_some_and(|snapshot| snapshot.contains_path(path)) || provider_path_hint(path) {
+    if previous.is_some_and(|snapshot| snapshot.contains_path(path))
+        || strong_provider_path_hint(path)
+    {
         return true;
     }
     if !path.exists() {
         return false;
     }
     let hints = CloudHints::read(path);
-    hints.source != "filesystem" || domain_for_path(path, &hints) != FileProviderDomain::Local
+    observable_fileprovider_path_from_hints(path, &hints)
 }
 
-fn provider_path_hint(path: &Path) -> bool {
-    if path_components(path)
+fn observable_fileprovider_path_from_hints(path: &Path, hints: &CloudHints) -> bool {
+    if native_proves_local_only(hints) || weak_path_hint_without_provider_evidence(hints) {
+        return false;
+    }
+    hints.source != "filesystem" || domain_for_path(path, hints) != FileProviderDomain::Local
+}
+
+fn weak_path_hint_without_provider_evidence(hints: &CloudHints) -> bool {
+    path_only_provider_hint(&hints.source)
+        && hints.xattrs.is_empty()
+        && !native_has_fileprovider_values(&hints.native)
+        && hints.native_identity.status != NativeFileProviderIdentityStatus::Available
+}
+
+fn strong_provider_path_hint(path: &Path) -> bool {
+    path_components(path)
         .iter()
         .any(|component| component == ICLOUD_DRIVE_COMPONENT)
-    {
-        return true;
-    }
-    let name = file_name_lower(path);
-    is_evicted_placeholder_path(path) || name.contains("icloud") || name.contains("fileprovider")
+        || is_evicted_placeholder_path(path)
 }
 
 impl FileProviderOperationReport {
@@ -2413,6 +2425,56 @@ mod tests {
         assert!(!snapshot.entries.iter().any(|entry| entry.path == local));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn weak_provider_name_hint_is_not_observable_when_native_proves_local_only() {
+        let path = PathBuf::from("/tmp/icloud-meeting-notes.md");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(false);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name+native-url-resource".to_string(),
+        };
+
+        assert!(!strong_provider_path_hint(&path));
+        assert!(!observable_fileprovider_path_from_hints(&path, &hints));
+    }
+
+    #[test]
+    fn weak_provider_name_hint_is_not_observable_without_provider_evidence() {
+        let path = PathBuf::from("/tmp/Remote.fileprovider");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name".to_string(),
+        };
+
+        assert!(!strong_provider_path_hint(&path));
+        assert!(weak_path_hint_without_provider_evidence(&hints));
+        assert!(!observable_fileprovider_path_from_hints(&path, &hints));
+    }
+
+    #[test]
+    fn evicted_icloud_extension_remains_strong_observable_provider_hint() {
+        let path = PathBuf::from("/tmp/Remote.icloud");
+
+        assert!(strong_provider_path_hint(&path));
     }
 
     #[test]

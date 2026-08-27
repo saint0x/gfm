@@ -1755,7 +1755,7 @@ fn observed_fileprovider_metadata_invalidation_preserves_noop_events_from_binary
     std::fs::create_dir_all(&root).unwrap();
     let state = root.join("fileprovider-state.tsv");
     let provider = root.join("Remote.icloud-placeholder");
-    let local = root.join("Notes.txt");
+    let local = root.join("Remote.fileprovider");
     std::fs::write(&provider, "placeholder").unwrap();
     mark_evicted_fixture(&provider);
     std::fs::write(&local, "local").unwrap();
