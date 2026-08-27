@@ -783,6 +783,7 @@ mod tests {
                 storage_state: current,
                 materialization: crate::CloudMaterialization::RemotePlaceholder,
                 materialization_source: crate::CloudMaterializationSource::StateFallback,
+                materialization_confidence: crate::CloudMaterializationConfidence::StateFallback,
                 materialization_reason: Some("test".to_string()),
                 progress: crate::CloudTransferProgress {
                     direction: crate::CloudTransferDirection::Idle,

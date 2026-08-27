@@ -138,6 +138,29 @@ impl CloudMaterializationSource {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudMaterializationConfidence {
+    Native,
+    ProviderIdentity,
+    XattrFallback,
+    PathFallback,
+    Filesystem,
+    StateFallback,
+}
+
+impl CloudMaterializationConfidence {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::ProviderIdentity => "provider-identity",
+            Self::XattrFallback => "xattr-fallback",
+            Self::PathFallback => "path-fallback",
+            Self::Filesystem => "filesystem",
+            Self::StateFallback => "state-fallback",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CloudBadge {
     AvailableOffline,
@@ -206,6 +229,7 @@ pub struct FileProviderStateReport {
     pub storage_state: CloudStorageState,
     pub materialization: CloudMaterialization,
     pub materialization_source: CloudMaterializationSource,
+    pub materialization_confidence: CloudMaterializationConfidence,
     pub materialization_reason: Option<String>,
     pub progress: CloudTransferProgress,
     pub badges: Vec<CloudBadge>,
@@ -1279,6 +1303,8 @@ impl FileProviderStateReport {
         let storage_state = storage_state_for_path(&path, domain, &hints);
         let materialization = materialization_for_state(storage_state);
         let materialization_source = materialization_source_for_state(storage_state, &hints);
+        let materialization_confidence =
+            materialization_confidence_for_source(materialization_source);
         let materialization_reason = materialization_reason_for_state(storage_state, &hints);
         let progress = progress_for_state(storage_state, &hints);
         let mut badges = badges_for_state(storage_state);
@@ -1292,6 +1318,7 @@ impl FileProviderStateReport {
             storage_state,
             materialization,
             materialization_source,
+            materialization_confidence,
             materialization_reason,
             progress,
             badges,
@@ -1315,6 +1342,7 @@ impl FileProviderStateReport {
             storage_state,
             materialization: CloudMaterialization::Unknown,
             materialization_source: CloudMaterializationSource::StateFallback,
+            materialization_confidence: CloudMaterializationConfidence::StateFallback,
             materialization_reason: Some("fileprovider-item-removed".to_string()),
             progress: CloudTransferProgress::idle("fileprovider-item-removed"),
             badges: Vec::new(),
@@ -1328,12 +1356,13 @@ impl FileProviderStateReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "fileprovider-state\t{}\tdomain={}\tstate={}\tmaterialization={}\tmaterialization-source={}\tmaterialization-reason={}\toffline={}\tconflict={}\tbadges={}\t{}\tdownload={}\tevict={}\treveal-conflict={}\tprovider={}\tsource={}\treason={}",
+            "fileprovider-state\t{}\tdomain={}\tstate={}\tmaterialization={}\tmaterialization-source={}\tmaterialization-confidence={}\tmaterialization-reason={}\toffline={}\tconflict={}\tbadges={}\t{}\tdownload={}\tevict={}\treveal-conflict={}\tprovider={}\tsource={}\treason={}",
             self.path.display(),
             self.domain.as_str(),
             self.storage_state.as_str(),
             self.materialization.as_str(),
             self.materialization_source.as_str(),
+            self.materialization_confidence.as_str(),
             self.materialization_reason
                 .as_deref()
                 .map(escape_field)
@@ -1701,6 +1730,27 @@ fn materialization_source_for_state(
         CloudMaterializationSource::Filesystem
     } else {
         CloudMaterializationSource::StateFallback
+    }
+}
+
+fn materialization_confidence_for_source(
+    source: CloudMaterializationSource,
+) -> CloudMaterializationConfidence {
+    match source {
+        CloudMaterializationSource::NativeUrlResource
+        | CloudMaterializationSource::NativeUrlResourceUnavailable
+        | CloudMaterializationSource::NativeUrlResourceUnsupported => {
+            CloudMaterializationConfidence::Native
+        }
+        CloudMaterializationSource::NativeFileProviderIdentityUnknown
+        | CloudMaterializationSource::NativeFileProviderIdentityUnavailable
+        | CloudMaterializationSource::NativeFileProviderIdentityUnsupported => {
+            CloudMaterializationConfidence::ProviderIdentity
+        }
+        CloudMaterializationSource::XattrFallback => CloudMaterializationConfidence::XattrFallback,
+        CloudMaterializationSource::PathFallback => CloudMaterializationConfidence::PathFallback,
+        CloudMaterializationSource::Filesystem => CloudMaterializationConfidence::Filesystem,
+        CloudMaterializationSource::StateFallback => CloudMaterializationConfidence::StateFallback,
     }
 }
 
@@ -2094,9 +2144,10 @@ fn atomic_write_text(path: &Path, text: &str) -> Result<()> {
 }
 
 fn sync_parent(path: &Path) -> Result<bool> {
-    let Some(parent) = path.parent() else {
-        return Ok(false);
-    };
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     match File::open(parent) {
         Ok(file) => Ok(file.sync_all().is_ok()),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
@@ -2140,8 +2191,10 @@ mod tests {
     use gfm_mac_sys::{NativeFileProviderStatus, NativeUbiquitousError};
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn reports_path_only_icloud_file_as_unknown_without_native_evidence() {
@@ -2157,6 +2210,10 @@ mod tests {
         assert_eq!(
             report.materialization_source,
             CloudMaterializationSource::PathFallback
+        );
+        assert_eq!(
+            report.materialization_confidence,
+            CloudMaterializationConfidence::PathFallback
         );
         assert_eq!(report.progress.direction, CloudTransferDirection::Idle);
         assert_eq!(report.progress.percent_milli, None);
@@ -2188,6 +2245,10 @@ mod tests {
         assert_eq!(
             report.materialization_source,
             CloudMaterializationSource::PathFallback
+        );
+        assert_eq!(
+            report.materialization_confidence,
+            CloudMaterializationConfidence::PathFallback
         );
         assert_eq!(report.progress.direction, CloudTransferDirection::Idle);
         assert_eq!(report.progress.percent_milli, None);
@@ -2229,6 +2290,10 @@ mod tests {
             CloudMaterializationSource::PathFallback
         );
         assert_eq!(
+            report.materialization_confidence,
+            CloudMaterializationConfidence::PathFallback
+        );
+        assert_eq!(
             report.materialization_reason.as_deref(),
             Some("unknown-provider-state")
         );
@@ -2246,6 +2311,10 @@ mod tests {
         let report = FileProviderStateReport::read_path(&path).unwrap();
 
         assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(
+            report.materialization_confidence,
+            CloudMaterializationConfidence::XattrFallback
+        );
         assert_eq!(report.progress.direction, CloudTransferDirection::Download);
         assert_eq!(report.progress.percent_milli, Some(0));
         assert!(!report.progress.requested);
@@ -2288,6 +2357,10 @@ mod tests {
         assert_eq!(
             report.materialization_source,
             CloudMaterializationSource::XattrFallback
+        );
+        assert_eq!(
+            report.materialization_confidence,
+            CloudMaterializationConfidence::XattrFallback
         );
         assert_eq!(report.commands.download, CloudCommandState::Disabled);
         assert_eq!(report.commands.evict, CloudCommandState::Disabled);
@@ -3281,6 +3354,28 @@ mod tests {
     }
 
     #[test]
+    fn state_snapshot_writes_relative_leaf_state_file_in_current_directory() {
+        let _cwd = CWD_LOCK.lock().unwrap();
+        let root = unique_temp_dir();
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&root).unwrap();
+        let snapshot = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: PathBuf::from("Remote.icloud"),
+                state: CloudStorageState::Evicted,
+            }],
+        };
+
+        snapshot.write("fileprovider-state.tsv").unwrap();
+        let restored = FileProviderStateSnapshot::read("fileprovider-state.tsv").unwrap();
+
+        assert_eq!(restored.entries, snapshot.entries);
+        assert!(root.join("fileprovider-state.tsv").exists());
+        std::env::set_current_dir(previous).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn parses_cloud_storage_state_for_operator_surfaces() {
         assert_eq!(
             CloudStorageState::parse("downloading").unwrap(),
@@ -3337,6 +3432,10 @@ mod tests {
         assert_eq!(
             materialization_source_for_state(state, &hints),
             CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            materialization_confidence_for_source(materialization_source_for_state(state, &hints)),
+            CloudMaterializationConfidence::Native
         );
     }
 
@@ -3995,7 +4094,7 @@ mod tests {
 
         let report = FileProviderStateReport::from_hints(path, hints);
         assert!(report.as_tsv().contains(
-            "\tmaterialization-source=native-url-resource:unsupported\tmaterialization-reason=native URL resource values unsupported\t"
+            "\tmaterialization-source=native-url-resource:unsupported\tmaterialization-confidence=native\tmaterialization-reason=native URL resource values unsupported\t"
         ));
     }
 
@@ -4032,7 +4131,7 @@ mod tests {
 
         let report = FileProviderStateReport::from_hints(path, hints);
         assert!(report.as_tsv().contains(
-            "\tmaterialization-source=nsfileprovidermanager:unavailable\tmaterialization-reason=NSFileProviderManager identity lookup timed out\t"
+            "\tmaterialization-source=nsfileprovidermanager:unavailable\tmaterialization-confidence=provider-identity\tmaterialization-reason=NSFileProviderManager identity lookup timed out\t"
         ));
     }
 
