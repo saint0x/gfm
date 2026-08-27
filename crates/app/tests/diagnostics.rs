@@ -636,7 +636,8 @@ fn diagnostics_parity_baseline_refuses_unreachable_paths_before_config_write_fro
 
 fn assert_worker_admitted(stderr: &str, worker: &str, path: &Path) {
     let expected_worker = format!("worker={worker}");
-    let expected_path = format!("path={}", path.display());
+    let expected = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let expected_path = format!("path={}", expected.display());
     assert!(
         stderr.lines().any(|line| {
             line.starts_with("security-worker-admission\t")
