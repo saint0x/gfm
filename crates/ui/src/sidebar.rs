@@ -74,6 +74,66 @@ pub struct SidebarItemSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarCloudInvalidation {
+    pub row_id: String,
+    pub path: PathBuf,
+    pub previous: SidebarCloudState,
+    pub current: SidebarCloudState,
+    pub progress_milli: Option<u32>,
+    pub invalidate_row: bool,
+    pub reason: String,
+}
+
+impl SidebarCloudInvalidation {
+    pub fn new(
+        path: impl Into<PathBuf>,
+        previous: SidebarCloudState,
+        current: SidebarCloudState,
+        progress_milli: Option<u32>,
+        provider_invalidated_sidebar: bool,
+        provider_reason: impl Into<String>,
+    ) -> Self {
+        let path = path.into();
+        let visible = previous != SidebarCloudState::None || current != SidebarCloudState::None;
+        let invalidate_row = visible && provider_invalidated_sidebar;
+        let reason = if !visible {
+            "sidebar-cloud-not-visible".to_string()
+        } else if !provider_invalidated_sidebar {
+            "provider-did-not-invalidate-sidebar".to_string()
+        } else if previous != current {
+            "sidebar-cloud-state-changed".to_string()
+        } else {
+            provider_reason.into()
+        };
+
+        Self {
+            row_id: "icloud-drive".to_string(),
+            path,
+            previous,
+            current,
+            progress_milli,
+            invalidate_row,
+            reason,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "sidebar-cloud-invalidation\t{}\tpath={}\tprevious={}\tcurrent={}\tprogress={}\tinvalidate-row={}\treason={}",
+            self.row_id,
+            self.path.display(),
+            self.previous.as_str(),
+            self.current.as_str(),
+            self.progress_milli
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.invalidate_row,
+            self.reason
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidebarVolumeSpec {
     pub id: String,
     pub label: String,
@@ -788,5 +848,40 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\tcloud=downloading\tcloud-progress=12500"));
+    }
+
+    #[test]
+    fn fileprovider_invalidation_repaints_icloud_row_for_visible_state_change() {
+        let invalidation = SidebarCloudInvalidation::new(
+            "/Users/tester/Library/Mobile Documents/com~apple~CloudDocs/Report.md",
+            SidebarCloudState::CloudOnly,
+            SidebarCloudState::AvailableOffline,
+            None,
+            true,
+            "fileprovider-state-changed",
+        );
+
+        assert_eq!(invalidation.row_id, "icloud-drive");
+        assert!(invalidation.invalidate_row);
+        assert_eq!(invalidation.reason, "sidebar-cloud-state-changed");
+        assert_eq!(
+            invalidation.as_tsv(),
+            "sidebar-cloud-invalidation\ticloud-drive\tpath=/Users/tester/Library/Mobile Documents/com~apple~CloudDocs/Report.md\tprevious=cloud-only\tcurrent=available-offline\tprogress=-\tinvalidate-row=true\treason=sidebar-cloud-state-changed"
+        );
+    }
+
+    #[test]
+    fn fileprovider_invalidation_keeps_local_paths_out_of_sidebar_repaint() {
+        let invalidation = SidebarCloudInvalidation::new(
+            "/Users/tester/Desktop/Local.md",
+            SidebarCloudState::None,
+            SidebarCloudState::None,
+            None,
+            true,
+            "fileprovider-state-changed",
+        );
+
+        assert!(!invalidation.invalidate_row);
+        assert_eq!(invalidation.reason, "sidebar-cloud-not-visible");
     }
 }

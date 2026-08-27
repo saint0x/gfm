@@ -2942,6 +2942,19 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "ui-sidebar-fileprovider-invalidation",
+        "evicted",
+        "tmp/gfm-fozzy-downloaded.icloud.md"
+      ],
+      "exit_code": 0,
+      "stdout": "sidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-downloaded.icloud.md\tprevious=cloud-only\tcurrent=available-offline\tprogress=100000\tinvalidate-row=true\treason=sidebar-cloud-state-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "ui-icon-view-contract",
         "tmp",
         "4",

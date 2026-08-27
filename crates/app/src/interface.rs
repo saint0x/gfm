@@ -6,8 +6,8 @@ use gfm_index::Indexer;
 use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore};
 use gfm_mac::{
     current_permission_onboarding, CloudCommandState, CloudStorageState,
-    FileProviderConflictReport, FileProviderStateReport, VolumeDescriptor, VolumeDiscoveryReport,
-    VolumeKind,
+    FileProviderConflictReport, FileProviderInvalidationReport, FileProviderStateReport,
+    VolumeDescriptor, VolumeDiscoveryReport, VolumeKind,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
 use gfm_types::{FileKind, GfmError, Result};
@@ -19,9 +19,10 @@ use gfm_ui::{
     OperationProgressContract, OperationProgressInput, OperationProgressState,
     PermissionPromptKind, PermissionRefreshContract, ProviderConflictContract,
     ProviderConflictInput, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
-    SearchResultsStage, SidebarCloudState, SidebarContract, SidebarVolumeSpec, TitlebarContract,
-    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
-    VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    SearchResultsStage, SidebarCloudInvalidation, SidebarCloudState, SidebarContract,
+    SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
+    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
+    WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -227,6 +228,29 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     provider_path,
                     sidebar_cloud_state(report.storage_state),
                     report.progress.percent_milli,
+                )
+                .as_tsv()
+            );
+        }
+        "ui-sidebar-fileprovider-invalidation" => {
+            let previous = CloudStorageState::parse(&required_string(
+                args.next(),
+                "ui-sidebar-fileprovider-invalidation requires a previous FileProvider state",
+            )?)?;
+            let provider_path = required_path(
+                args.next(),
+                "ui-sidebar-fileprovider-invalidation requires a FileProvider path",
+            )?;
+            let report = FileProviderInvalidationReport::evaluate(&provider_path, previous)?;
+            println!(
+                "{}",
+                SidebarCloudInvalidation::new(
+                    report.path,
+                    sidebar_cloud_state(report.previous),
+                    sidebar_cloud_state(report.current.storage_state),
+                    report.current.progress.percent_milli,
+                    report.invalidate_sidebar,
+                    report.reason,
                 )
                 .as_tsv()
             );

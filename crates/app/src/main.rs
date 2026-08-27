@@ -429,6 +429,7 @@ fn print_usage() {
   gfm ui-toolbar-contract [path]
   gfm ui-sidebar-contract [path]
   gfm ui-sidebar-fileprovider-contract [current-path] <fileprovider-path>
+  gfm ui-sidebar-fileprovider-invalidation <previous-state> <fileprovider-path>
   gfm ui-icon-view-contract <path> [columns] [viewport-rows] [scroll-row]
   gfm ui-virtualization-contract <icon-grid|list-rows|column-rows|gallery-filmstrip|search-results|trash-rows> <total> <viewport> <scroll> [columns]
   gfm package-traversal <root> [opaque|traverse]

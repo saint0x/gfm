@@ -830,6 +830,37 @@ fn reports_fileprovider_invalidation_from_binary() {
 }
 
 #[test]
+fn reports_sidebar_fileprovider_invalidation_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-sidebar-fileprovider-invalidation-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let evicted = root.join("Remote.icloud-placeholder");
+    std::fs::write(&evicted, "placeholder").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-sidebar-fileprovider-invalidation")
+        .arg("downloaded")
+        .arg(&evicted)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("sidebar-cloud-invalidation\ticloud-drive\tpath="));
+    assert!(stdout.contains("\tprevious=available-offline\tcurrent=cloud-only\t"));
+    assert!(stdout.contains("\tprogress=0\tinvalidate-row=true\t"));
+    assert!(stdout.ends_with("reason=sidebar-cloud-state-changed\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn persists_fileprovider_invalidation_scan_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-invalidation-scan-persist-{}",

@@ -62,7 +62,8 @@ pub use session::{
     WindowSessionContract, WindowSessionStore, WindowSessionWriter,
 };
 pub use sidebar::{
-    SidebarCloudState, SidebarContract, SidebarItemKind, SidebarItemSpec, SidebarVolumeSpec,
+    SidebarCloudInvalidation, SidebarCloudState, SidebarContract, SidebarItemKind, SidebarItemSpec,
+    SidebarVolumeSpec,
 };
 pub use titlebar::{
     FullScreenPolicy, TitlebarContract, TitlebarFocusPolicy, TitlebarMaterialPolicy,
