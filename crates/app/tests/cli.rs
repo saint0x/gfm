@@ -3255,6 +3255,100 @@ fn operation_conflict_apply_executes_resolved_copy_from_binary() {
 }
 
 #[test]
+fn operation_conflict_store_refuses_unreachable_writes_before_recording_from_binary() {
+    let root = unique_temp_dir("gfm-cli-operation-conflict-store-root");
+    let offline = unique_temp_dir("gfm-cli-operation-conflict-store-unreachable");
+    let journal = root.join("ops.journal");
+    let conflicts = offline.join("operation-conflicts.tsv");
+    let source = root.join("report.md");
+    let destination = root.join("destination.md");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&source, "new report").unwrap();
+    fs::write(&destination, "old report").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .env("GFM_OPERATION_CONFLICT_STORE", &conflicts)
+        .args([
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr
+            .contains("operation conflict store volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!conflicts.exists());
+    assert_eq!(fs::read_to_string(&source).unwrap(), "new report");
+    assert_eq!(fs::read_to_string(&destination).unwrap(), "old report");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn operation_conflict_store_refuses_unreachable_reads_before_applying_from_binary() {
+    let root = unique_temp_dir("gfm-cli-operation-conflict-read-root");
+    let offline = unique_temp_dir("gfm-cli-operation-conflict-read-unreachable");
+    let journal = root.join("ops.journal");
+    let conflicts = offline.join("operation-conflicts.tsv");
+    let source = root.join("report.md");
+    let destination = root.join("destination.md");
+    let copied = root.join("destination copy.md");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&source, "new report").unwrap();
+    fs::write(&destination, "old report").unwrap();
+    fs::write(
+        &conflicts,
+        format!(
+            "operation-conflict\toperation=copy\tsource={}\ttarget={}\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n",
+            source.display(),
+            destination.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "operation-conflict-apply",
+            conflicts.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            "keep-both",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("operation-conflict-control\tapply\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr
+            .contains("operation conflict store volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), "new report");
+    assert_eq!(fs::read_to_string(&destination).unwrap(), "old report");
+    assert!(!copied.exists());
+    let stored = fs::read_to_string(&conflicts).unwrap();
+    assert!(stored.contains("\tpolicy=fail\t"), "{stored}");
+    assert!(stored.contains("\tblocks-operation=true\t"), "{stored}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn operation_conflict_apply_keeps_store_blocking_when_execution_fails() {
     let root = unique_temp_dir("gfm-cli-operation-conflict-apply-failed-root");
     let journal = root.join("ops.journal");

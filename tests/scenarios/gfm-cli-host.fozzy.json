@@ -2693,6 +2693,16 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-conflict-offline-source.txt",
+      "data": "new report\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-conflict-offline-target.txt",
+      "data": "old report\n"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-offline-volume/spotlight.tsv",
       "data": "kMDItemDisplayName\tVisible.txt\n"
     },
@@ -3058,6 +3068,37 @@
       "args": [
         "list",
         "tmp/gfm-fozzy-offline-volume"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_OPERATION_CONFLICT_STORE": "tmp/gfm-fozzy-offline-volume/operation-conflicts.tsv"
+      },
+      "args": [
+        "copy",
+        "tmp/gfm-fozzy-operation-conflict-offline-source.txt",
+        "tmp/gfm-fozzy-operation-conflict-offline-target.txt"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/apply-operation-conflicts.tsv",
+      "data": "operation-conflict\toperation=copy\tsource=tmp/gfm-fozzy-operation-conflict-offline-source.txt\ttarget=tmp/gfm-fozzy-operation-conflict-offline-target.txt\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "operation-conflict-apply",
+        "tmp/gfm-fozzy-offline-volume/apply-operation-conflicts.tsv",
+        "tmp/gfm-fozzy-operation-conflict-offline-target.txt",
+        "keep-both"
       ],
       "exit_code": 1,
       "times": 1

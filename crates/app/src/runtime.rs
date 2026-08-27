@@ -402,6 +402,7 @@ impl OperationConflictStore {
     }
 
     pub(crate) fn append(&self, report: &OperationConflictReport) -> Result<()> {
+        let _access = preflight_operation_conflict_write(&self.path)?;
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         }
@@ -414,6 +415,7 @@ impl OperationConflictStore {
     }
 
     pub(crate) fn read(&self) -> Result<Vec<RuntimeOperationConflict>> {
+        let _access = preflight_operation_conflict_read(&self.path)?;
         let text = match fs::read_to_string(&self.path) {
             Ok(text) => text,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -492,6 +494,7 @@ impl OperationConflictStore {
     }
 
     fn write_all(&self, conflicts: &[RuntimeOperationConflict]) -> Result<()> {
+        let _access = preflight_operation_conflict_write(&self.path)?;
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         }
@@ -513,6 +516,18 @@ impl OperationConflictStore {
         }
         Ok(())
     }
+}
+
+fn preflight_operation_conflict_read(path: &Path) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(path, AccessIntent::Read, "operation conflict store")
+}
+
+fn preflight_operation_conflict_write(path: &Path) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(
+        write_probe_path(path),
+        AccessIntent::Write,
+        "operation conflict store",
+    )
 }
 
 impl RuntimeOperationConflict {
