@@ -2077,6 +2077,9 @@ fn native_has_offline_error(values: &NativeFileProviderResourceValues) -> bool {
 fn native_has_ubiquitous_materialization_evidence(
     values: &NativeFileProviderResourceValues,
 ) -> bool {
+    if values.is_ubiquitous == Some(false) {
+        return false;
+    }
     native_storage_state(values).is_some() || native_has_offline_error(values)
 }
 
@@ -2404,6 +2407,85 @@ mod tests {
         assert_eq!(report.commands.download, CloudCommandState::Enabled);
         assert_eq!(report.commands.evict, CloudCommandState::Disabled);
         assert_eq!(report.commands.reason, None);
+    }
+
+    #[test]
+    fn native_ubiquitous_false_suppresses_stray_materialization_keys() {
+        let path = PathBuf::from("/tmp/Remote.icloud.md");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(false);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloaded = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.download_requested = Some(true);
+        native.percent_downloaded_milli = Some(0);
+        native.downloading_status = Some(NativeUbiquitousDownloadingStatus::NotDownloaded);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name+native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_eq!(report.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::NotProviderBacked
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-not-provider-backed")
+        );
+        assert_eq!(report.commands.download, CloudCommandState::Hidden);
+        assert_eq!(report.commands.evict, CloudCommandState::Hidden);
+    }
+
+    #[test]
+    fn native_ubiquitous_false_with_provider_identity_stays_provider_unknown() {
+        let path = PathBuf::from("/tmp/Remote.fileprovider");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(false);
+        native.is_downloaded = Some(false);
+        native.percent_downloaded_milli = Some(0);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::Available,
+                item_identifier: Some("item-1".to_string()),
+                domain_identifier: Some("com.example.provider".to_string()),
+                reason: None,
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: Some("com.example.provider".to_string()),
+            source: "native-url-resource+nsfileprovidermanager".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::FileProvider);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeFileProviderIdentityUnknown
+        );
+        assert_eq!(
+            report.materialization_confidence,
+            CloudMaterializationConfidence::ProviderIdentity
+        );
+        assert_eq!(report.commands.download, CloudCommandState::Disabled);
+        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
     }
 
     #[test]
