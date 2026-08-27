@@ -5,7 +5,7 @@ use crate::access::{
 use crate::{
     detect_volume_id, index_volume_descriptor, parse_required_scheduling_pressure,
     run_preview_contract_adaptive_with_volume, run_preview_contract_cancellable,
-    runtime::{preflight_runtime_job_state, RuntimeJobHandle},
+    runtime::{preflight_runtime_job_state, run_volume_task_cancellable, RuntimeJobHandle},
 };
 use gfm_fs::record_for_path;
 use gfm_index::{
@@ -129,9 +129,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "native-icon-fileprovider-invalidation requires a path",
             )?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Read, "native icon fileprovider")?;
-            let report = FileProviderInvalidationReport::evaluate(path, previous)?;
+            let report = run_fileprovider_read(path, "native icon fileprovider", move |path| {
+                FileProviderInvalidationReport::evaluate(path, previous)
+            })?;
             println!(
                 "{}",
                 NativeIconInvalidationReport::from_fileprovider(&report).as_tsv()
@@ -139,25 +139,33 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "fileprovider-state" => {
             let path = required_path(args.next(), "fileprovider-state requires a path")?;
-            let _access = preflight_access_scope(&path, AccessIntent::Read, "fileprovider state")?;
-            println!("{}", FileProviderStateReport::read_path(path)?.as_tsv());
+            let report = run_fileprovider_read(
+                path,
+                "fileprovider state",
+                FileProviderStateReport::read_path,
+            )?;
+            println!("{}", report.as_tsv());
         }
         "fileprovider-state-with-identity" => {
             let path = required_path(
                 args.next(),
                 "fileprovider-state-with-identity requires a path",
             )?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Read, "fileprovider identity state")?;
-            println!(
-                "{}",
-                FileProviderStateReport::from_path_with_native_identity(path).as_tsv()
-            );
+            let report = run_fileprovider_read(path, "fileprovider identity state", |path| {
+                Ok(FileProviderStateReport::from_path_with_native_identity(
+                    path,
+                ))
+            });
+            println!("{}", report?.as_tsv());
         }
         "fileprovider-domain" => {
             let path = required_path(args.next(), "fileprovider-domain requires a path")?;
-            let _access = preflight_access_scope(&path, AccessIntent::Read, "fileprovider domain")?;
-            println!("{}", FileProviderDomainReport::read_path(path)?.as_tsv());
+            let report = run_fileprovider_read(
+                path,
+                "fileprovider domain",
+                FileProviderDomainReport::read_path,
+            )?;
+            println!("{}", report.as_tsv());
         }
         "fileprovider-domains" => {
             println!(
@@ -167,15 +175,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "fileprovider-progress" => {
             let path = required_path(args.next(), "fileprovider-progress requires a path")?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Read, "fileprovider progress")?;
-            println!("{}", FileProviderProgressReport::read_path(path)?.as_tsv());
+            let report = run_fileprovider_read(
+                path,
+                "fileprovider progress",
+                FileProviderProgressReport::read_path,
+            )?;
+            println!("{}", report.as_tsv());
         }
         "fileprovider-conflict" => {
             let path = required_path(args.next(), "fileprovider-conflict requires a path")?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Read, "fileprovider conflict")?;
-            println!("{}", FileProviderConflictReport::read_path(path)?.as_tsv());
+            let report = run_fileprovider_read(
+                path,
+                "fileprovider conflict",
+                FileProviderConflictReport::read_path,
+            )?;
+            println!("{}", report.as_tsv());
         }
         "fileprovider-progress-job" => {
             let path = required_path(args.next(), "fileprovider-progress-job requires a path")?;
@@ -203,12 +217,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "fileprovider-invalidation requires a previous state",
             )?)?;
             let path = required_path(args.next(), "fileprovider-invalidation requires a path")?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Read, "fileprovider invalidation")?;
-            println!(
-                "{}",
-                FileProviderInvalidationReport::evaluate(path, previous)?.as_tsv()
-            );
+            let report = run_fileprovider_read(path, "fileprovider invalidation", move |path| {
+                FileProviderInvalidationReport::evaluate(path, previous)
+            });
+            println!("{}", report?.as_tsv());
         }
         "fileprovider-metadata-invalidation" => {
             let previous = CloudStorageState::parse(&required_string(
@@ -219,12 +231,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "fileprovider-metadata-invalidation requires a path",
             )?;
-            let _access = preflight_access_scope(
-                &path,
-                AccessIntent::Read,
-                "fileprovider metadata invalidation",
-            )?;
-            let report = FileProviderInvalidationReport::evaluate(path, previous)?;
+            let report =
+                run_fileprovider_read(path, "fileprovider metadata invalidation", move |path| {
+                    FileProviderInvalidationReport::evaluate(path, previous)
+                })?;
             println!(
                 "{}",
                 ProviderMetadataInvalidationReport::from_provider_transition(
@@ -1461,6 +1471,24 @@ fn observed_metadata_invalidation_tsv(observed: &FileProviderObservedInvalidatio
         .as_tsv()
     }));
     lines.join("\n")
+}
+
+fn run_fileprovider_read<T>(
+    path: PathBuf,
+    worker: &'static str,
+    read: impl FnOnce(PathBuf) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    let volume = detect_volume_id(&path).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_access_scope(&path, AccessIntent::Read, worker)?;
+        cancellation.check()?;
+        read(path)
+    })
 }
 
 fn run_fileprovider_observer_probe(

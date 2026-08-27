@@ -640,6 +640,8 @@ fn reports_native_icon_fileprovider_invalidation_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "native icon fileprovider", &evicted);
     assert!(stdout.starts_with("native-icon-invalidation\t"));
     assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\t"));
     assert!(stdout.contains("\tprevious-badges=cloud-available-offline\tcurrent-badges=cloud\t"));
@@ -914,6 +916,8 @@ fn reports_fileprovider_state_from_binary() {
         String::from_utf8_lossy(&downloaded_output.stderr)
     );
     let downloaded_stdout = String::from_utf8(downloaded_output.stdout).unwrap();
+    let downloaded_stderr = String::from_utf8_lossy(&downloaded_output.stderr);
+    assert_worker_admitted(&downloaded_stderr, "fileprovider state", &downloaded);
     assert!(downloaded_stdout.starts_with("fileprovider-state\t"));
     assert!(downloaded_stdout.contains("\tdomain=icloud-drive\tstate=unknown\t"));
     assert!(downloaded_stdout.contains("\tmaterialization=unknown\t"));
@@ -935,6 +939,12 @@ fn reports_fileprovider_state_from_binary() {
         String::from_utf8_lossy(&identity_state_output.stderr)
     );
     let identity_state_stdout = String::from_utf8(identity_state_output.stdout).unwrap();
+    let identity_state_stderr = String::from_utf8_lossy(&identity_state_output.stderr);
+    assert_worker_admitted(
+        &identity_state_stderr,
+        "fileprovider identity state",
+        &downloaded,
+    );
     assert!(identity_state_stdout.starts_with("fileprovider-state\t"));
     assert!(identity_state_stdout.contains("\tdomain=icloud-drive\tstate=unknown\t"));
     assert!(identity_state_stdout.contains("\tmaterialization=unknown\t"));
@@ -951,6 +961,8 @@ fn reports_fileprovider_state_from_binary() {
         String::from_utf8_lossy(&domain_output.stderr)
     );
     let domain_stdout = String::from_utf8(domain_output.stdout).unwrap();
+    let domain_stderr = String::from_utf8_lossy(&domain_output.stderr);
+    assert_worker_admitted(&domain_stderr, "fileprovider domain", &downloaded);
     assert!(domain_stdout.starts_with("fileprovider-domain\t"));
     assert!(domain_stdout.contains("\tdomain=icloud-drive\t"));
     assert!(domain_stdout.contains("\tidentity-status="));
@@ -986,6 +998,8 @@ fn reports_fileprovider_state_from_binary() {
         String::from_utf8_lossy(&evicted_output.stderr)
     );
     let evicted_stdout = String::from_utf8(evicted_output.stdout).unwrap();
+    let evicted_stderr = String::from_utf8_lossy(&evicted_output.stderr);
+    assert_worker_admitted(&evicted_stderr, "fileprovider state", &evicted);
     assert!(evicted_stdout.contains("\tstate=evicted\tmaterialization=remote-placeholder\t"));
     assert!(evicted_stdout.contains("\tmaterialization-source=xattr-fallback\t"));
     assert!(evicted_stdout.contains("\toffline=true\t"));
@@ -1004,6 +1018,8 @@ fn reports_fileprovider_state_from_binary() {
         String::from_utf8_lossy(&value_evicted_output.stderr)
     );
     let value_evicted_stdout = String::from_utf8(value_evicted_output.stdout).unwrap();
+    let value_evicted_stderr = String::from_utf8_lossy(&value_evicted_output.stderr);
+    assert_worker_admitted(&value_evicted_stderr, "fileprovider state", &value_evicted);
     assert!(value_evicted_stdout.contains("\tstate=evicted\tmaterialization=remote-placeholder\t"));
     assert!(value_evicted_stdout.contains("\tmaterialization-source=xattr-fallback\t"));
     assert!(value_evicted_stdout.contains("\tsource=fixture-name+xattr\t"));
@@ -1020,6 +1036,13 @@ fn reports_fileprovider_state_from_binary() {
     );
     let local_with_provider_xattr_stdout =
         String::from_utf8(local_with_provider_xattr_output.stdout).unwrap();
+    let local_with_provider_xattr_stderr =
+        String::from_utf8_lossy(&local_with_provider_xattr_output.stderr);
+    assert_worker_admitted(
+        &local_with_provider_xattr_stderr,
+        "fileprovider state",
+        &local_with_provider_xattr,
+    );
     assert!(local_with_provider_xattr_stdout
         .contains("\tdomain=local\tstate=local-only\tmaterialization=not-provider-backed\t"));
     assert!(local_with_provider_xattr_stdout.contains("\tprovider=-\t"));
@@ -1036,6 +1059,8 @@ fn reports_fileprovider_state_from_binary() {
         String::from_utf8_lossy(&conflict_output.stderr)
     );
     let conflict_stdout = String::from_utf8(conflict_output.stdout).unwrap();
+    let conflict_stderr = String::from_utf8_lossy(&conflict_output.stderr);
+    assert_worker_admitted(&conflict_stderr, "fileprovider state", &conflict);
     assert!(conflict_stdout.contains("\tstate=conflict\tmaterialization=conflict\t"));
     assert!(conflict_stdout.contains("\toffline=false\tconflict=true\t"));
     assert!(conflict_stdout.contains("\tbadges=conflict\t"));
@@ -1052,6 +1077,8 @@ fn reports_fileprovider_state_from_binary() {
         String::from_utf8_lossy(&conflict_report.stderr)
     );
     let conflict_report_stdout = String::from_utf8(conflict_report.stdout).unwrap();
+    let conflict_report_stderr = String::from_utf8_lossy(&conflict_report.stderr);
+    assert_worker_admitted(&conflict_report_stderr, "fileprovider conflict", &conflict);
     assert!(conflict_report_stdout.starts_with("fileprovider-conflict\t"));
     assert!(conflict_report_stdout
         .contains("\tconflict=true\tstate=conflict\taffected=1\taffected-paths="));
@@ -1084,6 +1111,8 @@ fn reports_fileprovider_progress_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "fileprovider progress", &downloading);
     assert!(stdout.starts_with("fileprovider-progress\t"));
     assert!(stdout.contains("\tstate=downloading\t"));
     assert!(stdout.contains("\tprogress-direction=download\tprogress-milli=-\t"));
@@ -1373,6 +1402,8 @@ fn reports_fileprovider_invalidation_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "fileprovider invalidation", &evicted);
     assert!(stdout.starts_with("fileprovider-invalidation\t"));
     assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\tchanged=true\t"));
     assert!(stdout.contains("\ticon=true\tpreview-memory=true\tpreview-disk=true\t"));
@@ -1406,6 +1437,8 @@ fn reports_fileprovider_metadata_invalidation_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "fileprovider metadata invalidation", &evicted);
     assert!(stdout.starts_with("provider-metadata-invalidation\t"));
     assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\t"));
     assert!(stdout.contains("\treindex-metadata=true\tschedule-metadata-update=true\t"));
@@ -1618,48 +1651,78 @@ fn fileprovider_state_routes_refuse_unreachable_volume_before_native_read_from_b
     std::fs::write(&item, "placeholder").unwrap();
     mark_evicted_fixture(&item);
 
-    for args in [
-        vec!["fileprovider-state".to_string(), item.display().to_string()],
-        vec![
-            "fileprovider-state-with-identity".to_string(),
-            item.display().to_string(),
-        ],
-        vec![
-            "fileprovider-domain".to_string(),
-            item.display().to_string(),
-        ],
-        vec![
-            "fileprovider-progress".to_string(),
-            item.display().to_string(),
-        ],
-        vec![
-            "fileprovider-conflict".to_string(),
-            item.display().to_string(),
-        ],
-        vec![
-            "fileprovider-progress-job".to_string(),
-            item.display().to_string(),
-        ],
-        vec![
-            "fileprovider-invalidation".to_string(),
-            "downloaded".to_string(),
-            item.display().to_string(),
-        ],
-        vec![
-            "fileprovider-metadata-invalidation".to_string(),
-            "downloaded".to_string(),
-            item.display().to_string(),
-        ],
-        vec![
-            "native-icon-fileprovider-invalidation".to_string(),
-            "downloaded".to_string(),
-            item.display().to_string(),
-        ],
-        vec![
-            "fileprovider-operation".to_string(),
-            "download".to_string(),
-            item.display().to_string(),
-        ],
+    for (args, blocked_worker) in [
+        (
+            vec!["fileprovider-state".to_string(), item.display().to_string()],
+            Some("fileprovider state"),
+        ),
+        (
+            vec![
+                "fileprovider-state-with-identity".to_string(),
+                item.display().to_string(),
+            ],
+            Some("fileprovider identity state"),
+        ),
+        (
+            vec![
+                "fileprovider-domain".to_string(),
+                item.display().to_string(),
+            ],
+            Some("fileprovider domain"),
+        ),
+        (
+            vec![
+                "fileprovider-progress".to_string(),
+                item.display().to_string(),
+            ],
+            Some("fileprovider progress"),
+        ),
+        (
+            vec![
+                "fileprovider-conflict".to_string(),
+                item.display().to_string(),
+            ],
+            Some("fileprovider conflict"),
+        ),
+        (
+            vec![
+                "fileprovider-progress-job".to_string(),
+                item.display().to_string(),
+            ],
+            None,
+        ),
+        (
+            vec![
+                "fileprovider-invalidation".to_string(),
+                "downloaded".to_string(),
+                item.display().to_string(),
+            ],
+            Some("fileprovider invalidation"),
+        ),
+        (
+            vec![
+                "fileprovider-metadata-invalidation".to_string(),
+                "downloaded".to_string(),
+                item.display().to_string(),
+            ],
+            Some("fileprovider metadata invalidation"),
+        ),
+        (
+            vec![
+                "native-icon-fileprovider-invalidation".to_string(),
+                "downloaded".to_string(),
+                item.display().to_string(),
+            ],
+            Some("native icon fileprovider"),
+        ),
+        (
+            vec![
+                "fileprovider-operation".to_string(),
+                "download".to_string(),
+                item.display().to_string(),
+            ],
+            None,
+        ),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
             .args(&args)
@@ -1678,6 +1741,15 @@ fn fileprovider_state_routes_refuse_unreachable_volume_before_native_read_from_b
             stderr.contains("volume access blocked: unreachable volume network"),
             "{args:?}: {stderr}"
         );
+        if let Some(worker) = blocked_worker {
+            assert!(
+                !stderr.contains(&format!(
+                    "security-worker-admission\tworker={worker}\tpath={}",
+                    item.display()
+                )),
+                "{args:?}: {stderr}"
+            );
+        }
     }
 
     let _ = std::fs::remove_dir_all(root);
@@ -3227,4 +3299,14 @@ fn reports_volume_mount_bsd_refusal_from_binary() {
 
 fn mark_evicted_fixture(path: impl AsRef<std::path::Path>) {
     xattr::set(path.as_ref(), "com.apple.icloud.placeholder", b"1").unwrap();
+}
+
+fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker={worker}\tpath={}",
+            path.display()
+        )),
+        "{stderr}"
+    );
 }
