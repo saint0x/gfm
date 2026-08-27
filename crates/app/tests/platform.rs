@@ -842,7 +842,8 @@ fn reports_fileprovider_state_from_binary() {
     assert!(evicted_stdout.contains("\tmaterialization-source=path-fallback\t"));
     assert!(evicted_stdout.contains("\toffline=true\t"));
     assert!(evicted_stdout.contains("\tbadges=cloud\t"));
-    assert!(evicted_stdout.contains("\tdownload=enabled\tevict=disabled\t"));
+    assert!(evicted_stdout.contains("\tdownload=disabled\tevict=disabled\t"));
+    assert!(evicted_stdout.contains("\treason=not-native-provider-backed"));
 
     let conflict_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-state")

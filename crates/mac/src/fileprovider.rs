@@ -1253,7 +1253,7 @@ impl FileProviderStateReport {
         let mut badges = badges_for_state(storage_state);
         badges.sort();
         badges.dedup();
-        let commands = command_policy(domain, storage_state);
+        let commands = command_policy(domain, storage_state, provider_commands_available(&hints));
 
         Self {
             path,
@@ -1743,9 +1743,26 @@ fn badges_for_state(state: CloudStorageState) -> Vec<CloudBadge> {
     }
 }
 
-fn command_policy(domain: FileProviderDomain, state: CloudStorageState) -> CloudCommandPolicy {
+fn command_policy(
+    domain: FileProviderDomain,
+    state: CloudStorageState,
+    provider_commands_available: bool,
+) -> CloudCommandPolicy {
     if domain == FileProviderDomain::Local {
         return CloudCommandPolicy::local();
+    }
+    if !provider_commands_available
+        && matches!(
+            state,
+            CloudStorageState::Evicted | CloudStorageState::Offline | CloudStorageState::Downloaded
+        )
+    {
+        return CloudCommandPolicy {
+            download: CloudCommandState::Disabled,
+            evict: CloudCommandState::Disabled,
+            reveal_conflict: CloudCommandState::Hidden,
+            reason: Some("not-native-provider-backed".to_string()),
+        };
     }
     match state {
         CloudStorageState::Evicted | CloudStorageState::Offline => CloudCommandPolicy {
@@ -1782,6 +1799,10 @@ fn command_policy(domain: FileProviderDomain, state: CloudStorageState) -> Cloud
         },
         CloudStorageState::LocalOnly => CloudCommandPolicy::local(),
     }
+}
+
+fn provider_commands_available(hints: &CloudHints) -> bool {
+    native_has_fileprovider_values(&hints.native)
 }
 
 fn is_evicted_placeholder_path(path: &Path) -> bool {
@@ -2012,7 +2033,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_evicted_placeholder_with_download_command() {
+    fn reports_path_only_evicted_placeholder_without_provider_command() {
         let root = unique_temp_dir();
         let path = root.join("Evicted.icloud-placeholder");
         fs::write(&path, "placeholder").unwrap();
@@ -2026,8 +2047,12 @@ mod tests {
         assert!(!report.progress.indeterminate);
         assert_eq!(report.badges, vec![CloudBadge::Cloud]);
         assert!(report.offline);
-        assert_eq!(report.commands.download, CloudCommandState::Enabled);
+        assert_eq!(report.commands.download, CloudCommandState::Disabled);
         assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+        assert_eq!(
+            report.commands.reason.as_deref(),
+            Some("not-native-provider-backed")
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -3187,6 +3212,8 @@ mod tests {
         );
         assert_eq!(report.progress.source, "state");
         assert_eq!(report.progress.percent_milli, Some(0));
+        assert_eq!(report.commands.download, CloudCommandState::Enabled);
+        assert_eq!(report.commands.reason, None);
     }
 
     #[test]
