@@ -26,10 +26,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let archives = args
                 .map(|spec| parse_content_manifest_archive_spec(&spec))
                 .collect::<Result<Vec<_>>>()?;
-            let _access = retain_manifest_write_access(&output, &archives)?;
-            let manifest = ContentArchiveManifest::new(archives)?;
-            manifest.write(&output)?;
-            eprintln!("content-manifest\tarchives={}", manifest.archives.len());
+            eprintln!("{}", run_manifest_write(output, archives)?);
         }
         "content-manifest-inspect" => {
             let manifest_path = required_path(
@@ -308,6 +305,45 @@ fn retain_manifest_write_access(
         )?);
     }
     Ok(guards)
+}
+
+fn preflight_manifest_write_volumes(
+    manifest_path: &Path,
+    archives: &[ContentArchiveManifestEntry],
+) -> Result<()> {
+    preflight_volume_access_scope(
+        write_probe_path(manifest_path),
+        AccessIntent::Write,
+        "content manifest write",
+    )?;
+    for archive in archives {
+        preflight_volume_access_scope(
+            &resolve_manifest_path(manifest_path, &archive.path),
+            AccessIntent::Read,
+            "content manifest write archive",
+        )?;
+    }
+    Ok(())
+}
+
+fn run_manifest_write(
+    manifest_path: PathBuf,
+    archives: Vec<ContentArchiveManifestEntry>,
+) -> Result<String> {
+    const WORKER: &str = "content manifest write";
+    preflight_manifest_write_volumes(&manifest_path, &archives)?;
+    let volume = detect_volume_id(write_probe_path(&manifest_path)).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_manifest_write_access(&manifest_path, &archives)?;
+        cancellation.check()?;
+        let manifest = ContentArchiveManifest::new(archives)?;
+        manifest.write(&manifest_path)?;
+        Ok(format!(
+            "content-manifest\tarchives={}",
+            manifest.archives.len()
+        ))
+    })
 }
 
 fn retain_manifest_inspect_archive_access<'a>(

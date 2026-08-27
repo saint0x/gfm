@@ -5361,7 +5361,14 @@ fn operation_refuses_unreachable_destination_volume_before_copying_from_binary()
         "do not copy onto unreachable storage"
     );
     assert!(!destination.exists());
-    assert!(!journal.exists());
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(journal_text.contains("\tstarted\t"), "{journal_text}");
+    assert!(journal_text.contains("\tfailed\t"), "{journal_text}");
+    assert!(
+        journal_text.contains("unreachable volume network"),
+        "{journal_text}"
+    );
+    assert!(!journal_text.contains("\tcompleted\t"), "{journal_text}");
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -8617,6 +8624,22 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{}",
         String::from_utf8_lossy(&manifest_output.stderr)
     );
+    let manifest_stderr = String::from_utf8_lossy(&manifest_output.stderr);
+    assert_worker_admitted(
+        &manifest_stderr,
+        "content manifest write",
+        manifest.parent().unwrap(),
+    );
+    assert_worker_admitted(
+        &manifest_stderr,
+        "content manifest write archive",
+        &first_content,
+    );
+    assert_worker_admitted(
+        &manifest_stderr,
+        "content manifest write archive",
+        &second_content,
+    );
 
     let manifest_inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["content-manifest-inspect", manifest.to_str().unwrap()])
@@ -9161,6 +9184,13 @@ fn content_manifest_write_refuses_unreachable_archive_before_publishing_from_bin
         stderr.contains(
             "content manifest write archive volume access blocked: unreachable volume network"
         ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content manifest write archive\tpath={}",
+            content.display()
+        )),
         "{stderr}"
     );
     assert!(!manifest.exists());
