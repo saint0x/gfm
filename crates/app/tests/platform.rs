@@ -739,6 +739,7 @@ fn reports_fileprovider_state_from_binary() {
     assert!(downloaded_stdout.contains("\tdomain=icloud-drive\tstate=unknown\t"));
     assert!(downloaded_stdout.contains("\tmaterialization=unknown\t"));
     assert!(downloaded_stdout.contains("\tmaterialization-source=path-fallback\t"));
+    assert!(downloaded_stdout.contains("\tmaterialization-reason=unknown-provider-state\t"));
     assert!(downloaded_stdout.contains("\tbadges=waiting\t"));
     assert!(downloaded_stdout.contains("\tdownload=disabled\tevict=disabled\t"));
     assert!(downloaded_stdout.contains("\treason=unknown-provider-state"));

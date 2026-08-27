@@ -1055,6 +1055,7 @@ mod tests {
                 storage_state: current,
                 materialization: cloud_materialization_for_state(current),
                 materialization_source: gfm_mac::CloudMaterializationSource::NativeUrlResource,
+                materialization_reason: Some("test".to_string()),
                 progress: gfm_mac::CloudTransferProgress {
                     direction: gfm_mac::CloudTransferDirection::Idle,
                     percent_milli: None,

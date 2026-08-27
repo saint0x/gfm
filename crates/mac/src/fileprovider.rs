@@ -202,6 +202,7 @@ pub struct FileProviderStateReport {
     pub storage_state: CloudStorageState,
     pub materialization: CloudMaterialization,
     pub materialization_source: CloudMaterializationSource,
+    pub materialization_reason: Option<String>,
     pub progress: CloudTransferProgress,
     pub badges: Vec<CloudBadge>,
     pub commands: CloudCommandPolicy,
@@ -1247,6 +1248,7 @@ impl FileProviderStateReport {
         let storage_state = storage_state_for_path(&path, domain, &hints);
         let materialization = materialization_for_state(storage_state);
         let materialization_source = materialization_source_for_state(storage_state, &hints);
+        let materialization_reason = materialization_reason_for_state(storage_state, &hints);
         let progress = progress_for_state(storage_state, &hints);
         let mut badges = badges_for_state(storage_state);
         badges.sort();
@@ -1259,6 +1261,7 @@ impl FileProviderStateReport {
             storage_state,
             materialization,
             materialization_source,
+            materialization_reason,
             progress,
             badges,
             commands,
@@ -1281,6 +1284,7 @@ impl FileProviderStateReport {
             storage_state,
             materialization: CloudMaterialization::NotProviderBacked,
             materialization_source: CloudMaterializationSource::Filesystem,
+            materialization_reason: Some("fileprovider-item-removed".to_string()),
             progress: CloudTransferProgress::idle("fileprovider-item-removed"),
             badges: Vec::new(),
             commands,
@@ -1293,12 +1297,16 @@ impl FileProviderStateReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "fileprovider-state\t{}\tdomain={}\tstate={}\tmaterialization={}\tmaterialization-source={}\toffline={}\tconflict={}\tbadges={}\t{}\tdownload={}\tevict={}\treveal-conflict={}\tprovider={}\tsource={}\treason={}",
+            "fileprovider-state\t{}\tdomain={}\tstate={}\tmaterialization={}\tmaterialization-source={}\tmaterialization-reason={}\toffline={}\tconflict={}\tbadges={}\t{}\tdownload={}\tevict={}\treveal-conflict={}\tprovider={}\tsource={}\treason={}",
             self.path.display(),
             self.domain.as_str(),
             self.storage_state.as_str(),
             self.materialization.as_str(),
             self.materialization_source.as_str(),
+            self.materialization_reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
             self.offline,
             self.conflict,
             self.badges
@@ -1620,6 +1628,64 @@ fn materialization_source_for_state(
         CloudMaterializationSource::Filesystem
     } else {
         CloudMaterializationSource::StateFallback
+    }
+}
+
+fn materialization_reason_for_state(
+    state: CloudStorageState,
+    hints: &CloudHints,
+) -> Option<String> {
+    if hints.native.is_ubiquitous == Some(true)
+        || native_has_ubiquitous_materialization_evidence(&hints.native)
+    {
+        return Some(match state {
+            CloudStorageState::Downloaded => "native-url-resource-materialized".to_string(),
+            CloudStorageState::Evicted => "native-url-resource-remote-placeholder".to_string(),
+            CloudStorageState::Downloading => "native-url-resource-downloading".to_string(),
+            CloudStorageState::Uploading => "native-url-resource-uploading".to_string(),
+            CloudStorageState::Waiting => "native-url-resource-waiting".to_string(),
+            CloudStorageState::Conflict => "native-url-resource-conflict".to_string(),
+            CloudStorageState::Offline => hints
+                .native
+                .downloading_error
+                .as_ref()
+                .or(hints.native.uploading_error.as_ref())
+                .and_then(|error| error.description.clone())
+                .unwrap_or_else(|| "native-url-resource-offline".to_string()),
+            CloudStorageState::LocalOnly | CloudStorageState::Unknown => {
+                "native-url-resource-unknown".to_string()
+            }
+        });
+    }
+    if state == CloudStorageState::Unknown {
+        if matches!(
+            hints.native.status,
+            gfm_mac_sys::NativeFileProviderStatus::UnsupportedPath
+                | gfm_mac_sys::NativeFileProviderStatus::Missing
+        ) {
+            return hints.native.reason.clone();
+        }
+        if matches!(
+            hints.native_identity.status,
+            NativeFileProviderIdentityStatus::Available
+                | NativeFileProviderIdentityStatus::ProviderUnavailable
+                | NativeFileProviderIdentityStatus::TimedOut
+                | NativeFileProviderIdentityStatus::Failed
+                | NativeFileProviderIdentityStatus::UnsupportedPath
+        ) {
+            return hints.native_identity.reason.clone();
+        }
+    }
+    match state {
+        CloudStorageState::LocalOnly => Some("not-fileprovider-backed".to_string()),
+        CloudStorageState::Downloaded => Some("materialized".to_string()),
+        CloudStorageState::Evicted => Some("remote-placeholder".to_string()),
+        CloudStorageState::Downloading => Some("provider-download-in-flight".to_string()),
+        CloudStorageState::Uploading => Some("provider-upload-in-flight".to_string()),
+        CloudStorageState::Waiting => Some("provider-waiting".to_string()),
+        CloudStorageState::Conflict => Some("conflict-requires-resolution".to_string()),
+        CloudStorageState::Offline => Some("provider-offline".to_string()),
+        CloudStorageState::Unknown => Some("unknown-provider-state".to_string()),
     }
 }
 
@@ -3377,6 +3443,15 @@ mod tests {
             materialization_source_for_state(state, &hints),
             CloudMaterializationSource::NativeUrlResourceUnsupported
         );
+        assert_eq!(
+            materialization_reason_for_state(state, &hints).as_deref(),
+            Some("native URL resource values unsupported")
+        );
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+        assert!(report.as_tsv().contains(
+            "\tmaterialization-source=native-url-resource:unsupported\tmaterialization-reason=native URL resource values unsupported\t"
+        ));
     }
 
     #[test]
@@ -3404,6 +3479,15 @@ mod tests {
             materialization_source_for_state(state, &hints),
             CloudMaterializationSource::NativeFileProviderIdentityUnavailable
         );
+        assert_eq!(
+            materialization_reason_for_state(state, &hints).as_deref(),
+            Some("NSFileProviderManager identity lookup timed out")
+        );
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+        assert!(report.as_tsv().contains(
+            "\tmaterialization-source=nsfileprovidermanager:unavailable\tmaterialization-reason=NSFileProviderManager identity lookup timed out\t"
+        ));
     }
 
     #[test]
