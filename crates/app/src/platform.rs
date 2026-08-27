@@ -1,4 +1,7 @@
-use crate::access::{preflight_access_scope, worker_admission_with_volume_gate, ScopedAccessGuard};
+use crate::access::{
+    preflight_access_scope, preflight_volume_access_scope, worker_admission_with_volume_gate,
+    ScopedAccessGuard,
+};
 use crate::{
     detect_volume_id, index_volume_descriptor, parse_required_scheduling_pressure,
     run_preview_contract_adaptive_with_volume, run_preview_contract_cancellable,
@@ -805,7 +808,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "quicklook preview",
                 pressure,
                 move || {
-                    let _access = preflight_access_scope(
+                    preflight_volume_access_scope(
                         &volume_path,
                         AccessIntent::Preview,
                         "adaptive quicklook preview",
@@ -956,7 +959,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "thumbnail generation",
                 pressure,
                 move || {
-                    let _access = preflight_access_scope(
+                    preflight_volume_access_scope(
                         &volume_path,
                         AccessIntent::Preview,
                         "adaptive thumbnail generation volume",

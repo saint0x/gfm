@@ -1,6 +1,13 @@
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
+fn preview_security_scope_count(stderr: &str) -> usize {
+    stderr
+        .lines()
+        .filter(|line| line.starts_with("security-scope\t") && line.contains("\tintent=preview\t"))
+        .count()
+}
+
 #[test]
 fn reports_ui_lifecycle_contract_from_binary() {
     let root =
@@ -1908,9 +1915,11 @@ fn adaptive_quicklook_session_stays_visible_under_pressure_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(stdout.starts_with("quicklook-session\tquick-look\t"));
     assert!(stdout.contains("\tschedule=scheduled:visible\taction=Run\tdeferred=false\n"));
+    assert_eq!(preview_security_scope_count(&stderr), 1, "{stderr}");
 
     let _ = std::fs::remove_file(path);
 }
@@ -1985,6 +1994,7 @@ fn adaptive_quicklook_session_cancel_after_access_stops_before_record_read_from_
         "quicklook-session\tstatus=cancelled\treason=cancelled-after-access\n"
     );
     assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert_eq!(preview_security_scope_count(&stderr), 1, "{stderr}");
 
     let _ = std::fs::remove_file(path);
 }
@@ -2168,6 +2178,7 @@ fn adaptive_thumbnail_generation_throttles_prefetch_on_battery_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(stdout.starts_with("thumbnail-generation\t"), "{stdout}");
     assert!(
@@ -2178,6 +2189,7 @@ fn adaptive_thumbnail_generation_throttles_prefetch_on_battery_from_binary() {
         stdout.contains("\taction=Throttle\tdeferred=false\n"),
         "{stdout}"
     );
+    assert_eq!(preview_security_scope_count(&stderr), 1, "{stderr}");
 
     let _ = std::fs::remove_file(path);
 }
@@ -2214,6 +2226,7 @@ fn adaptive_thumbnail_generation_cancel_after_access_stops_before_record_read_fr
         "thumbnail-generation\tstatus=cancelled\treason=cancelled-after-access\n"
     );
     assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert_eq!(preview_security_scope_count(&stderr), 1, "{stderr}");
 
     let _ = std::fs::remove_file(path);
 }

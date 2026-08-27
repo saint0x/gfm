@@ -78,6 +78,14 @@ pub(crate) fn preflight_access_scope(
     }
 }
 
+pub(crate) fn preflight_volume_access_scope(
+    path: &Path,
+    intent: AccessIntent,
+    worker: &str,
+) -> Result<()> {
+    preflight_volume_access(path, intent, worker)
+}
+
 fn preflight_volume_access(path: &Path, intent: AccessIntent, worker: &str) -> Result<()> {
     let volume_path = absolute_volume_probe_path(path);
     let report = VolumeDiscoveryReport::for_containing_path(&volume_path);
@@ -330,7 +338,10 @@ mod tests {
         )
         .unwrap();
         let path = root.join("Export.pdf");
-        let volume = VolumeDescriptor::for_path(&root).unwrap();
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::External;
+        volume.writable = false;
+        volume.read_only = true;
         let report = VolumeDiscoveryReport {
             volumes: vec![volume],
         };
