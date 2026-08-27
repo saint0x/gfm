@@ -399,6 +399,58 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    #[test]
+    fn operation_conflict_store_round_trips_escaped_fields() {
+        let path = temp_path("gfm-operation-conflict-escaped", "tsv");
+        let store = OperationConflictStore::new(&path);
+        let conflict = RuntimeOperationConflict {
+            operation: "copy".to_string(),
+            source: "/tmp/source\twith\ncontrols.md".to_string(),
+            target: "/tmp/target\\literal\rname.md".to_string(),
+            target_kind: "file".to_string(),
+            selected_policy: "fail".to_string(),
+            available_policies: vec!["replace".to_string(), "keep-both".to_string()],
+            blocks_operation: true,
+            reason: "destination\tconflict\nrequires\\choice".to_string(),
+        };
+
+        store.write_all(std::slice::from_ref(&conflict)).unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains("source=/tmp/source\\twith\\ncontrols.md"),
+            "{raw}"
+        );
+        assert!(
+            raw.contains("target=/tmp/target\\\\literal\\rname.md"),
+            "{raw}"
+        );
+        assert_eq!(store.read().unwrap(), vec![conflict]);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn operation_conflict_store_rejects_invalid_field_escape() {
+        let path = temp_path("gfm-operation-conflict-invalid-escape", "tsv");
+        std::fs::write(
+            &path,
+            "operation-conflict\toperation=copy\tsource=/tmp/source\\x.md\ttarget=/tmp/target.md\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both\tblocks-operation=true\treason=needs-choice\n",
+        )
+        .unwrap();
+        let store = OperationConflictStore::new(&path);
+
+        let err = store.read().unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("invalid operation-conflict escape \\x"),
+            "{err}"
+        );
+
+        std::fs::remove_file(path).unwrap();
+    }
+
     fn sample_progress_snapshot(id: JobId) -> JobProgressSnapshot {
         JobProgressSnapshot::new(
             id,
@@ -503,7 +555,8 @@ impl OperationConflictStore {
             .append(true)
             .open(&self.path)
             .map_err(|err| GfmError::io(&self.path, err))?;
-        writeln!(file, "{}", report.as_tsv()).map_err(|err| GfmError::io(&self.path, err))
+        writeln!(file, "{}", RuntimeOperationConflict::from(report).as_tsv())
+            .map_err(|err| GfmError::io(&self.path, err))
     }
 
     pub(crate) fn read(&self) -> Result<Vec<RuntimeOperationConflict>> {
@@ -626,16 +679,43 @@ impl RuntimeOperationConflict {
     pub(crate) fn as_tsv(&self) -> String {
         format!(
             "operation-conflict\toperation={}\tsource={}\ttarget={}\texists={}\tkind={}\tpolicy={}\tavailable={}\tblocks-operation={}\treason={}",
-            self.operation,
-            self.source,
-            self.target,
+            escape_field(&self.operation),
+            escape_field(&self.source),
+            escape_field(&self.target),
             self.target_kind != "none",
-            self.target_kind,
-            self.selected_policy,
-            self.available_policies.join(","),
+            escape_field(&self.target_kind),
+            escape_field(&self.selected_policy),
+            escape_field(&self.available_policies.join(",")),
             self.blocks_operation,
-            self.reason
+            escape_field(&self.reason)
         )
+    }
+}
+
+impl From<&OperationConflictReport> for RuntimeOperationConflict {
+    fn from(report: &OperationConflictReport) -> Self {
+        Self {
+            operation: report.operation.to_string(),
+            source: report
+                .source
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            target: report
+                .target
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            target_kind: report.target_kind.as_str().to_string(),
+            selected_policy: report.selected_policy.as_str().to_string(),
+            available_policies: report
+                .available_policies
+                .iter()
+                .map(|policy| policy.as_str().to_string())
+                .collect(),
+            blocks_operation: report.blocks_operation,
+            reason: report.reason.clone(),
+        }
     }
 }
 
@@ -715,20 +795,21 @@ fn parse_operation_conflict_line(
     let value = |key: &str| -> Result<String> {
         pairs
             .get(key)
-            .map(|value| (*value).to_string())
+            .map(|value| unescape_field(value))
             .ok_or_else(|| {
                 GfmError::Format(format!(
                     "{}:{} missing operation-conflict `{key}` field",
                     path.display(),
                     line_index + 1
                 ))
-            })
+            })?
     };
     Ok(RuntimeOperationConflict {
         operation: value("operation")?,
         source: pairs
             .get("source")
-            .map(|value| (*value).to_string())
+            .map(|value| unescape_field(value))
+            .transpose()?
             .unwrap_or_else(|| "-".to_string()),
         target: value("target")?,
         target_kind: value("kind")?,
@@ -751,6 +832,42 @@ fn parse_operation_conflict_line(
         },
         reason: value("reason")?,
     })
+}
+
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn unescape_field(value: &str) -> Result<String> {
+    let mut output = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            output.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => output.push('\\'),
+            Some('t') => output.push('\t'),
+            Some('n') => output.push('\n'),
+            Some('r') => output.push('\r'),
+            Some(other) => {
+                return Err(GfmError::Format(format!(
+                    "invalid operation-conflict escape \\{other}"
+                )));
+            }
+            None => {
+                return Err(GfmError::Format(
+                    "operation-conflict field ends with incomplete escape".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(output)
 }
 
 fn payload_kind_for_label(label: &str) -> JobPayloadKind {
