@@ -614,6 +614,15 @@ impl JobPayloadCatalog {
         if !self.path.exists() {
             self.write_all(&[])?;
         }
+        let mut records = self.read()?;
+        if let Some(existing) = records.iter_mut().find(|existing| existing.id == record.id) {
+            if existing == record {
+                return Ok(());
+            }
+            *existing = record.clone();
+            self.write_all(&records)?;
+            return Ok(());
+        }
         let mut file = OpenOptions::new()
             .append(true)
             .open(&self.path)

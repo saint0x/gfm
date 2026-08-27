@@ -7849,6 +7849,61 @@ fn volume_producers_persist_runtime_payload_and_progress_from_binary() {
 }
 
 #[test]
+fn repeated_runtime_producers_replace_stale_payload_for_same_job_id_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-producer-replace-root");
+    let first = root.join("First.png");
+    let second = root.join("Second.png");
+    fs::write(&first, b"\x89PNG\r\n\x1a\nruntime first metadata").unwrap();
+    fs::write(&second, b"\x89PNG\r\n\x1a\nruntime second metadata").unwrap();
+    let catalog = unique_temp_path("gfm-cli-runtime-producer-replace", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-runtime-producer-replace", "gfmprogress");
+
+    for image in [&first, &second] {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+            .env("GFM_JOB_PROGRESS_STORE", &progress)
+            .args(["thumbnail-generation", image.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert_eq!(
+        catalog_text
+            .matches("\npayload\t1\tthumbnail\tthumbnail generation\t")
+            .count(),
+        1,
+        "{catalog_text}"
+    );
+    assert!(
+        catalog_text.contains("runtime/thumbnail/thumbnail-generation.gfmjob"),
+        "{catalog_text}"
+    );
+
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert_eq!(
+        progress_text
+            .matches("\nprogress\t1\tvisible\tvisible\tthumbnail generation\t")
+            .count(),
+        1,
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tcompleted\t1\t1\tcompleted\t"),
+        "{progress_text}"
+    );
+
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn volume_producers_refuse_unreachable_runtime_stores_before_progress_from_binary() {
     let root = unique_temp_dir("gfm-cli-runtime-producer-store-root");
     let store_root = unique_temp_dir("gfm-cli-runtime-producer-store-unreachable");

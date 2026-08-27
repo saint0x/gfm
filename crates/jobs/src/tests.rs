@@ -957,6 +957,45 @@ fn payload_catalog_write_all_creates_parent_directory() {
 }
 
 #[test]
+fn payload_catalog_append_replaces_existing_job_id() {
+    let path = temp_path("gfm-job-payload-catalog-replace", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+    let first = JobPayloadRecord::new(
+        JobId::from_raw(8),
+        JobPayloadKind::Preview,
+        "quicklook preview",
+        "preview/old.gfmjob",
+        Some(VolumeId(7)),
+        "preview:/old",
+    );
+    let second = JobPayloadRecord::new(
+        JobId::from_raw(8),
+        JobPayloadKind::Preview,
+        "quicklook preview",
+        "preview/current.gfmjob",
+        Some(VolumeId(9)),
+        "preview:/current",
+    );
+
+    catalog.append(&first).unwrap();
+    catalog.append(&second).unwrap();
+
+    let records = catalog.read().unwrap();
+    assert_eq!(records, vec![second]);
+    let before_noop = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let current = catalog.read().unwrap().remove(0);
+    catalog.append(&current).unwrap();
+    let after_noop = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(before_noop, after_noop);
+    assert_eq!(raw.matches("\npayload\t8\tpreview\t").count(), 1);
+    assert!(!raw.contains("preview/old.gfmjob"), "{raw}");
+    assert!(raw.contains("preview/current.gfmjob"), "{raw}");
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn payload_catalog_temp_paths_are_unique_within_process() {
     let path = temp_path("gfm-job-payload-catalog-unique-temp", "gfmjobs");
     let catalog = JobPayloadCatalog::new(&path);
