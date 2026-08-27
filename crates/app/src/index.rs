@@ -16,6 +16,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .next()
                 .map(PathBuf::from)
                 .unwrap_or(std::env::current_dir().unwrap());
+            preflight_access(&path, AccessIntent::Read, "directory listing")?;
             let page = read_directory(path)?;
             for record in page.entries {
                 println!(

@@ -939,6 +939,36 @@ fn reports_ui_list_view_contract_from_binary() {
 }
 
 #[test]
+fn ui_list_view_refuses_unreachable_network_volume_before_reading_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-list-view-unreachable-volume-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    std::fs::write(root.join("Visible.txt"), "should not be listed").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-list-view-contract")
+        .arg(&root)
+        .args(["6", "0"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("list-view\t"), "{stdout}");
+    assert!(
+        stderr.contains("ui list view volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_ui_column_view_contract_from_binary() {
     let root =
         std::env::temp_dir().join(format!("gfm-column-view-contract-{}", std::process::id()));

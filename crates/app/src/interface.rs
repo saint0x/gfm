@@ -5,13 +5,13 @@ use gfm_fs::{
 use gfm_index::Indexer;
 use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore};
 use gfm_mac::{
-    current_permission_onboarding, CloudCommandState, CloudStorageState,
+    current_permission_onboarding, AccessIntent, CloudCommandState, CloudStorageState,
     FileProviderConflictReport, FileProviderInvalidationReport, FileProviderStateReport,
     MountState, NativeVolumeStatus, VolumeDescriptor, VolumeDiscoveryReport,
     VolumeEventInvalidationReport, VolumeEventKind, VolumeKind,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
-use gfm_types::{FileKind, GfmError, Result};
+use gfm_types::{DirectoryPage, FileKind, GfmError, Result};
 use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
@@ -303,7 +303,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let columns = optional_u16(args.next(), "columns", 6)?;
             let viewport_rows = optional_u16(args.next(), "viewport-rows", 4)?;
             let scroll_row = optional_u16(args.next(), "scroll-row", 0)?;
-            let page = read_directory(&path)?;
+            let page = read_directory_with_access(&path, "ui icon view")?;
             let options = IconViewOptions::default()
                 .with_columns(columns)
                 .with_viewport_rows(viewport_rows)
@@ -320,7 +320,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let viewport_rows = optional_u16(args.next(), "viewport-rows", 24)?;
             let scroll_row = optional_u32(args.next(), "scroll-row", 0)?;
-            let page = read_directory(&path)?;
+            let page = read_directory_with_access(&path, "ui list view")?;
             let options = ListViewOptions::default()
                 .with_viewport_rows(viewport_rows)
                 .with_scroll_row(scroll_row);
@@ -337,7 +337,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let viewport_rows = optional_u16(args.next(), "viewport-rows", 24)?;
             let scroll_row = optional_u32(args.next(), "scroll-row", 0)?;
             let selected_name = args.next();
-            let page = read_directory(&path)?;
+            let page = read_directory_with_access(&path, "ui column view")?;
             let selected_record = selected_name
                 .as_deref()
                 .and_then(|name| page.entries.iter().find(|record| record.name == name));
@@ -347,7 +347,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             if let Some(record) =
                 selected_record.filter(|record| record.kind == FileKind::Directory)
             {
-                let child_page = read_directory(&record.path)?;
+                let child_page = read_directory_with_access(&record.path, "ui column child view")?;
                 sources.push(ColumnSource::new(record.path.clone(), child_page.entries));
             }
             let options = ColumnViewOptions::default().with_viewport_rows(viewport_rows);
@@ -364,7 +364,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let viewport_items = optional_u16(args.next(), "viewport-items", 8)?;
             let scroll_item = optional_u32(args.next(), "scroll-item", 0)?;
             let selected_name = args.next();
-            let page = read_directory(&path)?;
+            let page = read_directory_with_access(&path, "ui gallery view")?;
             let selected = selected_name
                 .as_deref()
                 .and_then(|name| page.entries.iter().find(|record| record.name == name))
@@ -389,6 +389,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let viewport_rows = optional_u16(args.next(), "viewport-rows", 24)?;
             let scroll_row = optional_u32(args.next(), "scroll-row", 0)?;
+            let _access =
+                crate::access::preflight_access_scope(&root, AccessIntent::Index, "ui search")?;
             let snapshot = Indexer::default().build(root)?;
             let session = snapshot.query_session();
             let batches = session
@@ -414,7 +416,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .and_then(|value| (value != "-").then(|| PathBuf::from(value)));
             let viewport_rows = optional_u16(args.next(), "viewport-rows", 24)?;
             let scroll_row = optional_u32(args.next(), "scroll-row", 0)?;
-            let page = read_directory(&path)?;
+            let page = read_directory_with_access(&path, "ui trash view")?;
             let metadata = metadata_path
                 .as_ref()
                 .map(read_trash_restore_metadata)
@@ -433,6 +435,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "package-traversal requires a root path")?;
             let mode = parse_package_traversal_mode(args.next().as_deref())?;
             let options = ScanOptions::default().with_package_traversal(mode);
+            let _access = crate::access::preflight_access_scope(
+                &root,
+                AccessIntent::Read,
+                "package traversal",
+            )?;
             let page = scan_tree(&root, options.clone())?;
             let report = PackageTraversalReport::from_page(&page, &options.package_policy);
             println!("{}", report.as_tsv());
@@ -671,6 +678,11 @@ fn sidebar_volume_event_kind(kind: VolumeEventKind) -> SidebarVolumeEventKind {
         VolumeEventKind::Disappeared => SidebarVolumeEventKind::Disappeared,
         VolumeEventKind::Unavailable => SidebarVolumeEventKind::Unavailable,
     }
+}
+
+fn read_directory_with_access(path: &PathBuf, worker: &str) -> Result<DirectoryPage> {
+    let _access = crate::access::preflight_access_scope(path, AccessIntent::Read, worker)?;
+    read_directory(path)
 }
 
 fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {

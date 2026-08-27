@@ -122,6 +122,30 @@ fn index_preflight_refreshes_permission_state_from_binary() {
 }
 
 #[test]
+fn list_refuses_unreachable_network_volume_before_reading_from_binary() {
+    let root = unique_temp_dir("gfm-cli-list-unreachable-volume");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(root.join("Visible.txt"), "should not be listed").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("list")
+        .arg(&root)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("Visible.txt"), "{stdout}");
+    assert!(
+        stderr.contains("directory listing volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn operation_preflight_refreshes_permission_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-permission-operation-refresh");
     let source = root.join("source.txt");
