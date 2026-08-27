@@ -667,21 +667,44 @@ fn run_filemanager_url_operation(
             "NSFileManager defaultManager is unavailable",
         );
     }
+    let selector = operation.selector();
+    if !object_responds_to_selector(default_manager, selector) {
+        return operation_result(
+            NativeFileProviderOperationStatus::Failed,
+            format!("NSFileManager {} is unavailable", operation.selector_name()),
+        );
+    }
 
     let mut error: *mut c_void = ptr::null_mut();
     let ns_url = url.as_concrete_TypeRef() as *mut Object;
     let completed =
-        unsafe { run_ubiquitous_operation(default_manager, operation, ns_url, &mut error) };
+        unsafe { run_ubiquitous_operation(default_manager, selector, ns_url, &mut error) };
     if completed != 0 {
         NativeFileProviderOperationResult {
             status: NativeFileProviderOperationStatus::Completed,
             reason: None,
         }
     } else {
+        let error = error as *mut Object;
+        let error_code = unsafe { ns_error_code(error) };
+        let error_description = unsafe { ns_error_description(error) };
         operation_result(
             NativeFileProviderOperationStatus::Failed,
-            format!("{label} returned false for {}", path.display()),
+            operation_failure_reason(label, path, error_code, error_description.as_deref()),
         )
+    }
+}
+
+impl NativeUbiquitousOperation {
+    fn selector(self) -> Sel {
+        Sel::register(self.selector_name())
+    }
+
+    const fn selector_name(self) -> &'static str {
+        match self {
+            Self::Download => "startDownloadingUbiquitousItemAtURL:error:",
+            Self::Evict => "evictUbiquitousItemAtURL:error:",
+        }
     }
 }
 
@@ -693,19 +716,32 @@ unsafe fn default_filemanager(class: &Class) -> *mut Object {
 
 unsafe fn run_ubiquitous_operation(
     filemanager: *mut Object,
-    operation: NativeUbiquitousOperation,
+    selector: Sel,
     url: *mut Object,
     error: *mut *mut c_void,
 ) -> i8 {
     let send: unsafe extern "C" fn(*mut Object, Sel, *mut Object, *mut *mut c_void) -> i8 =
         std::mem::transmute(objc_msgSend as *const ());
-    let selector = match operation {
-        NativeUbiquitousOperation::Download => {
-            Sel::register("startDownloadingUbiquitousItemAtURL:error:")
-        }
-        NativeUbiquitousOperation::Evict => Sel::register("evictUbiquitousItemAtURL:error:"),
-    };
     send(filemanager, selector, url, error)
+}
+
+fn operation_failure_reason(
+    label: &str,
+    path: &Path,
+    error_code: Option<i64>,
+    error_description: Option<&str>,
+) -> String {
+    let base = format!("{label} returned false for {}", path.display());
+    match (error_code, error_description) {
+        (Some(code), Some(description)) if !description.is_empty() => {
+            format!("{base}: NSError {code}: {description}")
+        }
+        (Some(code), _) => format!("{base}: NSError {code}"),
+        (None, Some(description)) if !description.is_empty() => {
+            format!("{base}: {description}")
+        }
+        _ => base,
+    }
 }
 
 unsafe fn class_responds_to_selector(class: &Class, selector: Sel) -> bool {
@@ -911,6 +947,23 @@ mod tests {
 
         assert_eq!(result.status, NativeFileProviderOperationStatus::Missing);
         assert!(result.reason.unwrap().contains("does not exist"));
+    }
+
+    #[test]
+    fn formats_native_fileprovider_operation_error_details() {
+        let path = Path::new("/tmp/Remote.icloud");
+
+        let reason = operation_failure_reason(
+            "start downloading ubiquitous item",
+            path,
+            Some(257),
+            Some("Operation not permitted"),
+        );
+
+        assert_eq!(
+            reason,
+            "start downloading ubiquitous item returned false for /tmp/Remote.icloud: NSError 257: Operation not permitted"
+        );
     }
 
     #[test]
