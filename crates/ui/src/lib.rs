@@ -160,6 +160,16 @@ pub struct PermissionRefreshContract {
     pub refresh_ui: bool,
     pub refresh_workers: bool,
     pub refresh_operations: bool,
+    pub changes: Vec<PermissionRefreshChangeContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionRefreshChangeContract {
+    pub scope: String,
+    pub previous: String,
+    pub current: String,
+    pub path: String,
+    pub reason: String,
 }
 
 impl PermissionRefreshContract {
@@ -176,17 +186,43 @@ impl PermissionRefreshContract {
             refresh_ui,
             refresh_workers,
             refresh_operations,
+            changes: Vec::new(),
         }
     }
 
+    pub fn with_changes(mut self, changes: Vec<PermissionRefreshChangeContract>) -> Self {
+        self.changed = changes.len();
+        self.changes = changes;
+        self
+    }
+
     pub fn as_tsv(&self) -> String {
-        format!(
+        let mut lines = vec![format!(
             "permission-refresh\taudience=ui\tinitialized={}\tchanged={}\trefresh-ui={}\trefresh-workers={}\trefresh-operations={}",
             self.initialized,
             self.changed,
             self.refresh_ui,
             self.refresh_workers,
             self.refresh_operations
+        )];
+        lines.extend(
+            self.changes
+                .iter()
+                .map(PermissionRefreshChangeContract::as_tsv),
+        );
+        lines.join("\n")
+    }
+}
+
+impl PermissionRefreshChangeContract {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "permission-refresh-change\tscope={}\tprevious={}\tcurrent={}\tpath={}\treason={}",
+            escape_contract_field(&self.scope),
+            escape_contract_field(&self.previous),
+            escape_contract_field(&self.current),
+            escape_contract_field(&self.path),
+            escape_contract_field(&self.reason)
         )
     }
 }
@@ -877,16 +913,25 @@ mod tests {
 
     #[test]
     fn lifecycle_contract_tracks_permission_refresh_state() {
-        let spec = AppLaunchSpec::new("/tmp/gfm")
-            .with_permission_refresh(PermissionRefreshContract::new(false, 1, true, true, true));
+        let refresh =
+            PermissionRefreshContract::new(false, 1, true, true, true).with_changes(vec![
+                PermissionRefreshChangeContract {
+                    scope: "desktop".to_string(),
+                    previous: "denied".to_string(),
+                    current: "granted".to_string(),
+                    path: "/Users/me/Desktop".to_string(),
+                    reason: "macOS granted read access".to_string(),
+                },
+            ]);
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_permission_refresh(refresh.clone());
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
 
-        assert_eq!(
-            contract.permission_refresh,
-            Some(PermissionRefreshContract::new(false, 1, true, true, true))
-        );
+        assert_eq!(contract.permission_refresh, Some(refresh));
         assert!(contract
             .as_tsv()
             .contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"));
+        assert!(contract.as_tsv().contains(
+            "\npermission-refresh-change\tscope=desktop\tprevious=denied\tcurrent=granted\t"
+        ));
     }
 }

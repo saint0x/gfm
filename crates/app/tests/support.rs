@@ -466,6 +466,14 @@ fn reports_permission_ui_refresh_in_onboarding_contract_from_binary() {
         stdout.contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("\npermission-refresh-change\tscope=")
+            && stdout.contains("\tprevious=")
+            && stdout.contains("\tcurrent=")
+            && stdout.contains("\tpath=")
+            && stdout.contains("\treason="),
+        "{stdout}"
+    );
     assert!(stdout.contains("\trefresh-ui=true\t"), "{stdout}");
 
     let _ = std::fs::remove_dir_all(root);
@@ -504,6 +512,14 @@ fn reports_permission_ui_refresh_in_lifecycle_contract_from_binary() {
         stdout.contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("\npermission-refresh-change\tscope=")
+            && stdout.contains("\tprevious=")
+            && stdout.contains("\tcurrent=")
+            && stdout.contains("\tpath=")
+            && stdout.contains("\treason="),
+        "{stdout}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -539,6 +555,14 @@ fn reports_permission_ui_refresh_in_access_contract_from_binary() {
     assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
     assert!(
         stdout.contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\npermission-refresh-change\tscope=")
+            && stdout.contains("\tprevious=")
+            && stdout.contains("\tcurrent=")
+            && stdout.contains("\tpath=")
+            && stdout.contains("\treason="),
         "{stdout}"
     );
     assert!(stdout.contains("\trefresh-ui=true\t"), "{stdout}");

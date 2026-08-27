@@ -20,12 +20,12 @@ use gfm_ui::{
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
     MenuContract, OperationConflictContract, OperationConflictInput, OperationConflictPaths,
     OperationProgressContract, OperationProgressInput, OperationProgressState,
-    PermissionAccessContract, PermissionPromptKind, PermissionRefreshContract,
-    ProviderConflictContract, ProviderConflictInput, SearchResultsBatch, SearchResultsContract,
-    SearchResultsOptions, SearchResultsStage, SidebarCloudInvalidation, SidebarCloudState,
-    SidebarContract, SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind,
-    SidebarVolumeMountState, SidebarVolumeSpec, TitlebarContract, ToolbarContract,
-    TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
+    PermissionAccessContract, PermissionPromptKind, PermissionRefreshChangeContract,
+    PermissionRefreshContract, ProviderConflictContract, ProviderConflictInput, SearchResultsBatch,
+    SearchResultsContract, SearchResultsOptions, SearchResultsStage, SidebarCloudInvalidation,
+    SidebarCloudState, SidebarContract, SidebarVolumeEventKind, SidebarVolumeInvalidation,
+    SidebarVolumeKind, SidebarVolumeMountState, SidebarVolumeSpec, TitlebarContract,
+    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
     VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
@@ -1209,6 +1209,22 @@ fn permission_refresh_contract(
         report.refresh_ui,
         report.refresh_workers,
         report.refresh_operations,
+    )
+    .with_changes(
+        report
+            .changed
+            .iter()
+            .map(|change| PermissionRefreshChangeContract {
+                scope: change.scope.as_str().to_string(),
+                previous: change
+                    .previous
+                    .map(|state| state.as_str().to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                current: change.current.as_str().to_string(),
+                path: change.path.display().to_string(),
+                reason: change.reason.clone(),
+            })
+            .collect(),
     )
 }
 
