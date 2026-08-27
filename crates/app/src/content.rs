@@ -7,13 +7,14 @@ use crate::extract::{
 use crate::runtime::{
     default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
     run_scheduled_volume_task_cancellable, run_scheduled_volume_task_cancellable_with_volume,
-    run_volume_task_cancellable, runtime_progress_store, RuntimeJobHandle,
+    run_volume_task_cancellable, run_volume_task_cancellable_without_progress,
+    runtime_progress_store, RuntimeJobHandle,
 };
 use crate::{
     detect_volume_id, optional_path_arg, parent_volume, parse_battery_state, parse_io_pressure,
-    parse_optional_scheduling_pressure, parse_quarantine_failure_kind, path_volume,
+    parse_optional_scheduling_pressure, parse_quarantine_failure_kind,
     parse_required_scheduling_pressure, parse_thermal_state, parse_u32, parse_u64,
-    parse_user_activity, required_path, required_string,
+    parse_user_activity, path_volume, required_path, required_string,
 };
 use gfm_content::{CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor};
 use gfm_fs::record_for_path;
@@ -484,16 +485,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or_else(default_job_journal_path);
             let journal = JobJournal::new(journal);
-            let recoverable = recoverable_background_content_jobs(&journal)?;
-            if recoverable == 0 {
+            let Some((recoverable, spec)) =
+                load_resumable_content_job_spec(spec_path.clone(), &journal)?
+            else {
                 eprintln!("no recoverable background content jobs");
-            } else {
-                let _access = preflight_access_scope(
-                    &spec_path,
-                    AccessIntent::Read,
-                    "resume background content index",
-                )?;
-                let spec = ContentIndexJobSpec::read(&spec_path)?;
+                return Ok(true);
+            };
+            {
                 let outcome =
                     run_content_job(&spec, &journal, SchedulingPressure::default(), &spec_path)?;
                 if outcome.deferred {
@@ -553,16 +551,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     outcome.scheduling_action
                 );
             } else {
-                let recoverable = recoverable_background_content_jobs(&journal)?;
-                if recoverable == 0 {
+                let Some((recoverable, spec)) =
+                    load_resumable_content_job_spec(spec_path.clone(), &journal)?
+                else {
                     eprintln!("no recoverable background content jobs");
-                } else {
-                    let _access = preflight_access_scope(
-                        &spec_path,
-                        AccessIntent::Read,
-                        "resume background content index",
-                    )?;
-                    let spec = ContentIndexJobSpec::read(&spec_path)?;
+                    return Ok(true);
+                };
+                {
                     let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
                     if outcome.deferred {
                         eprintln!(
@@ -876,6 +871,44 @@ fn run_content_segment_maintenance(
     })
 }
 
+fn load_resumable_content_job_spec(
+    spec_path: PathBuf,
+    journal: &JobJournal,
+) -> Result<Option<(usize, ContentIndexJobSpec)>> {
+    const WORKER: &str = "resume background content recovery";
+    preflight_background_content_recovery_volumes(journal)?;
+    let volume = parent_volume(journal.path())
+        .or_else(|| runtime_progress_store().and_then(|store| parent_volume(store.path())))
+        .or_else(|| parent_volume(&spec_path));
+    let journal = JobJournal::new(journal.path().to_path_buf());
+    run_volume_task_cancellable_without_progress(
+        volume,
+        Priority::Visible,
+        WORKER,
+        move |cancellation| {
+            cancellation.check()?;
+            let recoverable = recoverable_background_content_jobs(&journal)?;
+            if recoverable == 0 {
+                return Ok(None);
+            }
+            preflight_volume_access_scope(
+                &spec_path,
+                AccessIntent::Read,
+                "resume background content index",
+            )?;
+            cancellation.check()?;
+            let _access = preflight_access_scope(
+                &spec_path,
+                AccessIntent::Read,
+                "resume background content index",
+            )?;
+            let spec = ContentIndexJobSpec::read(&spec_path)?;
+            cancellation.check()?;
+            Ok(Some((recoverable, spec)))
+        },
+    )
+}
+
 fn run_index_footprint_inspect(
     spec: IndexFootprintSpec,
     worker: &'static str,
@@ -1053,6 +1086,29 @@ fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<usize> {
         }
     }
     Ok(ids.len())
+}
+
+fn preflight_background_content_recovery_volumes(journal: &JobJournal) -> Result<()> {
+    preflight_optional_recovery_store_volumes(
+        journal.path(),
+        "background content recovery journal",
+    )?;
+    if let Some(store) = runtime_progress_store() {
+        preflight_optional_recovery_store_volumes(
+            store.path(),
+            "background content recovery progress",
+        )?;
+    }
+    Ok(())
+}
+
+fn preflight_optional_recovery_store_volumes(path: &Path, worker: &str) -> Result<()> {
+    let parent = path.parent().unwrap_or(path);
+    preflight_volume_access_scope(parent, AccessIntent::Read, worker)?;
+    if path.exists() {
+        preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
+    }
+    Ok(())
 }
 
 fn retain_optional_recovery_store_access(
