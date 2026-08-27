@@ -55,6 +55,37 @@ impl MountState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApfsVolumeRole {
+    System,
+    Data,
+    Preboot,
+    Recovery,
+    Vm,
+    Update,
+    Xart,
+    Hardware,
+    Backup,
+    Unknown,
+}
+
+impl ApfsVolumeRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Data => "data",
+            Self::Preboot => "preboot",
+            Self::Recovery => "recovery",
+            Self::Vm => "vm",
+            Self::Update => "update",
+            Self::Xart => "xart",
+            Self::Hardware => "hardware",
+            Self::Backup => "backup",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VolumeCommandState {
     Enabled,
     Disabled,
@@ -133,6 +164,8 @@ pub struct VolumeDescriptor {
     pub bsd_name: Option<String>,
     pub volume_uuid: Option<String>,
     pub volume_type: Option<String>,
+    pub apfs_container_uuid: Option<String>,
+    pub apfs_role: Option<ApfsVolumeRole>,
     pub media_uuid: Option<String>,
     pub filesystem: Option<String>,
     pub media_content: Option<String>,
@@ -243,6 +276,8 @@ impl VolumeDescriptor {
             .and_then(|resource| resource.is_internal)
             .or_else(|| native.as_ref().and_then(|native| native.device_internal));
         let mountable = native.as_ref().and_then(|native| native.volume_mountable);
+        let apfs_container_uuid = apfs_container_uuid(native.as_ref(), mount_table.as_ref());
+        let apfs_role = apfs_volume_role(native.as_ref());
         let capacity = VolumeCapacity::read(&path);
         let commands = command_policy(kind, mount_state, ejectable);
         let stable_identity = match marker.as_deref() {
@@ -317,6 +352,8 @@ impl VolumeDescriptor {
             volume_type: native
                 .as_ref()
                 .and_then(|native| native.volume_type.clone()),
+            apfs_container_uuid,
+            apfs_role,
             media_uuid: native.as_ref().and_then(|native| native.media_uuid.clone()),
             filesystem: mount_table
                 .as_ref()
@@ -367,7 +404,7 @@ impl VolumeDescriptor {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-reachable={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tapfs-container-uuid={}\tapfs-role={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-reachable={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -419,6 +456,13 @@ impl VolumeDescriptor {
                 .as_deref()
                 .map(escape_field)
                 .unwrap_or_else(|| "-".to_string()),
+            self.apfs_container_uuid
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.apfs_role
+                .map(ApfsVolumeRole::as_str)
+                .unwrap_or("-"),
             self.media_uuid
                 .as_deref()
                 .map(escape_field)
@@ -1286,6 +1330,7 @@ fn topology_change_reason(
         Some("volume-ejectability-changed")
     } else if previous.volume_uuid != current.volume_uuid
         || previous.media_uuid != current.media_uuid
+        || previous.apfs_container_uuid != current.apfs_container_uuid
         || previous.resource_uuid != current.resource_uuid
         || previous.bsd_name != current.bsd_name
         || previous.mount_from != current.mount_from
@@ -1295,6 +1340,7 @@ fn topology_change_reason(
     {
         Some("volume-identity-changed")
     } else if previous.filesystem != current.filesystem
+        || previous.apfs_role != current.apfs_role
         || previous.volume_type != current.volume_type
         || previous.media_kind != current.media_kind
         || previous.media_type != current.media_type
@@ -1323,6 +1369,81 @@ fn topology_change_reason(
         Some("volume-label-changed")
     } else {
         None
+    }
+}
+
+fn apfs_container_uuid(
+    native: Option<&NativeVolumeDescription>,
+    mount_table: Option<&NativeVolumeMountTableEntry>,
+) -> Option<String> {
+    let native = native.filter(|native| native.status == NativeVolumeStatus::Available)?;
+    is_apfs_volume(native, mount_table)
+        .then(|| native.media_uuid.clone())
+        .flatten()
+}
+
+fn apfs_volume_role(native: Option<&NativeVolumeDescription>) -> Option<ApfsVolumeRole> {
+    let native = native.filter(|native| native.status == NativeVolumeStatus::Available)?;
+    [
+        native.volume_type.as_deref(),
+        native.volume_kind.as_deref(),
+        native.media_content.as_deref(),
+        native.media_type.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(parse_apfs_role)
+}
+
+fn is_apfs_volume(
+    native: &NativeVolumeDescription,
+    mount_table: Option<&NativeVolumeMountTableEntry>,
+) -> bool {
+    [
+        native.volume_type.as_deref(),
+        native.volume_kind.as_deref(),
+        native.media_content.as_deref(),
+        native.media_type.as_deref(),
+        mount_table
+            .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
+            .and_then(|mount_table| mount_table.filesystem_type.as_deref()),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.to_ascii_lowercase().contains("apfs"))
+}
+
+fn parse_apfs_role(value: &str) -> Option<ApfsVolumeRole> {
+    let normalized = value
+        .trim()
+        .trim_matches(|ch: char| ch == '"' || ch == '\'' || ch == '(' || ch == ')')
+        .to_ascii_lowercase()
+        .replace(['_', '-'], " ");
+    let mut tokens = normalized.split_whitespace().collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return None;
+    }
+    if tokens.first() == Some(&"apple") && tokens.get(1) == Some(&"apfs") {
+        tokens.drain(..2);
+    } else if tokens.first() == Some(&"apfs") {
+        tokens.drain(..1);
+    }
+    let role = tokens
+        .iter()
+        .find(|token| **token != "volume" && **token != "role")
+        .copied()?;
+    match role {
+        "system" => Some(ApfsVolumeRole::System),
+        "data" => Some(ApfsVolumeRole::Data),
+        "preboot" => Some(ApfsVolumeRole::Preboot),
+        "recovery" => Some(ApfsVolumeRole::Recovery),
+        "vm" => Some(ApfsVolumeRole::Vm),
+        "update" => Some(ApfsVolumeRole::Update),
+        "xart" => Some(ApfsVolumeRole::Xart),
+        "hardware" => Some(ApfsVolumeRole::Hardware),
+        "backup" => Some(ApfsVolumeRole::Backup),
+        "unknown" => Some(ApfsVolumeRole::Unknown),
+        _ => None,
     }
 }
 
@@ -1661,9 +1782,25 @@ fn command_policy(
 }
 
 fn marker_kind(path: &Path) -> Option<String> {
+    if !marker_fixture_path_allowed(path) {
+        return None;
+    }
     let value = fs::read_to_string(path.join(VOLUME_MARKER)).ok()?;
     let value = value.lines().next()?.trim().to_ascii_lowercase();
     (!value.is_empty()).then_some(value)
+}
+
+fn marker_fixture_path_allowed(path: &Path) -> bool {
+    let Ok(temp_dir) = std::env::temp_dir().canonicalize() else {
+        return false;
+    };
+    let Ok(path) = path.canonicalize() else {
+        return false;
+    };
+    path.starts_with(&temp_dir)
+        && path
+            .components()
+            .any(|component| component.as_os_str().to_string_lossy().starts_with("gfm-"))
 }
 
 fn marker_removable(marker: Option<&str>) -> Option<bool> {
@@ -1815,6 +1952,8 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tresource-reachable=true\t"));
         assert!(descriptor.as_tsv().contains("\tresource-remount-url="));
         assert!(descriptor.as_tsv().contains("\tmount-status=available\t"));
+        assert!(descriptor.as_tsv().contains("\tapfs-container-uuid="));
+        assert!(descriptor.as_tsv().contains("\tapfs-role="));
         assert!(descriptor.as_tsv().contains("\tvolume-type="));
         assert!(descriptor.as_tsv().contains("\tmedia-kind="));
         assert!(descriptor.as_tsv().contains("\tmedia-name="));
@@ -1856,6 +1995,27 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tmount-status="));
         assert!(descriptor.source.contains("url-resource="));
         assert!(descriptor.source.contains("mount-table="));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ignores_volume_markers_outside_fixture_roots() {
+        let root = std::env::temp_dir().join(format!(
+            "ordinary-volume-marker-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst),
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(VOLUME_MARKER), "network-unreachable\n").unwrap();
+
+        let descriptor = VolumeDescriptor::for_path(&root).unwrap();
+
+        assert_ne!(descriptor.kind, VolumeKind::Network);
+        assert_eq!(descriptor.reachable, Some(true));
+        assert!(!descriptor.source.contains("fixture-marker"));
+        assert!(!descriptor.stable_identity.starts_with("fixture-marker:"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1909,6 +2069,39 @@ mod tests {
         );
 
         assert_eq!(kind, Some(VolumeKind::DiskImage));
+    }
+
+    #[test]
+    fn extracts_apfs_container_uuid_and_role_from_native_description() {
+        let native = native_description(|description| {
+            description.status = NativeVolumeStatus::Available;
+            description.volume_type = Some("apfs".to_string());
+            description.media_content = Some("Apple_APFS_Role_Data".to_string());
+            description.media_uuid = Some("APFS-CONTAINER-UUID".to_string());
+        });
+        let mount_table = mount_table_entry(|entry| {
+            entry.filesystem_type = Some("apfs".to_string());
+        });
+
+        assert_eq!(
+            apfs_container_uuid(Some(&native), Some(&mount_table)),
+            Some("APFS-CONTAINER-UUID".to_string())
+        );
+        assert_eq!(apfs_volume_role(Some(&native)), Some(ApfsVolumeRole::Data));
+    }
+
+    #[test]
+    fn leaves_apfs_metadata_unknown_without_native_apfs_evidence() {
+        let native = native_description(|description| {
+            description.status = NativeVolumeStatus::Unavailable;
+            description.media_content = Some("Apple_APFS_Role_System".to_string());
+            description.media_uuid = Some("APFS-CONTAINER-UUID".to_string());
+            description.reason = Some("DiskArbitration unavailable".to_string());
+        });
+
+        assert_eq!(apfs_container_uuid(Some(&native), None), None);
+        assert_eq!(apfs_volume_role(Some(&native)), None);
+        assert_eq!(parse_apfs_role("plain external disk"), None);
     }
 
     #[test]
@@ -2139,6 +2332,7 @@ mod tests {
         let mut current_volume = previous_volume.clone();
         current_volume.volume_uuid = Some("APFS-VOLUME-UUID".to_string());
         current_volume.media_uuid = Some("APFS-CONTAINER-UUID".to_string());
+        current_volume.apfs_container_uuid = Some("APFS-CONTAINER-UUID".to_string());
         current_volume.media_content = Some("Apple_APFS".to_string());
         current_volume.bsd_name = Some("disk4s1".to_string());
         current_volume.mount_from = Some("/dev/disk4s1".to_string());
@@ -2171,6 +2365,7 @@ mod tests {
         let mut current_volume = previous_volume.clone();
         current_volume.filesystem = Some("apfs".to_string());
         current_volume.mount_filesystem = Some("apfs".to_string());
+        current_volume.apfs_role = Some(ApfsVolumeRole::Data);
         current_volume.mount_flags = Some(0x0000_1000);
         current_volume.mount_local = Some(true);
         current_volume.case_sensitive = Some(true);

@@ -273,6 +273,16 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
     push_signature_str(&mut tokens, "fs", volume.filesystem.as_deref());
     push_signature_str(&mut tokens, "mount-fs", volume.mount_filesystem.as_deref());
     push_signature_str(&mut tokens, "volume-uuid", volume.volume_uuid.as_deref());
+    push_signature_str(
+        &mut tokens,
+        "apfs-container-uuid",
+        volume.apfs_container_uuid.as_deref(),
+    );
+    push_signature_str(
+        &mut tokens,
+        "apfs-role",
+        volume.apfs_role.map(gfm_mac::ApfsVolumeRole::as_str),
+    );
     push_signature_str(&mut tokens, "media-uuid", volume.media_uuid.as_deref());
     push_signature_str(
         &mut tokens,
@@ -748,6 +758,8 @@ mod tests {
         descriptor.filesystem = Some("apfs".to_string());
         descriptor.mount_filesystem = Some("apfs".to_string());
         descriptor.volume_uuid = Some("VOLUME-UUID".to_string());
+        descriptor.apfs_container_uuid = Some("APFS-CONTAINER-UUID".to_string());
+        descriptor.apfs_role = Some(gfm_mac::ApfsVolumeRole::Data);
         descriptor.media_uuid = Some("APFS-CONTAINER-UUID".to_string());
         descriptor.resource_uuid = Some("RESOURCE-UUID".to_string());
         descriptor.bsd_name = Some("disk4s1".to_string());
@@ -787,6 +799,8 @@ mod tests {
             "fs=apfs",
             "mount-fs=apfs",
             "volume-uuid=VOLUME-UUID",
+            "apfs-container-uuid=APFS-CONTAINER-UUID",
+            "apfs-role=data",
             "media-uuid=APFS-CONTAINER-UUID",
             "resource-uuid=RESOURCE-UUID",
             "bsd=disk4s1",

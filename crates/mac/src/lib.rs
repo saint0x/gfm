@@ -52,9 +52,9 @@ pub use spotlight::{
     SpotlightReconciliationReport, SpotlightSnapshot, SpotlightStatus,
 };
 pub use volume::{
-    MountState, VolumeCapacity, VolumeCommandPolicy, VolumeCommandState, VolumeDescriptor,
-    VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind, VolumeEventReport,
-    VolumeEventStream, VolumeKind, VolumeMountIdentityReport, VolumeOperation,
+    ApfsVolumeRole, MountState, VolumeCapacity, VolumeCommandPolicy, VolumeCommandState,
+    VolumeDescriptor, VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind,
+    VolumeEventReport, VolumeEventStream, VolumeKind, VolumeMountIdentityReport, VolumeOperation,
     VolumeOperationDisposition, VolumeOperationReport, VolumeTopologyChange,
     VolumeTopologyChangeKind, VolumeTopologyDiff,
 };
