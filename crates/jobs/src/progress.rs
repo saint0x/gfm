@@ -3,8 +3,10 @@ use gfm_types::{GfmError, Result, VolumeId};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 const MAGIC: &str = "gfm-job-progress-v1";
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobProgressState {
@@ -291,7 +293,8 @@ impl JobProgressStore {
             .file_name()
             .map(|name| name.to_os_string())
             .unwrap_or_else(|| "job-progress".into());
-        name.push(format!(".{}.tmp", std::process::id()));
+        let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+        name.push(format!(".{}.{sequence}.tmp", std::process::id()));
         self.path.with_file_name(name)
     }
 }
@@ -407,6 +410,27 @@ fn parse_snapshot(line: &str) -> std::result::Result<JobProgressSnapshot, String
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn progress_store_temp_paths_are_unique_within_process() {
+        let path = temp_path("unique-temp");
+        let store = JobProgressStore::new(&path);
+
+        let first = store.temp_path();
+        let second = store.temp_path();
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), path.parent());
+        assert_eq!(second.parent(), path.parent());
+        assert!(first
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".tmp")));
+        assert!(second
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".tmp")));
+    }
 
     #[test]
     fn progress_commands_pause_resume_and_stop_persist_atomically() {
