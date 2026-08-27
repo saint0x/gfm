@@ -559,40 +559,61 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let pressure = parse_required_scheduling_pressure(args, "resume content job")?;
             let journal = JobJournal::new(journal_path);
-            let recoverable = recoverable_background_content_jobs(&journal)?;
-            if recoverable == 0 {
-                eprintln!("no recoverable background content jobs");
-            } else {
-                let _access = preflight_access_scope(
-                    &spec_path,
-                    AccessIntent::Read,
-                    "resume background content index",
+            if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
+                let outcome = run_scheduled_volume_task_cancellable(
+                    None,
+                    Priority::Background,
+                    "background content index",
+                    pressure,
+                    |_| {
+                        Ok(ContentJobOutcome {
+                            report: None,
+                            inaccessible: 0,
+                            scheduling_action: SchedulingAction::Defer,
+                            deferred: true,
+                        })
+                    },
                 )?;
-                let spec = ContentIndexJobSpec::read(&spec_path)?;
-                let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
-                if outcome.deferred {
-                    eprintln!(
-                        "resumed-background-content-deferred action={:?}; recoverable {}",
-                        outcome.scheduling_action, recoverable
-                    );
+                eprintln!(
+                    "resumed-background-content-deferred action={:?}; recoverable unknown",
+                    outcome.scheduling_action
+                );
+            } else {
+                let recoverable = recoverable_background_content_jobs(&journal)?;
+                if recoverable == 0 {
+                    eprintln!("no recoverable background content jobs");
                 } else {
-                    let report = outcome.report.ok_or_else(|| {
-                        GfmError::Format(
-                            "resumed background content index ran without a report".to_string(),
-                        )
-                    })?;
-                    eprintln!(
-                        "resumed-background-content-indexed {} files; skipped {}; quarantined {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; recoverable {}",
-                        report.indexed,
-                        report.skipped,
-                        report.quarantined,
-                        report.unchanged,
-                        report.tombstoned,
-                        report.segments.len(),
-                        report.terms,
-                        outcome.scheduling_action,
-                        recoverable
-                    );
+                    let _access = preflight_access_scope(
+                        &spec_path,
+                        AccessIntent::Read,
+                        "resume background content index",
+                    )?;
+                    let spec = ContentIndexJobSpec::read(&spec_path)?;
+                    let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
+                    if outcome.deferred {
+                        eprintln!(
+                            "resumed-background-content-deferred action={:?}; recoverable {}",
+                            outcome.scheduling_action, recoverable
+                        );
+                    } else {
+                        let report = outcome.report.ok_or_else(|| {
+                            GfmError::Format(
+                                "resumed background content index ran without a report".to_string(),
+                            )
+                        })?;
+                        eprintln!(
+                            "resumed-background-content-indexed {} files; skipped {}; quarantined {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; recoverable {}",
+                            report.indexed,
+                            report.skipped,
+                            report.quarantined,
+                            report.unchanged,
+                            report.tombstoned,
+                            report.segments.len(),
+                            report.terms,
+                            outcome.scheduling_action,
+                            recoverable
+                        );
+                    }
                 }
             }
         }

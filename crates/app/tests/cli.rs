@@ -9146,6 +9146,47 @@ fn adaptive_resume_content_index_job_applies_pressure_budgets_from_binary() {
 }
 
 #[test]
+fn deferred_adaptive_resume_content_index_job_skips_unreachable_recovery_paths_from_binary() {
+    let offline = unique_temp_dir("gfm-cli-resume-content-adaptive-deferred-unreachable");
+    let journal = offline.join("jobs.journal");
+    let spec = offline.join("content.job");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&journal, "99\t1\tstarted\tbackground content index\n").unwrap();
+    fs::write(&spec, "not-a-content-job-spec\n").unwrap();
+
+    let resume_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "resume-content-background-adaptive",
+            spec.to_str().unwrap(),
+            journal.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        resume_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resume_output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&resume_output.stderr);
+    assert!(
+        stderr.contains("resumed-background-content-deferred action=Defer; recoverable unknown"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("content job spec"), "{stderr}");
+
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn reports_recoverable_jobs_from_binary() {
     let journal = unique_temp_path("gfm-cli-recovery-jobs", "journal");
     fs::write(
