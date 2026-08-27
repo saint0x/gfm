@@ -129,8 +129,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let worker = args
                 .next()
                 .unwrap_or_else(|| "just-in-time permission".to_string());
+            let refresh = crate::permission_refresh::refresh_permission_state(
+                crate::permission_refresh::PermissionRefreshAudience::Ui,
+                "permission-access",
+            )?;
             let admission = crate::access::worker_admission_with_volume_gate(&path, intent, worker);
-            print_permission_access_contract(&admission);
+            print_permission_access_contract(
+                &admission,
+                refresh.as_ref().map(permission_refresh_contract),
+            );
         }
         "ui-progress-job-contract" => {
             let path = required_path(
@@ -578,12 +585,18 @@ fn print_permission_onboarding_contract(
     }
 }
 
-fn print_permission_access_contract(admission: &SecurityWorkerAdmissionReport) {
+fn print_permission_access_contract(
+    admission: &SecurityWorkerAdmissionReport,
+    refresh: Option<PermissionRefreshContract>,
+) {
     let access = permission_access_contract(admission);
     println!(
         "{}",
         DialogContract::permission_prompt(access.prompt_kind).as_tsv()
     );
+    if let Some(refresh) = refresh {
+        println!("{}", refresh.as_tsv());
+    }
     println!("{}", access.as_tsv());
     println!("{}", admission.as_tsv());
 }

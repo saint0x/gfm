@@ -4561,6 +4561,26 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-ui-access-permission-state.tsv",
+      "data": "gfm-permission-state-v1\ndocuments\tgranted\ttmp/gfm-fozzy-home/Documents\treadable\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_PERMISSION_STATE": "tmp/gfm-fozzy-ui-access-permission-state.tsv"
+      },
+      "args": [
+        "ui-permission-access-contract",
+        "tmp/gfm-fozzy-security.md",
+        "read",
+        "ui list view"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

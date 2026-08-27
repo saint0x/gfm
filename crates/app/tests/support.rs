@@ -436,6 +436,46 @@ fn reports_permission_ui_refresh_in_lifecycle_contract_from_binary() {
 }
 
 #[test]
+fn reports_permission_ui_refresh_in_access_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-refresh-access-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("permission-state.tsv");
+    seed_stale_permission_state(&state);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_PERMISSION_STATE", &state)
+        .args([
+            "ui-permission-access-contract",
+            root.to_str().unwrap(),
+            "read",
+            "ui list view",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+    assert!(
+        stdout.contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\trefresh-ui=true\t"), "{stdout}");
+    assert!(stdout.contains("\npermission-access\tpath="), "{stdout}");
+    assert!(stdout.contains("\nsecurity-worker-admission\tworker=ui list view\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn permission_access_contract_uses_bookmark_prompt_for_protected_locations_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-permission-access-bookmark-{}",
