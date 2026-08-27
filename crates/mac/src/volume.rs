@@ -596,10 +596,16 @@ impl VolumeDiscoveryReport {
     }
 
     pub fn volume_for_path(&self, path: &Path) -> Option<&VolumeDescriptor> {
+        let lookup_path = normalized_lookup_path(path);
         self.volumes
             .iter()
-            .filter(|volume| path.starts_with(&volume.path))
-            .max_by_key(|volume| volume.path.components().count())
+            .filter(|volume| volume_contains_path(volume, path, lookup_path.as_deref()))
+            .max_by_key(|volume| {
+                normalized_lookup_path(&volume.path)
+                    .unwrap_or_else(|| volume.path.clone())
+                    .components()
+                    .count()
+            })
     }
 
     pub fn as_tsv(&self) -> String {
@@ -2087,6 +2093,42 @@ fn marker_stable_identity(marker: &str, id: VolumeId, path: &Path) -> String {
     )
 }
 
+fn volume_contains_path(
+    volume: &VolumeDescriptor,
+    path: &Path,
+    normalized_path: Option<&Path>,
+) -> bool {
+    if path.starts_with(&volume.path) {
+        return true;
+    }
+    let Some(normalized_path) = normalized_path else {
+        return false;
+    };
+    normalized_lookup_path(&volume.path)
+        .as_deref()
+        .is_some_and(|volume_path| normalized_path.starts_with(volume_path))
+}
+
+fn normalized_lookup_path(path: &Path) -> Option<PathBuf> {
+    if let Ok(canonical) = path.canonicalize() {
+        return Some(canonical);
+    }
+
+    let mut candidate = path;
+    let mut missing = Vec::new();
+    loop {
+        if candidate.exists() {
+            let mut normalized = candidate.canonicalize().ok()?;
+            for component in missing.iter().rev() {
+                normalized.push(component);
+            }
+            return Some(normalized);
+        }
+        missing.push(candidate.file_name()?.to_os_string());
+        candidate = candidate.parent()?;
+    }
+}
+
 fn volume_label(path: &Path) -> String {
     if path == Path::new("/") {
         "Macintosh HD".to_string()
@@ -2554,6 +2596,44 @@ mod tests {
 
         fs::remove_dir_all(first).unwrap();
         fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
+    fn normalized_lookup_path_preserves_missing_suffix_under_existing_ancestor() {
+        let root = unique_temp_dir("gfm-volume-normalized-missing");
+        let missing = root.join("Missing").join("Nested").join("Plan.md");
+
+        let normalized = normalized_lookup_path(&missing).unwrap();
+
+        assert!(normalized.starts_with(root.canonicalize().unwrap()));
+        assert!(normalized.ends_with(Path::new("Missing/Nested/Plan.md")));
+        assert!(!missing.exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_lookup_matches_var_private_var_aliases() {
+        let root = unique_temp_dir("gfm-volume-private-var-alias");
+        let canonical_root = root.canonicalize().unwrap();
+        let Some(alias_root) = private_var_alias_for(&canonical_root) else {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        };
+        let descriptor = VolumeDescriptor::for_path(&canonical_root).unwrap();
+        let report = VolumeDiscoveryReport {
+            volumes: vec![descriptor],
+        };
+        let alias_child = alias_root.join("Nested").join("File.txt");
+
+        let volume = report
+            .volume_for_path(&alias_child)
+            .expect("canonical volume should contain /var alias child");
+
+        assert_eq!(volume.path, canonical_root);
+        assert!(!alias_child.exists());
+
+        fs::remove_dir_all(alias_root).unwrap();
     }
 
     #[test]
@@ -3074,6 +3154,12 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn private_var_alias_for(path: &Path) -> Option<PathBuf> {
+        path.strip_prefix("/private")
+            .ok()
+            .map(|stripped| Path::new("/").join(stripped))
     }
 
     fn resource_values(
