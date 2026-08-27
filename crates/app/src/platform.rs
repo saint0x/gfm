@@ -286,6 +286,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "fileprovider-observer-probe requires a FileProvider target path",
             )?;
+            let _root_access =
+                preflight_access_scope(&root, AccessIntent::Index, "fileprovider observer root")?;
+            let _target_access = preflight_access_scope(
+                &target,
+                AccessIntent::Write,
+                "fileprovider observer target",
+            )?;
             let previous = if state_path.is_file() {
                 Some(FileProviderStateSnapshot::read(&state_path)?)
             } else {

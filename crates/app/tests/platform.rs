@@ -1341,6 +1341,45 @@ fn reports_fileprovider_observer_probe_from_binary() {
 }
 
 #[test]
+fn fileprovider_observer_probe_refuses_unreachable_volume_before_watching_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-observer-unreachable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    std::fs::write(&item, "placeholder").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-observer-probe")
+        .arg(&state)
+        .arg(&root)
+        .arg(&item)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("fileprovider-observed-invalidation\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(
+            "fileprovider observer root volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!state.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_discovery_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-volumes-{}", std::process::id()));
     let external = root.join("Work Drive");
