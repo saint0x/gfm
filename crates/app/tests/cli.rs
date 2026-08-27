@@ -6954,6 +6954,82 @@ fn resume_content_index_job_refuses_unreachable_outputs_before_worker_from_binar
 }
 
 #[test]
+fn resume_content_index_job_refuses_unreachable_journal_before_recovery_read_from_binary() {
+    let offline = unique_temp_dir("gfm-cli-resume-content-journal-unreachable");
+    let journal = offline.join("jobs.journal");
+    let spec = unique_temp_path("gfm-cli-resume-content-journal-unread", "job");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&journal, "99\t1\tstarted\tbackground content index\n").unwrap();
+    fs::write(&spec, "not-a-content-job-spec\n").unwrap();
+
+    let resume_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "resume-content-background",
+            spec.to_str().unwrap(),
+            journal.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!resume_output.status.success());
+    let stderr = String::from_utf8_lossy(&resume_output.stderr);
+    assert!(
+        stderr.contains(
+            "background content recovery journal volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("content job spec"), "{stderr}");
+
+    fs::remove_dir_all(offline).unwrap();
+    fs::remove_file(spec).unwrap();
+}
+
+#[test]
+fn resume_content_index_job_refuses_unreachable_progress_store_before_recovery_read_from_binary() {
+    let offline = unique_temp_dir("gfm-cli-resume-content-progress-unreachable");
+    let progress = offline.join("jobs.gfmprogress");
+    let journal = unique_temp_path("gfm-cli-resume-content-progress", "journal");
+    let spec = unique_temp_path("gfm-cli-resume-content-progress-unread", "job");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&journal, "99\t1\tstarted\tbackground content index\n").unwrap();
+    fs::write(
+        &progress,
+        "gfm-job-progress-v1\nprogress\t100\tbackground\tbackground\tbackground content index\t-\tpaused\t0\t1\tdeferred:Defer\t123\n",
+    )
+    .unwrap();
+    fs::write(&spec, "not-a-content-job-spec\n").unwrap();
+
+    let resume_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "resume-content-background",
+            spec.to_str().unwrap(),
+            journal.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!resume_output.status.success());
+    let stderr = String::from_utf8_lossy(&resume_output.stderr);
+    assert!(
+        stderr.contains(
+            "background content recovery progress volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("content job spec"), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(&journal).unwrap(),
+        "99\t1\tstarted\tbackground content index\n"
+    );
+
+    fs::remove_dir_all(offline).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(spec).unwrap();
+}
+
+#[test]
 fn adaptive_resume_content_index_job_applies_pressure_budgets_from_binary() {
     let root = unique_temp_dir("gfm-cli-resume-content-budget-root");
     let segments = unique_temp_dir("gfm-cli-resume-content-budget-segments");

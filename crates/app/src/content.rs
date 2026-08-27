@@ -685,6 +685,11 @@ pub(crate) fn run_content_search(
 }
 
 fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<usize> {
+    let _journal_access = preflight_access_scope(
+        journal.path(),
+        AccessIntent::Read,
+        "background content recovery journal",
+    )?;
     let mut ids = journal
         .recoverable(RetryPolicy { max_attempts: 2 })?
         .into_iter()
@@ -692,6 +697,11 @@ fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<usize> {
         .map(|job| job.id)
         .collect::<HashSet<_>>();
     if let Some(store) = runtime_progress_store() {
+        let _progress_access = preflight_access_scope(
+            store.path(),
+            AccessIntent::Read,
+            "background content recovery progress",
+        )?;
         for snapshot in store.restorable()? {
             if snapshot.label == "background content index" {
                 ids.insert(snapshot.id);

@@ -2722,6 +2722,21 @@
       "data": "99\t1\tstarted\tbackground content index\n"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-resume-content-unread.job",
+      "data": "not-a-content-job-spec\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/recovery-offline.journal",
+      "data": "99\t1\tstarted\tbackground content index\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/recovery-progress.gfmprogress",
+      "data": "gfm-job-progress-v1\nprogress\t100\tbackground\tbackground\tbackground content index\t-\tpaused\t0\t1\tdeferred:Defer\t123\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -2737,6 +2752,31 @@
       "args": [
         "quicklook-session",
         "tmp/gfm-fozzy-offline-volume/Project/Preview.pdf"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "resume-content-background",
+        "tmp/gfm-fozzy-resume-content-unread.job",
+        "tmp/gfm-fozzy-offline-volume/recovery-offline.journal"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-offline-volume/recovery-progress.gfmprogress"
+      },
+      "args": [
+        "resume-content-background",
+        "tmp/gfm-fozzy-resume-content-unread.job",
+        "tmp/gfm-fozzy-resume-content-offline.journal"
       ],
       "exit_code": 1,
       "times": 1
