@@ -4591,15 +4591,7 @@ fn operation_refuses_unreachable_destination_volume_before_copying_from_binary()
         "do not copy onto unreachable storage"
     );
     assert!(!destination.exists());
-    let journal_text = fs::read_to_string(&journal).unwrap();
-    assert!(journal_text.contains("\tstarted\t"), "{journal_text}");
-    assert!(journal_text.contains("\tfailed\t"), "{journal_text}");
-    assert!(journal_text.contains("\tcopy\t"), "{journal_text}");
-    assert!(
-        journal_text.contains("unreachable volume network"),
-        "{journal_text}"
-    );
-    assert!(!journal_text.contains("\tcompleted\t"), "{journal_text}");
+    assert!(!journal.exists());
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -4632,6 +4624,7 @@ fn operation_volume_copy_policy_reports_descriptor_classes_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stdout.starts_with("operation-volume-copy-policy\t"),
         "{stdout}"
@@ -4642,6 +4635,10 @@ fn operation_volume_copy_policy_reports_descriptor_classes_from_binary() {
         "{stdout}"
     );
     assert!(stdout.contains("\tbuffer-bytes=65536\t"), "{stdout}");
+    assert!(
+        !stderr.contains("security-access\t") && !stderr.contains("security-worker-admission\t"),
+        "{stderr}"
+    );
     assert!(!destination.exists());
 
     fs::remove_dir_all(root).unwrap();

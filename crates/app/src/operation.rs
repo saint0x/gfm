@@ -1,6 +1,6 @@
 use crate::access::{
-    preflight_access_scope, worker_admission_with_volume_gate, worker_admission_with_volume_report,
-    ScopedAccessGuard,
+    preflight_access_scope, preflight_volume_access_scope, worker_admission_with_volume_gate,
+    worker_admission_with_volume_report, ScopedAccessGuard,
 };
 use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
 use crate::runtime::{
@@ -115,7 +115,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "operation-volume-copy-policy requires a destination path",
             )?;
             let operation = Operation::Copy { from, to };
-            let _access = retain_operation_volume_policy_access(&operation)?;
+            preflight_operation_volume_policy_access(&operation)?;
             println!("{}", operation_volume_copy_policy_report(&operation));
         }
         "move" => {
@@ -350,17 +350,16 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     let trash_metadata = default_trash_metadata_path();
     let label = operation_kind(&operation);
     let _ = refresh_permission_state(PermissionRefreshAudience::Operations, label)?;
+    let volume_report = operation_volume_report(&operation);
+    let access_gate = operation_access_gate(&operation, &volume_report);
+    access_gate.check(&operation)?;
     let _journal_access = preflight_operation_journal_write(&journal)?;
     let _trash_metadata_access =
         retain_operation_trash_metadata_access(&operation, &trash_metadata)?;
-    let volume_report = operation_volume_report(&operation);
-    let access_gate = operation_access_gate(&operation, &volume_report);
-    if access_gate.check(&operation).is_ok() {
-        let conflict_report = OperationConflictReport::evaluate(&operation, conflict);
-        if conflict_report.blocks_operation {
-            if let Some(store) = runtime_operation_conflict_store() {
-                store.append(&conflict_report)?;
-            }
+    let conflict_report = OperationConflictReport::evaluate(&operation, conflict);
+    if conflict_report.blocks_operation {
+        if let Some(store) = runtime_operation_conflict_store() {
+            store.append(&conflict_report)?;
         }
     }
     let volume_copy_policy = operation_volume_copy_policy_from_report(&operation, &volume_report);
@@ -397,21 +396,21 @@ fn operation_volume_copy_policy_report(operation: &Operation) -> String {
     }
 }
 
-fn retain_operation_volume_policy_access(operation: &Operation) -> Result<Vec<ScopedAccessGuard>> {
+fn preflight_operation_volume_policy_access(operation: &Operation) -> Result<()> {
     match operation {
-        Operation::Copy { from, to } | Operation::Move { from, to } => Ok(vec![
-            preflight_access_scope(
+        Operation::Copy { from, to } | Operation::Move { from, to } => {
+            preflight_volume_access_scope(
                 from,
                 AccessIntent::Read,
                 "operation volume copy policy source",
-            )?,
-            preflight_access_scope(
+            )?;
+            preflight_volume_access_scope(
                 write_probe_path(to),
                 AccessIntent::Write,
                 "operation volume copy policy destination",
-            )?,
-        ]),
-        _ => Ok(Vec::new()),
+            )
+        }
+        _ => Ok(()),
     }
 }
 
