@@ -1165,8 +1165,9 @@ fn retain_fileprovider_snapshot_access(
     worker: &str,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::with_capacity(paths.len() + 1);
+    let state_probe = write_probe_existing_ancestor(state_path);
     guards.push(preflight_access_scope(
-        write_probe_path(state_path),
+        &state_probe,
         AccessIntent::Write,
         worker,
     )?);
@@ -1228,6 +1229,20 @@ fn write_probe_path(path: &Path) -> &Path {
         return path;
     }
     path.parent().unwrap_or(path)
+}
+
+fn write_probe_existing_ancestor(path: &Path) -> PathBuf {
+    let mut candidate = write_probe_path(path).to_path_buf();
+    while !candidate.exists() {
+        let Some(parent) = candidate.parent() else {
+            break;
+        };
+        if parent == candidate {
+            break;
+        }
+        candidate = parent.to_path_buf();
+    }
+    candidate
 }
 
 fn record_for_path_with_access(

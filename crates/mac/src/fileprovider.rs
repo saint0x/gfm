@@ -1903,6 +1903,12 @@ fn unescape_field(value: &str) -> String {
 }
 
 fn atomic_write_text(path: &Path, text: &str) -> Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
     let temporary = temporary_path(path);
     let mut file = File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
     if let Err(err) = file.write_all(text.as_bytes()) {
@@ -2120,6 +2126,23 @@ mod tests {
         let reloaded = FileProviderStateSnapshot::read(&path).unwrap();
 
         assert_eq!(reloaded, snapshot);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_state_snapshot_write_creates_parent_directory() {
+        let root = unique_temp_dir();
+        let path = root.join("runtime").join("fileprovider-state.tsv");
+        let snapshot = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: root.join("Remote.icloud-placeholder"),
+                state: CloudStorageState::Evicted,
+            }],
+        };
+
+        snapshot.write(&path).unwrap();
+
+        assert_eq!(FileProviderStateSnapshot::read(&path).unwrap(), snapshot);
         fs::remove_dir_all(root).unwrap();
     }
 
