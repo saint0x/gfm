@@ -506,7 +506,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let page = read_directory_with_access(&path, "ui trash view")?;
             let metadata = metadata_path
                 .as_ref()
-                .map(read_trash_restore_metadata)
+                .map(|path| read_trash_restore_metadata(path.as_path()))
                 .transpose()?
                 .unwrap_or_default();
             let options = TrashViewOptions::default()
@@ -1241,9 +1241,27 @@ fn parse_package_traversal_mode(value: Option<&str>) -> Result<PackageTraversalM
     }
 }
 
-fn read_trash_restore_metadata(path: &PathBuf) -> Result<BTreeMap<String, TrashEntryMetadata>> {
-    let _access =
-        crate::access::preflight_access_scope(path, AccessIntent::Read, "ui trash metadata")?;
+fn read_trash_restore_metadata(path: &Path) -> Result<BTreeMap<String, TrashEntryMetadata>> {
+    const WORKER: &str = "ui trash metadata";
+    crate::access::preflight_volume_access_scope(path, AccessIntent::Read, WORKER)?;
+    let volume = crate::detect_volume_id(path)
+        .ok()
+        .or_else(|| crate::parent_volume(path));
+    let path = path.to_path_buf();
+    crate::runtime::run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        WORKER,
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
+            cancellation.check()?;
+            parse_trash_restore_metadata(&path)
+        },
+    )
+}
+
+fn parse_trash_restore_metadata(path: &Path) -> Result<BTreeMap<String, TrashEntryMetadata>> {
     let text = std::fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
     let mut metadata = BTreeMap::new();
     for (line_index, line) in text.lines().enumerate() {

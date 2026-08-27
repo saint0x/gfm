@@ -1884,6 +1884,13 @@ fn reports_ui_trash_view_contract_from_binary() {
         )),
         "{stderr}"
     );
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=ui trash metadata\tpath={}",
+            metadata.display()
+        )),
+        "{stderr}"
+    );
 
     assert!(stdout.starts_with("trash-view\tsort=deleted-newest\trow-height=24px"));
     assert!(stdout.contains("\ttotal=3\t"));

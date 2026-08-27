@@ -6121,6 +6121,13 @@ fn ui_trash_view_refuses_unreachable_restore_metadata_before_rendering_from_bina
         stderr.contains("ui trash metadata volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=ui trash metadata\tpath={}",
+            metadata.display()
+        )),
+        "{stderr}"
+    );
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(offline).unwrap();
