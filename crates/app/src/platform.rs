@@ -442,6 +442,33 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .as_tsv()
             );
         }
+        "volume-event-transition-case-sensitivity" => {
+            let previous_case_sensitive = parse_platform_bool(
+                &required_string(
+                    args.next(),
+                    "volume-event-transition-case-sensitivity requires a previous case-sensitive flag",
+                )?,
+                "previous case-sensitive",
+            )?;
+            let current_case_sensitive = parse_platform_bool(
+                &required_string(
+                    args.next(),
+                    "volume-event-transition-case-sensitivity requires a current case-sensitive flag",
+                )?,
+                "current case-sensitive",
+            )?;
+            println!(
+                "{}",
+                volume_event_transition_case_sensitivity(
+                    previous_case_sensitive,
+                    current_case_sensitive
+                )?
+                .as_tsv()
+            );
+        }
+        "volume-event-transition-api-status" => {
+            println!("{}", volume_event_transition_api_status()?.as_tsv());
+        }
         "volume-event-index-invalidation" => {
             println!(
                 "{}",
@@ -916,6 +943,52 @@ fn volume_topology_index_invalidation_tsv(
         );
     }
     lines.join("\n")
+}
+
+fn volume_event_transition_case_sensitivity(
+    previous_case_sensitive: bool,
+    current_case_sensitive: bool,
+) -> Result<VolumeEventInvalidationReport> {
+    let mut previous = VolumeDescriptor::for_path("/")?;
+    previous.stable_identity = "diskarbitration:uuid:CASE-EVENT".to_string();
+    previous.label = "Case Event".to_string();
+    previous.path = PathBuf::from("/Volumes/Case Event");
+    previous.kind = gfm_mac::VolumeKind::External;
+    previous.case_sensitive = Some(previous_case_sensitive);
+    previous.native_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    previous.resource_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    previous.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    let mut current = previous.clone();
+    current.case_sensitive = Some(current_case_sensitive);
+    Ok(VolumeEventInvalidationReport::from_transition(
+        VolumeEventKind::DescriptionChanged,
+        gfm_mac::NativeVolumeStatus::Available,
+        Some(&previous),
+        Some(&current),
+        None,
+    ))
+}
+
+fn volume_event_transition_api_status() -> Result<VolumeEventInvalidationReport> {
+    let mut previous = VolumeDescriptor::for_path("/")?;
+    previous.stable_identity = "diskarbitration:uuid:API-EVENT".to_string();
+    previous.label = "API Event".to_string();
+    previous.path = PathBuf::from("/Volumes/API Event");
+    previous.kind = gfm_mac::VolumeKind::External;
+    previous.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    previous.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    previous.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    let mut current = previous.clone();
+    current.native_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    current.resource_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    current.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    Ok(VolumeEventInvalidationReport::from_transition(
+        VolumeEventKind::DescriptionChanged,
+        gfm_mac::NativeVolumeStatus::Available,
+        Some(&previous),
+        Some(&current),
+        None,
+    ))
 }
 
 fn publish_fileprovider_progress_job(path: PathBuf) -> Result<FileProviderProgressReport> {

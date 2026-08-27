@@ -790,6 +790,8 @@ fn print_usage() {
   gfm volume-events-shutdown-probe
   gfm volume-event-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-event-transition-invalidation <appeared|description-changed|disappeared|unavailable> <path> <previous-label> <current-label>
+  gfm volume-event-transition-case-sensitivity <previous:true|false> <current:true|false>
+  gfm volume-event-transition-api-status
   gfm volume-operation <eject|unmount|mount> <path>
   gfm volume-mount-bsd <bsd-name>
   gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]

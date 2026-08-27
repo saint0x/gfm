@@ -878,8 +878,16 @@ pub struct VolumeEventInvalidationReport {
     pub path: Option<PathBuf>,
     pub previous_kind: Option<VolumeKind>,
     pub previous_mount_state: Option<MountState>,
+    pub previous_case_sensitive: Option<bool>,
+    pub previous_native_status: Option<NativeVolumeStatus>,
+    pub previous_resource_status: Option<NativeVolumeStatus>,
+    pub previous_mount_table_status: Option<NativeVolumeStatus>,
     pub current_kind: Option<VolumeKind>,
     pub current_mount_state: Option<MountState>,
+    pub current_case_sensitive: Option<bool>,
+    pub current_native_status: Option<NativeVolumeStatus>,
+    pub current_resource_status: Option<NativeVolumeStatus>,
+    pub current_mount_table_status: Option<NativeVolumeStatus>,
     pub invalidate_sidebar: bool,
     pub invalidate_operation_policy: bool,
     pub invalidate_index_admission: bool,
@@ -1004,8 +1012,23 @@ impl VolumeEventInvalidationReport {
                     path,
                     previous_kind: previous.map(|descriptor| descriptor.kind),
                     previous_mount_state: previous.map(|descriptor| descriptor.mount_state),
+                    previous_case_sensitive: previous
+                        .and_then(|descriptor| descriptor.case_sensitive),
+                    previous_native_status: previous
+                        .and_then(|descriptor| descriptor.native_status),
+                    previous_resource_status: previous
+                        .and_then(|descriptor| descriptor.resource_status),
+                    previous_mount_table_status: previous
+                        .and_then(|descriptor| descriptor.mount_table_status),
                     current_kind: current.map(|descriptor| descriptor.kind),
                     current_mount_state: current.map(|descriptor| descriptor.mount_state),
+                    current_case_sensitive: current
+                        .and_then(|descriptor| descriptor.case_sensitive),
+                    current_native_status: current.and_then(|descriptor| descriptor.native_status),
+                    current_resource_status: current
+                        .and_then(|descriptor| descriptor.resource_status),
+                    current_mount_table_status: current
+                        .and_then(|descriptor| descriptor.mount_table_status),
                     invalidate_sidebar: event_visible,
                     invalidate_operation_policy: event_visible,
                     invalidate_index_admission: event_visible,
@@ -1036,8 +1059,23 @@ impl VolumeEventInvalidationReport {
                     path,
                     previous_kind,
                     previous_mount_state,
+                    previous_case_sensitive: previous
+                        .and_then(|descriptor| descriptor.case_sensitive),
+                    previous_native_status: previous
+                        .and_then(|descriptor| descriptor.native_status),
+                    previous_resource_status: previous
+                        .and_then(|descriptor| descriptor.resource_status),
+                    previous_mount_table_status: previous
+                        .and_then(|descriptor| descriptor.mount_table_status),
                     current_kind,
                     current_mount_state,
+                    current_case_sensitive: current
+                        .and_then(|descriptor| descriptor.case_sensitive),
+                    current_native_status: current.and_then(|descriptor| descriptor.native_status),
+                    current_resource_status: current
+                        .and_then(|descriptor| descriptor.resource_status),
+                    current_mount_table_status: current
+                        .and_then(|descriptor| descriptor.mount_table_status),
                     invalidate_sidebar: visible,
                     invalidate_operation_policy: visible && heavy,
                     invalidate_index_admission: visible && heavy,
@@ -1084,6 +1122,18 @@ impl VolumeEventInvalidationReport {
             previous_mount_state: (kind == VolumeEventKind::Disappeared)
                 .then(|| descriptor.map(|descriptor| descriptor.mount_state))
                 .flatten(),
+            previous_case_sensitive: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.and_then(|descriptor| descriptor.case_sensitive))
+                .flatten(),
+            previous_native_status: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.and_then(|descriptor| descriptor.native_status))
+                .flatten(),
+            previous_resource_status: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.and_then(|descriptor| descriptor.resource_status))
+                .flatten(),
+            previous_mount_table_status: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.and_then(|descriptor| descriptor.mount_table_status))
+                .flatten(),
             current_kind: (kind != VolumeEventKind::Disappeared)
                 .then(|| descriptor.map(|descriptor| descriptor.kind))
                 .flatten(),
@@ -1092,6 +1142,18 @@ impl VolumeEventInvalidationReport {
             } else {
                 descriptor.map(|descriptor| descriptor.mount_state)
             },
+            current_case_sensitive: (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.and_then(|descriptor| descriptor.case_sensitive))
+                .flatten(),
+            current_native_status: (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.and_then(|descriptor| descriptor.native_status))
+                .flatten(),
+            current_resource_status: (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.and_then(|descriptor| descriptor.resource_status))
+                .flatten(),
+            current_mount_table_status: (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.and_then(|descriptor| descriptor.mount_table_status))
+                .flatten(),
             invalidate_sidebar: invalidates,
             invalidate_operation_policy: invalidates,
             invalidate_index_admission: invalidates,
@@ -1102,7 +1164,7 @@ impl VolumeEventInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tprevious-kind={}\tprevious-mount={}\tcurrent-kind={}\tcurrent-mount={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
+            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tprevious-kind={}\tprevious-mount={}\tprevious-case-sensitive={}\tprevious-native-status={}\tprevious-resource-status={}\tprevious-mount-status={}\tcurrent-kind={}\tcurrent-mount={}\tcurrent-case-sensitive={}\tcurrent-native-status={}\tcurrent-resource-status={}\tcurrent-mount-status={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
             self.kind.as_str(),
             self.native_status.as_str(),
             self.path
@@ -1111,8 +1173,32 @@ impl VolumeEventInvalidationReport {
                 .unwrap_or_else(|| "-".to_string()),
             self.previous_kind.map(VolumeKind::as_str).unwrap_or("-"),
             self.previous_mount_state.map(MountState::as_str).unwrap_or("-"),
+            self.previous_case_sensitive
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.previous_native_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            self.previous_resource_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            self.previous_mount_table_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
             self.current_kind.map(VolumeKind::as_str).unwrap_or("-"),
             self.current_mount_state.map(MountState::as_str).unwrap_or("-"),
+            self.current_case_sensitive
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.current_native_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            self.current_resource_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            self.current_mount_table_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
             self.invalidate_sidebar,
             self.invalidate_operation_policy,
             self.invalidate_index_admission,
@@ -2953,10 +3039,97 @@ mod tests {
     }
 
     #[test]
+    fn volume_event_transition_reports_case_sensitivity_changes() {
+        let root = unique_temp_dir("gfm-volume-event-case-sensitivity-change");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous = VolumeDescriptor::for_path(&root).unwrap();
+        previous.case_sensitive = Some(false);
+        previous.native_status = Some(NativeVolumeStatus::Available);
+        previous.resource_status = Some(NativeVolumeStatus::Available);
+        previous.mount_table_status = Some(NativeVolumeStatus::Available);
+        let mut current = previous.clone();
+        current.case_sensitive = Some(true);
+
+        let report = VolumeEventInvalidationReport::from_transition(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Available,
+            Some(&previous),
+            Some(&current),
+            None,
+        );
+
+        assert_eq!(report.reason, "volume-case-sensitivity-changed");
+        assert_eq!(report.previous_case_sensitive, Some(false));
+        assert_eq!(report.current_case_sensitive, Some(true));
+        assert!(report.invalidate_sidebar);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report
+            .as_tsv()
+            .contains("\tprevious-case-sensitive=false\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tprevious-native-status=available\t"));
+        assert!(report.as_tsv().contains("\tcurrent-case-sensitive=true\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tcurrent-native-status=available\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_transition_reports_api_status_changes() {
+        let root = unique_temp_dir("gfm-volume-event-api-status-change");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous = VolumeDescriptor::for_path(&root).unwrap();
+        previous.native_status = Some(NativeVolumeStatus::Unavailable);
+        previous.resource_status = Some(NativeVolumeStatus::Unavailable);
+        previous.mount_table_status = Some(NativeVolumeStatus::Unavailable);
+        let mut current = previous.clone();
+        current.native_status = Some(NativeVolumeStatus::Available);
+        current.resource_status = Some(NativeVolumeStatus::Available);
+        current.mount_table_status = Some(NativeVolumeStatus::Available);
+
+        let report = VolumeEventInvalidationReport::from_transition(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Available,
+            Some(&previous),
+            Some(&current),
+            None,
+        );
+
+        assert_eq!(report.reason, "volume-api-status-changed");
+        assert_eq!(
+            report.previous_native_status,
+            Some(NativeVolumeStatus::Unavailable)
+        );
+        assert_eq!(
+            report.current_native_status,
+            Some(NativeVolumeStatus::Available)
+        );
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report
+            .as_tsv()
+            .contains("\tprevious-native-status=unavailable\t"));
+        assert!(report.as_tsv().contains("\tcurrent-kind=external\t"));
+        assert!(report.as_tsv().contains(
+            "\tcurrent-native-status=available\tcurrent-resource-status=available\tcurrent-mount-status=available\t"
+        ));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn disappeared_volume_event_reports_previous_volume_and_unmounted_current_state() {
         let root = unique_temp_dir("gfm-volume-event-disappeared");
         fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
-        let descriptor = VolumeDescriptor::for_path(&root).unwrap();
+        let mut descriptor = VolumeDescriptor::for_path(&root).unwrap();
+        descriptor.native_status = Some(NativeVolumeStatus::Available);
+        descriptor.resource_status = Some(NativeVolumeStatus::Available);
+        descriptor.mount_table_status = Some(NativeVolumeStatus::Available);
 
         let report = VolumeEventInvalidationReport::from_parts(
             VolumeEventKind::Disappeared,
@@ -2968,15 +3141,23 @@ mod tests {
 
         assert_eq!(report.previous_kind, Some(VolumeKind::External));
         assert_eq!(report.previous_mount_state, Some(MountState::Mounted));
+        assert_eq!(
+            report.previous_native_status,
+            Some(NativeVolumeStatus::Available)
+        );
         assert_eq!(report.current_kind, None);
         assert_eq!(report.current_mount_state, Some(MountState::Unmounted));
+        assert_eq!(report.current_native_status, None);
         assert!(report.invalidate_sidebar);
         assert!(report.invalidate_operation_policy);
         assert!(report.invalidate_index_admission);
         assert!(report.rescan_index);
-        assert!(report.as_tsv().contains(
-            "\tprevious-kind=external\tprevious-mount=mounted\tcurrent-kind=-\tcurrent-mount=unmounted\t"
-        ));
+        assert!(report
+            .as_tsv()
+            .contains("\tprevious-kind=external\tprevious-mount=mounted\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tcurrent-kind=-\tcurrent-mount=unmounted\t"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -3051,9 +3232,11 @@ mod tests {
         assert!(report.invalidate_index_admission);
         assert!(report.rescan_index);
         assert_eq!(report.reason, "diskarbitration-description-unavailable");
-        assert!(report.as_tsv().contains(
-            "\tprevious-kind=network\tprevious-mount=mounted\tcurrent-kind=-\tcurrent-mount=-\t"
-        ));
+        let tsv = report.as_tsv();
+        assert!(tsv.contains("\tprevious-kind=network\t"));
+        assert!(tsv.contains("\tprevious-mount=mounted\t"));
+        assert!(tsv.contains("\tcurrent-kind=-\t"));
+        assert!(tsv.contains("\tcurrent-mount=-\t"));
 
         fs::remove_dir_all(root).unwrap();
     }

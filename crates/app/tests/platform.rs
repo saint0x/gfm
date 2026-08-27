@@ -3265,6 +3265,58 @@ fn reports_volume_event_transition_label_change_as_sidebar_only_from_binary() {
 }
 
 #[test]
+fn reports_volume_event_transition_case_sensitivity_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-transition-case-sensitivity")
+        .arg("false")
+        .arg("true")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "volume-event-invalidation\tkind=description-changed\tnative-status=available\t"
+    ));
+    assert!(stdout.contains("\tpath=/Volumes/Case Event\t"));
+    assert!(stdout.contains("\tprevious-case-sensitive=false\t"));
+    assert!(stdout.contains("\tcurrent-case-sensitive=true\t"));
+    assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.ends_with("reason=volume-case-sensitivity-changed\n"));
+}
+
+#[test]
+fn reports_volume_event_transition_api_status_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-transition-api-status")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "volume-event-invalidation\tkind=description-changed\tnative-status=available\t"
+    ));
+    assert!(stdout.contains("\tpath=/Volumes/API Event\t"));
+    assert!(stdout.contains("\tprevious-native-status=unavailable\t"));
+    assert!(stdout.contains("\tcurrent-native-status=available\t"));
+    assert!(stdout.contains("\tprevious-resource-status=unavailable\t"));
+    assert!(stdout.contains("\tcurrent-resource-status=available\t"));
+    assert!(stdout.contains("\tprevious-mount-status=unavailable\t"));
+    assert!(stdout.contains("\tcurrent-mount-status=available\t"));
+    assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.ends_with("reason=volume-api-status-changed\n"));
+}
+
+#[test]
 fn reports_unavailable_volume_event_invalidation_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-event-invalidation")
