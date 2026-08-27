@@ -130,11 +130,22 @@ pub struct VolumeDescriptor {
     pub mount_local: Option<bool>,
     pub bsd_name: Option<String>,
     pub volume_uuid: Option<String>,
+    pub volume_type: Option<String>,
     pub media_uuid: Option<String>,
     pub filesystem: Option<String>,
     pub media_content: Option<String>,
+    pub media_kind: Option<String>,
+    pub media_name: Option<String>,
+    pub media_path: Option<String>,
+    pub media_type: Option<String>,
+    pub media_leaf: Option<bool>,
+    pub media_whole: Option<bool>,
+    pub media_encrypted: Option<bool>,
+    pub media_block_size_bytes: Option<u64>,
+    pub media_size_bytes: Option<u64>,
     pub device_protocol: Option<String>,
     pub device_model: Option<String>,
+    pub device_path: Option<String>,
     pub device_vendor: Option<String>,
     pub source: String,
 }
@@ -288,6 +299,9 @@ impl VolumeDescriptor {
             volume_uuid: native
                 .as_ref()
                 .and_then(|native| native.volume_uuid.clone()),
+            volume_type: native
+                .as_ref()
+                .and_then(|native| native.volume_type.clone()),
             media_uuid: native.as_ref().and_then(|native| native.media_uuid.clone()),
             filesystem: mount_table
                 .as_ref()
@@ -303,12 +317,26 @@ impl VolumeDescriptor {
             media_content: native
                 .as_ref()
                 .and_then(|native| native.media_content.clone()),
+            media_kind: native.as_ref().and_then(|native| native.media_kind.clone()),
+            media_name: native.as_ref().and_then(|native| native.media_name.clone()),
+            media_path: native.as_ref().and_then(|native| native.media_path.clone()),
+            media_type: native.as_ref().and_then(|native| native.media_type.clone()),
+            media_leaf: native.as_ref().and_then(|native| native.media_leaf),
+            media_whole: native.as_ref().and_then(|native| native.media_whole),
+            media_encrypted: native.as_ref().and_then(|native| native.media_encrypted),
+            media_block_size_bytes: native
+                .as_ref()
+                .and_then(|native| native.media_block_size_bytes),
+            media_size_bytes: native.as_ref().and_then(|native| native.media_size_bytes),
             device_protocol: native
                 .as_ref()
                 .and_then(|native| native.device_protocol.clone()),
             device_model: native
                 .as_ref()
                 .and_then(|native| native.device_model.clone()),
+            device_path: native
+                .as_ref()
+                .and_then(|native| native.device_path.clone()),
             device_vendor: native
                 .as_ref()
                 .and_then(|native| native.device_vendor.clone()),
@@ -324,7 +352,7 @@ impl VolumeDescriptor {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -433,6 +461,45 @@ impl VolumeDescriptor {
                 .unwrap_or_else(|| "-".to_string()),
             self.mount_local
                 .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.volume_type
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.media_kind
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.media_name
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.media_path
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.media_type
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.media_leaf
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.media_whole
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.media_encrypted
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.media_block_size_bytes
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.media_size_bytes
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.device_path
+                .as_deref()
+                .map(escape_field)
                 .unwrap_or_else(|| "-".to_string())
         )
     }
@@ -904,9 +971,19 @@ fn topology_change_reason(
         || previous.resource_uuid != current.resource_uuid
         || previous.bsd_name != current.bsd_name
         || previous.media_content != current.media_content
+        || previous.media_name != current.media_name
+        || previous.media_path != current.media_path
     {
         Some("volume-identity-changed")
     } else if previous.filesystem != current.filesystem
+        || previous.volume_type != current.volume_type
+        || previous.media_kind != current.media_kind
+        || previous.media_type != current.media_type
+        || previous.media_leaf != current.media_leaf
+        || previous.media_whole != current.media_whole
+        || previous.media_encrypted != current.media_encrypted
+        || previous.media_block_size_bytes != current.media_block_size_bytes
+        || previous.media_size_bytes != current.media_size_bytes
         || previous.mount_filesystem != current.mount_filesystem
         || previous.case_sensitive != current.case_sensitive
         || previous.case_preserving != current.case_preserving
@@ -914,6 +991,7 @@ fn topology_change_reason(
         || previous.resource_browsable != current.resource_browsable
         || previous.resource_remount_url != current.resource_remount_url
         || previous.device_protocol != current.device_protocol
+        || previous.device_path != current.device_path
     {
         Some("volume-filesystem-changed")
     } else if previous.label != current.label {
@@ -1273,6 +1351,17 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tresource-browsable="));
         assert!(descriptor.as_tsv().contains("\tresource-remount-url="));
         assert!(descriptor.as_tsv().contains("\tmount-status=available\t"));
+        assert!(descriptor.as_tsv().contains("\tvolume-type="));
+        assert!(descriptor.as_tsv().contains("\tmedia-kind="));
+        assert!(descriptor.as_tsv().contains("\tmedia-name="));
+        assert!(descriptor.as_tsv().contains("\tmedia-path="));
+        assert!(descriptor.as_tsv().contains("\tmedia-type="));
+        assert!(descriptor.as_tsv().contains("\tmedia-leaf="));
+        assert!(descriptor.as_tsv().contains("\tmedia-whole="));
+        assert!(descriptor.as_tsv().contains("\tmedia-encrypted="));
+        assert!(descriptor.as_tsv().contains("\tmedia-block-size="));
+        assert!(descriptor.as_tsv().contains("\tmedia-size="));
+        assert!(descriptor.as_tsv().contains("\tdevice-path="));
         assert!(descriptor.source.contains("mount-table=available"));
         assert!(descriptor.source.contains("url-resource=available"));
     }
@@ -1299,6 +1388,9 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tresource-status=-"));
         assert!(descriptor.as_tsv().contains("\tresource-uuid=-\t"));
         assert!(descriptor.as_tsv().contains("\tmount-status=-\t"));
+        assert!(descriptor.as_tsv().contains("\tvolume-type=-\t"));
+        assert!(descriptor.as_tsv().contains("\tmedia-encrypted=-\t"));
+        assert!(descriptor.as_tsv().contains("\tmedia-size=-\t"));
         assert!(!descriptor.source.contains("url-resource="));
         assert!(!descriptor.source.contains("mount-table="));
 
@@ -1530,6 +1622,15 @@ mod tests {
         current_volume.case_sensitive = Some(true);
         current_volume.case_preserving = Some(true);
         current_volume.device_protocol = Some("USB".to_string());
+        current_volume.volume_type = Some("apfs".to_string());
+        current_volume.media_kind = Some("IOMedia".to_string());
+        current_volume.media_type = Some("Generic".to_string());
+        current_volume.media_leaf = Some(true);
+        current_volume.media_whole = Some(false);
+        current_volume.media_encrypted = Some(true);
+        current_volume.media_block_size_bytes = Some(4096);
+        current_volume.media_size_bytes = Some(1024 * 1024 * 1024);
+        current_volume.device_path = Some("IODeviceTree:/PCI0".to_string());
         let previous = VolumeDiscoveryReport {
             volumes: vec![previous_volume],
         };
