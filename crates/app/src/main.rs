@@ -262,28 +262,56 @@ pub(crate) fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeD
 }
 
 fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
-    [
-        volume.filesystem.as_deref(),
-        volume.mount_filesystem.as_deref(),
-        volume
-            .case_sensitive
-            .map(|value| if value { "1" } else { "0" }),
-        volume
-            .case_preserving
-            .map(|value| if value { "1" } else { "0" }),
-        volume
-            .resource_automounted
-            .map(|value| if value { "1" } else { "0" }),
-        volume
-            .resource_browsable
-            .map(|value| if value { "1" } else { "0" }),
+    let mut tokens = Vec::new();
+    push_signature_str(&mut tokens, "fs", volume.filesystem.as_deref());
+    push_signature_str(&mut tokens, "mount-fs", volume.mount_filesystem.as_deref());
+    push_signature_str(&mut tokens, "volume-uuid", volume.volume_uuid.as_deref());
+    push_signature_str(&mut tokens, "media-uuid", volume.media_uuid.as_deref());
+    push_signature_str(
+        &mut tokens,
+        "resource-uuid",
+        volume.resource_uuid.as_deref(),
+    );
+    push_signature_str(
+        &mut tokens,
+        "media-content",
+        volume.media_content.as_deref(),
+    );
+    push_signature_str(&mut tokens, "volume-type", volume.volume_type.as_deref());
+    push_signature_str(&mut tokens, "media-kind", volume.media_kind.as_deref());
+    push_signature_str(&mut tokens, "media-type", volume.media_type.as_deref());
+    push_signature_bool(&mut tokens, "case-sensitive", volume.case_sensitive);
+    push_signature_bool(&mut tokens, "case-preserving", volume.case_preserving);
+    push_signature_bool(&mut tokens, "automounted", volume.resource_automounted);
+    push_signature_bool(&mut tokens, "browsable", volume.resource_browsable);
+    push_signature_str(
+        &mut tokens,
+        "remount-url",
         volume.resource_remount_url.as_deref(),
-        volume.device_protocol.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join("|")
+    );
+    push_signature_str(&mut tokens, "protocol", volume.device_protocol.as_deref());
+    push_signature_bool(&mut tokens, "encrypted", volume.media_encrypted);
+    push_signature_u64(&mut tokens, "block-size", volume.media_block_size_bytes);
+    push_signature_u64(&mut tokens, "media-size", volume.media_size_bytes);
+    tokens.join("|")
+}
+
+fn push_signature_str(tokens: &mut Vec<String>, key: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        tokens.push(format!("{key}={value}"));
+    }
+}
+
+fn push_signature_bool(tokens: &mut Vec<String>, key: &str, value: Option<bool>) {
+    if let Some(value) = value {
+        tokens.push(format!("{key}={}", if value { "1" } else { "0" }));
+    }
+}
+
+fn push_signature_u64(tokens: &mut Vec<String>, key: &str, value: Option<u64>) {
+    if let Some(value) = value {
+        tokens.push(format!("{key}={value}"));
+    }
 }
 
 fn index_volume_class(kind: VolumeKind) -> IndexVolumeClass {
@@ -636,4 +664,71 @@ fn print_usage() {
   gfm empty-trash <trash-dir>
   gfm restore <trash-entry> [original-path] [--replace|--keep-both|--merge|--skip]"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn index_volume_signature_includes_native_apfs_and_media_identity() {
+        let root = unique_temp_dir("gfm-app-volume-signature");
+        let mut descriptor = VolumeDescriptor::for_path(&root).unwrap();
+        descriptor.filesystem = Some("apfs".to_string());
+        descriptor.mount_filesystem = Some("apfs".to_string());
+        descriptor.volume_uuid = Some("VOLUME-UUID".to_string());
+        descriptor.media_uuid = Some("APFS-CONTAINER-UUID".to_string());
+        descriptor.resource_uuid = Some("RESOURCE-UUID".to_string());
+        descriptor.media_content = Some("Apple_APFS".to_string());
+        descriptor.volume_type = Some("apfs".to_string());
+        descriptor.media_kind = Some("IOMedia".to_string());
+        descriptor.media_type = Some("Generic".to_string());
+        descriptor.case_sensitive = Some(true);
+        descriptor.case_preserving = Some(true);
+        descriptor.resource_automounted = Some(false);
+        descriptor.resource_browsable = Some(true);
+        descriptor.resource_remount_url = Some("file:///Volumes/Work".to_string());
+        descriptor.device_protocol = Some("PCI-Express".to_string());
+        descriptor.media_encrypted = Some(true);
+        descriptor.media_block_size_bytes = Some(4096);
+        descriptor.media_size_bytes = Some(1024 * 1024 * 1024);
+
+        let signature = index_volume_filesystem_signature(&descriptor);
+
+        for token in [
+            "fs=apfs",
+            "mount-fs=apfs",
+            "volume-uuid=VOLUME-UUID",
+            "media-uuid=APFS-CONTAINER-UUID",
+            "resource-uuid=RESOURCE-UUID",
+            "media-content=Apple_APFS",
+            "volume-type=apfs",
+            "media-kind=IOMedia",
+            "media-type=Generic",
+            "case-sensitive=1",
+            "case-preserving=1",
+            "automounted=0",
+            "browsable=1",
+            "remount-url=file:///Volumes/Work",
+            "protocol=PCI-Express",
+            "encrypted=1",
+            "block-size=4096",
+            "media-size=1073741824",
+        ] {
+            assert!(signature.contains(token), "{signature}");
+        }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let id = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let root = std::env::temp_dir().join(format!("{prefix}-{}-{id}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
 }
