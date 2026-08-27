@@ -1075,10 +1075,16 @@ fn preview_cache_refuses_unreachable_network_volume_before_record_read_from_bina
         "gfm-preview-cache-unreachable-volume-{}",
         std::process::id()
     ));
+    let cache_root = std::env::temp_dir().join(format!(
+        "gfm-preview-cache-unreachable-volume-cache-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&cache_root);
     std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&cache_root).unwrap();
     std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
-    let cache = root.join("cache");
+    let cache = cache_root.join("cache");
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
 
@@ -1101,6 +1107,49 @@ fn preview_cache_refuses_unreachable_network_volume_before_record_read_from_bina
     );
 
     let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(cache_root);
+}
+
+#[test]
+fn preview_cache_refuses_unreachable_cache_root_before_invalidation_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-preview-cache-root-unreachable-source-{}",
+        std::process::id()
+    ));
+    let offline = std::env::temp_dir().join(format!(
+        "gfm-preview-cache-root-unreachable-cache-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&offline);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&offline).unwrap();
+    std::fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let cache = offline.join("cache");
+    let evicted = root.join("Remote.icloud-placeholder");
+    std::fs::write(&evicted, "placeholder").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("preview-cache-fileprovider-invalidation")
+        .arg(&cache)
+        .arg("downloaded")
+        .arg(&evicted)
+        .arg("thumbnail")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("preview-cache-invalidation\t"), "{stdout}");
+    assert!(
+        stderr.contains("preview cache root volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!cache.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(offline);
 }
 
 #[test]

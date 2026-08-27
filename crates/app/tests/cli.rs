@@ -509,6 +509,40 @@ fn thumbnail_preflight_retains_security_scoped_bookmark_from_binary() {
 }
 
 #[test]
+fn preview_cache_invalidation_refuses_unreachable_cache_root_before_disk_touch_from_binary() {
+    let root = unique_temp_dir("gfm-cli-preview-cache-root");
+    let offline = unique_temp_dir("gfm-cli-preview-cache-unreachable");
+    let cache_root = offline.join("cache");
+    let previewed = root.join("Document.icloud");
+    fs::write(&previewed, "downloaded preview").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "preview-cache-fileprovider-invalidation",
+            cache_root.to_str().unwrap(),
+            "downloaded",
+            previewed.to_str().unwrap(),
+            "thumbnail",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("preview-cache-invalidation\t"), "{stdout}");
+    assert!(
+        stderr.contains("preview cache root volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!cache_root.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn index_refuses_missing_root_before_scan_from_binary() {
     let root = unique_temp_path("gfm-cli-index-missing-root", "missing");
     let index = unique_temp_path("gfm-cli-index-missing-output", "gfmidx");

@@ -239,6 +239,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "preview-cache-fileprovider-invalidation requires a path",
             )?;
             let kind = parse_preview_kind(args.next())?;
+            let _cache_access = preflight_access_scope(
+                write_probe_path(&cache_root),
+                AccessIntent::Write,
+                "preview cache root",
+            )?;
             let record =
                 record_for_path_with_access(&path, AccessIntent::Preview, "preview cache")?;
             let report = FileProviderInvalidationReport::evaluate(path.clone(), previous)?;
