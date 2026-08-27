@@ -451,6 +451,12 @@ fn unescape_field(value: &str) -> String {
 }
 
 fn atomic_write_text(path: &Path, text: &str) -> Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
     let temporary = temporary_path(path);
     let mut file = File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
     if let Err(err) = file.write_all(text.as_bytes()) {
@@ -600,6 +606,25 @@ mod tests {
         let reloaded = PermissionStateSnapshot::read(&path).unwrap();
 
         assert_eq!(reloaded, snapshot);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permission_state_snapshot_write_creates_parent_directory() {
+        let root = temp_root("permissions-snapshot-parent");
+        let path = root.join("runtime").join("permission-state.tsv");
+        let snapshot = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: root.join("Documents"),
+                state: PermissionState::Granted,
+                reason: "readable".to_string(),
+            }],
+        };
+
+        snapshot.write(&path).unwrap();
+
+        assert_eq!(PermissionStateSnapshot::read(&path).unwrap(), snapshot);
         fs::remove_dir_all(root).unwrap();
     }
 

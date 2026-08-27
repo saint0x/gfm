@@ -70,9 +70,9 @@ pub(crate) fn refresh_permission_state_at_path(
 }
 
 fn preflight_permission_state_volume(path: &Path) -> Result<()> {
-    let probe_path = write_probe_path(path);
-    let report = VolumeDiscoveryReport::for_containing_path(probe_path);
-    let Some(volume) = report.volume_for_path(probe_path) else {
+    let probe_path = write_probe_existing_ancestor(path);
+    let report = VolumeDiscoveryReport::for_containing_path(&probe_path);
+    let Some(volume) = report.volume_for_path(&probe_path) else {
         return Ok(());
     };
     if volume.reachable != Some(false) {
@@ -98,6 +98,20 @@ fn write_probe_path(path: &Path) -> &Path {
     path.parent().unwrap_or(path)
 }
 
+fn write_probe_existing_ancestor(path: &Path) -> std::path::PathBuf {
+    let mut candidate = write_probe_path(path).to_path_buf();
+    while !candidate.exists() {
+        let Some(parent) = candidate.parent() else {
+            break;
+        };
+        if parent == candidate {
+            break;
+        }
+        candidate = parent.to_path_buf();
+    }
+    candidate
+}
+
 fn escape_field(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -109,7 +123,11 @@ fn escape_field(value: &str) -> String {
 mod tests {
     use super::*;
     use gfm_mac::{PermissionReadiness, PermissionScope, PermissionState};
+    use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn audience_selection_tracks_report_refresh_flags() {
@@ -125,5 +143,35 @@ mod tests {
 
         assert!(PermissionRefreshAudience::Workers.selected(&report));
         assert!(PermissionRefreshAudience::Operations.selected(&report));
+    }
+
+    #[test]
+    fn refresh_state_refuses_nested_unreachable_volume_before_parent_creation() {
+        let root = unique_temp_dir("gfm-permission-refresh-nested-offline");
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let state = root.join("runtime").join("permission-state.tsv");
+
+        let err = refresh_permission_state_at_path(&state).unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err
+            .to_string()
+            .contains("permission state volume access blocked"));
+        assert!(!state.exists());
+        assert!(!state.parent().unwrap().exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "{}-{}-{}",
+            prefix,
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 }

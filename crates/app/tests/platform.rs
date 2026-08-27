@@ -113,6 +113,37 @@ fn persists_permission_invalidation_state_from_binary() {
 }
 
 #[test]
+fn permission_invalidation_creates_nested_state_parent_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-permission-invalidation-parent-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("runtime").join("permission-state.tsv");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation")
+        .arg(&state)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("permission-invalidation\tinitialized=true\t"));
+    assert!(state.is_file());
+    assert!(std::fs::read_to_string(&state)
+        .unwrap()
+        .starts_with("gfm-permission-state-v1\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn permission_invalidation_refuses_unreachable_state_before_persisting_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-permission-invalidation-offline-{}",
