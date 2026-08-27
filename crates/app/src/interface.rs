@@ -146,6 +146,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "ui-fileprovider-conflict-contract requires a FileProvider path",
             )?;
+            let _access = preflight_ui_fileprovider_read(&path, "ui fileprovider conflict")?;
             let report = FileProviderConflictReport::read_path(&path)?;
             let contract = ProviderConflictContract::from_input(ProviderConflictInput::new(
                 report.path.display().to_string(),
@@ -223,6 +224,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "ui-sidebar-fileprovider-contract requires a FileProvider path",
             )?;
+            let _access =
+                preflight_ui_fileprovider_read(&provider_path, "ui fileprovider sidebar state")?;
             let report = FileProviderStateReport::read_path(&provider_path)?;
             println!(
                 "{}",
@@ -243,6 +246,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let provider_path = required_path(
                 args.next(),
                 "ui-sidebar-fileprovider-invalidation requires a FileProvider path",
+            )?;
+            let _access = preflight_ui_fileprovider_read(
+                &provider_path,
+                "ui fileprovider sidebar invalidation",
             )?;
             let report = FileProviderInvalidationReport::evaluate(&provider_path, previous)?;
             println!(
@@ -688,6 +695,13 @@ fn read_directory_with_access(path: &PathBuf, worker: &str) -> Result<DirectoryP
 
 fn preflight_ui_progress_read(path: &Path) -> Result<crate::access::ScopedAccessGuard> {
     crate::access::preflight_access_scope(path, AccessIntent::Read, "ui progress store")
+}
+
+fn preflight_ui_fileprovider_read(
+    path: &Path,
+    worker: &'static str,
+) -> Result<crate::access::ScopedAccessGuard> {
+    crate::access::preflight_access_scope(path, AccessIntent::Read, worker)
 }
 
 fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {

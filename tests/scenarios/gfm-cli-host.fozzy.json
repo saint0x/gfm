@@ -3182,6 +3182,11 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/Conflict.icloud-conflict.md",
+      "data": "conflict\n"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-offline-volume/ops-recover.journal",
       "data": "991\tstarted\t1\tcopy\ttmp/gfm-fozzy-operation-conflict-offline-source.txt\ttmp/gfm-fozzy-offline-recover-target.txt\t\n"
     },
@@ -3334,6 +3339,38 @@
       },
       "args": [
         "ui-contract"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-sidebar-fileprovider-contract",
+        ".",
+        "tmp/gfm-fozzy-offline-volume/Conflict.icloud-conflict.md"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-sidebar-fileprovider-invalidation",
+        "downloaded",
+        "tmp/gfm-fozzy-offline-volume/Conflict.icloud-conflict.md"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-fileprovider-conflict-contract",
+        "tmp/gfm-fozzy-offline-volume/Conflict.icloud-conflict.md"
       ],
       "exit_code": 1,
       "times": 1

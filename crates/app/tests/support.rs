@@ -828,6 +828,57 @@ fn reports_fileprovider_conflict_in_ui_dialog_contract_from_binary() {
 }
 
 #[test]
+fn ui_fileprovider_contracts_refuse_unreachable_volume_before_native_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-fileprovider-unreachable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let provider = root.join("Conflict.icloud-conflict.md");
+    std::fs::write(&provider, "conflict").unwrap();
+
+    for (args, expected, forbidden) in [
+        (
+            vec![
+                "ui-sidebar-fileprovider-contract",
+                ".",
+                provider.to_str().unwrap(),
+            ],
+            "ui fileprovider sidebar state volume access blocked: unreachable volume network",
+            "row\tiCloud\t",
+        ),
+        (
+            vec![
+                "ui-sidebar-fileprovider-invalidation",
+                "downloaded",
+                provider.to_str().unwrap(),
+            ],
+            "ui fileprovider sidebar invalidation volume access blocked: unreachable volume network",
+            "sidebar-cloud-invalidation\t",
+        ),
+        (
+            vec!["ui-fileprovider-conflict-contract", provider.to_str().unwrap()],
+            "ui fileprovider conflict volume access blocked: unreachable volume network",
+            "provider-conflict\t",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains(forbidden), "{stdout}");
+        assert!(stderr.contains(expected), "{stderr}");
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_ui_icon_view_contract_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-icon-view-contract-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
