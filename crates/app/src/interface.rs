@@ -415,10 +415,12 @@ fn print_permission_onboarding_contract(
     plan: gfm_mac::PermissionOnboardingPlan,
     refresh: Option<PermissionRefreshContract>,
 ) {
-    println!("{}", permission_dialog_for_plan(&plan).as_tsv());
+    let prompt = permission_prompt_kind(&plan);
+    println!("{}", DialogContract::permission_prompt(prompt).as_tsv());
     println!(
-        "permission-onboarding\taction={}\tprompt-mode={}\tfinder-parity-default={}\tmachine-search-ready={}",
+        "permission-onboarding\taction={}\tprompt-kind={}\tprompt-mode={}\tfinder-parity-default={}\tmachine-search-ready={}",
         plan.action.as_str(),
+        prompt.as_str(),
         plan.policy.prompt_mode.as_str(),
         plan.finder_parity_default,
         plan.granted_for_machine_search()
@@ -593,7 +595,7 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
     }
     let plan = current_permission_onboarding()?;
     if plan.finder_parity_default || plan.action != gfm_mac::PermissionAction::ContinueNormally {
-        Ok(spec.with_permission_dialog(permission_dialog_for_plan(&plan)))
+        Ok(spec.with_permission_prompt(permission_prompt_kind(&plan)))
     } else {
         Ok(spec)
     }
@@ -609,10 +611,6 @@ fn permission_refresh_contract(
         report.refresh_workers,
         report.refresh_operations,
     )
-}
-
-fn permission_dialog_for_plan(plan: &gfm_mac::PermissionOnboardingPlan) -> DialogContract {
-    DialogContract::permission_prompt(permission_prompt_kind(plan))
 }
 
 fn permission_prompt_kind(plan: &gfm_mac::PermissionOnboardingPlan) -> PermissionPromptKind {

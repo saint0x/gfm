@@ -94,6 +94,7 @@ pub struct AppLaunchSpec {
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
     pub permission_dialog: Option<DialogContract>,
+    pub permission_prompt: Option<PermissionPromptKind>,
     pub permission_refresh: Option<PermissionRefreshContract>,
 }
 
@@ -211,12 +212,23 @@ impl AppLaunchSpec {
                 ));
             }
         }
+        if self.permission_prompt.is_some() && self.permission_dialog.is_none() {
+            return Err(GfmError::Format(
+                "native app permission prompt binding requires a permission dialog".to_string(),
+            ));
+        }
         titlebar::TitlebarContract::from_spec(self)?;
         Ok(())
     }
 
     pub fn with_permission_dialog(mut self, dialog: DialogContract) -> Self {
         self.permission_dialog = Some(dialog);
+        self
+    }
+
+    pub fn with_permission_prompt(mut self, kind: PermissionPromptKind) -> Self {
+        self.permission_dialog = Some(DialogContract::permission_prompt(kind));
+        self.permission_prompt = Some(kind);
         self
     }
 
@@ -257,6 +269,7 @@ impl Default for AppLaunchSpec {
             progress_surfaces: Vec::new(),
             operation_conflicts: Vec::new(),
             permission_dialog: None,
+            permission_prompt: None,
             permission_refresh: None,
         }
     }
@@ -277,6 +290,7 @@ pub struct WindowLifecycleContract {
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
     pub permission_dialog: Option<DialogSurface>,
+    pub permission_prompt: Option<PermissionPromptKind>,
     pub permission_refresh: Option<PermissionRefreshContract>,
 }
 
@@ -297,6 +311,7 @@ impl WindowLifecycleContract {
             progress_surfaces: spec.progress_surfaces.clone(),
             operation_conflicts: spec.operation_conflicts.clone(),
             permission_dialog: spec.permission_dialog.as_ref().map(|dialog| dialog.surface),
+            permission_prompt: spec.permission_prompt,
             permission_refresh: spec.permission_refresh.clone(),
         })
     }
@@ -327,6 +342,12 @@ impl WindowLifecycleContract {
                 .iter()
                 .map(|conflict| conflict.as_tsv()),
         );
+        if let Some(prompt) = self.permission_prompt {
+            lines.push(format!(
+                "permission-prompt\tkind={}\tsurface=permission",
+                prompt.as_str()
+            ));
+        }
         if let Some(refresh) = &self.permission_refresh {
             lines.push(refresh.as_tsv());
         }
@@ -534,13 +555,29 @@ mod tests {
     #[test]
     fn lifecycle_contract_tracks_permission_sheet() {
         let spec = AppLaunchSpec::new("/tmp/gfm")
-            .with_permission_dialog(DialogContract::finder_default(DialogSurface::Permission));
+            .with_permission_prompt(PermissionPromptKind::BookmarkAcquisition);
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
 
         assert_eq!(contract.permission_dialog, Some(DialogSurface::Permission));
+        assert_eq!(
+            contract.permission_prompt,
+            Some(PermissionPromptKind::BookmarkAcquisition)
+        );
+        assert!(contract.as_tsv().contains("\tpermission-dialog=permission"));
         assert!(contract
             .as_tsv()
-            .ends_with("\tpermission-dialog=permission"));
+            .contains("\npermission-prompt\tkind=bookmark-acquisition\tsurface=permission"));
+    }
+
+    #[test]
+    fn rejects_permission_prompt_without_permission_dialog() {
+        let mut spec = AppLaunchSpec::new("/tmp/gfm");
+        spec.permission_prompt = Some(PermissionPromptKind::FullDiskAccess);
+
+        let err = WindowLifecycleContract::from_spec(&spec).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("permission prompt binding requires a permission dialog"));
     }
 
     #[test]

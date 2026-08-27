@@ -16,7 +16,7 @@ fn reports_ui_lifecycle_contract_from_binary() {
 
     assert_eq!(
         stdout.trim(),
-        "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tpermission-dialog=permission"
+        "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tpermission-dialog=permission\npermission-prompt\tkind=general\tsurface=permission"
     );
 }
 
@@ -113,6 +113,7 @@ fn reports_permission_onboarding_dialog_contract_from_binary() {
         stdout.contains("\npermission-onboarding\taction="),
         "{stdout}"
     );
+    assert!(stdout.contains("\tprompt-kind="), "{stdout}");
     assert!(
         stdout.contains("\tprompt-mode=defer-until-needed\t"),
         "{stdout}"
@@ -155,6 +156,10 @@ fn permission_onboarding_contract_uses_full_disk_access_prompt_from_binary() {
     assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
     assert!(
         stdout.contains("\ttitle=Allow Full Disk Access\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tprompt-kind=full-disk-access\t"),
         "{stdout}"
     );
     assert!(
@@ -226,6 +231,7 @@ fn reports_permission_ui_refresh_in_lifecycle_contract_from_binary() {
         stdout.contains("\tpermission-dialog=permission"),
         "{stdout}"
     );
+    assert!(stdout.contains("\npermission-prompt\tkind="), "{stdout}");
     assert!(
         stdout.contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"),
         "{stdout}"
