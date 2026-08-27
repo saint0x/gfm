@@ -1810,6 +1810,9 @@ fn classify_volume(
     if let Some(kind) = classify_native_volume(path, native, resource, mount_table) {
         return kind;
     }
+    if native_volume_evidence_unavailable(native, resource, mount_table) {
+        return VolumeKind::Unknown;
+    }
 
     let label = volume_label(path).to_ascii_lowercase();
     if path == Path::new("/") || label == "macintosh hd" {
@@ -1897,6 +1900,23 @@ fn classify_native_volume(
         return Some(VolumeKind::Internal);
     }
     None
+}
+
+fn native_volume_evidence_unavailable(
+    native: Option<&NativeVolumeDescription>,
+    resource: Option<&NativeVolumeResourceValues>,
+    mount_table: Option<&NativeVolumeMountTableEntry>,
+) -> bool {
+    let statuses = [
+        native.map(|native| native.status),
+        resource.map(|resource| resource.status),
+        mount_table.map(|mount_table| mount_table.status),
+    ];
+    statuses.iter().any(Option::is_some)
+        && statuses
+            .iter()
+            .flatten()
+            .all(|status| *status != NativeVolumeStatus::Available)
 }
 
 fn volume_source(native: Option<&NativeVolumeDescription>) -> String {
@@ -2410,6 +2430,39 @@ mod tests {
         );
 
         assert_eq!(kind, Some(VolumeKind::DiskImage));
+    }
+
+    #[test]
+    fn classify_volume_reports_unknown_when_all_native_evidence_is_unavailable() {
+        let native = native_description(|description| {
+            description.status = NativeVolumeStatus::Unavailable;
+            description.reason = Some("DiskArbitration unavailable".to_string());
+        });
+        let resource = resource_values(|values| {
+            values.status = NativeVolumeStatus::Unavailable;
+            values.reason = Some("URL resource unavailable".to_string());
+        });
+        let mount_table = mount_table_entry(|entry| {
+            entry.status = NativeVolumeStatus::Unavailable;
+            entry.reason = Some("mount table unavailable".to_string());
+        });
+
+        let kind = classify_volume(
+            Path::new("/Volumes/Team SMB"),
+            None,
+            Some(&native),
+            Some(&resource),
+            Some(&mount_table),
+        );
+
+        assert_eq!(kind, VolumeKind::Unknown);
+    }
+
+    #[test]
+    fn classify_volume_keeps_path_fallback_only_when_native_evidence_is_absent() {
+        let kind = classify_volume(Path::new("/Volumes/Team SMB"), None, None, None, None);
+
+        assert_eq!(kind, VolumeKind::Network);
     }
 
     #[test]
