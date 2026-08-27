@@ -121,8 +121,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "jobs-progress-restore requires a progress path",
             )?;
             let updated_ms = parse_optional_timestamp_ms("jobs-progress-restore", args.next())?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Write, "jobs progress restore")?;
+            let _access = preflight_access_scope(
+                write_probe_path(&path),
+                AccessIntent::Write,
+                "jobs progress restore",
+            )?;
             let store = JobProgressStore::new(&path);
             for snapshot in store.restore_interrupted(updated_ms)? {
                 println!("{}", snapshot.as_tsv());
@@ -136,8 +139,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let job_id = parse_u64_arg(args.next(), "jobs-progress-control requires a job id")?;
             let command = parse_progress_command(args.next())?;
             let updated_ms = parse_optional_timestamp_ms("jobs-progress-control", args.next())?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Write, "jobs progress control")?;
+            let _access = preflight_access_scope(
+                write_probe_path(&path),
+                AccessIntent::Write,
+                "jobs progress control",
+            )?;
             let store = JobProgressStore::new(&path);
             let snapshot =
                 store.apply_command(gfm_jobs::JobId::from_raw(job_id), command, updated_ms)?;
@@ -250,7 +256,7 @@ fn retain_payload_restore_access(
             "jobs payload restore plan",
         )?,
         preflight_access_scope(
-            progress_path,
+            write_probe_path(progress_path),
             AccessIntent::Write,
             "jobs payload restore plan",
         )?,

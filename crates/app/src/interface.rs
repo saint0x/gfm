@@ -7,7 +7,8 @@ use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore};
 use gfm_mac::{
     current_permission_onboarding, AccessIntent, CloudCommandState, CloudStorageState,
     FileProviderConflictReport, FileProviderInvalidationReport, FileProviderStateReport,
-    MountState, NativeVolumeStatus, VolumeDescriptor, VolumeDiscoveryReport,
+    MountState, NativeVolumeStatus, SecurityAccessMode, SecurityDecisionAction,
+    SecurityWorkerAction, SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport,
     VolumeEventInvalidationReport, VolumeEventKind, VolumeKind,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
@@ -117,6 +118,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 plan,
                 refresh.as_ref().map(permission_refresh_contract),
             );
+        }
+        "ui-permission-access-contract" => {
+            let path = required_path(args.next(), "ui-permission-access-contract requires a path")?;
+            let intent = AccessIntent::parse(&required_string(
+                args.next(),
+                "ui-permission-access-contract requires an access intent",
+            )?)?;
+            let worker = args
+                .next()
+                .unwrap_or_else(|| "just-in-time permission".to_string());
+            let admission = SecurityWorkerAdmissionReport::evaluate(&path, intent, worker);
+            print_permission_access_contract(&admission);
         }
         "ui-progress-job-contract" => {
             let path = required_path(
@@ -529,6 +542,27 @@ fn print_permission_onboarding_contract(
     }
 }
 
+fn print_permission_access_contract(admission: &SecurityWorkerAdmissionReport) {
+    let prompt = permission_prompt_kind_for_admission(admission);
+    println!("{}", DialogContract::permission_prompt(prompt).as_tsv());
+    println!(
+        "permission-access\tpath={}\tintent={}\tscope={}\tprobe={}\tmode={}\taccess-action={}\tworker-action={}\tbookmark-required={}\tbookmark-access={}\trefresh-on-permission-change={}\tprompt-kind={}\treason={}",
+        admission.access.path.display(),
+        admission.access.intent.as_str(),
+        admission.access.scope.as_str(),
+        admission.access.probe.as_str(),
+        admission.access.mode.as_str(),
+        admission.access.action.as_str(),
+        admission.worker_action.as_str(),
+        admission.access.bookmark_required,
+        admission.needs_bookmark_access,
+        admission.refresh_on_permission_change,
+        prompt.as_str(),
+        escape_interface_field(&admission.reason)
+    );
+    println!("{}", admission.as_tsv());
+}
+
 fn parse_conflict_contract_operation(args: &mut impl Iterator<Item = String>) -> Result<Operation> {
     let kind = required_string(
         args.next(),
@@ -798,6 +832,33 @@ fn permission_prompt_kind(plan: &gfm_mac::PermissionOnboardingPlan) -> Permissio
             }
         }
     }
+}
+
+fn permission_prompt_kind_for_admission(
+    admission: &SecurityWorkerAdmissionReport,
+) -> PermissionPromptKind {
+    if matches!(admission.access.mode, SecurityAccessMode::FullDiskAccess)
+        || matches!(admission.access.action, SecurityDecisionAction::Prompt)
+            && admission.access.scope == gfm_mac::ProtectedScope::FullDiskAccess
+    {
+        return PermissionPromptKind::FullDiskAccess;
+    }
+    if matches!(admission.worker_action, SecurityWorkerAction::MetadataOnly) {
+        return PermissionPromptKind::DegradedSearch;
+    }
+    if admission.access.bookmark_required
+        && (admission.needs_bookmark_access
+            || matches!(admission.access.action, SecurityDecisionAction::Prompt))
+    {
+        return PermissionPromptKind::BookmarkAcquisition;
+    }
+    if matches!(
+        admission.worker_action,
+        SecurityWorkerAction::Prompt | SecurityWorkerAction::Deny
+    ) {
+        return PermissionPromptKind::Blocked;
+    }
+    PermissionPromptKind::General
 }
 
 fn default_current_path(path: Option<String>) -> PathBuf {

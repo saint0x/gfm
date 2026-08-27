@@ -171,6 +171,91 @@ fn permission_onboarding_contract_uses_full_disk_access_prompt_from_binary() {
 }
 
 #[test]
+fn reports_permission_access_contract_for_allowed_path_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-allowed-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-permission-access-contract",
+            root.to_str().unwrap(),
+            "read",
+            "ui list view",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+    assert!(
+        stdout.contains("\npermission-access\tpath=") && stdout.contains("\tintent=read\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tscope=none\t"), "{stdout}");
+    assert!(stdout.contains("\taccess-action=allow\t"), "{stdout}");
+    assert!(stdout.contains("\tworker-action=start\t"), "{stdout}");
+    assert!(stdout.contains("\tbookmark-required=false\t"), "{stdout}");
+    assert!(stdout.contains("\tprompt-kind=general\t"), "{stdout}");
+    assert!(stdout.contains("\nsecurity-worker-admission\tworker=ui list view\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn reports_permission_access_contract_for_protected_missing_path_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-protected-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let home = root.join("home");
+    let documents = home.join("Documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    let protected = documents.join("Project").join("Plan.md");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .args([
+            "ui-permission-access-contract",
+            protected.to_str().unwrap(),
+            "index",
+            "index worker",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+    assert!(
+        stdout.contains("\npermission-access\tpath=") && stdout.contains("\tintent=index\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tscope=documents\t"), "{stdout}");
+    assert!(stdout.contains("\taccess-action=deny\t"), "{stdout}");
+    assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
+    assert!(stdout.contains("\tbookmark-required=true\t"), "{stdout}");
+    assert!(stdout.contains("\tprompt-kind=blocked\t"), "{stdout}");
+    assert!(stdout.contains("\nsecurity-worker-admission\tworker=index worker\t"));
+    assert!(!protected.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_permission_ui_refresh_in_onboarding_contract_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-permission-refresh-onboarding-{}",
@@ -234,6 +319,195 @@ fn reports_permission_ui_refresh_in_lifecycle_contract_from_binary() {
     assert!(stdout.contains("\npermission-prompt\tkind="), "{stdout}");
     assert!(
         stdout.contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn permission_access_contract_uses_bookmark_prompt_for_protected_locations_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-bookmark-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let home = root.join("home");
+    let protected = home.join("Documents").join("Plan.pdf");
+    std::fs::create_dir_all(protected.parent().unwrap()).unwrap();
+    std::fs::write(&protected, "%PDF-1.7\nprotected").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .args([
+            "ui-permission-access-contract",
+            protected.to_str().unwrap(),
+            "preview",
+            "preview worker",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+    assert!(
+        stdout.contains("\ttitle=Choose a Folder to Continue\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\npermission-access\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tintent=preview\tscope=documents\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tworker-action=start\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tbookmark-required=true\tbookmark-access=true\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tprompt-kind=bookmark-acquisition\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\nsecurity-worker-admission\tworker=preview worker\t"),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn permission_access_contract_uses_degraded_prompt_for_metadata_only_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-degraded-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let denied = root.join("Denied.pdf");
+    std::fs::write(&denied, "%PDF-1.7\ndenied").unwrap();
+    std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-permission-access-contract",
+            denied.to_str().unwrap(),
+            "preview",
+            "quicklook preview",
+        ])
+        .output()
+        .unwrap();
+
+    let _ = std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o600));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("\ttitle=Search Will Use Metadata Only\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tmode=degraded-metadata-only\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tworker-action=metadata-only\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tprompt-kind=degraded-search\t"),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn permission_access_contract_uses_blocked_prompt_for_missing_paths_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-blocked-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let missing = root.join("Missing.md");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-permission-access-contract",
+            missing.to_str().unwrap(),
+            "read",
+            "list view",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains("\ttitle=Permission Required\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tprobe=missing\tmode=denied\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
+    assert!(stdout.contains("\tprompt-kind=blocked\t"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn permission_access_contract_uses_full_disk_access_prompt_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-fda-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let home = root.join("home");
+    let mail = home.join("Library").join("Mail");
+    std::fs::create_dir_all(&mail).unwrap();
+    std::fs::set_permissions(&mail, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .args([
+            "ui-permission-access-contract",
+            mail.to_str().unwrap(),
+            "index",
+            "index worker",
+        ])
+        .output()
+        .unwrap();
+
+    let _ = std::fs::set_permissions(&mail, std::fs::Permissions::from_mode(0o700));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("\ttitle=Allow Full Disk Access\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tscope=full-disk-access\t"), "{stdout}");
+    assert!(stdout.contains("\tmode=full-disk-access\t"), "{stdout}");
+    assert!(stdout.contains("\tworker-action=prompt\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tprompt-kind=full-disk-access\t"),
         "{stdout}"
     );
 
