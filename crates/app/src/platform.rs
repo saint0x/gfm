@@ -1,4 +1,4 @@
-use crate::access::preflight_access_scope;
+use crate::access::{preflight_access_scope, ScopedAccessGuard};
 use crate::{
     detect_volume_id, index_volume_descriptor, parse_required_scheduling_pressure,
     run_preview_contract_adaptive, run_preview_contract_cancellable, runtime::RuntimeJobHandle,
@@ -117,6 +117,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "native-icon-fileprovider-invalidation requires a path",
             )?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Read, "native icon fileprovider")?;
             let report = FileProviderInvalidationReport::evaluate(path, previous)?;
             println!(
                 "{}",
@@ -125,6 +127,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "fileprovider-state" => {
             let path = required_path(args.next(), "fileprovider-state requires a path")?;
+            let _access = preflight_access_scope(&path, AccessIntent::Read, "fileprovider state")?;
             println!("{}", FileProviderStateReport::read_path(path)?.as_tsv());
         }
         "fileprovider-state-with-identity" => {
@@ -132,6 +135,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "fileprovider-state-with-identity requires a path",
             )?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Read, "fileprovider identity state")?;
             println!(
                 "{}",
                 FileProviderStateReport::from_path_with_native_identity(path).as_tsv()
@@ -139,6 +144,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "fileprovider-domain" => {
             let path = required_path(args.next(), "fileprovider-domain requires a path")?;
+            let _access = preflight_access_scope(&path, AccessIntent::Read, "fileprovider domain")?;
             println!("{}", FileProviderDomainReport::read_path(path)?.as_tsv());
         }
         "fileprovider-domains" => {
@@ -149,14 +155,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "fileprovider-progress" => {
             let path = required_path(args.next(), "fileprovider-progress requires a path")?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Read, "fileprovider progress")?;
             println!("{}", FileProviderProgressReport::read_path(path)?.as_tsv());
         }
         "fileprovider-conflict" => {
             let path = required_path(args.next(), "fileprovider-conflict requires a path")?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Read, "fileprovider conflict")?;
             println!("{}", FileProviderConflictReport::read_path(path)?.as_tsv());
         }
         "fileprovider-progress-job" => {
             let path = required_path(args.next(), "fileprovider-progress-job requires a path")?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Read, "fileprovider progress job")?;
             println!("{}", publish_fileprovider_progress_job(path)?.as_tsv());
         }
         "fileprovider-operation" => {
@@ -165,6 +177,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "fileprovider-operation requires an operation",
             )?)?;
             let path = required_path(args.next(), "fileprovider-operation requires a path")?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Operate, "fileprovider operation")?;
             println!(
                 "{}",
                 FileProviderOperationReport::execute(path, operation)?.as_tsv()
@@ -176,6 +190,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "fileprovider-invalidation requires a previous state",
             )?)?;
             let path = required_path(args.next(), "fileprovider-invalidation requires a path")?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Read, "fileprovider invalidation")?;
             println!(
                 "{}",
                 FileProviderInvalidationReport::evaluate(path, previous)?.as_tsv()
@@ -189,6 +205,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = required_path(
                 args.next(),
                 "fileprovider-metadata-invalidation requires a path",
+            )?;
+            let _access = preflight_access_scope(
+                &path,
+                AccessIntent::Read,
+                "fileprovider metadata invalidation",
             )?;
             let report = FileProviderInvalidationReport::evaluate(path, previous)?;
             println!(
@@ -241,6 +262,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "fileprovider-invalidation-scan requires at least one path".to_string(),
                 ));
             }
+            let _access = retain_fileprovider_snapshot_access(
+                &state_path,
+                &paths,
+                "fileprovider invalidation scan",
+            )?;
             let previous = if state_path.is_file() {
                 Some(FileProviderStateSnapshot::read(&state_path)?)
             } else {
@@ -266,6 +292,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let event =
                 parse_fileprovider_event(&event_kind, path, args.next().map(PathBuf::from))?;
+            let _access = retain_fileprovider_snapshot_access(
+                &state_path,
+                std::slice::from_ref(&event.path),
+                "fileprovider invalidation event",
+            )?;
             let previous = if state_path.is_file() {
                 Some(FileProviderStateSnapshot::read(&state_path)?)
             } else {
@@ -1016,6 +1047,30 @@ fn index_volume_event_kind(kind: VolumeEventKind) -> IndexVolumeEventKind {
         VolumeEventKind::Disappeared => IndexVolumeEventKind::Disappeared,
         VolumeEventKind::Unavailable => IndexVolumeEventKind::Unavailable,
     }
+}
+
+fn retain_fileprovider_snapshot_access(
+    state_path: &Path,
+    paths: &[PathBuf],
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = Vec::with_capacity(paths.len() + 1);
+    guards.push(preflight_access_scope(
+        write_probe_path(state_path),
+        AccessIntent::Write,
+        worker,
+    )?);
+    for path in paths {
+        guards.push(preflight_access_scope(path, AccessIntent::Read, worker)?);
+    }
+    Ok(guards)
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.is_dir() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
 }
 
 fn record_for_path_with_access(

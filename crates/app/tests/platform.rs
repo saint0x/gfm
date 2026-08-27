@@ -1104,6 +1104,144 @@ fn preview_cache_refuses_unreachable_network_volume_before_record_read_from_bina
 }
 
 #[test]
+fn fileprovider_state_routes_refuse_unreachable_volume_before_native_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-state-unreachable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let item = root.join("Remote.icloud-placeholder");
+    std::fs::write(&item, "placeholder").unwrap();
+
+    for args in [
+        vec!["fileprovider-state".to_string(), item.display().to_string()],
+        vec![
+            "fileprovider-state-with-identity".to_string(),
+            item.display().to_string(),
+        ],
+        vec![
+            "fileprovider-domain".to_string(),
+            item.display().to_string(),
+        ],
+        vec![
+            "fileprovider-progress".to_string(),
+            item.display().to_string(),
+        ],
+        vec![
+            "fileprovider-conflict".to_string(),
+            item.display().to_string(),
+        ],
+        vec![
+            "fileprovider-progress-job".to_string(),
+            item.display().to_string(),
+        ],
+        vec![
+            "fileprovider-invalidation".to_string(),
+            "downloaded".to_string(),
+            item.display().to_string(),
+        ],
+        vec![
+            "fileprovider-metadata-invalidation".to_string(),
+            "downloaded".to_string(),
+            item.display().to_string(),
+        ],
+        vec![
+            "native-icon-fileprovider-invalidation".to_string(),
+            "downloaded".to_string(),
+            item.display().to_string(),
+        ],
+        vec![
+            "fileprovider-operation".to_string(),
+            "download".to_string(),
+            item.display().to_string(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(&args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{args:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains("fileprovider-"), "{args:?}: {stdout}");
+        assert!(
+            !stdout.contains("native-icon-invalidation\t"),
+            "{args:?}: {stdout}"
+        );
+        assert!(
+            stderr.contains("volume access blocked: unreachable volume network"),
+            "{args:?}: {stderr}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn fileprovider_snapshot_routes_refuse_unreachable_volume_before_state_persistence_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-snapshot-unreachable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    std::fs::write(&item, "placeholder").unwrap();
+
+    let scan = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&item)
+        .output()
+        .unwrap();
+
+    assert!(!scan.status.success());
+    let scan_stdout = String::from_utf8_lossy(&scan.stdout);
+    let scan_stderr = String::from_utf8_lossy(&scan.stderr);
+    assert!(
+        !scan_stdout.contains("fileprovider-state-invalidation\t"),
+        "{scan_stdout}"
+    );
+    assert!(
+        scan_stderr.contains(
+            "fileprovider invalidation scan volume access blocked: unreachable volume network"
+        ),
+        "{scan_stderr}"
+    );
+    assert!(!state.exists());
+
+    let event = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-event")
+        .arg(&state)
+        .arg("metadata")
+        .arg(&item)
+        .output()
+        .unwrap();
+
+    assert!(!event.status.success());
+    let event_stdout = String::from_utf8_lossy(&event.stdout);
+    let event_stderr = String::from_utf8_lossy(&event.stderr);
+    assert!(
+        !event_stdout.contains("fileprovider-observed-invalidation\t"),
+        "{event_stdout}"
+    );
+    assert!(
+        event_stderr.contains(
+            "fileprovider invalidation event volume access blocked: unreachable volume network"
+        ),
+        "{event_stderr}"
+    );
+    assert!(!state.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_sidebar_fileprovider_invalidation_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-sidebar-fileprovider-invalidation-{}",

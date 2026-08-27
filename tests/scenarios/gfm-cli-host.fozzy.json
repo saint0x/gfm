@@ -2654,6 +2654,48 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "fileprovider-state",
+        "tmp/gfm-fozzy-offline-volume/Project/Preview.pdf"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-progress",
+        "tmp/gfm-fozzy-offline-volume/Project/Preview.pdf"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-invalidation-scan",
+        "tmp/gfm-fozzy-offline-volume/fileprovider-state.tsv",
+        "tmp/gfm-fozzy-offline-volume/Project/Preview.pdf"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-operation",
+        "download",
+        "tmp/gfm-fozzy-offline-volume/Project/Preview.pdf"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "diagnostics-index-rebuild",
         "tmp/gfm-fozzy-offline-volume",
         "tmp/gfm-fozzy-offline-volume/records.gfmidx",
@@ -2730,6 +2772,41 @@
         "-",
         "-",
         "tmp/gfm-fozzy-offline-volume/dictionary.gfmdict"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-promote",
+        "tmp/gfm-fozzy-offline-volume/content.gfmmanifest",
+        "warm:tmp/gfm-fozzy-offline-volume/new.gfmcontent",
+        "tmp/gfm-fozzy-offline-volume/old.gfmcontent"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-recovery-plan",
+        "tmp/gfm-fozzy-offline-volume/content.gfmmanifest",
+        "hot:tmp/gfm-fozzy-offline-volume/content.gfmcontent"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-recover",
+        "tmp/gfm-fozzy-offline-volume/content.gfmmanifest",
+        "tmp/gfm-fozzy-offline-volume/quarantine",
+        "hot:tmp/gfm-fozzy-offline-volume/content.gfmcontent"
       ],
       "exit_code": 1,
       "times": 1

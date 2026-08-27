@@ -1,15 +1,17 @@
+use crate::access::{preflight_access_scope, ScopedAccessGuard};
 use crate::{parse_u64_arg, parse_usize_arg, required_path};
 use gfm_index::{
     ContentArchiveCleanupPolicy, ContentArchiveManifest, ContentArchiveManifestEntry,
     ContentMergeTier,
 };
+use gfm_mac::AccessIntent;
 use gfm_store::{
     plan_content_manifest_promotion_recovery, plan_content_manifest_recovery,
     promote_content_archive_manifest, recover_content_manifest, recover_content_manifest_promotion,
     ContentArchiveHealth, MmapContentSet,
 };
 use gfm_types::{GfmError, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
@@ -21,6 +23,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let archives = args
                 .map(|spec| parse_content_manifest_archive_spec(&spec))
                 .collect::<Result<Vec<_>>>()?;
+            let _access = retain_manifest_write_access(&output)?;
             let manifest = ContentArchiveManifest::new(archives)?;
             manifest.write(&output)?;
             eprintln!("content-manifest\tarchives={}", manifest.archives.len());
@@ -30,6 +33,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "content-manifest-inspect requires a manifest path",
             )?;
+            let _access = retain_manifest_inspect_access(&manifest_path)?;
             let manifest = ContentArchiveManifest::read(&manifest_path)?;
             let paths = manifest.resolved_archive_paths(&manifest_path);
             let set = MmapContentSet::open(&paths)?;
@@ -56,6 +60,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let discovered = args
                 .map(|spec| parse_content_manifest_archive_spec(&spec))
                 .collect::<Result<Vec<_>>>()?;
+            let _access = retain_manifest_recovery_plan_access(&manifest_path, discovered.iter())?;
             let plan = plan_content_manifest_recovery(&manifest_path, &discovered);
             println!("{}", plan.as_tsv());
             print_content_archive_health("invalid", &plan.invalid_archives);
@@ -72,6 +77,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let discovered = args
                 .map(|spec| parse_content_manifest_archive_spec(&spec))
                 .collect::<Result<Vec<_>>>()?;
+            let _access =
+                retain_manifest_recovery_access(&manifest_path, &quarantine, discovered.iter())?;
             let report = recover_content_manifest(&manifest_path, &discovered, &quarantine)?;
             println!("{}", report.before.as_tsv());
             println!(
@@ -99,6 +106,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             })?;
             let new_archive = parse_content_manifest_archive_spec(&new_archive)?;
             let retired_paths = args.map(PathBuf::from).collect::<Vec<_>>();
+            let _access =
+                retain_manifest_promotion_access(&manifest_path, &new_archive, &retired_paths)?;
             let promotion =
                 promote_content_archive_manifest(&manifest_path, new_archive, &retired_paths)?;
             eprintln!(
@@ -119,6 +128,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "content-manifest-promotion-recovery-plan requires a manifest path",
             )?;
+            let _access = retain_manifest_promotion_recovery_plan_access(&manifest_path)?;
             println!(
                 "{}",
                 plan_content_manifest_promotion_recovery(manifest_path).as_tsv()
@@ -129,6 +139,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "content-manifest-promotion-recover requires a manifest path",
             )?;
+            let _access = retain_manifest_promotion_recovery_access(&manifest_path)?;
             let recovery = recover_content_manifest_promotion(manifest_path)?;
             println!("{}", recovery.before.as_tsv());
             println!(
@@ -148,6 +159,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-manifest-cleanup requires at least one candidate archive".to_string(),
                 ));
             }
+            let _access = retain_manifest_cleanup_access(&manifest_path, &candidates, true)?;
             let manifest = ContentArchiveManifest::read(&manifest_path)?;
             let report = manifest.cleanup_inactive_archives(&manifest_path, &candidates)?;
             eprintln!(
@@ -182,6 +194,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "content-cleanup-plan requires max-cleanup-archives",
             )?;
             let candidates = args.map(PathBuf::from).collect::<Vec<_>>();
+            let _access = retain_manifest_cleanup_access(&manifest_path, &candidates, false)?;
             let manifest = ContentArchiveManifest::read(&manifest_path)?;
             let plan = manifest.plan_inactive_archive_cleanup(
                 &manifest_path,
@@ -219,6 +232,179 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn retain_manifest_write_access(manifest_path: &Path) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![preflight_access_scope(
+        write_probe_path(manifest_path),
+        AccessIntent::Write,
+        "content manifest write",
+    )?])
+}
+
+fn retain_manifest_inspect_access(manifest_path: &Path) -> Result<Vec<ScopedAccessGuard>> {
+    let manifest = preflight_access_scope(
+        manifest_path,
+        AccessIntent::Read,
+        "content manifest inspect",
+    )?;
+    let parsed = ContentArchiveManifest::read(manifest_path)?;
+    let mut guards = vec![manifest];
+    for path in parsed.resolved_archive_paths(manifest_path) {
+        guards.push(preflight_access_scope(
+            &path,
+            AccessIntent::Read,
+            "content manifest inspect archive",
+        )?);
+    }
+    Ok(guards)
+}
+
+fn retain_manifest_recovery_plan_access<'a>(
+    manifest_path: &Path,
+    discovered: impl Iterator<Item = &'a ContentArchiveManifestEntry>,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = vec![preflight_access_scope(
+        manifest_path,
+        AccessIntent::Read,
+        "content manifest recovery plan",
+    )?];
+    for entry in discovered {
+        guards.push(preflight_access_scope(
+            existing_read_probe_path(&resolve_manifest_path(manifest_path, &entry.path)),
+            AccessIntent::Read,
+            "content manifest recovery discovered archive",
+        )?);
+    }
+    Ok(guards)
+}
+
+fn retain_manifest_recovery_access<'a>(
+    manifest_path: &Path,
+    quarantine: &Path,
+    discovered: impl Iterator<Item = &'a ContentArchiveManifestEntry>,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = retain_manifest_recovery_plan_access(manifest_path, discovered)?;
+    guards.push(preflight_access_scope(
+        write_probe_path(manifest_path),
+        AccessIntent::Write,
+        "content manifest recovery manifest",
+    )?);
+    guards.push(preflight_access_scope(
+        write_probe_path(quarantine),
+        AccessIntent::Write,
+        "content manifest recovery quarantine",
+    )?);
+    Ok(guards)
+}
+
+fn retain_manifest_promotion_access(
+    manifest_path: &Path,
+    new_archive: &ContentArchiveManifestEntry,
+    retired_paths: &[PathBuf],
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = vec![
+        preflight_access_scope(
+            manifest_path,
+            AccessIntent::Read,
+            "content manifest promotion manifest",
+        )?,
+        preflight_access_scope(
+            write_probe_path(manifest_path),
+            AccessIntent::Write,
+            "content manifest promotion manifest",
+        )?,
+        preflight_access_scope(
+            &resolve_manifest_path(manifest_path, &new_archive.path),
+            AccessIntent::Read,
+            "content manifest promotion archive",
+        )?,
+    ];
+    for path in retired_paths {
+        guards.push(preflight_access_scope(
+            existing_read_probe_path(&resolve_manifest_path(manifest_path, path)),
+            AccessIntent::Read,
+            "content manifest promotion retirement",
+        )?);
+    }
+    Ok(guards)
+}
+
+fn retain_manifest_promotion_recovery_plan_access(
+    manifest_path: &Path,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![preflight_access_scope(
+        manifest_path,
+        AccessIntent::Read,
+        "content manifest promotion recovery plan",
+    )?])
+}
+
+fn retain_manifest_promotion_recovery_access(
+    manifest_path: &Path,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(
+            manifest_path,
+            AccessIntent::Read,
+            "content manifest promotion recovery",
+        )?,
+        preflight_access_scope(
+            write_probe_path(manifest_path),
+            AccessIntent::Write,
+            "content manifest promotion recovery",
+        )?,
+    ])
+}
+
+fn retain_manifest_cleanup_access(
+    manifest_path: &Path,
+    candidates: &[PathBuf],
+    removes_candidates: bool,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = vec![preflight_access_scope(
+        manifest_path,
+        AccessIntent::Read,
+        "content manifest cleanup",
+    )?];
+    for candidate in candidates {
+        let path = resolve_manifest_path(manifest_path, candidate);
+        let (path, intent) = if removes_candidates {
+            (write_probe_path(&path), AccessIntent::Write)
+        } else {
+            (existing_read_probe_path(&path), AccessIntent::Read)
+        };
+        guards.push(preflight_access_scope(
+            path,
+            intent,
+            "content manifest cleanup candidate",
+        )?);
+    }
+    Ok(guards)
+}
+
+fn resolve_manifest_path(manifest_path: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    manifest_path
+        .parent()
+        .map(|parent| parent.join(path))
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.is_dir() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
+}
+
+fn existing_read_probe_path(path: &Path) -> &Path {
+    if path.exists() {
+        return path;
+    }
+    write_probe_path(path)
 }
 
 fn parse_content_manifest_archive_spec(value: &str) -> Result<ContentArchiveManifestEntry> {

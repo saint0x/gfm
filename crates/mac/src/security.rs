@@ -426,7 +426,7 @@ fn probe_path(path: &Path, intent: AccessIntent) -> AccessProbeState {
 
 fn probe_write(path: &Path) -> AccessProbeState {
     if path.is_dir() {
-        let probe = path.join(".gfm-write-probe");
+        let probe = path.join(write_probe_file_name());
         match fs::OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -444,6 +444,16 @@ fn probe_write(path: &Path) -> AccessProbeState {
             Err(err) => probe_error(err.kind()),
         }
     }
+}
+
+fn write_probe_file_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    format!(
+        ".gfm-write-probe-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn probe_error(kind: ErrorKind) -> AccessProbeState {

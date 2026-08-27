@@ -5236,6 +5236,113 @@ fn recovers_corrupt_content_manifest_from_binary() {
 }
 
 #[test]
+fn content_manifest_promote_refuses_unreachable_volume_before_journaling_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-promote-unreachable");
+    let manifest = root.join("content.gfmmanifest");
+    let old_content = root.join("old.gfmcontent");
+    let new_content = root.join("new.gfmcontent");
+    write_content_postings(
+        &old_content,
+        &[ContentPosting {
+            term: "oldneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: Vec::new(),
+        }],
+    )
+    .unwrap();
+    write_content_postings(
+        &new_content,
+        &[ContentPosting {
+            term: "newneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 2)],
+            positions: Vec::new(),
+        }],
+    )
+    .unwrap();
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: old_content.clone(),
+    }])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+    let original_manifest = fs::read_to_string(&manifest).unwrap();
+    let journal = content_manifest_promotion_journal_path(&manifest);
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-promote",
+            manifest.to_str().unwrap(),
+            &format!("warm:{}", new_content.display()),
+            old_content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("retire\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "content manifest promotion manifest volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), original_manifest);
+    assert!(!journal.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_manifest_recover_refuses_unreachable_volume_before_quarantine_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-recover-unreachable");
+    let manifest = root.join("content.gfmmanifest");
+    let content = root.join("content.gfmcontent");
+    let quarantine = root.join("quarantine");
+    fs::create_dir_all(&quarantine).unwrap();
+    write_content_postings(
+        &content,
+        &[ContentPosting {
+            term: "recoverneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 7)],
+            positions: Vec::new(),
+        }],
+    )
+    .unwrap();
+    fs::write(&manifest, "not-a-content-manifest").unwrap();
+    let original_manifest = fs::read_to_string(&manifest).unwrap();
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-recover",
+            manifest.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("content-manifest-recovery\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "content manifest recovery plan volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), original_manifest);
+    assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn compacts_content_segments_from_binary() {
     let root = unique_temp_dir("gfm-cli-segment-content-root");
     let records = unique_temp_path("gfm-cli-segment-records", "gfmidx");
