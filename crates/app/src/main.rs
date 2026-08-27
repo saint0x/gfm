@@ -692,6 +692,7 @@ fn print_usage() {
   gfm volume-case-sensitivity-invalidation <previous:true|false> <current:true|false>
   gfm volume-event-runtime-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-topology-diff <previous-paths...> -- <current-paths...>
+  gfm volume-topology-case-sensitivity <previous:true|false> <current:true|false>
   gfm spotlight-reconcile <path> [spotlight-fixture.tsv]
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
   gfm icon-preview <path>

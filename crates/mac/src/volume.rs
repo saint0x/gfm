@@ -650,6 +650,8 @@ pub struct VolumeTopologyChange {
     pub current_kind: Option<VolumeKind>,
     pub previous_mount_state: Option<MountState>,
     pub current_mount_state: Option<MountState>,
+    pub previous_case_sensitive: Option<bool>,
+    pub current_case_sensitive: Option<bool>,
     pub invalidate_sidebar: bool,
     pub invalidate_operation_policy: bool,
     pub invalidate_index_admission: bool,
@@ -668,6 +670,8 @@ impl VolumeTopologyChange {
             current_kind: Some(volume.kind),
             previous_mount_state: None,
             current_mount_state: Some(volume.mount_state),
+            previous_case_sensitive: None,
+            current_case_sensitive: volume.case_sensitive,
             invalidate_sidebar: true,
             invalidate_operation_policy: true,
             invalidate_index_admission: true,
@@ -686,6 +690,8 @@ impl VolumeTopologyChange {
             current_kind: None,
             previous_mount_state: Some(volume.mount_state),
             current_mount_state: None,
+            previous_case_sensitive: volume.case_sensitive,
+            current_case_sensitive: None,
             invalidate_sidebar: true,
             invalidate_operation_policy: true,
             invalidate_index_admission: true,
@@ -705,6 +711,7 @@ impl VolumeTopologyChange {
                 | "volume-locality-changed"
                 | "volume-ejectability-changed"
                 | "volume-identity-changed"
+                | "volume-case-sensitivity-changed"
                 | "volume-filesystem-changed"
         );
         let rescan_index = matches!(
@@ -715,6 +722,7 @@ impl VolumeTopologyChange {
                 | "volume-access-changed"
                 | "volume-locality-changed"
                 | "volume-identity-changed"
+                | "volume-case-sensitivity-changed"
                 | "volume-filesystem-changed"
         );
         Some(Self {
@@ -726,6 +734,8 @@ impl VolumeTopologyChange {
             current_kind: Some(current.kind),
             previous_mount_state: Some(previous.mount_state),
             current_mount_state: Some(current.mount_state),
+            previous_case_sensitive: previous.case_sensitive,
+            current_case_sensitive: current.case_sensitive,
             invalidate_sidebar: true,
             invalidate_operation_policy: invalidates_policy,
             invalidate_index_admission: invalidates_policy,
@@ -736,7 +746,7 @@ impl VolumeTopologyChange {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-topology\t{}\tstable-id={}\tlabel={}\tpath={}\tprevious-kind={}\tcurrent-kind={}\tprevious-mount={}\tcurrent-mount={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
+            "volume-topology\t{}\tstable-id={}\tlabel={}\tpath={}\tprevious-kind={}\tcurrent-kind={}\tprevious-mount={}\tcurrent-mount={}\tprevious-case-sensitive={}\tcurrent-case-sensitive={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
             self.kind.as_str(),
             escape_field(&self.stable_identity),
             escape_field(&self.label),
@@ -747,6 +757,12 @@ impl VolumeTopologyChange {
                 .map(MountState::as_str)
                 .unwrap_or("-"),
             self.current_mount_state.map(MountState::as_str).unwrap_or("-"),
+            self.previous_case_sensitive
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.current_case_sensitive
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             self.invalidate_sidebar,
             self.invalidate_operation_policy,
             self.invalidate_index_admission,
@@ -1339,6 +1355,8 @@ fn topology_change_reason(
         || previous.media_path != current.media_path
     {
         Some("volume-identity-changed")
+    } else if previous.case_sensitive != current.case_sensitive {
+        Some("volume-case-sensitivity-changed")
     } else if previous.filesystem != current.filesystem
         || previous.apfs_role != current.apfs_role
         || previous.volume_type != current.volume_type
@@ -1352,7 +1370,6 @@ fn topology_change_reason(
         || previous.mount_filesystem != current.mount_filesystem
         || previous.mount_flags != current.mount_flags
         || previous.mount_local != current.mount_local
-        || previous.case_sensitive != current.case_sensitive
         || previous.case_preserving != current.case_preserving
         || previous.resource_automounted != current.resource_automounted
         || previous.resource_browsable != current.resource_browsable
@@ -2368,7 +2385,6 @@ mod tests {
         current_volume.apfs_role = Some(ApfsVolumeRole::Data);
         current_volume.mount_flags = Some(0x0000_1000);
         current_volume.mount_local = Some(true);
-        current_volume.case_sensitive = Some(true);
         current_volume.case_preserving = Some(true);
         current_volume.resource_reachable = Some(true);
         current_volume.device_protocol = Some("USB".to_string());
@@ -2399,6 +2415,38 @@ mod tests {
         assert!(diff.changes[0].invalidate_operation_policy);
         assert!(diff.changes[0].invalidate_index_admission);
         assert!(diff.changes[0].rescan_index);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_reports_case_sensitivity_as_index_semantics_change() {
+        let root = unique_temp_dir("gfm-volume-topology-case-sensitivity");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        previous_volume.case_sensitive = Some(false);
+        let mut current_volume = previous_volume.clone();
+        current_volume.case_sensitive = Some(true);
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].reason, "volume-case-sensitivity-changed");
+        assert_eq!(diff.changes[0].previous_case_sensitive, Some(false));
+        assert_eq!(diff.changes[0].current_case_sensitive, Some(true));
+        assert!(diff.changes[0].invalidate_sidebar);
+        assert!(diff.changes[0].invalidate_operation_policy);
+        assert!(diff.changes[0].invalidate_index_admission);
+        assert!(diff.changes[0].rescan_index);
+        assert!(diff
+            .as_tsv()
+            .contains("\tprevious-case-sensitive=false\tcurrent-case-sensitive=true\t"));
 
         fs::remove_dir_all(root).unwrap();
     }

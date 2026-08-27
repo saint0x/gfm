@@ -3935,6 +3935,19 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-topology-case-sensitivity",
+        "false",
+        "true"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-topology-diff\tcount=1\nvolume-topology\tchanged\tstable-id=diskarbitration:uuid:CASE-TOPOLOGY\tlabel=Case Topology\tpath=/Volumes/Case Topology\tprevious-kind=external\tcurrent-kind=external\tprevious-mount=mounted\tcurrent-mount=mounted\tprevious-case-sensitive=false\tcurrent-case-sensitive=true\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-case-sensitivity-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "resume-content-background",
         "/tmp/gfm-content.job",
         "/tmp/gfm-jobs.journal"

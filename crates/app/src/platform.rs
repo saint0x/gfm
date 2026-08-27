@@ -580,6 +580,27 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 VolumeTopologyDiff::evaluate(&previous, &current).as_tsv()
             );
         }
+        "volume-topology-case-sensitivity" => {
+            let previous_case_sensitive = parse_platform_bool(
+                &required_string(
+                    args.next(),
+                    "volume-topology-case-sensitivity requires a previous case-sensitive flag",
+                )?,
+                "previous case-sensitive",
+            )?;
+            let current_case_sensitive = parse_platform_bool(
+                &required_string(
+                    args.next(),
+                    "volume-topology-case-sensitivity requires a current case-sensitive flag",
+                )?,
+                "current case-sensitive",
+            )?;
+            println!(
+                "{}",
+                topology_case_sensitivity_diff(previous_case_sensitive, current_case_sensitive)?
+                    .as_tsv()
+            );
+        }
         "spotlight-reconcile" => {
             let path = required_path(args.next(), "spotlight-reconcile requires a path")?;
             let fixture_path = args.next().map(PathBuf::from);
@@ -942,6 +963,28 @@ fn split_topology_paths(
         ));
     }
     Ok((previous, current))
+}
+
+fn topology_case_sensitivity_diff(
+    previous_case_sensitive: bool,
+    current_case_sensitive: bool,
+) -> Result<VolumeTopologyDiff> {
+    let mut previous = VolumeDescriptor::for_path("/")?;
+    previous.stable_identity = "diskarbitration:uuid:CASE-TOPOLOGY".to_string();
+    previous.label = "Case Topology".to_string();
+    previous.path = PathBuf::from("/Volumes/Case Topology");
+    previous.kind = gfm_mac::VolumeKind::External;
+    previous.case_sensitive = Some(previous_case_sensitive);
+    let mut current = previous.clone();
+    current.case_sensitive = Some(current_case_sensitive);
+    Ok(VolumeTopologyDiff::evaluate(
+        &VolumeDiscoveryReport {
+            volumes: vec![previous],
+        },
+        &VolumeDiscoveryReport {
+            volumes: vec![current],
+        },
+    ))
 }
 
 fn publish_fileprovider_progress_job(path: PathBuf) -> Result<FileProviderProgressReport> {
