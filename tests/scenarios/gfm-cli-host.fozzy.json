@@ -3653,6 +3653,76 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-manifest-offline.gfmmanifest",
+      "data": "gfm-content-manifest-v1\narchive\thot\ttmp/gfm-fozzy-offline-volume/content-query.gfmcontent\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-manifest-records.gfmidx",
+      "data": "not parsed after archive access denial\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-ids-mmap-manifest",
+        "tmp/gfm-fozzy-manifest-offline.gfmmanifest",
+        "needle"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-content-index-manifest",
+        "tmp/gfm-fozzy-manifest-records.gfmidx",
+        "tmp/gfm-fozzy-manifest-offline.gfmmanifest",
+        "needle"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-copy-policy-network/.gfm-volume-kind",
+      "data": "network-smb\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-copy-policy-external/.gfm-volume-kind",
+      "data": "external-removable\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-copy-policy-network/source.bin",
+      "data": "policy\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "operation-volume-copy-policy",
+        "tmp/gfm-fozzy-copy-policy-network/source.bin",
+        "tmp/gfm-fozzy-copy-policy-external/destination.bin"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "operation-volume-copy-policy",
+        "tmp/gfm-fozzy-copy-policy-network/source.bin",
+        "tmp/gfm-fozzy-offline-volume/policy-destination.bin"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

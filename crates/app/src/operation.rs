@@ -102,6 +102,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let conflict = parse_operation_conflict_args(args, "copy")?;
             execute_operation(Operation::Copy { from, to }, conflict)?;
         }
+        "operation-volume-copy-policy" => {
+            let from = required_path(
+                args.next(),
+                "operation-volume-copy-policy requires a source path",
+            )?;
+            let to = required_path(
+                args.next(),
+                "operation-volume-copy-policy requires a destination path",
+            )?;
+            let operation = Operation::Copy { from, to };
+            let _access = retain_operation_volume_policy_access(&operation)?;
+            println!("{}", operation_volume_copy_policy_report(&operation));
+        }
         "move" => {
             let from = required_path(args.next(), "move requires a source path")?;
             let to = required_path(args.next(), "move requires a destination path")?;
@@ -362,6 +375,41 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     })?;
     println!("{}\t{}", entry.id, operation_status(entry.status));
     Ok(())
+}
+
+fn operation_volume_copy_policy_report(operation: &Operation) -> String {
+    let report = operation_volume_report(operation);
+    let policy = operation_volume_copy_policy_from_report(operation, &report);
+    match operation {
+        Operation::Copy { from, to } | Operation::Move { from, to } => format!(
+            "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tbuffer-bytes={}\tvolumes={}",
+            from.display(),
+            to.display(),
+            operation_volume_class_name(policy.class_for_path(from)),
+            operation_volume_class_name(policy.class_for_path(to)),
+            policy.copy_buffer_bytes_for_paths(from, to),
+            report.volumes.len()
+        ),
+        _ => "operation-volume-copy-policy\tsource=-\tdestination=-\tsource-class=-\tdestination-class=-\tbuffer-bytes=0\tvolumes=0".to_string(),
+    }
+}
+
+fn retain_operation_volume_policy_access(operation: &Operation) -> Result<Vec<ScopedAccessGuard>> {
+    match operation {
+        Operation::Copy { from, to } | Operation::Move { from, to } => Ok(vec![
+            preflight_access_scope(
+                from,
+                AccessIntent::Read,
+                "operation volume copy policy source",
+            )?,
+            preflight_access_scope(
+                write_probe_path(to),
+                AccessIntent::Write,
+                "operation volume copy policy destination",
+            )?,
+        ]),
+        _ => Ok(Vec::new()),
+    }
 }
 
 fn retain_operation_trash_metadata_access(
@@ -841,6 +889,15 @@ fn operation_kind(operation: &Operation) -> &'static str {
     }
 }
 
+fn operation_volume_class_name(class: OperationVolumeClass) -> &'static str {
+    match class {
+        OperationVolumeClass::Local => "local",
+        OperationVolumeClass::External => "external",
+        OperationVolumeClass::Network => "network",
+        OperationVolumeClass::Slow => "slow",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -879,6 +936,33 @@ mod tests {
             OperationVolumeClass::External
         );
         assert!(policy.copy_buffer_bytes_for_paths(&source, &destination) < 256 * 1024);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_copy_policy_report_uses_discovered_descriptors() {
+        let root = unique_temp_dir("gfm-app-op-volume-policy-report");
+        let network = root.join("TeamShare");
+        let external = root.join("Backup");
+        fs::create_dir_all(&network).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::write(network.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+        fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+        let source = network.join("source.bin");
+        let destination = external.join("destination.bin");
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let report = operation_volume_copy_policy_report(&operation);
+
+        assert!(report.starts_with("operation-volume-copy-policy\t"));
+        assert!(report.contains("\tsource-class=network\t"));
+        assert!(report.contains("\tdestination-class=external\t"));
+        assert!(report.contains("\tbuffer-bytes=65536\t"));
+        assert!(report.contains("\tvolumes="));
 
         fs::remove_dir_all(root).unwrap();
     }

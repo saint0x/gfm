@@ -741,7 +741,8 @@ fn print_usage() {
   gfm delete <path>
   gfm trash <path>
   gfm empty-trash <trash-dir>
-  gfm restore <trash-entry> [original-path] [--replace|--keep-both|--merge|--skip]"
+  gfm restore <trash-entry> [original-path] [--replace|--keep-both|--merge|--skip]
+  gfm operation-volume-copy-policy <source> <destination>"
     );
 }
 

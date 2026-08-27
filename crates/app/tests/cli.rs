@@ -4211,6 +4211,88 @@ fn operation_refuses_unreachable_destination_volume_before_copying_from_binary()
 }
 
 #[test]
+fn operation_volume_copy_policy_reports_descriptor_classes_from_binary() {
+    let root = unique_temp_dir("gfm-cli-operation-copy-policy");
+    let network = root.join("TeamShare");
+    let external = root.join("Backup");
+    fs::create_dir_all(&network).unwrap();
+    fs::create_dir_all(&external).unwrap();
+    fs::write(network.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+    fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+    let source = network.join("source.bin");
+    let destination = external.join("destination.bin");
+    fs::write(&source, "policy only").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "operation-volume-copy-policy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.starts_with("operation-volume-copy-policy\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tsource-class=network\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tdestination-class=external\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tbuffer-bytes=65536\t"), "{stdout}");
+    assert!(!destination.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn operation_volume_copy_policy_refuses_unreachable_destination_from_binary() {
+    let root = unique_temp_dir("gfm-cli-operation-copy-policy-unreachable");
+    let source_root = root.join("Source");
+    let offline = root.join("Offline");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&offline).unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let source = source_root.join("source.bin");
+    let destination = offline.join("destination.bin");
+    fs::write(&source, "policy only").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "operation-volume-copy-policy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("operation-volume-copy-policy\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(
+            "operation volume copy policy destination volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!destination.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn operation_refuses_read_only_destination_volume_before_copying_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-readonly-destination-root");
     let journal = root.join("ops.journal");
@@ -6645,6 +6727,91 @@ fn content_ids_mmap_refuses_unreachable_archive_before_mapping_from_binary() {
     assert!(!stderr.contains("invalid magic"), "{stderr}");
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_ids_mmap_manifest_refuses_unreachable_archive_before_mapping_from_binary() {
+    let manifest_root = unique_temp_dir("gfm-cli-content-manifest-access-local");
+    let offline = unique_temp_dir("gfm-cli-content-manifest-access-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let manifest = manifest_root.join("content.gfmmanifest");
+    let content = offline.join("content.gfmcontent");
+    fs::write(&content, "not mapped after admission denial").unwrap();
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: content.clone(),
+    }])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-ids-mmap-manifest",
+            manifest.to_str().unwrap(),
+            "term",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains(
+            "content ids mmap manifest volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("invalid magic"), "{stderr}");
+
+    fs::remove_dir_all(manifest_root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn search_content_index_manifest_refuses_unreachable_archive_before_loading_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-search-local");
+    let offline = unique_temp_dir("gfm-cli-content-manifest-search-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = root.join("records.gfmidx");
+    let manifest = root.join("content.gfmmanifest");
+    let content = offline.join("content.gfmcontent");
+    fs::write(&records, "not parsed after content admission denial").unwrap();
+    fs::write(&content, "not mapped after admission denial").unwrap();
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: content.clone(),
+    }])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index-manifest",
+            records.to_str().unwrap(),
+            manifest.to_str().unwrap(),
+            "needle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("hit\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "content index manifest search content volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("invalid magic"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
 }
 
 #[test]

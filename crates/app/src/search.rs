@@ -9,9 +9,9 @@ use gfm_index::{
 };
 use gfm_mac::AccessIntent;
 use gfm_store::{
-    ContentArchive, MetadataField, MmapContentArchive, MmapContentSet, MmapDictionary,
-    MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
-    MmapSubstringArchive,
+    ContentArchive, ContentArchiveManifest, MetadataField, MmapContentArchive, MmapContentSet,
+    MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
+    MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_types::{FileKind, GfmError, Result, SearchHit, VolumeId};
 use std::path::{Path, PathBuf};
@@ -209,7 +209,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-content-index-manifest requires a query string",
             )?;
-            let _access = preflight_content_index_search_access(
+            let _access = preflight_content_index_manifest_search_access(
                 &records,
                 &manifest,
                 "content index manifest search",
@@ -241,7 +241,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-content-index-manifest-session requires a query string",
             )?;
-            let _access = preflight_content_index_search_access(
+            let _access = preflight_content_index_manifest_search_access(
                 &records,
                 &manifest,
                 "content index manifest session",
@@ -661,7 +661,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "content-ids-mmap-manifest requires a manifest path",
             )?;
             let term = required_string(args.next(), "content-ids-mmap-manifest requires a term")?;
-            let _access = preflight_content_archive_access(&manifest, "content ids mmap manifest")?;
+            let _access =
+                preflight_content_manifest_access(&manifest, "content ids mmap manifest")?;
             let archive = MmapContentSet::open_manifest(manifest)?;
             print_file_ids(archive.ids_for_term(&term)?);
         }
@@ -876,6 +877,28 @@ fn preflight_content_index_search_access(
     ])
 }
 
+fn preflight_content_index_manifest_search_access(
+    records: &Path,
+    manifest_path: &Path,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = vec![
+        preflight_access_scope(records, AccessIntent::Read, &format!("{worker} records"))?,
+        preflight_access_scope(
+            manifest_path,
+            AccessIntent::Read,
+            &format!("{worker} manifest"),
+        )?,
+    ];
+    let manifest = ContentArchiveManifest::read(manifest_path)?;
+    let content_worker = format!("{worker} content");
+    guards.extend(preflight_content_archives_access(
+        &manifest.resolved_archive_paths(manifest_path),
+        &content_worker,
+    )?);
+    Ok(guards)
+}
+
 fn preflight_content_index_set_search_access(
     records: &Path,
     content_paths: &[PathBuf],
@@ -951,6 +974,19 @@ fn preflight_content_archives_access(
         .iter()
         .map(|path| preflight_content_archive_access(path, worker))
         .collect()
+}
+
+fn preflight_content_manifest_access(
+    manifest_path: &Path,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = vec![preflight_content_archive_access(manifest_path, worker)?];
+    let manifest = ContentArchiveManifest::read(manifest_path)?;
+    guards.extend(preflight_content_archives_access(
+        &manifest.resolved_archive_paths(manifest_path),
+        worker,
+    )?);
+    Ok(guards)
 }
 
 fn parse_metadata_field(value: &str, name: &str) -> Result<MetadataField> {
