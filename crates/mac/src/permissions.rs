@@ -82,6 +82,7 @@ pub enum PermissionState {
     Granted,
     Denied,
     Missing,
+    Unavailable,
     Unknown,
 }
 
@@ -91,6 +92,7 @@ impl PermissionState {
             Self::Granted => "granted",
             Self::Denied => "denied",
             Self::Missing => "missing",
+            Self::Unavailable => "unavailable",
             Self::Unknown => "unknown",
         }
     }
@@ -104,9 +106,10 @@ impl PermissionState {
             "granted" => Ok(Self::Granted),
             "denied" => Ok(Self::Denied),
             "missing" => Ok(Self::Missing),
+            "unavailable" => Ok(Self::Unavailable),
             "unknown" => Ok(Self::Unknown),
             other => Err(GfmError::Format(format!(
-                "permission state must be granted, denied, missing, or unknown; got `{other}`"
+                "permission state must be granted, denied, missing, unavailable, or unknown; got `{other}`"
             ))),
         }
     }
@@ -275,11 +278,41 @@ impl PermissionStateInvalidationReport {
                 });
             }
         }
+        if let Some(previous) = previous {
+            for previous_item in &previous.readiness {
+                if current
+                    .readiness
+                    .iter()
+                    .any(|item| item.scope == previous_item.scope)
+                {
+                    continue;
+                }
+                changed.push(PermissionScopeChange {
+                    scope: previous_item.scope,
+                    path: previous_item.path.clone(),
+                    previous: Some(previous_item.state),
+                    current: PermissionState::Unavailable,
+                    reason: "permission scope no longer reported by permission onboarding"
+                        .to_string(),
+                });
+            }
+        }
         let refresh_workers = changed.iter().any(|change| {
             matches!(
                 (change.previous, change.current),
-                (_, PermissionState::Denied | PermissionState::Unknown)
-                    | (Some(PermissionState::Denied | PermissionState::Unknown), _)
+                (
+                    _,
+                    PermissionState::Denied
+                        | PermissionState::Unavailable
+                        | PermissionState::Unknown
+                ) | (
+                    Some(
+                        PermissionState::Denied
+                            | PermissionState::Unavailable
+                            | PermissionState::Unknown
+                    ),
+                    _
+                )
             )
         });
         Self {
@@ -696,6 +729,60 @@ mod tests {
         assert!(report.refresh_workers);
         assert!(report.refresh_operations);
         assert!(report.as_tsv().contains("previous=granted\tcurrent=denied"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permission_invalidation_marks_removed_scope_unavailable() {
+        let root = temp_root("permissions-removed-scope");
+        let previous = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: root.join("Documents"),
+                state: PermissionState::Granted,
+                reason: "readable".to_string(),
+            }],
+        };
+        let current = PermissionStateSnapshot {
+            readiness: Vec::new(),
+        };
+
+        let report = PermissionStateInvalidationReport::evaluate(Some(&previous), &current);
+
+        assert!(!report.initialized);
+        assert_eq!(report.changed.len(), 1);
+        assert_eq!(report.changed[0].scope, PermissionScope::Documents);
+        assert_eq!(report.changed[0].previous, Some(PermissionState::Granted));
+        assert_eq!(report.changed[0].current, PermissionState::Unavailable);
+        assert!(report.refresh_ui);
+        assert!(report.refresh_workers);
+        assert!(report.refresh_operations);
+        assert!(report
+            .as_tsv()
+            .contains("permission-change\tdocuments\tprevious=granted\tcurrent=unavailable\t"));
+        assert!(report
+            .as_tsv()
+            .contains("permission scope no longer reported by permission onboarding"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permission_snapshot_round_trips_unavailable_state() {
+        let root = temp_root("permissions-unavailable-state");
+        let path = root.join("permission-state.tsv");
+        let snapshot = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::FullDiskAccess,
+                path: root.join("Library/Mail"),
+                state: PermissionState::Unavailable,
+                reason: "TCC service unavailable".to_string(),
+            }],
+        };
+
+        snapshot.write(&path).unwrap();
+
+        assert_eq!(PermissionStateSnapshot::read(&path).unwrap(), snapshot);
         fs::remove_dir_all(root).unwrap();
     }
 

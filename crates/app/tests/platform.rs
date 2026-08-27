@@ -174,6 +174,53 @@ fn permission_invalidation_refuses_unreachable_state_before_persisting_from_bina
 }
 
 #[test]
+fn permission_invalidation_compare_reports_removed_scope_as_unavailable_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-permission-invalidation-removed-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let previous = root.join("previous-permission-state.tsv");
+    let current = root.join("current-permission-state.tsv");
+    let documents = root.join("Documents");
+    std::fs::write(
+        &previous,
+        format!(
+            "gfm-permission-state-v1\ndocuments\tgranted\t{}\treadable\n",
+            documents.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(&current, "gfm-permission-state-v1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation-compare")
+        .arg(&previous)
+        .arg(&current)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(
+        "permission-invalidation\tinitialized=false\tchanged=1\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\n"
+    ));
+    assert!(
+        stdout.contains("\npermission-change\tdocuments\tprevious=granted\tcurrent=unavailable\t")
+    );
+    assert!(
+        stdout.contains("\treason=permission scope no longer reported by permission onboarding\n")
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_security_scoped_access_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-security-{}", std::process::id()));
     let unprotected = root.join("plain.md");
@@ -263,6 +310,43 @@ fn reports_security_worker_admission_from_binary() {
     assert!(denied_stdout.contains("\tintent=preview\tscope=none\tprobe=missing\t"));
     assert!(denied_stdout.contains("\tworker-action=deny\t"));
     assert!(denied_stdout.contains("\tcan-touch-filesystem=false\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn security_worker_admission_refuses_unreachable_volume_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-security-worker-unreachable-volume-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Preview.pdf");
+    std::fs::write(&path, "%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("security-worker-admission")
+        .arg("preview worker")
+        .arg(&path)
+        .arg("preview")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("security-worker-admission\t"));
+    assert!(stdout.contains("\tintent=preview\tscope=none\tprobe=granted\t"));
+    assert!(stdout.contains("\taccess-action=allow\tworker-action=deny\t"));
+    assert!(stdout.contains("\tcan-touch-filesystem=false\t"));
+    assert!(stdout.contains("\tbookmark-access=false\t"));
+    assert!(stdout.contains("\trefresh-on-permission-change=true\t"));
+    assert!(stdout.contains("preview worker volume access blocked"));
+    assert!(stdout.contains("unreachable volume network"));
 
     let _ = std::fs::remove_dir_all(root);
 }

@@ -4208,6 +4208,29 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-permission-previous.tsv",
+      "data": "gfm-permission-state-v1\ndocuments\tgranted\ttmp/gfm-fozzy-home/Documents\treadable\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-permission-current.tsv",
+      "data": "gfm-permission-state-v1\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "permission-invalidation-compare",
+        "tmp/gfm-fozzy-permission-previous.tsv",
+        "tmp/gfm-fozzy-permission-current.tsv"
+      ],
+      "exit_code": 0,
+      "stdout": "permission-invalidation\tinitialized=false\tchanged=1\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\npermission-change\tdocuments\tprevious=granted\tcurrent=unavailable\tpath=tmp/gfm-fozzy-home/Documents\treason=permission scope no longer reported by permission onboarding\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -4221,6 +4244,11 @@
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-security.md",
       "data": "security scoped probe"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/SecurityPreview.pdf",
+      "data": "%PDF-1.7\nsecurity preview\n"
     },
     {
       "type": "proc_when",
@@ -4267,6 +4295,20 @@
         "index"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "security-worker-admission",
+        "preview worker",
+        "tmp/gfm-fozzy-offline-volume/SecurityPreview.pdf",
+        "preview"
+      ],
+      "exit_code": 0,
+      "stdout": "security-worker-admission\tworker=preview worker\tpath=tmp/gfm-fozzy-offline-volume/SecurityPreview.pdf\tintent=preview\tscope=none\tprobe=granted\tmode=plain-filesystem\taccess-action=allow\tworker-action=deny\tcan-touch-filesystem=false\tbookmark-access=false\trefresh-on-permission-change=true\treason=preview worker volume access blocked: unreachable volume network; label=gfm-fozzy-offline-volume; root=tmp/gfm-fozzy-offline-volume; stable-id=fixture-marker:network-unreachable:dev:16777230:tmp/gfm-fozzy-offline-volume; mount=mounted\n",
+      "stderr": "",
+      "times": 1
     },
     {
       "type": "fs_write",

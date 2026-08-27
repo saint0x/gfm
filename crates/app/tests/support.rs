@@ -211,6 +211,63 @@ fn reports_permission_access_contract_for_allowed_path_from_binary() {
 }
 
 #[test]
+fn permission_access_contract_refuses_unreachable_volume_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-unreachable-volume-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Preview.pdf");
+    std::fs::write(&path, "%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-permission-access-contract",
+            path.to_str().unwrap(),
+            "preview",
+            "preview worker",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+    assert!(stdout.contains("\npermission-access\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tintent=preview\tscope=none\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\taccess-action=allow\t"), "{stdout}");
+    assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tbookmark-required=false\tbookmark-access=false\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\trefresh-on-permission-change=true\tprompt-kind=blocked\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\nsecurity-worker-admission\tworker=preview worker\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("preview worker volume access blocked"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("unreachable volume network"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_permission_access_contract_for_protected_missing_path_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-permission-access-protected-{}",

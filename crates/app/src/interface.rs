@@ -129,7 +129,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let worker = args
                 .next()
                 .unwrap_or_else(|| "just-in-time permission".to_string());
-            let admission = SecurityWorkerAdmissionReport::evaluate(&path, intent, worker);
+            let admission = crate::access::worker_admission_with_volume_gate(&path, intent, worker);
             print_permission_access_contract(&admission);
         }
         "ui-progress-job-contract" => {
@@ -948,7 +948,7 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
     if plan.finder_parity_default || plan.action != gfm_mac::PermissionAction::ContinueNormally {
         spec = spec.with_permission_prompt(permission_prompt_kind(&plan));
     }
-    let admission = SecurityWorkerAdmissionReport::evaluate(
+    let admission = crate::access::worker_admission_with_volume_gate(
         &spec.initial_path,
         AccessIntent::Read,
         "window initial path",

@@ -117,6 +117,21 @@ fn run() -> Result<()> {
             let report = permission_refresh::refresh_permission_state_at_path(&path)?;
             println!("{}", report.as_tsv());
         }
+        Some("permission-invalidation-compare") => {
+            let previous_path = required_path(
+                args.next(),
+                "permission-invalidation-compare requires a previous state path",
+            )?;
+            let current_path = required_path(
+                args.next(),
+                "permission-invalidation-compare requires a current state path",
+            )?;
+            let previous = gfm_mac::PermissionStateSnapshot::read(&previous_path)?;
+            let current = gfm_mac::PermissionStateSnapshot::read(&current_path)?;
+            let report =
+                gfm_mac::PermissionStateInvalidationReport::evaluate(Some(&previous), &current);
+            println!("{}", report.as_tsv());
+        }
         Some(command) if platform::run(command, &mut args)? => {}
         Some(command) if gates::run(command, &mut args)? => {}
         Some("release-policy") => packaging::release_policy()?,
@@ -661,6 +676,7 @@ fn print_usage() {
   gfm support-check
   gfm permission-onboarding
   gfm permission-invalidation [permission-state.tsv]
+  gfm permission-invalidation-compare <previous-state.tsv> <current-state.tsv>
   gfm security-scope <path> [read|write|index|preview|operate]
   gfm security-worker-admission <worker-label> <path> [read|write|index|preview|operate]
   gfm security-bookmark-create <path> [read|write|index|preview|operate]

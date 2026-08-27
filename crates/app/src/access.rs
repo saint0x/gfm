@@ -4,13 +4,35 @@ use crate::{
 };
 use gfm_mac::{
     AccessIntent, SecurityDecisionAction, SecurityScopedAccessReport, SecurityScopedBookmarkAccess,
-    SecurityScopedBookmarkStore, SecurityWorkerAction, VolumeDiscoveryReport,
+    SecurityScopedBookmarkStore, SecurityWorkerAction, SecurityWorkerAdmissionReport,
+    VolumeDiscoveryReport,
 };
 use gfm_types::{GfmError, Result};
 use std::path::Path;
 
 pub(crate) struct ScopedAccessGuard {
     _accesses: Vec<SecurityScopedBookmarkAccess>,
+}
+
+pub(crate) fn worker_admission_with_volume_gate(
+    path: &Path,
+    intent: AccessIntent,
+    worker: impl Into<String>,
+) -> SecurityWorkerAdmissionReport {
+    let worker = worker.into();
+    let access = SecurityScopedAccessReport::evaluate(path, intent);
+    if let Some(reason) = volume_reachability_block_reason(path, &worker) {
+        return SecurityWorkerAdmissionReport {
+            worker,
+            access,
+            worker_action: SecurityWorkerAction::Deny,
+            can_touch_filesystem: false,
+            needs_bookmark_access: false,
+            refresh_on_permission_change: true,
+            reason,
+        };
+    }
+    access.worker_admission(worker)
 }
 
 pub(crate) fn preflight_access_scope(
@@ -54,23 +76,38 @@ fn preflight_volume_reachability_in_report(
     worker: &str,
     report: &VolumeDiscoveryReport,
 ) -> Result<()> {
-    let Some(volume) = report.volume_for_path(volume_path) else {
-        return Ok(());
-    };
-    if volume.reachable != Some(false) {
-        return Ok(());
+    if let Some(reason) = volume_reachability_block_reason_in_report(volume_path, worker, report) {
+        return Err(GfmError::Permission {
+            path: user_path.to_path_buf(),
+            message: reason,
+        });
     }
-    Err(GfmError::Permission {
-        path: user_path.to_path_buf(),
-        message: format!(
-            "{worker} volume access blocked: unreachable volume {}; label={}; root={}; stable-id={}; mount={}",
-            volume.kind.as_str(),
-            volume.label,
-            volume.path.display(),
-            volume.stable_identity,
-            volume.mount_state.as_str()
-        ),
-    })
+    Ok(())
+}
+
+fn volume_reachability_block_reason(path: &Path, worker: &str) -> Option<String> {
+    let volume_path = absolute_volume_probe_path(path);
+    let report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    volume_reachability_block_reason_in_report(&volume_path, worker, &report)
+}
+
+fn volume_reachability_block_reason_in_report(
+    volume_path: &Path,
+    worker: &str,
+    report: &VolumeDiscoveryReport,
+) -> Option<String> {
+    let volume = report.volume_for_path(volume_path)?;
+    if volume.reachable != Some(false) {
+        return None;
+    }
+    Some(format!(
+        "{worker} volume access blocked: unreachable volume {}; label={}; root={}; stable-id={}; mount={}",
+        volume.kind.as_str(),
+        volume.label,
+        volume.path.display(),
+        volume.stable_identity,
+        volume.mount_state.as_str()
+    ))
 }
 
 fn absolute_volume_probe_path(path: &Path) -> std::path::PathBuf {
@@ -208,6 +245,33 @@ mod tests {
         assert!(err
             .to_string()
             .contains("retained security-scoped bookmark required before touching filesystem"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_gate_refuses_unreachable_volume_before_filesystem_touch() {
+        let root = unique_temp_dir("gfm-access-admission-unreachable-volume");
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let path = root.join("Preview.pdf");
+        fs::write(&path, "%PDF-1.7\n").unwrap();
+
+        let admission =
+            worker_admission_with_volume_gate(&path, AccessIntent::Preview, "preview worker");
+
+        assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
+        assert!(!admission.can_touch_filesystem);
+        assert!(!admission.needs_bookmark_access);
+        assert!(admission.refresh_on_permission_change);
+        assert_eq!(admission.access.action, SecurityDecisionAction::Allow);
+        assert!(admission
+            .reason
+            .contains("preview worker volume access blocked"));
+        assert!(admission.reason.contains("unreachable volume network"));
+        assert!(admission.as_tsv().contains("\tworker-action=deny\t"));
+        assert!(admission
+            .as_tsv()
+            .contains("\tcan-touch-filesystem=false\t"));
 
         fs::remove_dir_all(root).unwrap();
     }

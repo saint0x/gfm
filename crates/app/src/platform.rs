@@ -1,4 +1,4 @@
-use crate::access::{preflight_access_scope, ScopedAccessGuard};
+use crate::access::{preflight_access_scope, worker_admission_with_volume_gate, ScopedAccessGuard};
 use crate::{
     detect_volume_id, index_volume_descriptor, parse_required_scheduling_pressure,
     run_preview_contract_adaptive_with_volume, run_preview_contract_cancellable,
@@ -22,10 +22,10 @@ use gfm_mac::{
     FileProviderStateInvalidationReport, FileProviderStateObserver, FileProviderStateReport,
     FileProviderStateSnapshot, MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor,
     NativeIconInvalidationReport, SecurityScopedAccessReport, SecurityScopedBookmarkStatus,
-    SecurityScopedBookmarkStore, SecurityWorkerAdmissionReport, SpotlightMetadataReader,
-    SpotlightReconciliationReport, VolumeDescriptor, VolumeDiscoveryReport,
-    VolumeEventInvalidationReport, VolumeEventKind, VolumeEventStream, VolumeMountIdentityReport,
-    VolumeOperation, VolumeOperationReport, VolumeTopologyDiff, WatchRoot,
+    SecurityScopedBookmarkStore, SpotlightMetadataReader, SpotlightReconciliationReport,
+    VolumeDescriptor, VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind,
+    VolumeEventStream, VolumeMountIdentityReport, VolumeOperation, VolumeOperationReport,
+    VolumeTopologyDiff, WatchRoot,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
@@ -66,7 +66,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .unwrap_or(AccessIntent::Read);
             println!(
                 "{}",
-                SecurityWorkerAdmissionReport::evaluate(path, intent, worker).as_tsv()
+                worker_admission_with_volume_gate(&path, intent, worker).as_tsv()
             );
         }
         "security-bookmark-create" => {
