@@ -71,6 +71,10 @@ pub struct SidebarItemSpec {
     pub virtual_item: bool,
     pub cloud_state: SidebarCloudState,
     pub cloud_progress_milli: Option<u32>,
+    pub volume_kind: Option<SidebarVolumeKind>,
+    pub volume_mount_state: Option<SidebarVolumeMountState>,
+    pub volume_read_only: Option<bool>,
+    pub volume_network: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +143,10 @@ pub struct SidebarVolumeSpec {
     pub label: String,
     pub path: PathBuf,
     pub ejectable: bool,
+    pub kind: SidebarVolumeKind,
+    pub mount_state: SidebarVolumeMountState,
+    pub read_only: bool,
+    pub network: bool,
 }
 
 impl SidebarVolumeSpec {
@@ -153,6 +161,81 @@ impl SidebarVolumeSpec {
             label: label.into(),
             path: path.into(),
             ejectable,
+            kind: SidebarVolumeKind::External,
+            mount_state: SidebarVolumeMountState::Mounted,
+            read_only: false,
+            network: false,
+        }
+    }
+
+    pub fn with_volume_state(
+        mut self,
+        kind: SidebarVolumeKind,
+        mount_state: SidebarVolumeMountState,
+        read_only: bool,
+        network: bool,
+    ) -> Self {
+        self.kind = kind;
+        self.mount_state = mount_state;
+        self.read_only = read_only;
+        self.network = network;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarVolumeKind {
+    Internal,
+    External,
+    Removable,
+    Network,
+    DiskImage,
+    Unknown,
+}
+
+impl SidebarVolumeKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Internal => "internal",
+            Self::External => "external",
+            Self::Removable => "removable",
+            Self::Network => "network",
+            Self::DiskImage => "disk-image",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    const fn role(self) -> &'static str {
+        match self {
+            Self::Network => "network-volume",
+            Self::DiskImage => "disk-image",
+            _ => "mounted-volume",
+        }
+    }
+
+    const fn icon(self) -> &'static str {
+        match self {
+            Self::Network => "network",
+            Self::DiskImage => "disk-image",
+            Self::Internal => "internal-disk",
+            _ => "external-disk",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarVolumeMountState {
+    Mounted,
+    Unmounted,
+    Stale,
+}
+
+impl SidebarVolumeMountState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Mounted => "mounted",
+            Self::Unmounted => "unmounted",
+            Self::Stale => "stale",
         }
     }
 }
@@ -255,7 +338,7 @@ impl SidebarContract {
         ));
         lines.extend(self.rows.iter().map(|row| {
             format!(
-                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tcloud={}\tcloud-progress={}",
+                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tcloud={}\tcloud-progress={}\tvolume-kind={}\tvolume-mount={}\tvolume-read-only={}\tvolume-network={}",
                 row.section,
                 row.id,
                 row.label,
@@ -272,6 +355,18 @@ impl SidebarContract {
                 row.virtual_item,
                 row.cloud_state.as_str(),
                 row.cloud_progress_milli
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                row.volume_kind
+                    .map(SidebarVolumeKind::as_str)
+                    .unwrap_or("-"),
+                row.volume_mount_state
+                    .map(SidebarVolumeMountState::as_str)
+                    .unwrap_or("-"),
+                row.volume_read_only
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                row.volume_network
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "-".to_string())
             )
@@ -525,13 +620,15 @@ fn location_rows(volumes: &[SidebarVolumeSpec], current_path: &Path) -> Vec<Side
             "Locations",
             volume.id.clone(),
             volume.label.clone(),
-            "mounted-volume",
+            volume.kind.role(),
             SidebarItemKind::Location,
-            "external-disk",
+            volume.kind.icon(),
         )
         .path(volume.path.clone())
+        .volume(volume)
         .state(RowState {
-            enabled: path_exists(&volume.path),
+            enabled: volume.mount_state == SidebarVolumeMountState::Mounted
+                && path_exists(&volume.path),
             selected: same_path(&volume.path, current_path),
             ejectable: volume.ejectable,
             virtual_item: false,
@@ -602,6 +699,10 @@ struct RowDescriptor {
     state: RowState,
     cloud_state: SidebarCloudState,
     cloud_progress_milli: Option<u32>,
+    volume_kind: Option<SidebarVolumeKind>,
+    volume_mount_state: Option<SidebarVolumeMountState>,
+    volume_read_only: Option<bool>,
+    volume_network: Option<bool>,
 }
 
 impl RowDescriptor {
@@ -624,6 +725,10 @@ impl RowDescriptor {
             state: RowState::path(true, false),
             cloud_state: SidebarCloudState::None,
             cloud_progress_milli: None,
+            volume_kind: None,
+            volume_mount_state: None,
+            volume_read_only: None,
+            volume_network: None,
         }
     }
 
@@ -647,6 +752,14 @@ impl RowDescriptor {
         self.cloud_progress_milli = progress_milli;
         self
     }
+
+    fn volume(mut self, volume: &SidebarVolumeSpec) -> Self {
+        self.volume_kind = Some(volume.kind);
+        self.volume_mount_state = Some(volume.mount_state);
+        self.volume_read_only = Some(volume.read_only);
+        self.volume_network = Some(volume.network);
+        self
+    }
 }
 
 fn row(descriptor: RowDescriptor) -> SidebarItemSpec {
@@ -665,6 +778,10 @@ fn row(descriptor: RowDescriptor) -> SidebarItemSpec {
         virtual_item: descriptor.state.virtual_item,
         cloud_state: descriptor.cloud_state,
         cloud_progress_milli: descriptor.cloud_progress_milli,
+        volume_kind: descriptor.volume_kind,
+        volume_mount_state: descriptor.volume_mount_state,
+        volume_read_only: descriptor.volume_read_only,
+        volume_network: descriptor.volume_network,
     }
 }
 
@@ -795,10 +912,51 @@ mod tests {
             "row\tFavorites\thome\ttester\thome-folder\tfavorite\t/Users/tester\tdepth=0"
         ));
         assert!(output.contains(
-            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false\tselected=false\tejectable=false\tvirtual=false\tcloud=none\tcloud-progress=-"
+            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false\tselected=false\tejectable=false\tvirtual=false\tcloud=none\tcloud-progress=-\tvolume-kind=-\tvolume-mount=-\tvolume-read-only=-\tvolume-network=-"
         ));
         assert!(output.contains(
             "row\tTags\ttag-all\tAll Tags...\tfinder-tag\ttag\t-\tdepth=0\tenabled=true"
+        ));
+    }
+
+    #[test]
+    fn volume_rows_carry_typed_volume_state() {
+        let contract = SidebarContract::from_environment(
+            "/Volumes/Team",
+            SidebarEnvironment {
+                home: PathBuf::from("/Users/tester"),
+                icloud_drive: None,
+                icloud_state: SidebarCloudState::None,
+                icloud_progress_milli: None,
+                volumes: vec![SidebarVolumeSpec::from_native_seed(
+                    "network-volume",
+                    "Team",
+                    "/Volumes/Team",
+                    true,
+                )
+                .with_volume_state(
+                    SidebarVolumeKind::Network,
+                    SidebarVolumeMountState::Stale,
+                    true,
+                    true,
+                )],
+            },
+        );
+
+        let row = contract
+            .rows
+            .iter()
+            .find(|row| row.id == "volume-network-volume")
+            .unwrap();
+        assert_eq!(row.role, "network-volume");
+        assert_eq!(row.icon, "network");
+        assert_eq!(row.volume_kind, Some(SidebarVolumeKind::Network));
+        assert_eq!(row.volume_mount_state, Some(SidebarVolumeMountState::Stale));
+        assert_eq!(row.volume_read_only, Some(true));
+        assert_eq!(row.volume_network, Some(true));
+        assert!(!row.enabled);
+        assert!(contract.as_tsv().contains(
+            "\tvolume-kind=network\tvolume-mount=stale\tvolume-read-only=true\tvolume-network=true"
         ));
     }
 
@@ -847,7 +1005,7 @@ mod tests {
         assert_eq!(row.cloud_progress_milli, Some(12_500));
         assert!(contract
             .as_tsv()
-            .contains("\tcloud=downloading\tcloud-progress=12500"));
+            .contains("\tcloud=downloading\tcloud-progress=12500\tvolume-kind=-"));
     }
 
     #[test]

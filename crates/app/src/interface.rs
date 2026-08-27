@@ -7,7 +7,7 @@ use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore};
 use gfm_mac::{
     current_permission_onboarding, CloudCommandState, CloudStorageState,
     FileProviderConflictReport, FileProviderInvalidationReport, FileProviderStateReport,
-    VolumeDescriptor, VolumeDiscoveryReport, VolumeKind,
+    MountState, VolumeDescriptor, VolumeDiscoveryReport, VolumeKind,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
 use gfm_types::{FileKind, GfmError, Result};
@@ -20,9 +20,9 @@ use gfm_ui::{
     PermissionPromptKind, PermissionRefreshContract, ProviderConflictContract,
     ProviderConflictInput, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
     SearchResultsStage, SidebarCloudInvalidation, SidebarCloudState, SidebarContract,
-    SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
-    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
-    WindowSessionContract, WindowSessionStore,
+    SidebarVolumeKind, SidebarVolumeMountState, SidebarVolumeSpec, TitlebarContract,
+    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
+    VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -584,6 +584,31 @@ fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
         volume.path.clone(),
         volume.ejectable,
     )
+    .with_volume_state(
+        sidebar_volume_kind(volume.kind),
+        sidebar_volume_mount_state(volume.mount_state),
+        volume.read_only,
+        volume.network,
+    )
+}
+
+fn sidebar_volume_kind(kind: VolumeKind) -> SidebarVolumeKind {
+    match kind {
+        VolumeKind::System | VolumeKind::Internal => SidebarVolumeKind::Internal,
+        VolumeKind::External => SidebarVolumeKind::External,
+        VolumeKind::Removable => SidebarVolumeKind::Removable,
+        VolumeKind::Network => SidebarVolumeKind::Network,
+        VolumeKind::DiskImage => SidebarVolumeKind::DiskImage,
+        VolumeKind::Unknown => SidebarVolumeKind::Unknown,
+    }
+}
+
+fn sidebar_volume_mount_state(state: MountState) -> SidebarVolumeMountState {
+    match state {
+        MountState::Mounted => SidebarVolumeMountState::Mounted,
+        MountState::Unmounted => SidebarVolumeMountState::Unmounted,
+        MountState::Stale => SidebarVolumeMountState::Stale,
+    }
 }
 
 fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
