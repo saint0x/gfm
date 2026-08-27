@@ -72,6 +72,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 required_path(args.next(), "search-content-index requires a content path")?;
             let query =
                 required_string(args.next(), "search-content-index requires a query string")?;
+            let _access =
+                preflight_content_index_search_access(&records, &content, "content index search")?;
             let (live, report) =
                 Indexer::default().load_live_with_content_for_query(records, content, &query)?;
             eprintln!(
@@ -106,6 +108,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .unwrap_or_else(|| PathBuf::from("."));
             let extractor =
                 Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
+            let _access = preflight_content_index_search_access(
+                &records,
+                &content,
+                "adaptive content index search",
+            )?;
             let (live, report) =
                 Indexer::default().load_live_with_content_for_query(records, content, &query)?;
             eprintln!(
@@ -135,6 +142,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "search-content-index-set requires at least one content archive".to_string(),
                 ));
             }
+            let _access = preflight_content_index_set_search_access(
+                &records,
+                &content_paths,
+                "content index set search",
+            )?;
             let (live, report) =
                 Indexer::default().load_live_with_content_set(records, &content_paths, &query)?;
             eprintln!(
@@ -166,6 +178,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         .to_string(),
                 ));
             }
+            let _access = preflight_content_index_set_search_access(
+                &records,
+                &content_paths,
+                "content index set session",
+            )?;
             let session =
                 Indexer::default().load_content_set_query_session(&records, &content_paths)?;
             let first = session.search(&query, 50)?;
@@ -191,6 +208,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let query = required_string(
                 args.next(),
                 "search-content-index-manifest requires a query string",
+            )?;
+            let _access = preflight_content_index_search_access(
+                &records,
+                &manifest,
+                "content index manifest search",
             )?;
             let (live, report) =
                 Indexer::default().load_live_with_content_manifest(records, manifest, &query)?;
@@ -218,6 +240,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let query = required_string(
                 args.next(),
                 "search-content-index-manifest-session requires a query string",
+            )?;
+            let _access = preflight_content_index_search_access(
+                &records,
+                &manifest,
+                "content index manifest session",
             )?;
             let session =
                 Indexer::default().load_content_manifest_query_session(&records, &manifest)?;
@@ -766,6 +793,31 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
 
 fn preflight_content_archive_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
     preflight_access_scope(path, AccessIntent::Read, worker)
+}
+
+fn preflight_content_index_search_access(
+    records: &Path,
+    content: &Path,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(records, AccessIntent::Read, &format!("{worker} records"))?,
+        preflight_access_scope(content, AccessIntent::Read, &format!("{worker} content"))?,
+    ])
+}
+
+fn preflight_content_index_set_search_access(
+    records: &Path,
+    content_paths: &[PathBuf],
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = vec![preflight_access_scope(
+        records,
+        AccessIntent::Read,
+        &format!("{worker} records"),
+    )?];
+    guards.extend(preflight_content_archives_access(content_paths, worker)?);
+    Ok(guards)
 }
 
 fn preflight_content_archives_access(
