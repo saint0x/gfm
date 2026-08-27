@@ -992,6 +992,7 @@ pub struct VolumeOperationReport {
     pub operation: VolumeOperation,
     pub disposition: VolumeOperationDisposition,
     pub native_status: Option<NativeVolumeOperationStatus>,
+    pub dissenter_status: Option<u32>,
     pub volume: Option<VolumeDescriptor>,
     pub reason: String,
 }
@@ -1014,6 +1015,7 @@ impl VolumeOperationReport {
                 operation,
                 VolumeOperationDisposition::Unsupported,
                 None,
+                None,
                 volume,
                 "native-mount-requires-unmounted-disk-identity",
             ));
@@ -1022,6 +1024,7 @@ impl VolumeOperationReport {
             return Ok(Self::with_volume(
                 operation,
                 VolumeOperationDisposition::Refused,
+                None,
                 None,
                 volume,
                 "fixture-volume-native-operation-disabled",
@@ -1032,6 +1035,7 @@ impl VolumeOperationReport {
                 operation,
                 VolumeOperationDisposition::Refused,
                 None,
+                None,
                 volume,
                 "system-volume-operation-refused",
             ));
@@ -1040,6 +1044,7 @@ impl VolumeOperationReport {
             return Ok(Self::with_volume(
                 operation,
                 VolumeOperationDisposition::Refused,
+                None,
                 None,
                 volume,
                 "native-volume-operation-requires-volumes-root",
@@ -1050,6 +1055,7 @@ impl VolumeOperationReport {
                 operation,
                 VolumeOperationDisposition::Refused,
                 None,
+                None,
                 volume,
                 "diskarbitration-volume-unavailable",
             ));
@@ -1058,6 +1064,7 @@ impl VolumeOperationReport {
             return Ok(Self::with_volume(
                 operation,
                 VolumeOperationDisposition::Refused,
+                None,
                 None,
                 volume,
                 reason,
@@ -1075,6 +1082,7 @@ impl VolumeOperationReport {
             operation,
             disposition,
             Some(native.status),
+            native.dissenter_status,
             volume,
             native.reason.as_deref().unwrap_or(native.status.as_str()),
         ))
@@ -1091,6 +1099,7 @@ impl VolumeOperationReport {
             operation,
             disposition,
             native_status: None,
+            dissenter_status: None,
             volume: None,
             reason: reason.into(),
         }
@@ -1100,6 +1109,7 @@ impl VolumeOperationReport {
         operation: VolumeOperation,
         disposition: VolumeOperationDisposition,
         native_status: Option<NativeVolumeOperationStatus>,
+        dissenter_status: Option<u32>,
         volume: VolumeDescriptor,
         reason: impl Into<String>,
     ) -> Self {
@@ -1108,6 +1118,7 @@ impl VolumeOperationReport {
             operation,
             disposition,
             native_status,
+            dissenter_status,
             volume: Some(volume),
             reason: reason.into(),
         }
@@ -1126,13 +1137,16 @@ impl VolumeOperationReport {
             })
             .unwrap_or(("-", "-", "-".to_string()));
         format!(
-            "volume-operation\t{}\tpath={}\tdisposition={}\tnative-status={}\tvolume-kind={}\tmount={}\tstable-id={}\treason={}",
+            "volume-operation\t{}\tpath={}\tdisposition={}\tnative-status={}\tdissenter-status={}\tvolume-kind={}\tmount={}\tstable-id={}\treason={}",
             self.operation.as_str(),
             self.path.display(),
             self.disposition.as_str(),
             self.native_status
                 .map(NativeVolumeOperationStatus::as_str)
                 .unwrap_or("-"),
+            self.dissenter_status
+                .map(|status| format!("0x{status:08x}"))
+                .unwrap_or_else(|| "-".to_string()),
             kind,
             mount,
             stable_identity,
@@ -1915,8 +1929,10 @@ mod tests {
         assert_eq!(report.operation, VolumeOperation::Unmount);
         assert_eq!(report.disposition, VolumeOperationDisposition::Refused);
         assert_eq!(report.native_status, None);
+        assert_eq!(report.dissenter_status, None);
         assert_eq!(report.reason, "system-volume-operation-refused");
         assert!(report.as_tsv().contains("\tdisposition=refused\t"));
+        assert!(report.as_tsv().contains("\tdissenter-status=-\t"));
     }
 
     #[test]
@@ -1928,7 +1944,9 @@ mod tests {
 
         assert_eq!(report.disposition, VolumeOperationDisposition::Refused);
         assert_eq!(report.native_status, None);
+        assert_eq!(report.dissenter_status, None);
         assert_eq!(report.reason, "fixture-volume-native-operation-disabled");
+        assert!(report.as_tsv().contains("\tdissenter-status=-\t"));
         assert!(report
             .as_tsv()
             .contains("\tvolume-kind=external\tmount=mounted\t"));
