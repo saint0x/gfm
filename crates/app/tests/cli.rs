@@ -3135,6 +3135,13 @@ fn direct_search_archives_refuse_unreachable_volume_before_mapping_from_binary()
 
     let cases = [
         (
+            "search-index",
+            "gfmidx",
+            vec!["needle"],
+            "search index",
+            "hit\t",
+        ),
+        (
             "search-index-mmap",
             "gfmidx",
             vec!["needle"],

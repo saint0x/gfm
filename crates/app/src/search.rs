@@ -270,6 +270,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "search-index" => {
             let index_path = required_path(args.next(), "search-index requires an index path")?;
             let query = required_string(args.next(), "search-index requires a query string")?;
+            let _access = preflight_search_archive_access(&index_path, "search index")?;
             let session = Indexer::default().load_query_session(index_path)?;
             for hit in session.search(&query, 50) {
                 print_hit(&hit);
