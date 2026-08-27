@@ -492,6 +492,39 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .as_tsv()
             );
         }
+        "volume-event-transition-invalidation" => {
+            let kind = parse_volume_event_kind(&required_string(
+                args.next(),
+                "volume-event-transition-invalidation requires an event kind",
+            )?)?;
+            let path = PathBuf::from(required_string(
+                args.next(),
+                "volume-event-transition-invalidation requires a volume path",
+            )?);
+            let previous_label = required_string(
+                args.next(),
+                "volume-event-transition-invalidation requires a previous label",
+            )?;
+            let current_label = required_string(
+                args.next(),
+                "volume-event-transition-invalidation requires a current label",
+            )?;
+            let mut previous = VolumeDescriptor::for_path(&path)?;
+            previous.label = previous_label;
+            let mut current = previous.clone();
+            current.label = current_label;
+            println!(
+                "{}",
+                VolumeEventInvalidationReport::from_transition(
+                    kind,
+                    gfm_mac::NativeVolumeStatus::Available,
+                    Some(&previous),
+                    Some(&current),
+                    None,
+                )
+                .as_tsv()
+            );
+        }
         "volume-event-index-invalidation" => {
             println!(
                 "{}",

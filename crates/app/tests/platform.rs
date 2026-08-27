@@ -2268,19 +2268,24 @@ fn reports_volume_index_policy_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-volume-policy-{}", std::process::id()));
     let external = root.join("Work Drive");
     let network = root.join("Team Share");
+    let disk_image = root.join("Installer");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&external).unwrap();
     std::fs::create_dir_all(&network).unwrap();
+    std::fs::create_dir_all(&disk_image).unwrap();
     std::fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
     std::fs::write(network.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+    std::fs::write(disk_image.join(".gfm-volume-kind"), "disk-image\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-index-policy")
         .arg("opt-in")
         .arg("opt-in")
         .arg(format!("opt-in:{}", external.display()))
+        .arg(format!("opt-in:{}", disk_image.display()))
         .arg(&external)
         .arg(&network)
+        .arg(&disk_image)
         .output()
         .unwrap();
 
@@ -2290,13 +2295,16 @@ fn reports_volume_index_policy_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("volume-index-plan\tcount=2\tincluded=1\n"));
+    assert!(stdout.starts_with("volume-index-plan\tcount=3\tincluded=2\n"));
     assert!(stdout.contains("\tWork Drive\t"));
     assert!(stdout.contains("\tid="));
     assert!(!stdout.contains("\tid=-\tpath="));
     assert!(stdout.contains("\tclass=external\tmount=mounted\treachable=true\taction=include\t"));
     assert!(stdout.contains("\tthrottle=external\tmax-jobs=2\t"));
     assert!(stdout.contains("\treason=opted-in"));
+    assert!(stdout.contains("\tInstaller\t"));
+    assert!(stdout.contains("\tclass=slow\tmount=mounted\treachable=true\taction=include\t"));
+    assert!(stdout.contains("\tthrottle=slow\tmax-jobs=1\tcrawl-delay-ms=8\t"));
     assert!(stdout.contains("\tTeam Share\t"));
     assert!(
         stdout.contains("\tclass=network\tmount=mounted\treachable=true\taction=deferred-opt-in\t")
@@ -2471,6 +2479,43 @@ fn reports_volume_event_invalidation_from_binary() {
     assert!(stdout.contains("\tsidebar=true\toperation-policy=true\t"));
     assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
     assert!(stdout.ends_with("reason=volume-event-description-changed\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn reports_volume_event_transition_label_change_as_sidebar_only_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-event-transition-label-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-transition-invalidation")
+        .arg("description-changed")
+        .arg(&root)
+        .arg("External")
+        .arg("Renamed Drive")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(
+        "volume-event-invalidation\tkind=description-changed\tnative-status=available\t"
+    ));
+    assert!(stdout.contains("\tprevious-kind=external\tprevious-mount=mounted\t"));
+    assert!(stdout.contains("\tcurrent-kind=external\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains(
+        "\tsidebar=true\toperation-policy=false\tindex-admission=false\trescan-index=false\t"
+    ));
+    assert!(stdout.ends_with("reason=volume-label-changed\n"));
 
     let _ = std::fs::remove_dir_all(root);
 }

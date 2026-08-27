@@ -2644,6 +2644,21 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-event-transition-invalidation",
+        "description-changed",
+        "tmp/gfm-fozzy-dist",
+        "External",
+        "Renamed Drive"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-invalidation\tkind=description-changed\tnative-status=available\tpath=tmp/gfm-fozzy-dist\tprevious-kind=external\tprevious-mount=mounted\tcurrent-kind=external\tcurrent-mount=mounted\tsidebar=true\toperation-policy=false\tindex-admission=false\trescan-index=false\treason=volume-label-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-event-invalidation",
         "disappeared",
         "tmp/gfm-fozzy-dist"
@@ -2843,6 +2858,11 @@
       "expect_exit": 0
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-index-disk-image/.gfm-volume-kind",
+      "data": "disk-image\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -2850,6 +2870,18 @@
         "enabled",
         "opt-in",
         "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-index-policy",
+        "enabled",
+        "opt-in",
+        "tmp/gfm-fozzy-index-disk-image"
       ],
       "exit_code": 0,
       "times": 1

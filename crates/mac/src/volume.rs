@@ -971,6 +971,72 @@ impl VolumeEventInvalidationReport {
         )
     }
 
+    pub fn from_transition(
+        kind: VolumeEventKind,
+        native_status: NativeVolumeStatus,
+        previous: Option<&VolumeDescriptor>,
+        current: Option<&VolumeDescriptor>,
+        native_reason: Option<String>,
+    ) -> Self {
+        match kind {
+            VolumeEventKind::Appeared => Self::from_parts(
+                kind,
+                native_status,
+                current.map(|descriptor| descriptor.path.clone()),
+                current,
+                native_reason,
+            ),
+            VolumeEventKind::Disappeared => Self::from_parts(
+                kind,
+                native_status,
+                previous.map(|descriptor| descriptor.path.clone()),
+                previous,
+                native_reason,
+            ),
+            VolumeEventKind::Unavailable => Self::from_parts(
+                kind,
+                native_status,
+                current
+                    .or(previous)
+                    .map(|descriptor| descriptor.path.clone()),
+                current.or(previous),
+                native_reason,
+            ),
+            VolumeEventKind::DescriptionChanged => {
+                let path = current
+                    .or(previous)
+                    .map(|descriptor| descriptor.path.clone());
+                let current_kind = current.map(|descriptor| descriptor.kind);
+                let current_mount_state = current.map(|descriptor| descriptor.mount_state);
+                let previous_kind = previous.map(|descriptor| descriptor.kind);
+                let previous_mount_state = previous.map(|descriptor| descriptor.mount_state);
+                let reason = previous
+                    .zip(current)
+                    .and_then(|(previous, current)| topology_change_reason(previous, current))
+                    .map(str::to_string)
+                    .or(native_reason)
+                    .unwrap_or_else(|| "volume-event-description-changed".to_string());
+                let heavy = description_change_invalidates_policy(&reason);
+                let visible =
+                    path.is_some() || native_status != NativeVolumeStatus::Available || heavy;
+                Self {
+                    kind,
+                    native_status,
+                    path,
+                    previous_kind,
+                    previous_mount_state,
+                    current_kind,
+                    current_mount_state,
+                    invalidate_sidebar: visible,
+                    invalidate_operation_policy: visible && heavy,
+                    invalidate_index_admission: visible && heavy,
+                    rescan_index: visible && heavy,
+                    reason,
+                }
+            }
+        }
+    }
+
     pub fn from_parts(
         kind: VolumeEventKind,
         native_status: NativeVolumeStatus,
@@ -1043,6 +1109,13 @@ impl VolumeEventInvalidationReport {
             escape_field(&self.reason)
         )
     }
+}
+
+fn description_change_invalidates_policy(reason: &str) -> bool {
+    !matches!(
+        reason,
+        "volume-label-changed" | "volume-event-description-changed"
+    )
 }
 
 impl VolumeEventStream {
@@ -2568,6 +2641,65 @@ mod tests {
         assert!(report
             .as_tsv()
             .starts_with("volume-event-invalidation\tkind=description-changed\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_transition_keeps_label_only_change_sidebar_scoped() {
+        let root = unique_temp_dir("gfm-volume-event-label-change");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let previous = VolumeDescriptor::for_path(&root).unwrap();
+        let mut current = previous.clone();
+        current.label = "Renamed Drive".to_string();
+
+        let report = VolumeEventInvalidationReport::from_transition(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Available,
+            Some(&previous),
+            Some(&current),
+            None,
+        );
+
+        assert_eq!(report.reason, "volume-label-changed");
+        assert_eq!(report.previous_kind, Some(VolumeKind::External));
+        assert_eq!(report.current_kind, Some(VolumeKind::External));
+        assert_eq!(report.previous_mount_state, Some(MountState::Mounted));
+        assert_eq!(report.current_mount_state, Some(MountState::Mounted));
+        assert!(report.invalidate_sidebar);
+        assert!(!report.invalidate_operation_policy);
+        assert!(!report.invalidate_index_admission);
+        assert!(!report.rescan_index);
+        assert!(report.as_tsv().contains(
+            "\tsidebar=true\toperation-policy=false\tindex-admission=false\trescan-index=false\t"
+        ));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_transition_keeps_reachability_change_hot_path_visible() {
+        let root = unique_temp_dir("gfm-volume-event-reachability-change");
+        fs::write(root.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        let previous = VolumeDescriptor::for_path(&root).unwrap();
+        let mut current = previous.clone();
+        current.reachable = Some(false);
+
+        let report = VolumeEventInvalidationReport::from_transition(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Available,
+            Some(&previous),
+            Some(&current),
+            None,
+        );
+
+        assert_eq!(report.reason, "volume-locality-changed");
+        assert_eq!(report.previous_kind, Some(VolumeKind::Network));
+        assert_eq!(report.current_kind, Some(VolumeKind::Network));
+        assert!(report.invalidate_sidebar);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
 
         fs::remove_dir_all(root).unwrap();
     }

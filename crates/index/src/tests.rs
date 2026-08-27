@@ -14,7 +14,7 @@ use gfm_types::{
 };
 use std::collections::HashSet;
 use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn extracts_content_terms_for_query_sidecar_loading() {
@@ -1661,6 +1661,35 @@ fn volume_index_policy_applies_opt_in_and_remote_throttles() {
     assert_eq!(external.throttle.max_concurrent_jobs, 2);
     assert_eq!(network.action, VolumeIndexAction::DeferredOptIn);
     assert_eq!(plan.included_roots(), vec![PathBuf::from("/Volumes/Work")]);
+}
+
+#[test]
+fn volume_index_policy_uses_slow_throttle_for_slow_external_media() {
+    let policy = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Enabled,
+        gfm_config::VolumeIndexingPolicy::OptIn,
+    );
+    let disk_image = IndexVolumeDescriptor::new(
+        "Installer",
+        "/Volumes/Installer",
+        IndexVolumeClass::Slow,
+        IndexMountState::Mounted,
+    );
+
+    let decision = policy.decide(&disk_image);
+
+    assert_eq!(decision.class, IndexVolumeClass::Slow);
+    assert_eq!(decision.action, VolumeIndexAction::Include);
+    assert_eq!(decision.throttle.class, VolumeThrottleClass::Slow);
+    assert_eq!(decision.throttle.max_concurrent_jobs, 1);
+    assert_eq!(decision.throttle.crawl_delay, Duration::from_millis(8));
+    assert_eq!(
+        decision.throttle.content_bytes_per_second,
+        Some(32 * 1024 * 1024)
+    );
+    assert!(decision
+        .as_tsv()
+        .contains("\tclass=slow\tmount=mounted\treachable=true\taction=include\tthrottle=slow\t"));
 }
 
 #[test]

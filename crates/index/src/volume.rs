@@ -9,6 +9,7 @@ pub enum IndexVolumeClass {
     System,
     Internal,
     External,
+    Slow,
     Network,
     Unknown,
 }
@@ -19,6 +20,7 @@ impl IndexVolumeClass {
             Self::System => "system",
             Self::Internal => "internal",
             Self::External => "external",
+            Self::Slow => "slow",
             Self::Network => "network",
             Self::Unknown => "unknown",
         }
@@ -26,7 +28,7 @@ impl IndexVolumeClass {
 
     const fn policy_family(self) -> VolumePolicyFamily {
         match self {
-            Self::External => VolumePolicyFamily::External,
+            Self::External | Self::Slow => VolumePolicyFamily::External,
             Self::Network => VolumePolicyFamily::Network,
             Self::System | Self::Internal | Self::Unknown => VolumePolicyFamily::Local,
         }
@@ -36,7 +38,8 @@ impl IndexVolumeClass {
         match value {
             "system" => Ok(Self::System),
             "internal" => Ok(Self::Internal),
-            "external" | "removable" | "disk-image" => Ok(Self::External),
+            "external" | "removable" => Ok(Self::External),
+            "slow" | "disk-image" => Ok(Self::Slow),
             "network" => Ok(Self::Network),
             "unknown" => Ok(Self::Unknown),
             other => Err(GfmError::Format(format!(
@@ -118,6 +121,7 @@ impl IndexVolumeEventKind {
 pub enum VolumeThrottleClass {
     Local,
     External,
+    Slow,
     Network,
     Suspended,
 }
@@ -127,6 +131,7 @@ impl VolumeThrottleClass {
         match self {
             Self::Local => "local",
             Self::External => "external",
+            Self::Slow => "slow",
             Self::Network => "network",
             Self::Suspended => "suspended",
         }
@@ -157,6 +162,15 @@ impl VolumeIndexThrottle {
             max_concurrent_jobs: 2,
             crawl_delay: Duration::from_millis(2),
             content_bytes_per_second: Some(96 * 1024 * 1024),
+        }
+    }
+
+    pub const fn slow() -> Self {
+        Self {
+            class: VolumeThrottleClass::Slow,
+            max_concurrent_jobs: 1,
+            crawl_delay: Duration::from_millis(8),
+            content_bytes_per_second: Some(32 * 1024 * 1024),
         }
     }
 
@@ -335,7 +349,11 @@ impl VolumeIndexPolicy {
                 "local-volume",
             ),
             VolumePolicyFamily::External => {
-                self.decide_remote(volume, self.external, VolumeIndexThrottle::external())
+                let throttle = match volume.class {
+                    IndexVolumeClass::Slow => VolumeIndexThrottle::slow(),
+                    _ => VolumeIndexThrottle::external(),
+                };
+                self.decide_remote(volume, self.external, throttle)
             }
             VolumePolicyFamily::Network => {
                 self.decide_remote(volume, self.network, VolumeIndexThrottle::network())

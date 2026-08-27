@@ -359,9 +359,8 @@ fn index_volume_class(kind: VolumeKind) -> IndexVolumeClass {
     match kind {
         VolumeKind::System => IndexVolumeClass::System,
         VolumeKind::Internal => IndexVolumeClass::Internal,
-        VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage => {
-            IndexVolumeClass::External
-        }
+        VolumeKind::External | VolumeKind::Removable => IndexVolumeClass::External,
+        VolumeKind::DiskImage => IndexVolumeClass::Slow,
         VolumeKind::Network => IndexVolumeClass::Network,
         VolumeKind::Unknown => IndexVolumeClass::Unknown,
     }
@@ -688,6 +687,7 @@ fn print_usage() {
   gfm volume-discovery [paths...]
   gfm volume-events-probe
   gfm volume-event-invalidation <appeared|description-changed|disappeared|unavailable> [path]
+  gfm volume-event-transition-invalidation <appeared|description-changed|disappeared|unavailable> <path> <previous-label> <current-label>
   gfm volume-operation <eject|unmount|mount> <path>
   gfm volume-mount-bsd <bsd-name>
   gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]
@@ -897,6 +897,19 @@ mod tests {
         assert_eq!(descriptor.ejectable, Some(true));
         assert_eq!(descriptor.mountable, Some(false));
         assert_eq!(descriptor.case_sensitive, Some(true));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_volume_descriptor_maps_disk_images_to_slow_class() {
+        let root = unique_temp_dir("gfm-app-volume-disk-image-index-class");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::DiskImage;
+
+        let descriptor = index_volume_descriptor(&volume);
+
+        assert_eq!(descriptor.class, IndexVolumeClass::Slow);
 
         std::fs::remove_dir_all(root).unwrap();
     }
