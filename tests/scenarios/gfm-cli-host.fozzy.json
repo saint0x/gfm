@@ -150,6 +150,62 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-apply-all-partial-source-a.txt",
+      "data": "partial source ok\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-apply-all-partial-target-a.txt",
+      "data": "partial target ok\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-apply-all-partial-target-b.txt",
+      "data": "partial target fail\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-apply-all-partial-conflicts.tsv",
+      "data": "operation-conflict\toperation=copy\tsource=tmp/gfm-fozzy-operation-apply-all-partial-source-a.txt\ttarget=tmp/gfm-fozzy-operation-apply-all-partial-target-a.txt\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\noperation-conflict\toperation=copy\tsource=tmp/gfm-fozzy-operation-apply-all-partial-missing.txt\ttarget=tmp/gfm-fozzy-operation-apply-all-partial-target-b.txt\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_OPS_JOURNAL": "tmp/gfm-fozzy-operation-apply-all-partial-journal.tsv"
+      },
+      "args": [
+        "operation-conflict-apply-all",
+        "tmp/gfm-fozzy-operation-apply-all-partial-conflicts.tsv",
+        "keep-both"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/bin/cat",
+      "args": [
+        "tmp/gfm-fozzy-operation-apply-all-partial-target-a copy.txt"
+      ],
+      "exit_code": 0,
+      "stdout": "partial source ok\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/bin/cat",
+      "args": [
+        "tmp/gfm-fozzy-operation-apply-all-partial-conflicts.tsv"
+      ],
+      "exit_code": 0,
+      "stdout": "operation-conflict\toperation=copy\tsource=tmp/gfm-fozzy-operation-apply-all-partial-source-a.txt\ttarget=tmp/gfm-fozzy-operation-apply-all-partial-target-a.txt\texists=true\tkind=file\tpolicy=keep-both\tavailable=replace,keep-both,skip\tblocks-operation=false\treason=destination-conflict-resolved-by-keep-both\noperation-conflict\toperation=copy\tsource=tmp/gfm-fozzy-operation-apply-all-partial-missing.txt\ttarget=tmp/gfm-fozzy-operation-apply-all-partial-target-b.txt\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
