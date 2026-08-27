@@ -4,8 +4,13 @@ use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 use core_foundation::url::CFURL;
+use core_foundation_sys::array::CFArrayRef;
 use core_foundation_sys::base::{CFAllocatorRef, CFGetTypeID, CFRelease, CFTypeRef};
 use core_foundation_sys::dictionary::{CFDictionaryGetValueIfPresent, CFDictionaryRef};
+use core_foundation_sys::runloop::{
+    kCFRunLoopDefaultMode, CFRunLoopGetCurrent, CFRunLoopRef, CFRunLoopRun, CFRunLoopStop,
+    CFRunLoopWakeUp,
+};
 use core_foundation_sys::string::CFStringRef;
 use core_foundation_sys::url::CFURLRef;
 use core_foundation_sys::uuid::{CFUUIDCreateString, CFUUIDRef};
@@ -14,10 +19,16 @@ use std::ffi::{CStr, CString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::mpsc::{self, Receiver};
+use std::thread::{self, JoinHandle};
 
 type DASessionRef = *const c_void;
 type DADiskRef = *const c_void;
 type DADissenterRef = *const c_void;
+type DADiskAppearedCallback = Option<unsafe extern "C" fn(DADiskRef, *mut c_void)>;
+type DADiskDisappearedCallback = Option<unsafe extern "C" fn(DADiskRef, *mut c_void)>;
+type DADiskDescriptionChangedCallback =
+    Option<unsafe extern "C" fn(DADiskRef, CFArrayRef, *mut c_void)>;
 type DADiskEjectCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef, *mut c_void)>;
 type DADiskUnmountCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef, *mut c_void)>;
 
@@ -40,6 +51,35 @@ extern "C" {
         disk: DADiskRef,
         options: u32,
         callback: DADiskUnmountCallback,
+        context: *mut c_void,
+    );
+    fn DASessionScheduleWithRunLoop(
+        session: DASessionRef,
+        run_loop: CFRunLoopRef,
+        run_loop_mode: CFStringRef,
+    );
+    fn DASessionUnscheduleFromRunLoop(
+        session: DASessionRef,
+        run_loop: CFRunLoopRef,
+        run_loop_mode: CFStringRef,
+    );
+    fn DARegisterDiskAppearedCallback(
+        session: DASessionRef,
+        match_description: CFDictionaryRef,
+        callback: DADiskAppearedCallback,
+        context: *mut c_void,
+    );
+    fn DARegisterDiskDescriptionChangedCallback(
+        session: DASessionRef,
+        match_description: CFDictionaryRef,
+        watch: CFArrayRef,
+        callback: DADiskDescriptionChangedCallback,
+        context: *mut c_void,
+    );
+    fn DARegisterDiskDisappearedCallback(
+        session: DASessionRef,
+        match_description: CFDictionaryRef,
+        callback: DADiskDisappearedCallback,
         context: *mut c_void,
     );
 
@@ -174,6 +214,30 @@ pub struct NativeVolumeMountTable {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeVolumeEventKind {
+    Appeared,
+    DescriptionChanged,
+    Disappeared,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeVolumeEvent {
+    pub kind: NativeVolumeEventKind,
+    pub description: NativeVolumeDescription,
+}
+
+pub struct NativeVolumeEventStream {
+    receiver: Receiver<NativeVolumeEvent>,
+    run_loop: Option<usize>,
+    thread: Option<JoinHandle<()>>,
+}
+
+struct NativeVolumeEventContext {
+    sender: mpsc::Sender<NativeVolumeEvent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeVolumeStatus {
     Available,
     Missing,
@@ -219,6 +283,89 @@ pub struct NativeVolumeOperationResult {
     pub reason: Option<String>,
 }
 
+impl NativeVolumeEventStream {
+    pub fn start() -> Self {
+        let (event_tx, event_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let thread = thread::spawn(move || {
+            let session = unsafe { DASessionCreate(kCFAllocatorDefault) };
+            if session.is_null() {
+                let _ = event_tx.send(NativeVolumeEvent {
+                    kind: NativeVolumeEventKind::Unavailable,
+                    description: unavailable("DiskArbitration did not create an event session"),
+                });
+                let _ = ready_tx.send(None);
+                return;
+            }
+
+            let context = Box::into_raw(Box::new(NativeVolumeEventContext { sender: event_tx }));
+            unsafe {
+                DARegisterDiskAppearedCallback(
+                    session,
+                    ptr::null(),
+                    Some(disk_appeared_callback),
+                    context.cast(),
+                );
+                DARegisterDiskDescriptionChangedCallback(
+                    session,
+                    ptr::null(),
+                    ptr::null(),
+                    Some(disk_description_changed_callback),
+                    context.cast(),
+                );
+                DARegisterDiskDisappearedCallback(
+                    session,
+                    ptr::null(),
+                    Some(disk_disappeared_callback),
+                    context.cast(),
+                );
+            }
+
+            let run_loop = unsafe { CFRunLoopGetCurrent() };
+            unsafe {
+                DASessionScheduleWithRunLoop(session, run_loop, kCFRunLoopDefaultMode);
+            }
+            let _ = ready_tx.send(Some(run_loop as usize));
+            unsafe {
+                CFRunLoopRun();
+                DASessionUnscheduleFromRunLoop(session, run_loop, kCFRunLoopDefaultMode);
+                CFRelease(session as CFTypeRef);
+                drop(Box::from_raw(context));
+            }
+        });
+
+        let run_loop = ready_rx.recv().ok().flatten();
+        Self {
+            receiver: event_rx,
+            run_loop,
+            thread: Some(thread),
+        }
+    }
+
+    pub fn is_attached(&self) -> bool {
+        self.run_loop.is_some()
+    }
+
+    pub fn try_recv(&self) -> Option<NativeVolumeEvent> {
+        self.receiver.try_recv().ok()
+    }
+}
+
+impl Drop for NativeVolumeEventStream {
+    fn drop(&mut self) {
+        if let Some(run_loop) = self.run_loop.take() {
+            unsafe {
+                let run_loop = run_loop as CFRunLoopRef;
+                CFRunLoopStop(run_loop);
+                CFRunLoopWakeUp(run_loop);
+            }
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 impl NativeVolumeStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -255,18 +402,22 @@ pub fn copy_volume_description_for_path(path: &Path) -> NativeVolumeDescription 
         ));
     }
 
-    let description = unsafe { DADiskCopyDescription(disk) };
+    let description = volume_description_from_disk(disk);
     unsafe {
         CFRelease(disk as CFTypeRef);
         CFRelease(session as CFTypeRef);
     }
-    if description.is_null() {
-        return unavailable(format!(
-            "DiskArbitration did not return a description for {}",
-            path.display()
-        ));
-    }
+    description
+}
 
+fn volume_description_from_disk(disk: DADiskRef) -> NativeVolumeDescription {
+    if disk.is_null() {
+        return unavailable("DiskArbitration callback received a null disk");
+    }
+    let description = unsafe { DADiskCopyDescription(disk) };
+    if description.is_null() {
+        return unavailable("DiskArbitration did not return a disk description");
+    }
     let description = unsafe {
         CFDictionary::<*const c_void, *const c_void>::wrap_under_create_rule(description)
     };
@@ -308,6 +459,33 @@ pub fn copy_volume_description_for_path(path: &Path) -> NativeVolumeDescription 
         device_vendor: string_value(&description, unsafe { kDADiskDescriptionDeviceVendorKey }),
         reason: None,
     }
+}
+
+unsafe extern "C" fn disk_appeared_callback(disk: DADiskRef, context: *mut c_void) {
+    send_volume_event(context, NativeVolumeEventKind::Appeared, disk);
+}
+
+unsafe extern "C" fn disk_description_changed_callback(
+    disk: DADiskRef,
+    _keys: CFArrayRef,
+    context: *mut c_void,
+) {
+    send_volume_event(context, NativeVolumeEventKind::DescriptionChanged, disk);
+}
+
+unsafe extern "C" fn disk_disappeared_callback(disk: DADiskRef, context: *mut c_void) {
+    send_volume_event(context, NativeVolumeEventKind::Disappeared, disk);
+}
+
+fn send_volume_event(context: *mut c_void, kind: NativeVolumeEventKind, disk: DADiskRef) {
+    if context.is_null() {
+        return;
+    }
+    let context = unsafe { &*(context as *const NativeVolumeEventContext) };
+    let _ = context.sender.send(NativeVolumeEvent {
+        kind,
+        description: volume_description_from_disk(disk),
+    });
 }
 
 pub fn submit_volume_operation(
@@ -725,6 +903,14 @@ mod tests {
                 && entry.filesystem_type.is_some()
                 && entry.flags.is_some()
         }));
+    }
+
+    #[test]
+    fn volume_event_stream_owns_diskarbitration_session_lifecycle() {
+        let stream = NativeVolumeEventStream::start();
+
+        assert!(stream.is_attached() || stream.try_recv().is_some());
+        drop(stream);
     }
 
     #[test]

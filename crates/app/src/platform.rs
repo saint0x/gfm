@@ -19,8 +19,8 @@ use gfm_mac::{
     FileProviderStateInvalidationReport, FileProviderStateReport, FileProviderStateSnapshot,
     MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
     SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore, SpotlightMetadataReader,
-    SpotlightReconciliationReport, VolumeDiscoveryReport, VolumeOperation, VolumeOperationReport,
-    VolumeTopologyDiff,
+    SpotlightReconciliationReport, VolumeDiscoveryReport, VolumeEventStream, VolumeOperation,
+    VolumeOperationReport, VolumeTopologyDiff,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path, IconPreviewContract,
@@ -193,6 +193,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
             let report = volume_discovery_report(paths);
             println!("{}", report.as_tsv());
+        }
+        "volume-events-probe" => {
+            let stream = VolumeEventStream::start();
+            println!(
+                "volume-events\tattached={}\tpending={}",
+                stream.is_attached(),
+                stream.try_recv().is_some()
+            );
         }
         "volume-operation" => {
             let operation = VolumeOperation::parse(&required_string(

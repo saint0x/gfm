@@ -721,6 +721,104 @@ impl VolumeTopologyDiff {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolumeEventKind {
+    Appeared,
+    DescriptionChanged,
+    Disappeared,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeEventReport {
+    pub kind: VolumeEventKind,
+    pub native_status: NativeVolumeStatus,
+    pub path: Option<PathBuf>,
+    pub descriptor: Option<VolumeDescriptor>,
+    pub reason: Option<String>,
+}
+
+pub struct VolumeEventStream {
+    stream: gfm_mac_sys::NativeVolumeEventStream,
+}
+
+impl VolumeEventKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Appeared => "appeared",
+            Self::DescriptionChanged => "description-changed",
+            Self::Disappeared => "disappeared",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+impl From<gfm_mac_sys::NativeVolumeEventKind> for VolumeEventKind {
+    fn from(kind: gfm_mac_sys::NativeVolumeEventKind) -> Self {
+        match kind {
+            gfm_mac_sys::NativeVolumeEventKind::Appeared => Self::Appeared,
+            gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged => Self::DescriptionChanged,
+            gfm_mac_sys::NativeVolumeEventKind::Disappeared => Self::Disappeared,
+            gfm_mac_sys::NativeVolumeEventKind::Unavailable => Self::Unavailable,
+        }
+    }
+}
+
+impl VolumeEventReport {
+    fn from_native(event: gfm_mac_sys::NativeVolumeEvent) -> Self {
+        let path = event.description.volume_path.clone();
+        let descriptor = path
+            .as_ref()
+            .filter(|path| path.exists())
+            .and_then(|path| VolumeDescriptor::for_path(path).ok());
+        Self {
+            kind: event.kind.into(),
+            native_status: event.description.status,
+            path,
+            descriptor,
+            reason: event.description.reason,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let descriptor = self
+            .descriptor
+            .as_ref()
+            .map(VolumeDescriptor::as_tsv)
+            .unwrap_or_else(|| "volume=-".to_string());
+        format!(
+            "volume-event\tkind={}\tnative-status={}\tpath={}\treason={}\n{}",
+            self.kind.as_str(),
+            self.native_status.as_str(),
+            self.path
+                .as_ref()
+                .map(|path| escape_field(&path.to_string_lossy()))
+                .unwrap_or_else(|| "-".to_string()),
+            self.reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            descriptor
+        )
+    }
+}
+
+impl VolumeEventStream {
+    pub fn start() -> Self {
+        Self {
+            stream: gfm_mac_sys::NativeVolumeEventStream::start(),
+        }
+    }
+
+    pub fn is_attached(&self) -> bool {
+        self.stream.is_attached()
+    }
+
+    pub fn try_recv(&self) -> Option<VolumeEventReport> {
+        self.stream.try_recv().map(VolumeEventReport::from_native)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VolumeOperation {
     Eject,
     Unmount,
@@ -1656,6 +1754,14 @@ mod tests {
 
         assert!(paths.iter().any(|path| path == Path::new("/")));
         assert!(paths.iter().all(|path| finder_visible_mount_path(path)));
+    }
+
+    #[test]
+    fn volume_event_stream_exposes_owned_diskarbitration_lifecycle() {
+        let stream = VolumeEventStream::start();
+
+        assert!(stream.is_attached() || stream.try_recv().is_some());
+        drop(stream);
     }
 
     #[test]

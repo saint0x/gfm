@@ -566,6 +566,7 @@ fn print_usage() {
   gfm fileprovider-invalidation-scan <state.tsv> <paths...>
   gfm fileprovider-invalidation-event <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
   gfm volume-discovery [paths...]
+  gfm volume-events-probe
   gfm volume-operation <eject|unmount|mount> <path>
   gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]
   gfm volume-invalidation <previous-class> <previous-mount> <path>
