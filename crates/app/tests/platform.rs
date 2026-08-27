@@ -1288,11 +1288,13 @@ fn reports_volume_index_policy_from_binary() {
     assert!(stdout.contains("\tWork Drive\t"));
     assert!(stdout.contains("\tid="));
     assert!(!stdout.contains("\tid=-\tpath="));
-    assert!(stdout.contains("\tclass=external\tmount=mounted\taction=include\t"));
+    assert!(stdout.contains("\tclass=external\tmount=mounted\treachable=true\taction=include\t"));
     assert!(stdout.contains("\tthrottle=external\tmax-jobs=2\t"));
     assert!(stdout.contains("\treason=opted-in"));
     assert!(stdout.contains("\tTeam Share\t"));
-    assert!(stdout.contains("\tclass=network\tmount=mounted\taction=deferred-opt-in\t"));
+    assert!(
+        stdout.contains("\tclass=network\tmount=mounted\treachable=true\taction=deferred-opt-in\t")
+    );
     assert!(stdout.contains("\tthrottle=suspended\tmax-jobs=0\t"));
     assert!(stdout.contains("\treason=requires-opt-in"));
 

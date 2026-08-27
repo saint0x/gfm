@@ -80,6 +80,7 @@ pub enum VolumeIndexAction {
     DeferredOptIn,
     Disabled,
     Disconnected,
+    Unreachable,
 }
 
 impl VolumeIndexAction {
@@ -89,6 +90,7 @@ impl VolumeIndexAction {
             Self::DeferredOptIn => "deferred-opt-in",
             Self::Disabled => "disabled",
             Self::Disconnected => "disconnected",
+            Self::Unreachable => "unreachable",
         }
     }
 }
@@ -196,6 +198,7 @@ pub struct IndexVolumeDescriptor {
     pub path: PathBuf,
     pub class: IndexVolumeClass,
     pub mount_state: IndexMountState,
+    pub reachable: Option<bool>,
     pub stable_identity: Option<String>,
     pub filesystem_signature: Option<String>,
 }
@@ -213,6 +216,7 @@ impl IndexVolumeDescriptor {
             path: path.into(),
             class,
             mount_state,
+            reachable: Some(mount_state == IndexMountState::Mounted),
             stable_identity: None,
             filesystem_signature: None,
         }
@@ -225,6 +229,11 @@ impl IndexVolumeDescriptor {
 
     pub fn with_stable_identity(mut self, stable_identity: impl Into<String>) -> Self {
         self.stable_identity = Some(stable_identity.into());
+        self
+    }
+
+    pub fn with_reachable(mut self, reachable: Option<bool>) -> Self {
+        self.reachable = reachable;
         self
     }
 
@@ -272,6 +281,14 @@ impl VolumeIndexPolicy {
                 VolumeIndexAction::Disconnected,
                 VolumeIndexThrottle::suspended(),
                 "volume-disconnected",
+            );
+        }
+        if volume.reachable == Some(false) {
+            return VolumeIndexDecision::new(
+                volume,
+                VolumeIndexAction::Unreachable,
+                VolumeIndexThrottle::suspended(),
+                "volume-unreachable",
             );
         }
 
@@ -345,6 +362,7 @@ pub struct VolumeIndexDecision {
     pub path: PathBuf,
     pub class: IndexVolumeClass,
     pub mount_state: IndexMountState,
+    pub reachable: Option<bool>,
     pub action: VolumeIndexAction,
     pub throttle: VolumeIndexThrottle,
     pub reason: String,
@@ -363,6 +381,7 @@ impl VolumeIndexDecision {
             path: volume.path.clone(),
             class: volume.class,
             mount_state: volume.mount_state,
+            reachable: volume.reachable,
             action,
             throttle,
             reason: reason.into(),
@@ -375,7 +394,7 @@ impl VolumeIndexDecision {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-index\t{}\tid={}\tpath={}\tclass={}\tmount={}\taction={}\t{}\treason={}",
+            "volume-index\t{}\tid={}\tpath={}\tclass={}\tmount={}\treachable={}\taction={}\t{}\treason={}",
             escape_field(&self.label),
             self.id
                 .map(|id| id.0.to_string())
@@ -383,6 +402,9 @@ impl VolumeIndexDecision {
             self.path.display(),
             self.class.as_str(),
             self.mount_state.as_str(),
+            self.reachable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             self.action.as_str(),
             self.throttle.as_tsv_fields(),
             escape_field(&self.reason)
@@ -400,8 +422,10 @@ pub struct VolumeInvalidationReport {
     pub path: PathBuf,
     pub previous_class: Option<IndexVolumeClass>,
     pub previous_mount_state: Option<IndexMountState>,
+    pub previous_reachable: Option<bool>,
     pub current_class: Option<IndexVolumeClass>,
     pub current_mount_state: Option<IndexMountState>,
+    pub current_reachable: Option<bool>,
     pub invalidate_sidebar: bool,
     pub invalidate_operation_policy: bool,
     pub invalidate_index_admission: bool,
@@ -418,6 +442,7 @@ pub struct VolumeEventIndexInvalidationReport {
     pub current_volume_id: Option<VolumeId>,
     pub current_class: Option<IndexVolumeClass>,
     pub current_mount_state: Option<IndexMountState>,
+    pub current_reachable: Option<bool>,
     pub invalidate_index_admission: bool,
     pub rescan_index: bool,
     pub cancel_index_jobs: bool,
@@ -436,8 +461,10 @@ impl VolumeInvalidationReport {
             .unwrap_or_else(|| PathBuf::from("-"));
         let previous_class = previous.map(|volume| volume.class);
         let previous_mount_state = previous.map(|volume| volume.mount_state);
+        let previous_reachable = previous.and_then(|volume| volume.reachable);
         let current_class = current.map(|volume| volume.class);
         let current_mount_state = current.map(|volume| volume.mount_state);
+        let current_reachable = current.and_then(|volume| volume.reachable);
 
         let (
             invalidate_sidebar,
@@ -473,6 +500,19 @@ impl VolumeInvalidationReport {
             ),
             (Some(previous), Some(current)) if previous.class != current.class => {
                 (true, true, true, true, true, true, "volume-class-changed")
+            }
+            (Some(previous), Some(current))
+                if known_optional_value_changed(&previous.reachable, &current.reachable) =>
+            {
+                (
+                    true,
+                    true,
+                    true,
+                    true,
+                    previous.mount_state == IndexMountState::Mounted,
+                    true,
+                    "volume-reachability-changed",
+                )
             }
             (Some(previous), Some(current))
                 if known_optional_value_changed(
@@ -522,8 +562,10 @@ impl VolumeInvalidationReport {
             path,
             previous_class,
             previous_mount_state,
+            previous_reachable,
             current_class,
             current_mount_state,
+            current_reachable,
             invalidate_sidebar,
             invalidate_operation_policy,
             invalidate_index_admission,
@@ -536,7 +578,7 @@ impl VolumeInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tcurrent-class={}\tcurrent-mount={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
+            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
             self.path.display(),
             self.previous_class
                 .map(IndexVolumeClass::as_str)
@@ -544,10 +586,16 @@ impl VolumeInvalidationReport {
             self.previous_mount_state
                 .map(IndexMountState::as_str)
                 .unwrap_or("-"),
+            self.previous_reachable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             self.current_class.map(IndexVolumeClass::as_str).unwrap_or("-"),
             self.current_mount_state
                 .map(IndexMountState::as_str)
                 .unwrap_or("-"),
+            self.current_reachable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             self.invalidate_sidebar,
             self.invalidate_operation_policy,
             self.invalidate_index_admission,
@@ -596,6 +644,7 @@ impl VolumeEventIndexInvalidationReport {
             current_volume_id: current.and_then(|volume| volume.id),
             current_class: current.map(|volume| volume.class),
             current_mount_state: current.map(|volume| volume.mount_state),
+            current_reachable: current.and_then(|volume| volume.reachable),
             invalidate_index_admission,
             rescan_index,
             cancel_index_jobs,
@@ -606,7 +655,7 @@ impl VolumeEventIndexInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-index-invalidation\tkind={}\tpath={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
+            "volume-event-index-invalidation\tkind={}\tpath={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
             self.kind.as_str(),
             self.path
                 .as_ref()
@@ -619,6 +668,9 @@ impl VolumeEventIndexInvalidationReport {
             self.current_mount_state
                 .map(IndexMountState::as_str)
                 .unwrap_or("-"),
+            self.current_reachable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             self.invalidate_index_admission,
             self.rescan_index,
             self.cancel_index_jobs,

@@ -257,6 +257,7 @@ pub(crate) fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeD
     )
     .with_volume_id(volume.id)
     .with_stable_identity(volume.stable_identity.clone())
+    .with_reachable(volume.reachable)
     .with_filesystem_signature(index_volume_filesystem_signature(volume))
 }
 

@@ -1694,6 +1694,36 @@ fn volume_index_policy_suspends_disabled_and_disconnected_volumes() {
 }
 
 #[test]
+fn volume_index_policy_suspends_unreachable_remote_volumes_before_policy_admission() {
+    let policy = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Enabled,
+        gfm_config::VolumeIndexingPolicy::Enabled,
+    )
+    .with_opted_in_roots(vec![PathBuf::from("/Volumes/Team")]);
+    let network = IndexVolumeDescriptor::new(
+        "Team Share",
+        "/Volumes/Team",
+        IndexVolumeClass::Network,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(8))
+    .with_reachable(Some(false));
+
+    let plan = policy.plan(vec![network]);
+
+    assert_eq!(plan.decisions[0].action, VolumeIndexAction::Unreachable);
+    assert_eq!(
+        plan.decisions[0].throttle.class,
+        VolumeThrottleClass::Suspended
+    );
+    assert_eq!(plan.decisions[0].reason, "volume-unreachable");
+    assert!(plan.included_roots().is_empty());
+    assert!(plan
+        .as_tsv()
+        .contains("\tmount=mounted\treachable=false\taction=unreachable\t"));
+}
+
+#[test]
 fn volume_invalidation_rescans_admission_when_mount_state_changes() {
     let previous = IndexVolumeDescriptor::new(
         "Work Drive",
@@ -1717,7 +1747,9 @@ fn volume_invalidation_rescans_admission_when_mount_state_changes() {
     assert!(!report.cancel_index_jobs);
     assert!(report.clear_fsevents_cursor);
     assert_eq!(report.reason, "mount-state-changed");
-    assert!(report.as_tsv().contains("\tcurrent-mount=mounted\t"));
+    assert!(report
+        .as_tsv()
+        .contains("\tcurrent-mount=mounted\tcurrent-reachable=true\t"));
     assert!(report
         .as_tsv()
         .contains("\tcancel-index-jobs=false\tclear-fsevents-cursor=true\t"));
@@ -1770,6 +1802,36 @@ fn volume_invalidation_cancels_index_jobs_when_volume_disconnects() {
 }
 
 #[test]
+fn volume_invalidation_cancels_index_jobs_when_reachability_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "Team Share",
+        "/Volumes/Team",
+        IndexVolumeClass::Network,
+        IndexMountState::Mounted,
+    )
+    .with_reachable(Some(true));
+    let current = IndexVolumeDescriptor::new(
+        "Team Share",
+        "/Volumes/Team",
+        IndexVolumeClass::Network,
+        IndexMountState::Mounted,
+    )
+    .with_reachable(Some(false));
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+    assert!(report.invalidate_sidebar);
+    assert!(report.invalidate_operation_policy);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-reachability-changed");
+    assert!(report.as_tsv().contains("\tprevious-reachable=true\t"));
+    assert!(report.as_tsv().contains("\tcurrent-reachable=false\t"));
+}
+
+#[test]
 fn volume_event_index_invalidation_rescans_connected_volume_without_cancelling_jobs() {
     let current = IndexVolumeDescriptor::new(
         "Work Drive",
@@ -1796,7 +1858,7 @@ fn volume_event_index_invalidation_rescans_connected_volume_without_cancelling_j
     assert_eq!(report.reason, "volume-event-connected");
     assert!(report
         .as_tsv()
-        .contains("\tcurrent-volume=7\tcurrent-class=external\tcurrent-mount=mounted\t"));
+        .contains("\tcurrent-volume=7\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\t"));
 }
 
 #[test]
