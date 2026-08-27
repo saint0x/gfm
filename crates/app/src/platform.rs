@@ -764,16 +764,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "quicklook-session" => {
             let path = required_path(args.next(), "quicklook-session requires a path")?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Preview, "quicklook preview")?;
-            let record = record_for_path(&path, None, false)?;
             let rect = Rect::new(0, 0, 640, 480);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
-            let volume = detect_volume_id(&path).ok();
-            let contract = run_preview_contract_cancellable(
-                volume,
-                "quicklook preview",
-                move |cancellation| {
+            let contract =
+                run_preview_contract_cancellable(None, "quicklook preview", move |cancellation| {
+                    cancellation.check()?;
+                    let _access =
+                        preflight_access_scope(&path, AccessIntent::Preview, "quicklook preview")?;
+                    cancellation.check()?;
+                    let record = record_for_path(&path, None, false)?;
                     cancellation.check()?;
                     let cloud = FileProviderStateReport::read_path(&path)?.materialization;
                     let input = QuickLookSessionInput::new(
@@ -791,8 +790,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         input,
                         || cancellation.check(),
                     )
-                },
-            )?;
+                })?;
             println!("{}", contract.as_tsv());
         }
         "quicklook-session-adaptive" => {
@@ -897,16 +895,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "thumbnail-generation" => {
             let path = required_path(args.next(), "thumbnail-generation requires a path")?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Preview, "thumbnail generation")?;
-            let record = record_for_path(&path, None, false)?;
             let rect = Rect::new(0, 0, 160, 160);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
-            let volume = detect_volume_id(&path).ok();
             let contract = run_preview_contract_cancellable(
-                volume,
+                None,
                 "thumbnail generation",
                 move |cancellation| {
+                    cancellation.check()?;
+                    let _access = preflight_access_scope(
+                        &path,
+                        AccessIntent::Preview,
+                        "thumbnail generation",
+                    )?;
+                    cancellation.check()?;
+                    let record = record_for_path(&path, None, false)?;
                     cancellation.check()?;
                     let cloud = FileProviderStateReport::read_path(&path)?.materialization;
                     let input = ThumbnailGenerationInput::new(

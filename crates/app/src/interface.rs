@@ -1049,6 +1049,8 @@ fn permission_access_requires_surface(access: &PermissionAccessContract) -> bool
     access.bookmark_required
         || access.scope == "full-disk-access"
         || access.mode == "degraded-metadata-only"
+        || matches!(access.access_action.as_str(), "deny" | "prompt")
+        || matches!(access.worker_action.as_str(), "deny" | "prompt")
         || access.probe == "denied"
 }
 

@@ -3,8 +3,13 @@ use std::process::Command;
 
 #[test]
 fn reports_ui_lifecycle_contract_from_binary() {
+    let root =
+        std::env::temp_dir().join(format!("gfm-ui-lifecycle-contract-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
-        .args(["ui-contract", "/tmp/gfm"])
+        .args(["ui-contract", root.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(
@@ -16,8 +21,13 @@ fn reports_ui_lifecycle_contract_from_binary() {
 
     assert_eq!(
         stdout.trim(),
-        "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tpermission-dialog=permission\npermission-prompt\tkind=general\tsurface=permission"
+        format!(
+            "window\tGFM\t{}\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tpermission-dialog=permission\npermission-prompt\tkind=general\tsurface=permission",
+            root.display()
+        )
     );
+
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -268,9 +278,9 @@ fn permission_access_contract_refuses_unreachable_volume_from_binary() {
 }
 
 #[test]
-fn permission_access_contract_refuses_write_on_read_only_volume_from_binary() {
+fn permission_access_contract_prefers_native_volume_access_over_marker_from_binary() {
     let root = std::env::temp_dir().join(format!(
-        "gfm-ui-permission-access-read-only-volume-{}",
+        "gfm-ui-permission-access-native-volume-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&root);
@@ -281,6 +291,7 @@ fn permission_access_contract_refuses_write_on_read_only_volume_from_binary() {
     )
     .unwrap();
     let path = root.join("Export.pdf");
+    std::fs::write(&path, b"existing export target").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -301,10 +312,14 @@ fn permission_access_contract_refuses_write_on_read_only_volume_from_binary() {
     assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
     assert!(stdout.contains("\npermission-access\t"), "{stdout}");
     assert!(stdout.contains("\tintent=write\tscope=none\t"), "{stdout}");
-    assert!(stdout.contains("\taccess-action=deny\t"), "{stdout}");
-    assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
     assert!(
-        stdout.contains("\trefresh-on-permission-change=true\tprompt-kind=blocked\t"),
+        stdout.contains("\tprobe=granted\tmode=plain-filesystem\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\taccess-action=allow\t"), "{stdout}");
+    assert!(stdout.contains("\tworker-action=start\t"), "{stdout}");
+    assert!(
+        stdout.contains("\trefresh-on-permission-change=false\tprompt-kind=general\t"),
         "{stdout}"
     );
     assert!(
@@ -312,10 +327,9 @@ fn permission_access_contract_refuses_write_on_read_only_volume_from_binary() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("export worker volume access blocked"),
+        stdout.contains("export worker may start with filesystem access"),
         "{stdout}"
     );
-    assert!(stdout.contains("read-only volume external"), "{stdout}");
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -708,6 +722,54 @@ fn lifecycle_contract_carries_initial_path_permission_access_from_binary() {
     );
     assert!(
         stdout.contains("\tbookmark-required=true\tbookmark-access=true\t"),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn lifecycle_contract_carries_missing_initial_path_permission_denial_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-lifecycle-missing-permission-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let missing = root.join("Missing.md");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["ui-contract", missing.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("window\tGFM\t"));
+    assert!(
+        stdout.contains("\tpermission-dialog=permission"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\npermission-prompt\tkind=blocked\tsurface=permission"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\npermission-access\tpath="), "{stdout}");
+    assert!(
+        stdout.contains("\tprobe=missing\tmode=denied\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\taccess-action=deny\tworker-action=deny\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tprompt-kind=blocked\t"), "{stdout}");
+    assert!(
+        stdout.contains("window initial path access is denied"),
         "{stdout}"
     );
 
@@ -1814,6 +1876,7 @@ fn quicklook_refuses_unreachable_network_volume_before_preview_from_binary() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stdout.contains("quicklook-session\t"), "{stdout}");
+    assert!(stderr.contains("quicklook preview job failed:"), "{stderr}");
     assert!(
         stderr.contains("quicklook preview volume access blocked: unreachable volume network"),
         "{stderr}"
@@ -1997,6 +2060,10 @@ fn thumbnail_refuses_unreachable_network_volume_before_generation_from_binary() 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stdout.contains("thumbnail-generation\t"), "{stdout}");
+    assert!(
+        stderr.contains("thumbnail generation job failed:"),
+        "{stderr}"
+    );
     assert!(
         stderr.contains("thumbnail generation volume access blocked: unreachable volume network"),
         "{stderr}"
