@@ -281,6 +281,70 @@ fn quicklook_preflight_retains_security_scoped_bookmark_from_binary() {
 }
 
 #[test]
+fn thumbnail_preflight_retains_security_scoped_bookmark_from_binary() {
+    let root = unique_temp_dir("gfm-cli-thumbnail-bookmark");
+    let home = root.join("home");
+    let documents = home.join("Documents");
+    let protected = documents.join("Image.png");
+    let bookmarks = root.join("bookmarks.tsv");
+    fs::create_dir_all(&documents).unwrap();
+    fs::write(&protected, b"\x89PNG\r\n\x1a\nprotected thumbnail").unwrap();
+
+    let create = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .args([
+            "security-bookmark-create",
+            protected.to_str().unwrap(),
+            "preview",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let create_stdout = String::from_utf8(create.stdout).unwrap();
+    assert!(
+        create_stdout.contains("\tstatus=created\t"),
+        "{create_stdout}"
+    );
+    assert!(create_stdout.contains("\trecords=1\t"), "{create_stdout}");
+
+    let thumbnail = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .args(["thumbnail-generation", protected.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        thumbnail.status.success(),
+        "{}",
+        String::from_utf8_lossy(&thumbnail.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&thumbnail.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert!(stderr.contains("\tscope=documents\t"), "{stderr}");
+    assert!(stderr.contains("\tbookmark-required=true\t"), "{stderr}");
+    assert!(
+        stderr.contains("security-scope-access\t")
+            && stderr.contains("\tstatus=resolved\t")
+            && stderr.contains("\taccess-started=true\t"),
+        "{stderr}"
+    );
+    let stdout = String::from_utf8(thumbnail.stdout).unwrap();
+    assert!(stdout.starts_with("thumbnail-generation\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tallow-native\tcloud=native-eligible\tquicklook-thumbnailing\t"),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn index_refuses_missing_root_before_scan_from_binary() {
     let root = unique_temp_path("gfm-cli-index-missing-root", "missing");
     let index = unique_temp_path("gfm-cli-index-missing-output", "gfmidx");
