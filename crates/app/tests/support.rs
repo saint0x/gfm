@@ -762,7 +762,8 @@ fn reports_volume_invalidation_in_ui_sidebar_contract_from_binary() {
     assert!(changed_stdout.starts_with("sidebar-volume-invalidation\trow=volume-"));
     assert!(changed_stdout.contains(&format!("\tpath={}\t", root.display())));
     assert!(changed_stdout.contains("\tkind=description-changed\tcurrent-kind=network\t"));
-    assert!(changed_stdout.contains("\tcurrent-mount=mounted\tread-only=false\tnetwork=true\t"));
+    assert!(changed_stdout
+        .contains("\tcurrent-mount=mounted\tread-only=false\tnetwork=true\treachable=true\t"));
     assert!(changed_stdout.contains(
         "\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=false\t"
     ));
@@ -783,7 +784,7 @@ fn reports_volume_invalidation_in_ui_sidebar_contract_from_binary() {
     assert_eq!(
         disappeared_stdout,
         format!(
-            "sidebar-volume-invalidation\trow=-\tpath={}\tkind=disappeared\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared\n",
+            "sidebar-volume-invalidation\trow=-\tpath={}\tkind=disappeared\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared\n",
             missing.display()
         )
     );

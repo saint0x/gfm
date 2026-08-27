@@ -75,6 +75,7 @@ pub struct SidebarItemSpec {
     pub volume_mount_state: Option<SidebarVolumeMountState>,
     pub volume_read_only: Option<bool>,
     pub volume_network: Option<bool>,
+    pub volume_reachable: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +166,7 @@ pub struct SidebarVolumeInvalidation {
     pub current_mount_state: Option<SidebarVolumeMountState>,
     pub current_read_only: Option<bool>,
     pub current_network: Option<bool>,
+    pub current_reachable: Option<bool>,
     pub invalidate_row: bool,
     pub invalidate_section: bool,
     pub remove_row: bool,
@@ -185,13 +187,14 @@ impl SidebarVolumeInvalidation {
         let current_mount_state = current.map(|volume| volume.mount_state);
         let current_read_only = current.map(|volume| volume.read_only);
         let current_network = current.map(|volume| volume.network);
+        let current_reachable = current.and_then(|volume| volume.reachable);
         let remove_row = matches!(kind, SidebarVolumeEventKind::Disappeared);
         let disable_row = current_mount_state.is_some_and(|state| {
             matches!(
                 state,
                 SidebarVolumeMountState::Unmounted | SidebarVolumeMountState::Stale
             )
-        });
+        }) || current_reachable == Some(false);
         let visible =
             row_id.is_some() || path.is_some() || kind == SidebarVolumeEventKind::Unavailable;
         let invalidate_section = visible && platform_invalidated_sidebar;
@@ -216,6 +219,7 @@ impl SidebarVolumeInvalidation {
             current_mount_state,
             current_read_only,
             current_network,
+            current_reachable,
             invalidate_row,
             invalidate_section,
             remove_row,
@@ -226,7 +230,7 @@ impl SidebarVolumeInvalidation {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "sidebar-volume-invalidation\trow={}\tpath={}\tkind={}\tcurrent-kind={}\tcurrent-mount={}\tread-only={}\tnetwork={}\tinvalidate-row={}\tinvalidate-section={}\tremove-row={}\tdisable-row={}\treason={}",
+            "sidebar-volume-invalidation\trow={}\tpath={}\tkind={}\tcurrent-kind={}\tcurrent-mount={}\tread-only={}\tnetwork={}\treachable={}\tinvalidate-row={}\tinvalidate-section={}\tremove-row={}\tdisable-row={}\treason={}",
             self.row_id.as_deref().unwrap_or("-"),
             self.path
                 .as_ref()
@@ -241,6 +245,9 @@ impl SidebarVolumeInvalidation {
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.current_network
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.current_reachable
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.invalidate_row,
@@ -262,6 +269,7 @@ pub struct SidebarVolumeSpec {
     pub mount_state: SidebarVolumeMountState,
     pub read_only: bool,
     pub network: bool,
+    pub reachable: Option<bool>,
 }
 
 impl SidebarVolumeSpec {
@@ -280,6 +288,7 @@ impl SidebarVolumeSpec {
             mount_state: SidebarVolumeMountState::Mounted,
             read_only: false,
             network: false,
+            reachable: Some(true),
         }
     }
 
@@ -289,11 +298,13 @@ impl SidebarVolumeSpec {
         mount_state: SidebarVolumeMountState,
         read_only: bool,
         network: bool,
+        reachable: Option<bool>,
     ) -> Self {
         self.kind = kind;
         self.mount_state = mount_state;
         self.read_only = read_only;
         self.network = network;
+        self.reachable = reachable;
         self
     }
 }
@@ -453,7 +464,7 @@ impl SidebarContract {
         ));
         lines.extend(self.rows.iter().map(|row| {
             format!(
-                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tcloud={}\tcloud-progress={}\tvolume-kind={}\tvolume-mount={}\tvolume-read-only={}\tvolume-network={}",
+                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tcloud={}\tcloud-progress={}\tvolume-kind={}\tvolume-mount={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}",
                 row.section,
                 row.id,
                 row.label,
@@ -482,6 +493,9 @@ impl SidebarContract {
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "-".to_string()),
                 row.volume_network
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                row.volume_reachable
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "-".to_string())
             )
@@ -743,6 +757,7 @@ fn location_rows(volumes: &[SidebarVolumeSpec], current_path: &Path) -> Vec<Side
         .volume(volume)
         .state(RowState {
             enabled: volume.mount_state == SidebarVolumeMountState::Mounted
+                && volume.reachable != Some(false)
                 && path_exists(&volume.path),
             selected: same_path(&volume.path, current_path),
             ejectable: volume.ejectable,
@@ -818,6 +833,7 @@ struct RowDescriptor {
     volume_mount_state: Option<SidebarVolumeMountState>,
     volume_read_only: Option<bool>,
     volume_network: Option<bool>,
+    volume_reachable: Option<bool>,
 }
 
 impl RowDescriptor {
@@ -844,6 +860,7 @@ impl RowDescriptor {
             volume_mount_state: None,
             volume_read_only: None,
             volume_network: None,
+            volume_reachable: None,
         }
     }
 
@@ -873,6 +890,7 @@ impl RowDescriptor {
         self.volume_mount_state = Some(volume.mount_state);
         self.volume_read_only = Some(volume.read_only);
         self.volume_network = Some(volume.network);
+        self.volume_reachable = volume.reachable;
         self
     }
 }
@@ -897,6 +915,7 @@ fn row(descriptor: RowDescriptor) -> SidebarItemSpec {
         volume_mount_state: descriptor.volume_mount_state,
         volume_read_only: descriptor.volume_read_only,
         volume_network: descriptor.volume_network,
+        volume_reachable: descriptor.volume_reachable,
     }
 }
 
@@ -1027,7 +1046,7 @@ mod tests {
             "row\tFavorites\thome\ttester\thome-folder\tfavorite\t/Users/tester\tdepth=0"
         ));
         assert!(output.contains(
-            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false\tselected=false\tejectable=false\tvirtual=false\tcloud=none\tcloud-progress=-\tvolume-kind=-\tvolume-mount=-\tvolume-read-only=-\tvolume-network=-"
+            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false\tselected=false\tejectable=false\tvirtual=false\tcloud=none\tcloud-progress=-\tvolume-kind=-\tvolume-mount=-\tvolume-read-only=-\tvolume-network=-\tvolume-reachable=-"
         ));
         assert!(output.contains(
             "row\tTags\ttag-all\tAll Tags...\tfinder-tag\ttag\t-\tdepth=0\tenabled=true"
@@ -1054,6 +1073,7 @@ mod tests {
                     SidebarVolumeMountState::Stale,
                     true,
                     true,
+                    Some(false),
                 )],
             },
         );
@@ -1069,9 +1089,10 @@ mod tests {
         assert_eq!(row.volume_mount_state, Some(SidebarVolumeMountState::Stale));
         assert_eq!(row.volume_read_only, Some(true));
         assert_eq!(row.volume_network, Some(true));
+        assert_eq!(row.volume_reachable, Some(false));
         assert!(!row.enabled);
         assert!(contract.as_tsv().contains(
-            "\tvolume-kind=network\tvolume-mount=stale\tvolume-read-only=true\tvolume-network=true"
+            "\tvolume-kind=network\tvolume-mount=stale\tvolume-read-only=true\tvolume-network=true\tvolume-reachable=false"
         ));
     }
 
@@ -1088,6 +1109,7 @@ mod tests {
             SidebarVolumeMountState::Stale,
             true,
             true,
+            Some(false),
         );
 
         let invalidation = SidebarVolumeInvalidation::from_event(
@@ -1107,6 +1129,7 @@ mod tests {
             invalidation.current_mount_state,
             Some(SidebarVolumeMountState::Stale)
         );
+        assert_eq!(invalidation.current_reachable, Some(false));
         assert!(invalidation.invalidate_row);
         assert!(invalidation.invalidate_section);
         assert!(!invalidation.remove_row);
@@ -1114,7 +1137,41 @@ mod tests {
         assert_eq!(invalidation.reason, "sidebar-volume-disabled");
         assert_eq!(
             invalidation.as_tsv(),
-            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tcurrent-kind=network\tcurrent-mount=stale\tread-only=true\tnetwork=true\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
+            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tcurrent-kind=network\tcurrent-mount=stale\tread-only=true\tnetwork=true\treachable=false\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
+        );
+    }
+
+    #[test]
+    fn volume_invalidation_disables_unreachable_network_location_row() {
+        let volume = SidebarVolumeSpec::from_native_seed(
+            "diskarbitration:uuid:Team",
+            "Team",
+            "/Volumes/Team",
+            true,
+        )
+        .with_volume_state(
+            SidebarVolumeKind::Network,
+            SidebarVolumeMountState::Mounted,
+            false,
+            true,
+            Some(false),
+        );
+
+        let invalidation = SidebarVolumeInvalidation::from_event(
+            SidebarVolumeEventKind::DescriptionChanged,
+            Some(PathBuf::from("/Volumes/Team")),
+            Some(&volume),
+            true,
+            "volume-event-description-changed",
+        );
+
+        assert_eq!(invalidation.current_reachable, Some(false));
+        assert!(invalidation.invalidate_row);
+        assert!(invalidation.disable_row);
+        assert_eq!(invalidation.reason, "sidebar-volume-disabled");
+        assert_eq!(
+            invalidation.as_tsv(),
+            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tcurrent-kind=network\tcurrent-mount=mounted\tread-only=false\tnetwork=true\treachable=false\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
         );
     }
 
@@ -1136,7 +1193,7 @@ mod tests {
         assert_eq!(invalidation.reason, "sidebar-volume-disappeared");
         assert_eq!(
             invalidation.as_tsv(),
-            "sidebar-volume-invalidation\trow=-\tpath=/Volumes/Team\tkind=disappeared\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared"
+            "sidebar-volume-invalidation\trow=-\tpath=/Volumes/Team\tkind=disappeared\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared"
         );
     }
 

@@ -629,6 +629,7 @@ fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
         sidebar_volume_mount_state(volume.mount_state),
         volume.read_only,
         volume.network,
+        volume.reachable,
     )
 }
 

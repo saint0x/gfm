@@ -1240,12 +1240,12 @@ fn reports_volume_discovery_from_binary() {
     assert!(stdout.starts_with("volumes\tcount=2\n"));
     assert!(stdout.contains("\tWork Drive\t"));
     assert!(stdout.contains(
-        "\tkind=external\tmount=mounted\tremovable=true\tnetwork=false\tejectable=true\t"
+        "\tkind=external\tmount=mounted\tremovable=true\tnetwork=false\treachable=true\tejectable=true\t"
     ));
     assert!(stdout.contains("\teject=enabled\tmount=hidden\tunmount=enabled\t"));
     assert!(stdout.contains("\tTeam Share\t"));
     assert!(stdout.contains(
-        "\tkind=network\tmount=mounted\tremovable=false\tnetwork=true\tejectable=true\t"
+        "\tkind=network\tmount=mounted\tremovable=false\tnetwork=true\treachable=true\tejectable=true\t"
     ));
     assert!(stdout.contains("\tstable-id=dev:"));
     assert!(stdout.contains("\tnative-status=-\twritable="));

@@ -106,6 +106,7 @@ pub struct VolumeDescriptor {
     pub mount_state: MountState,
     pub removable: bool,
     pub network: bool,
+    pub reachable: Option<bool>,
     pub ejectable: bool,
     pub writable: bool,
     pub read_only: bool,
@@ -202,6 +203,7 @@ impl VolumeDescriptor {
             .map(|local| !local)
             .or_else(|| native.as_ref().and_then(|native| native.volume_network))
             .unwrap_or(kind == VolumeKind::Network);
+        let reachable = volume_reachability(network, mount_state, resource.as_ref(), &path);
         let ejectable = resource
             .as_ref()
             .and_then(|resource| resource.is_ejectable)
@@ -255,6 +257,7 @@ impl VolumeDescriptor {
             mount_state,
             removable,
             network,
+            reachable,
             ejectable,
             writable,
             read_only,
@@ -352,7 +355,7 @@ impl VolumeDescriptor {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -360,6 +363,9 @@ impl VolumeDescriptor {
             self.mount_state.as_str(),
             self.removable,
             self.network,
+            self.reachable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             self.ejectable,
             self.capacity.total_bytes,
             self.capacity.available_bytes,
@@ -1203,7 +1209,10 @@ fn topology_change_reason(
         Some("volume-kind-changed")
     } else if previous.read_only != current.read_only || previous.writable != current.writable {
         Some("volume-access-changed")
-    } else if previous.network != current.network || previous.local != current.local {
+    } else if previous.network != current.network
+        || previous.local != current.local
+        || previous.reachable != current.reachable
+    {
         Some("volume-locality-changed")
     } else if previous.ejectable != current.ejectable || previous.commands != current.commands {
         Some("volume-ejectability-changed")
@@ -1240,6 +1249,24 @@ fn topology_change_reason(
     } else {
         None
     }
+}
+
+fn volume_reachability(
+    network: bool,
+    mount_state: MountState,
+    resource: Option<&NativeVolumeResourceValues>,
+    path: &Path,
+) -> Option<bool> {
+    if !network {
+        return Some(mount_state == MountState::Mounted);
+    }
+    if mount_state != MountState::Mounted {
+        return Some(false);
+    }
+    resource
+        .filter(|resource| resource.status == NativeVolumeStatus::Available)
+        .and_then(|resource| resource.is_browsable)
+        .or_else(|| Some(path.exists()))
 }
 
 fn classify_volume(
@@ -1578,12 +1605,14 @@ mod tests {
             Some(NativeVolumeStatus::Available)
         );
         assert_eq!(descriptor.read_only, !descriptor.writable);
+        assert_eq!(descriptor.reachable, Some(true));
         assert!(descriptor.stable_identity.starts_with("diskarbitration:"));
         assert_eq!(descriptor.commands.eject, VolumeCommandState::Hidden);
         assert!(descriptor.capacity.total_bytes > 0);
         assert!(descriptor.as_tsv().contains("\tnative-status=available\t"));
         assert!(descriptor.as_tsv().contains("\tstable-id="));
         assert!(descriptor.as_tsv().contains("\tread-only="));
+        assert!(descriptor.as_tsv().contains("\treachable=true\t"));
         assert!(descriptor.as_tsv().contains("\tcase-sensitive="));
         assert!(descriptor.as_tsv().contains("\tlocal="));
         assert!(descriptor.as_tsv().contains("\tresource-status=available"));
@@ -1616,6 +1645,7 @@ mod tests {
 
         assert_eq!(descriptor.kind, VolumeKind::External);
         assert!(descriptor.removable);
+        assert_eq!(descriptor.reachable, Some(true));
         assert!(descriptor.ejectable);
         assert_eq!(descriptor.native_status, None);
         assert_eq!(descriptor.resource_status, None);
@@ -1947,6 +1977,32 @@ mod tests {
         assert!(report
             .as_tsv()
             .starts_with("volume-event-invalidation\tkind=description-changed\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_invalidates_policy_for_reachability_changes() {
+        let root = unique_temp_dir("gfm-volume-topology-reachability");
+        fs::write(root.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        let previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        let mut current_volume = previous_volume.clone();
+        current_volume.reachable = Some(false);
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].reason, "volume-locality-changed");
+        assert!(diff.changes[0].invalidate_sidebar);
+        assert!(diff.changes[0].invalidate_operation_policy);
+        assert!(diff.changes[0].invalidate_index_admission);
+        assert!(diff.changes[0].rescan_index);
 
         fs::remove_dir_all(root).unwrap();
     }

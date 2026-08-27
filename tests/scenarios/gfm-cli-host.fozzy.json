@@ -3207,7 +3207,7 @@
         "tmp/gfm-fozzy-dist"
       ],
       "exit_code": 0,
-      "stdout": "sidebar-volume-invalidation\trow=volume-dev-16777230-tmp-gfm-fozzy-dist\tpath=tmp/gfm-fozzy-dist\tkind=description-changed\tcurrent-kind=external\tcurrent-mount=mounted\tread-only=false\tnetwork=false\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=false\treason=volume-event-description-changed\n",
+      "stdout": "sidebar-volume-invalidation\trow=volume-dev-16777230-tmp-gfm-fozzy-dist\tpath=tmp/gfm-fozzy-dist\tkind=description-changed\tcurrent-kind=external\tcurrent-mount=mounted\tread-only=false\tnetwork=false\treachable=true\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=false\treason=volume-event-description-changed\n",
       "stderr": "",
       "times": 1
     },
