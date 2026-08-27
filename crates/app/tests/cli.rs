@@ -2909,6 +2909,133 @@ fn operation_conflict_apply_keeps_store_blocking_when_execution_fails() {
 }
 
 #[test]
+fn operation_conflict_apply_all_executes_blocking_batch_from_binary() {
+    let root = unique_temp_dir("gfm-cli-operation-conflict-apply-all-root");
+    let journal = root.join("ops.journal");
+    let conflicts = root.join("operation-conflicts.tsv");
+    let copy_source = root.join("copy-source.md");
+    let copy_target = root.join("copy-target.md");
+    let copy_keep_both = root.join("copy-target copy.md");
+    let move_source = root.join("move-source");
+    let move_target = root.join("move-target");
+    let move_keep_both = root.join("move-target copy");
+    fs::write(&copy_source, "incoming copy").unwrap();
+    fs::write(&copy_target, "existing copy").unwrap();
+    fs::create_dir_all(&move_source).unwrap();
+    fs::create_dir_all(&move_target).unwrap();
+    fs::write(move_source.join("new.txt"), "incoming move").unwrap();
+    fs::write(move_target.join("old.txt"), "existing move").unwrap();
+    fs::write(
+        &conflicts,
+        format!(
+            "operation-conflict\toperation=copy\tsource={}\ttarget={}\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\noperation-conflict\toperation=move\tsource={}\ttarget={}\texists=true\tkind=directory\tpolicy=fail\tavailable=replace,keep-both,merge,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n",
+            copy_source.display(),
+            copy_target.display(),
+            move_source.display(),
+            move_target.display()
+        ),
+    )
+    .unwrap();
+
+    let apply = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "operation-conflict-apply-all",
+            conflicts.to_str().unwrap(),
+            "keep-both",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let stdout = String::from_utf8(apply.stdout).unwrap();
+    assert!(
+        stdout.contains("operation-conflict-control\tapply-all\tpolicy=keep-both\tresolved=2"),
+        "{stdout}"
+    );
+    assert_eq!(fs::read_to_string(&copy_source).unwrap(), "incoming copy");
+    assert_eq!(fs::read_to_string(&copy_target).unwrap(), "existing copy");
+    assert_eq!(
+        fs::read_to_string(&copy_keep_both).unwrap(),
+        "incoming copy"
+    );
+    assert!(!move_source.exists());
+    assert!(move_target.join("old.txt").exists());
+    assert_eq!(
+        fs::read_to_string(move_keep_both.join("new.txt")).unwrap(),
+        "incoming move"
+    );
+    let resolved_store = fs::read_to_string(&conflicts).unwrap();
+    assert_eq!(
+        resolved_store.matches("\tblocks-operation=false\t").count(),
+        2
+    );
+    assert_eq!(resolved_store.matches("\tpolicy=keep-both\t").count(), 2);
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("copy-target copy.md"),
+        "{journal_text}"
+    );
+    assert!(journal_text.contains("move-target copy"), "{journal_text}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn operation_conflict_apply_all_rejects_unavailable_policy_before_mutation() {
+    let root = unique_temp_dir("gfm-cli-operation-conflict-apply-all-reject-root");
+    let journal = root.join("ops.journal");
+    let conflicts = root.join("operation-conflicts.tsv");
+    let source = root.join("copy-source.md");
+    let target = root.join("copy-target.md");
+    fs::write(&source, "incoming copy").unwrap();
+    fs::write(&target, "existing copy").unwrap();
+    fs::write(
+        &conflicts,
+        format!(
+            "operation-conflict\toperation=copy\tsource={}\ttarget={}\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n",
+            source.display(),
+            target.display()
+        ),
+    )
+    .unwrap();
+
+    let apply = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "operation-conflict-apply-all",
+            conflicts.to_str().unwrap(),
+            "merge",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !apply.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), "incoming copy");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "existing copy");
+    assert!(!root.join("copy-target copy.md").exists());
+    let unresolved_store = fs::read_to_string(&conflicts).unwrap();
+    assert!(
+        unresolved_store.contains("\tblocks-operation=true\t"),
+        "{unresolved_store}"
+    );
+    assert!(
+        unresolved_store.contains("\tpolicy=fail\t"),
+        "{unresolved_store}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn copy_merge_from_binary_combines_directories_without_overwrite() {
     let root = unique_temp_dir("gfm-cli-ops-merge-root");
     let journal = root.join("ops.journal");

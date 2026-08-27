@@ -89,6 +89,67 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-apply-all-source-a.txt",
+      "data": "apply all source a\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-apply-all-target-a.txt",
+      "data": "apply all target a\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-apply-all-source-b.txt",
+      "data": "apply all source b\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-apply-all-target-b.txt",
+      "data": "apply all target b\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-operation-apply-all-conflicts.tsv",
+      "data": "operation-conflict\toperation=copy\tsource=tmp/gfm-fozzy-operation-apply-all-source-a.txt\ttarget=tmp/gfm-fozzy-operation-apply-all-target-a.txt\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\noperation-conflict\toperation=copy\tsource=tmp/gfm-fozzy-operation-apply-all-source-b.txt\ttarget=tmp/gfm-fozzy-operation-apply-all-target-b.txt\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_OPS_JOURNAL": "tmp/gfm-fozzy-operation-apply-all-journal.tsv"
+      },
+      "args": [
+        "operation-conflict-apply-all",
+        "tmp/gfm-fozzy-operation-apply-all-conflicts.tsv",
+        "keep-both"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/bin/cat",
+      "args": [
+        "tmp/gfm-fozzy-operation-apply-all-target-a copy.txt"
+      ],
+      "exit_code": 0,
+      "stdout": "apply all source a\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/bin/cat",
+      "args": [
+        "tmp/gfm-fozzy-operation-apply-all-target-b copy.txt"
+      ],
+      "exit_code": 0,
+      "stdout": "apply all source b\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

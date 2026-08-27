@@ -60,6 +60,34 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 resolved.reason
             );
         }
+        "operation-conflict-apply-all" => {
+            let store_path = required_path(
+                args.next(),
+                "operation-conflict-apply-all requires an operation conflict store path",
+            )?;
+            let conflict = parse_required_conflict_policy(
+                args.next(),
+                "operation-conflict-apply-all requires replace, keep-both, merge, or skip",
+            )?;
+            let store = OperationConflictStore::new(store_path);
+            let pending = blocking_operation_conflicts(&store)?;
+            let operations = pending
+                .iter()
+                .map(|record| {
+                    ensure_conflict_policy_available(record, conflict)?;
+                    operation_from_runtime_conflict(record)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let total = pending.len();
+            for (record, operation) in pending.iter().zip(operations) {
+                execute_operation(operation, conflict)?;
+                store.resolve(&record.target, conflict.as_str())?;
+            }
+            println!(
+                "operation-conflict-control\tapply-all\tpolicy={}\tresolved={total}\tblocks-operation=false",
+                conflict.as_str()
+            );
+        }
         "copy" => {
             let from = required_path(args.next(), "copy requires a source path")?;
             let to = required_path(args.next(), "copy requires a destination path")?;
@@ -195,6 +223,41 @@ fn blocking_operation_conflict(
                 "operation conflict store has no blocking conflict for `{target}`"
             ))
         })
+}
+
+fn blocking_operation_conflicts(
+    store: &OperationConflictStore,
+) -> Result<Vec<RuntimeOperationConflict>> {
+    let conflicts = store
+        .read()?
+        .into_iter()
+        .filter(|conflict| conflict.blocks_operation)
+        .collect::<Vec<_>>();
+    if conflicts.is_empty() {
+        return Err(GfmError::Format(
+            "operation conflict store has no blocking conflicts".to_string(),
+        ));
+    }
+    Ok(conflicts)
+}
+
+fn ensure_conflict_policy_available(
+    conflict: &RuntimeOperationConflict,
+    selected_policy: ConflictPolicy,
+) -> Result<()> {
+    if conflict
+        .available_policies
+        .iter()
+        .any(|policy| policy == selected_policy.as_str())
+    {
+        return Ok(());
+    }
+    Err(GfmError::Format(format!(
+        "operation conflict for `{}` cannot resolve with `{}`; available={}",
+        conflict.target,
+        selected_policy.as_str(),
+        conflict.available_policies.join(",")
+    )))
 }
 
 fn operation_from_runtime_conflict(conflict: &RuntimeOperationConflict) -> Result<Operation> {
