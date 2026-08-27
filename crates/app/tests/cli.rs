@@ -2752,6 +2752,14 @@ fn reports_package_traversal_policy_from_binary() {
         String::from_utf8_lossy(&opaque.stderr)
     );
     let opaque_stdout = String::from_utf8(opaque.stdout).unwrap();
+    let opaque_stderr = String::from_utf8_lossy(&opaque.stderr);
+    assert!(
+        opaque_stderr.contains(&format!(
+            "security-worker-admission\tworker=package traversal\tpath={}",
+            root.display()
+        )),
+        "{opaque_stderr}"
+    );
     assert!(
         opaque_stdout.contains("package-traversal\tmode=opaque"),
         "{opaque_stdout}"
@@ -2775,6 +2783,14 @@ fn reports_package_traversal_policy_from_binary() {
         String::from_utf8_lossy(&traverse.stderr)
     );
     let traverse_stdout = String::from_utf8(traverse.stdout).unwrap();
+    let traverse_stderr = String::from_utf8_lossy(&traverse.stderr);
+    assert!(
+        traverse_stderr.contains(&format!(
+            "security-worker-admission\tworker=package traversal\tpath={}",
+            root.display()
+        )),
+        "{traverse_stderr}"
+    );
     assert!(
         traverse_stdout.contains("package-traversal\tmode=traverse"),
         "{traverse_stdout}"
@@ -2782,6 +2798,43 @@ fn reports_package_traversal_policy_from_binary() {
     assert!(
         traverse_stdout.contains("package\tapplication\ttrue\tGFMFixture.app"),
         "{traverse_stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn package_traversal_refuses_unreachable_volume_before_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-package-unreachable-root");
+    fs::create_dir_all(root.join("GFMFixture.app").join("Contents")).unwrap();
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(
+        root.join("GFMFixture.app")
+            .join("Contents")
+            .join("Info.plist"),
+        "plist",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["package-traversal", root.to_str().unwrap(), "opaque"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("package-traversal\t"), "{stdout}");
+    assert!(
+        stderr.contains("package traversal volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=package traversal\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
     );
 
     fs::remove_dir_all(root).unwrap();

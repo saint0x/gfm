@@ -523,12 +523,30 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "package-traversal requires a root path")?;
             let mode = parse_package_traversal_mode(args.next().as_deref())?;
             let options = ScanOptions::default().with_package_traversal(mode);
-            let _access = crate::access::preflight_access_scope(
+            crate::access::preflight_volume_access_scope(
                 &root,
                 AccessIntent::Read,
                 "package traversal",
             )?;
-            let page = scan_tree(&root, options.clone())?;
+            let volume = crate::detect_volume_id(&root)
+                .ok()
+                .or_else(|| crate::parent_volume(&root));
+            let options_for_worker = options.clone();
+            let page = crate::runtime::run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "package traversal",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access = crate::access::preflight_access_scope(
+                        &root,
+                        AccessIntent::Read,
+                        "package traversal",
+                    )?;
+                    cancellation.check()?;
+                    scan_tree(&root, options_for_worker)
+                },
+            )?;
             let report = PackageTraversalReport::from_page(&page, &options.package_policy);
             println!("{}", report.as_tsv());
         }
