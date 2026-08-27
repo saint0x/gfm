@@ -1,12 +1,17 @@
-use crate::access::{preflight_access_scope, ScopedAccessGuard};
+use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
 use crate::content::run_content_search;
 use crate::extract::extraction_budget_profile;
-use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, required_string};
+use crate::runtime::run_volume_task_cancellable;
+use crate::{
+    detect_volume_id, parse_required_scheduling_pressure, parse_usize_arg, required_path,
+    required_string,
+};
 use gfm_content::Extractor;
 use gfm_index::{
     Indexer, LiveIndex, SearchLookupBudget, SearchRecordColumns, SearchStreamStage,
     SearchVolumeScope, SidecarIndexQuerySession, SidecarQuerySessionReport,
 };
+use gfm_jobs::Priority;
 use gfm_mac::AccessIntent;
 use gfm_store::{
     ContentArchive, ContentArchiveManifest, MetadataField, MmapContentArchive, MmapContentSet,
@@ -21,20 +26,41 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "search" => {
             let root = required_path(args.next(), "search requires a root path")?;
             let query = required_string(args.next(), "search requires a query string")?;
-            let _access = preflight_access_scope(&root, AccessIntent::Index, "search")?;
-            let snapshot = Indexer::default().build(root)?;
-            let session = snapshot.query_session();
-            for hit in session.search(&query, 50) {
+            preflight_volume_access_scope(&root, AccessIntent::Index, "search")?;
+            let volume = detect_volume_id(&root).ok();
+            let hits = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "search",
+                move |cancellation| {
+                    let _access = preflight_access_scope(&root, AccessIntent::Index, "search")?;
+                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                    let session = snapshot.query_session();
+                    Ok(session.search(&query, 50))
+                },
+            )?;
+            for hit in hits {
                 print_hit(&hit);
             }
         }
         "search-stream" => {
             let root = required_path(args.next(), "search-stream requires a root path")?;
             let query = required_string(args.next(), "search-stream requires a query string")?;
-            let _access = preflight_access_scope(&root, AccessIntent::Index, "search stream")?;
-            let snapshot = Indexer::default().build(root)?;
-            let session = snapshot.query_session();
-            for batch in session.stream_search(&query, 50)? {
+            preflight_volume_access_scope(&root, AccessIntent::Index, "search stream")?;
+            let volume = detect_volume_id(&root).ok();
+            let batches = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "search stream",
+                move |cancellation| {
+                    let _access =
+                        preflight_access_scope(&root, AccessIntent::Index, "search stream")?;
+                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                    let session = snapshot.query_session();
+                    session.stream_search(&query, 50)
+                },
+            )?;
+            for batch in batches {
                 println!("batch\t{}", stream_stage(batch.stage));
                 for hit in batch.hits {
                     print_hit(&hit);

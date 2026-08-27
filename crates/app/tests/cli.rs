@@ -2415,6 +2415,13 @@ fn search_refuses_unreachable_network_volume_before_indexing_from_binary() {
         stderr.contains("search volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=search\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -2436,6 +2443,13 @@ fn search_stream_refuses_unreachable_network_volume_before_indexing_from_binary(
     assert!(!stdout.contains("batch\t"), "{stdout}");
     assert!(
         stderr.contains("search stream volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=search stream\tpath={}",
+            root.display()
+        )),
         "{stderr}"
     );
 
