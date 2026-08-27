@@ -78,7 +78,7 @@ GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GF
 
    ```sh
    fozzy doctor --deep --scenario tests/scenarios/gfm-cli-host.fozzy.json --runs 5 --seed 424242 --json
-   fozzy test --det --strict tests/scenarios/gfm-cli-host.fozzy.json --json
+   fozzy test --det --strict-verify tests/scenarios/gfm-cli-host.fozzy.json --json
    fozzy run tests/scenarios/gfm-cli-host.fozzy.json --det --record gfm-cli-host.trace.fozzy --proc-backend host --fs-backend host --http-backend host --json
    fozzy trace verify gfm-cli-host.trace.fozzy --strict --json
    fozzy replay gfm-cli-host.trace.fozzy --json
