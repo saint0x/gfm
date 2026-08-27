@@ -3407,7 +3407,13 @@ fn searches_persisted_tags_from_binary() {
     );
     let sidecar_search_stderr = String::from_utf8(sidecar_search.stderr).unwrap();
     assert!(
-        sidecar_search_stderr.contains("metadata-keys 1")
+        sidecar_search_stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar search records\tpath={}",
+            index.display()
+        )) && sidecar_search_stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar search content\tpath={}",
+            content.display()
+        )) && sidecar_search_stderr.contains("metadata-keys 1")
             && sidecar_search_stderr.contains("prefix-keys 0")
             && sidecar_search_stderr.contains("substring-keys 0")
             && sidecar_search_stderr.contains("fuzzy-keys 0")
@@ -4282,6 +4288,13 @@ fn search_index_sidecars_refuses_unreachable_content_before_open_from_binary() {
     assert!(!stdout.contains("hit\t"), "{stdout}");
     assert!(
         stderr.contains("sidecar search content volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar search content\tpath={}",
+            content.display()
+        )),
         "{stderr}"
     );
     assert!(!stderr.contains("invalid magic"), "{stderr}");

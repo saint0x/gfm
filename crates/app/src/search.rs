@@ -369,44 +369,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 required_path(args.next(), "search-index-sidecars requires a content path")?;
             let query =
                 required_string(args.next(), "search-index-sidecars requires a query string")?;
-            let sidecars = SidecarIndexAccessPaths {
-                records: &records,
-                columns: &columns,
-                metadata: &metadata,
-                prefixes: &prefixes,
-                substrings: &substrings,
-                fuzzy: &fuzzy,
-                content: &content,
+            let sidecars = OwnedSidecarIndexAccessPaths {
+                records,
+                columns,
+                metadata,
+                prefixes,
+                substrings,
+                fuzzy,
+                content,
             };
-            let _access = preflight_sidecar_index_search_access(sidecars, "sidecar search")?;
-            let session = SidecarIndexQuerySession::open(
-                records, columns, metadata, prefixes, substrings, fuzzy, content,
-            )?;
-            let budget = SearchLookupBudget::default();
-            let report = session.search_with_budget(&query, 50, budget)?;
-            let hydration = &report.hydration;
-            eprintln!(
-                "columns-indexed {} records-loaded {} records-missing {} candidate-ids {} full-hydration {} metadata-keys {} prefix-keys {} substring-keys {} fuzzy-keys {} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {} content-cache-hits {} content-cache-misses {} metadata-budget {} substring-budget {} content-budget {}",
-                hydration.columns_applied,
-                hydration.records_loaded,
-                hydration.records_missing,
-                hydration.import.candidate_ids,
-                hydration.import.requires_full_record_hydration,
-                hydration.metadata_keys,
-                hydration.prefix_keys,
-                hydration.substring_keys,
-                hydration.fuzzy_keys,
-                session.indexed_prefixes(),
-                session.indexed_substring_grams(),
-                session.indexed_fuzzy_keys(),
-                hydration.content_keys,
-                report.content_cache_hits,
-                report.content_cache_misses,
-                budget.max_metadata_ids_per_term,
-                budget.max_substring_ids_per_gram,
-                budget.max_content_ids_per_term
-            );
-            for hit in report.search.hits {
+            let output = run_sidecar_index_search(sidecars, query)?;
+            eprintln!("{}", output.diagnostics);
+            for hit in output.hits {
                 print_hit(&hit);
             }
         }
@@ -979,6 +953,112 @@ struct SidecarIndexAccessPaths<'a> {
     substrings: &'a Path,
     fuzzy: &'a Path,
     content: &'a Path,
+}
+
+struct OwnedSidecarIndexAccessPaths {
+    records: PathBuf,
+    columns: PathBuf,
+    metadata: PathBuf,
+    prefixes: PathBuf,
+    substrings: PathBuf,
+    fuzzy: PathBuf,
+    content: PathBuf,
+}
+
+impl OwnedSidecarIndexAccessPaths {
+    fn borrowed(&self) -> SidecarIndexAccessPaths<'_> {
+        SidecarIndexAccessPaths {
+            records: &self.records,
+            columns: &self.columns,
+            metadata: &self.metadata,
+            prefixes: &self.prefixes,
+            substrings: &self.substrings,
+            fuzzy: &self.fuzzy,
+            content: &self.content,
+        }
+    }
+
+    fn paths_with_roles(&self) -> [(&Path, &'static str); 7] {
+        [
+            (&self.records, "records"),
+            (&self.columns, "columns"),
+            (&self.metadata, "metadata"),
+            (&self.prefixes, "prefixes"),
+            (&self.substrings, "substrings"),
+            (&self.fuzzy, "fuzzy"),
+            (&self.content, "content"),
+        ]
+    }
+}
+
+struct SidecarSearchOutput {
+    diagnostics: String,
+    hits: Vec<SearchHit>,
+}
+
+fn run_sidecar_index_search(
+    paths: OwnedSidecarIndexAccessPaths,
+    query: String,
+) -> Result<SidecarSearchOutput> {
+    const WORKER: &str = "sidecar search";
+    preflight_sidecar_index_volume_access(&paths, WORKER)?;
+    let volume = detect_volume_id(&paths.records).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
+        cancellation.check()?;
+        let OwnedSidecarIndexAccessPaths {
+            records,
+            columns,
+            metadata,
+            prefixes,
+            substrings,
+            fuzzy,
+            content,
+        } = paths;
+        let session = SidecarIndexQuerySession::open(
+            records, columns, metadata, prefixes, substrings, fuzzy, content,
+        )?;
+        cancellation.check()?;
+        let budget = SearchLookupBudget::default();
+        let report = session.search_with_budget(&query, 50, budget)?;
+        let hydration = &report.hydration;
+        let diagnostics = format!(
+            "columns-indexed {} records-loaded {} records-missing {} candidate-ids {} full-hydration {} metadata-keys {} prefix-keys {} substring-keys {} fuzzy-keys {} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {} content-cache-hits {} content-cache-misses {} metadata-budget {} substring-budget {} content-budget {}",
+            hydration.columns_applied,
+            hydration.records_loaded,
+            hydration.records_missing,
+            hydration.import.candidate_ids,
+            hydration.import.requires_full_record_hydration,
+            hydration.metadata_keys,
+            hydration.prefix_keys,
+            hydration.substring_keys,
+            hydration.fuzzy_keys,
+            session.indexed_prefixes(),
+            session.indexed_substring_grams(),
+            session.indexed_fuzzy_keys(),
+            hydration.content_keys,
+            report.content_cache_hits,
+            report.content_cache_misses,
+            budget.max_metadata_ids_per_term,
+            budget.max_substring_ids_per_gram,
+            budget.max_content_ids_per_term
+        );
+        Ok(SidecarSearchOutput {
+            diagnostics,
+            hits: report.search.hits,
+        })
+    })
+}
+
+fn preflight_sidecar_index_volume_access(
+    paths: &OwnedSidecarIndexAccessPaths,
+    worker: &str,
+) -> Result<()> {
+    for (path, role) in paths.paths_with_roles() {
+        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} {role}"))?;
+    }
+    Ok(())
 }
 
 fn preflight_sidecar_index_search_access(
