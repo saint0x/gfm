@@ -440,15 +440,23 @@ fn operation_access_gate(
             probe_path.display()
         );
         let decision = if admission.needs_bookmark_access {
-            stored_bookmark_decision(&bookmark_store, &probe_path, &reason)
+            Some(stored_bookmark_decision_with_refresh(
+                &bookmark_store,
+                &probe_path,
+                &reason,
+                admission.refresh_on_permission_change || admission.needs_bookmark_access,
+            ))
         } else {
             None
         }
         .unwrap_or_else(|| match admission.worker_action {
-            SecurityWorkerAction::Start => OperationAccessDecision::allow(reason),
-            SecurityWorkerAction::Prompt => OperationAccessDecision::prompt(reason),
+            SecurityWorkerAction::Start => OperationAccessDecision::allow(reason)
+                .with_refresh_on_permission_change(admission.refresh_on_permission_change),
+            SecurityWorkerAction::Prompt => OperationAccessDecision::prompt(reason)
+                .with_refresh_on_permission_change(admission.refresh_on_permission_change),
             SecurityWorkerAction::MetadataOnly | SecurityWorkerAction::Deny => {
                 OperationAccessDecision::deny(reason)
+                    .with_refresh_on_permission_change(admission.refresh_on_permission_change)
             }
         });
         gate = gate.with_decision(requirement.path, decision);
@@ -621,14 +629,25 @@ fn operation_security_accesses(operation: &Operation) -> Result<Vec<SecurityScop
     Ok(accesses)
 }
 
-fn stored_bookmark_decision(
+fn stored_bookmark_decision_with_refresh(
     store: &SecurityScopedBookmarkStore,
     path: &Path,
     reason: &str,
-) -> Option<OperationAccessDecision> {
-    let lookup = store.resolve_for_path(path, false, true, true).ok()?;
-    let resolution = lookup.resolution?;
-    (resolution.report.status == SecurityScopedBookmarkStatus::Resolved).then(|| {
+    refresh_on_permission_change: bool,
+) -> OperationAccessDecision {
+    let Ok(lookup) = store.resolve_for_path(path, false, true, true) else {
+        return OperationAccessDecision::prompt(format!(
+            "{reason}; bookmark=unavailable; status=unavailable"
+        ))
+        .with_refresh_on_permission_change(refresh_on_permission_change);
+    };
+    let Some(resolution) = lookup.resolution else {
+        return OperationAccessDecision::prompt(format!(
+            "{reason}; bookmark=missing; status=missing"
+        ))
+        .with_refresh_on_permission_change(refresh_on_permission_change);
+    };
+    if resolution.report.status == SecurityScopedBookmarkStatus::Resolved {
         OperationAccessDecision::allow(format!(
             "{reason}; bookmark=resolved; stale={}; repaired={}; resolved={}",
             resolution.report.stale,
@@ -640,7 +659,16 @@ fn stored_bookmark_decision(
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "-".to_string())
         ))
-    })
+        .with_refresh_on_permission_change(refresh_on_permission_change)
+    } else {
+        OperationAccessDecision::prompt(format!(
+            "{reason}; bookmark=unavailable; status={}; stale={}; repaired={}",
+            resolution.report.status.as_str(),
+            resolution.report.stale,
+            resolution.repaired
+        ))
+        .with_refresh_on_permission_change(refresh_on_permission_change)
+    }
 }
 
 fn operation_access_probe_path(path: &Path, role: OperationAccessRole) -> PathBuf {
@@ -1176,11 +1204,30 @@ mod tests {
         let bookmark = gfm_mac::SecurityScopedBookmark::create(&protected, false).unwrap();
         store.upsert(bookmark).unwrap();
 
-        let decision = stored_bookmark_decision(&store, &protected, "needs scoped access")
-            .expect("stored bookmark should resolve");
+        let decision =
+            stored_bookmark_decision_with_refresh(&store, &protected, "needs scoped access", true);
 
         assert_eq!(decision.action, gfm_ops::OperationAccessAction::Allow);
         assert!(decision.reason.contains("bookmark=resolved"));
+        assert!(decision.refresh_on_permission_change);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_bookmark_prompts_operation_preflight_before_mutation() {
+        let root = unique_temp_dir("gfm-app-op-missing-bookmark");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        let protected = root.join("Documents").join("Plan.md");
+        fs::create_dir_all(protected.parent().unwrap()).unwrap();
+        fs::write(&protected, "plan").unwrap();
+
+        let decision =
+            stored_bookmark_decision_with_refresh(&store, &protected, "needs scoped access", true);
+
+        assert_eq!(decision.action, gfm_ops::OperationAccessAction::Prompt);
+        assert!(decision.reason.contains("bookmark=missing"));
+        assert!(decision.refresh_on_permission_change);
 
         fs::remove_dir_all(root).unwrap();
     }

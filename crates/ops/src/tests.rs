@@ -2319,7 +2319,8 @@ fn access_gate_prompts_before_mutating_destination_parent() {
     fs::write(&source, "source").unwrap();
     let gate = OperationAccessGate::new().with_decision(
         &protected,
-        OperationAccessDecision::prompt("security-scoped bookmark required"),
+        OperationAccessDecision::prompt("security-scoped bookmark required")
+            .with_refresh_on_permission_change(true),
     );
 
     let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
@@ -2340,6 +2341,11 @@ fn access_gate_prompts_before_mutating_destination_parent() {
         .as_deref()
         .unwrap()
         .contains("permission prompt"));
+    assert!(entries[1]
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("refresh-on-permission-change=true"));
     fs::remove_dir_all(root).unwrap();
 }
 

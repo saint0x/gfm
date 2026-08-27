@@ -41,6 +41,7 @@ pub enum OperationAccessAction {
 pub struct OperationAccessDecision {
     pub action: OperationAccessAction,
     pub reason: String,
+    pub refresh_on_permission_change: bool,
 }
 
 impl OperationAccessDecision {
@@ -48,6 +49,7 @@ impl OperationAccessDecision {
         Self {
             action: OperationAccessAction::Allow,
             reason: reason.into(),
+            refresh_on_permission_change: false,
         }
     }
 
@@ -55,6 +57,7 @@ impl OperationAccessDecision {
         Self {
             action: OperationAccessAction::Prompt,
             reason: reason.into(),
+            refresh_on_permission_change: false,
         }
     }
 
@@ -62,7 +65,13 @@ impl OperationAccessDecision {
         Self {
             action: OperationAccessAction::Deny,
             reason: reason.into(),
+            refresh_on_permission_change: false,
         }
+    }
+
+    pub fn with_refresh_on_permission_change(mut self, refresh: bool) -> Self {
+        self.refresh_on_permission_change = refresh;
+        self
     }
 }
 
@@ -96,9 +105,10 @@ impl OperationAccessGate {
                     return Err(GfmError::Permission {
                         path: requirement.path,
                         message: format!(
-                            "{} requires a permission prompt before mutation: {}",
+                            "{} requires a permission prompt before mutation: {}{}",
                             requirement.role.as_str(),
-                            decision.reason
+                            decision.reason,
+                            refresh_reason_suffix(decision.refresh_on_permission_change)
                         ),
                     });
                 }
@@ -106,14 +116,23 @@ impl OperationAccessGate {
                     return Err(GfmError::Permission {
                         path: requirement.path,
                         message: format!(
-                            "{} is not accessible for mutation: {}",
+                            "{} is not accessible for mutation: {}{}",
                             requirement.role.as_str(),
-                            decision.reason
+                            decision.reason,
+                            refresh_reason_suffix(decision.refresh_on_permission_change)
                         ),
                     });
                 }
             }
         }
         Ok(())
+    }
+}
+
+fn refresh_reason_suffix(refresh_on_permission_change: bool) -> &'static str {
+    if refresh_on_permission_change {
+        "; refresh-on-permission-change=true"
+    } else {
+        ""
     }
 }
