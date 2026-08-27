@@ -892,6 +892,28 @@ impl DialogContract {
 }
 
 pub fn render(contract: &DialogContract) -> impl IntoElement {
+    render_with_state(contract, None)
+}
+
+pub fn render_permission(
+    contract: &DialogContract,
+    access: Option<&super::PermissionAccessContract>,
+) -> impl IntoElement {
+    render_with_state(contract, access.map(PermissionAccessContractState::from))
+}
+
+struct PermissionAccessContractState(String);
+
+impl From<&super::PermissionAccessContract> for PermissionAccessContractState {
+    fn from(access: &super::PermissionAccessContract) -> Self {
+        Self(access.as_tsv())
+    }
+}
+
+fn render_with_state(
+    contract: &DialogContract,
+    access_state: Option<PermissionAccessContractState>,
+) -> impl IntoElement {
     let sheet_id = match contract.surface {
         DialogSurface::Alert => "alert-sheet",
         DialogSurface::Rename => "rename-sheet",
@@ -901,6 +923,56 @@ pub fn render(contract: &DialogContract) -> impl IntoElement {
         DialogSurface::Conflict => "conflict-sheet",
         DialogSurface::Permission => "permission-sheet",
     };
+    let mut sheet_content = div()
+        .id(sheet_id)
+        .w(px(420.0))
+        .p(px(18.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(rgb(0x5f6368))
+        .bg(rgb(0x2d2d30))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .child(
+                            div()
+                                .w(px(28.0))
+                                .h(px(28.0))
+                                .rounded(px(6.0))
+                                .bg(rgb(0x4f8cff)),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(16.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(rgb(0xf2f2f2))
+                                .child(contract.title),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .line_height(px(18.0))
+                        .text_color(rgb(0xd4d4d4))
+                        .child(contract.message),
+                )
+                .child(render_buttons(contract)),
+        );
+    if let Some(state) = access_state {
+        sheet_content = sheet_content.child(
+            div()
+                .id("permission-sheet-state")
+                .invisible()
+                .child(state.0),
+        );
+    }
     div()
         .absolute()
         .inset_0()
@@ -909,50 +981,7 @@ pub fn render(contract: &DialogContract) -> impl IntoElement {
         .justify_center()
         .pt(px(58.0))
         .bg(rgb(0x111113))
-        .child(
-            div()
-                .id(sheet_id)
-                .w(px(420.0))
-                .p(px(18.0))
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(rgb(0x5f6368))
-                .bg(rgb(0x2d2d30))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(12.0))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(10.0))
-                                .child(
-                                    div()
-                                        .w(px(28.0))
-                                        .h(px(28.0))
-                                        .rounded(px(6.0))
-                                        .bg(rgb(0x4f8cff)),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(16.0))
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(rgb(0xf2f2f2))
-                                        .child(contract.title),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(13.0))
-                                .line_height(px(18.0))
-                                .text_color(rgb(0xd4d4d4))
-                                .child(contract.message),
-                        )
-                        .child(render_buttons(contract)),
-                ),
-        )
+        .child(sheet_content)
 }
 
 fn render_buttons(contract: &DialogContract) -> impl IntoElement {

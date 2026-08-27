@@ -33,11 +33,12 @@ pub use context::{
     ContextItemKind, ContextMenuContract, ContextMenuInput, ContextMenuItemSpec, ContextSurface,
 };
 pub use dialog::{
-    render as render_dialog, DialogButtonRole, DialogButtonSpec, DialogContract, DialogFieldKind,
-    DialogFieldSpec, DialogPresentation, DialogSurface, OperationConflictContract,
-    OperationConflictInput, OperationConflictPaths, OperationProgressCommand,
-    OperationProgressCommandSpec, OperationProgressContract, OperationProgressInput,
-    OperationProgressState, PermissionPromptKind, ProviderConflictContract, ProviderConflictInput,
+    render as render_dialog, render_permission as render_permission_dialog, DialogButtonRole,
+    DialogButtonSpec, DialogContract, DialogFieldKind, DialogFieldSpec, DialogPresentation,
+    DialogSurface, OperationConflictContract, OperationConflictInput, OperationConflictPaths,
+    OperationProgressCommand, OperationProgressCommandSpec, OperationProgressContract,
+    OperationProgressInput, OperationProgressState, PermissionPromptKind, ProviderConflictContract,
+    ProviderConflictInput,
 };
 pub use gallery::{
     render as render_gallery_view, GalleryFilmstripItemSpec, GalleryKeyboardFlow,
@@ -578,7 +579,10 @@ impl Render for RootView {
                     .child(div().flex_1().h_full().child(icon::render(&self.icon_view))),
             );
         if let Some(dialog) = &self.permission_dialog {
-            root = root.child(dialog::render(dialog));
+            root = root.child(dialog::render_permission(
+                dialog,
+                self.permission_access.as_ref(),
+            ));
         }
         if let Some(access) = &self.permission_access {
             root = root.child(
@@ -709,6 +713,33 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\tprompt-kind=bookmark-acquisition\tprompt-action=choose-location\t"));
+    }
+
+    #[test]
+    fn permission_dialog_renderer_accepts_access_action_state() {
+        let access = PermissionAccessContract {
+            path: "/Users/me/Documents/Plan.md".to_string(),
+            intent: "preview".to_string(),
+            scope: "documents".to_string(),
+            probe: "granted".to_string(),
+            mode: "security-scoped-bookmark".to_string(),
+            access_action: "allow".to_string(),
+            worker_action: "start".to_string(),
+            can_touch_filesystem: true,
+            bookmark_required: true,
+            bookmark_access: true,
+            refresh_on_permission_change: false,
+            prompt_kind: PermissionPromptKind::BookmarkAcquisition,
+            prompt_action: "choose-location".to_string(),
+            reason: "preview worker may start after retained bookmark access".to_string(),
+        };
+        let dialog = DialogContract::permission_prompt(PermissionPromptKind::BookmarkAcquisition);
+
+        let _element = dialog::render_permission(&dialog, Some(&access));
+
+        assert!(access
+            .as_tsv()
+            .contains("\tprompt-action=choose-location\t"));
     }
 
     #[test]
