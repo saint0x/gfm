@@ -215,7 +215,14 @@ impl WorkerSandbox {
             return Ok(Self { profile_path: None });
         };
         let _ = sandbox_exec;
-        let profile = extraction_sandbox_profile(exe, input, stdout, stderr, permission_state)?;
+        let profile = extraction_sandbox_profile(
+            exe,
+            input,
+            stdout,
+            stderr,
+            permission_state,
+            ExtractionSandboxReadMode::from_env(),
+        )?;
         let profile_path = env::temp_dir().join(format!(
             "gfm-extract-worker-{}-{}.sb",
             std::process::id(),
@@ -378,9 +385,10 @@ fn extraction_sandbox_profile(
     stdout: &Path,
     stderr: &Path,
     permission_state: &Path,
+    read_mode: ExtractionSandboxReadMode,
 ) -> Result<String> {
-    let _ = canonical_or_self(exe)?;
-    let _ = canonical_or_self(input)?;
+    let exe = canonical_or_self(exe)?;
+    let input = canonical_or_self(input)?;
     let stdout = canonical_or_self(stdout)?;
     let stderr = canonical_or_self(stderr)?;
     let permission_state = canonical_or_self(permission_state)?;
@@ -389,17 +397,52 @@ fn extraction_sandbox_profile(
         .map(canonical_or_self)
         .transpose()?
         .unwrap_or_else(env::temp_dir);
-    Ok(format!(
-        "(version 1)\n\
-         (allow default)\n\
-         (deny file-write*)\n\
+    let mut profile = String::from("(version 1)\n(allow default)\n");
+    if read_mode == ExtractionSandboxReadMode::Strict {
+        profile.push_str(&format!(
+            "(deny file-read*)\n\
+             (allow file-read* (literal \"{}\"))\n\
+             (allow file-read* (literal \"{}\"))\n\
+             (allow file-read* (subpath \"{}\"))\n\
+             (allow file-read* (literal \"/dev/null\"))\n\
+             (allow file-read* (literal \"/dev/random\"))\n\
+             (allow file-read* (literal \"/dev/urandom\"))\n\
+             (allow file-read* (subpath \"/usr/lib\"))\n\
+             (allow file-read* (subpath \"/usr/share\"))\n\
+             (allow file-read* (subpath \"/System/Library\"))\n\
+             (allow file-read* (subpath \"/System/Volumes/Preboot/Cryptexes\"))\n\
+             (allow file-read* (subpath \"/Library/Apple\"))\n\
+             (allow file-read* (subpath \"/private/var/db\"))\n",
+            sandbox_escape(&exe),
+            sandbox_escape(&input),
+            sandbox_escape(&permission_state_dir)
+        ));
+    }
+    profile.push_str(&format!(
+        "(deny file-write*)\n\
          (allow file-write-data (literal \"{}\"))\n\
          (allow file-write-data (literal \"{}\"))\n\
          (allow file-write* (subpath \"{}\"))\n",
         sandbox_escape(&stdout),
         sandbox_escape(&stderr),
         sandbox_escape(&permission_state_dir)
-    ))
+    ));
+    Ok(profile)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExtractionSandboxReadMode {
+    Ambient,
+    Strict,
+}
+
+impl ExtractionSandboxReadMode {
+    fn from_env() -> Self {
+        match env::var("GFM_EXTRACTION_SANDBOX_READ_MODE") {
+            Ok(value) if value == "strict" => Self::Strict,
+            _ => Self::Ambient,
+        }
+    }
 }
 
 fn canonical_or_self(path: &Path) -> Result<PathBuf> {
@@ -457,5 +500,131 @@ fn job_user_activity_arg(value: JobUserActivity) -> &'static str {
     match value {
         JobUserActivity::Idle => "idle",
         JobUserActivity::Active => "active",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn extraction_sandbox_profile_default_confines_writes_without_read_deny() {
+        let fixture = SandboxProfileFixture::new("default");
+
+        let profile = fixture.profile(ExtractionSandboxReadMode::Ambient);
+
+        assert!(!profile.contains("(deny file-read*)"), "{profile}");
+        assert!(profile.contains("(deny file-write*)"), "{profile}");
+        assert!(profile.contains(&format!(
+            "(allow file-write-data (literal \"{}\"))",
+            sandbox_escape(&fixture.stdout.canonicalize().unwrap())
+        )));
+        assert!(profile.contains(&format!(
+            "(allow file-write-data (literal \"{}\"))",
+            sandbox_escape(&fixture.stderr.canonicalize().unwrap())
+        )));
+        assert!(profile.contains(&format!(
+            "(allow file-write* (subpath \"{}\"))",
+            sandbox_escape(&fixture.permission_dir.canonicalize().unwrap())
+        )));
+    }
+
+    #[test]
+    fn extraction_sandbox_profile_strict_mode_denies_ambient_reads_and_writes() {
+        let fixture = SandboxProfileFixture::new("strict");
+
+        let profile = fixture.profile(ExtractionSandboxReadMode::Strict);
+
+        assert!(profile.contains("(deny file-read*)"), "{profile}");
+        assert!(profile.contains("(deny file-write*)"), "{profile}");
+        assert!(profile.contains(&format!(
+            "(allow file-read* (literal \"{}\"))",
+            sandbox_escape(&fixture.exe.canonicalize().unwrap())
+        )));
+        assert!(profile.contains(&format!(
+            "(allow file-read* (literal \"{}\"))",
+            sandbox_escape(&fixture.input.canonicalize().unwrap())
+        )));
+        assert!(profile.contains(&format!(
+            "(allow file-read* (subpath \"{}\"))",
+            sandbox_escape(&fixture.permission_dir.canonicalize().unwrap())
+        )));
+        assert!(
+            !profile.contains(&format!(
+                "(allow file-read* (subpath \"{}\"))",
+                sandbox_escape(&fixture.root)
+            )),
+            "{profile}"
+        );
+    }
+
+    struct SandboxProfileFixture {
+        root: PathBuf,
+        exe: PathBuf,
+        input: PathBuf,
+        stdout: PathBuf,
+        stderr: PathBuf,
+        permission_dir: PathBuf,
+        permission_state: PathBuf,
+    }
+
+    impl SandboxProfileFixture {
+        fn new(name: &str) -> Self {
+            let root = unique_temp_dir(&format!("gfm-extract-sandbox-profile-{name}"));
+            let exe = root.join("gfm");
+            let input = root.join("input.txt");
+            let stdout = root.join("stdout");
+            let stderr = root.join("stderr");
+            let permission_dir = root.join("permission-state");
+            let permission_state = permission_dir.join("state.tsv");
+            fs::write(&exe, "binary").unwrap();
+            fs::write(&input, "body").unwrap();
+            fs::write(&stdout, "").unwrap();
+            fs::write(&stderr, "").unwrap();
+            fs::create_dir(&permission_dir).unwrap();
+            fs::write(&permission_state, "gfm-permission-state-v1\n").unwrap();
+            Self {
+                root,
+                exe,
+                input,
+                stdout,
+                stderr,
+                permission_dir,
+                permission_state,
+            }
+        }
+
+        fn profile(&self, read_mode: ExtractionSandboxReadMode) -> String {
+            extraction_sandbox_profile(
+                &self.exe,
+                &self.input,
+                &self.stdout,
+                &self.stderr,
+                &self.permission_state,
+                read_mode,
+            )
+            .unwrap()
+        }
+    }
+
+    impl Drop for SandboxProfileFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let path = env::temp_dir().join(format!(
+            "{}-{}-{}",
+            prefix,
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 }
