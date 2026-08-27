@@ -555,6 +555,7 @@ fn print_usage() {
   gfm mac-bridges
   gfm native-icon <path>
   gfm native-icon-bridge <path>
+  gfm native-icon-fileprovider-invalidation <previous-state> <path>
   gfm fileprovider-state <path>
   gfm fileprovider-state-with-identity <path>
   gfm fileprovider-domain <path>
@@ -568,6 +569,7 @@ fn print_usage() {
   gfm fileprovider-invalidation-event <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
   gfm volume-discovery [paths...]
   gfm volume-events-probe
+  gfm volume-event-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-operation <eject|unmount|mount> <path>
   gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]
   gfm volume-invalidation <previous-class> <previous-mount> <path>

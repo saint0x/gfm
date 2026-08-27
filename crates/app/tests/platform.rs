@@ -315,6 +315,40 @@ fn reports_icloud_badges_in_native_icon_descriptor_from_binary() {
 }
 
 #[test]
+fn reports_native_icon_fileprovider_invalidation_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-native-icon-fileprovider-invalidation-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let evicted = root.join("Remote.icloud-placeholder");
+    std::fs::write(&evicted, "placeholder").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("native-icon-fileprovider-invalidation")
+        .arg("downloaded")
+        .arg(&evicted)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("native-icon-invalidation\t"));
+    assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\t"));
+    assert!(stdout.contains("\tprevious-badges=cloud-available-offline\tcurrent-badges=cloud\t"));
+    assert!(stdout.contains(
+        "\tprevious-cache=fileprovider:downloaded:cloud-available-offline\tcurrent-cache=fileprovider:evicted:cloud\t"
+    ));
+    assert!(stdout.ends_with("invalidate-cache=true\treason=native-icon-badges-changed\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_custom_finder_icon_descriptor_from_binary() {
     const FINDER_INFO_XATTR: &str = "com.apple.FinderInfo";
     const FINDER_FLAG_CUSTOM_ICON: u16 = 0x0400;
@@ -1189,6 +1223,60 @@ fn probes_volume_event_stream_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("volume-events\tattached="));
     assert!(stdout.contains("\tpending="));
+}
+
+#[test]
+fn reports_volume_event_invalidation_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-event-invalidation-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-invalidation")
+        .arg("description-changed")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(
+        "volume-event-invalidation\tkind=description-changed\tnative-status=available\t"
+    ));
+    assert!(stdout.contains("\tcurrent-kind=external\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains("\tsidebar=true\toperation-policy=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(stdout.ends_with("reason=volume-event-description-changed\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn reports_unavailable_volume_event_invalidation_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-invalidation")
+        .arg("unavailable")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(
+        "volume-event-invalidation\tkind=unavailable\tnative-status=unavailable\tpath=-\t"
+    ));
+    assert!(stdout.contains("\tcurrent-kind=-\tcurrent-mount=-\t"));
+    assert!(stdout.contains("\tsidebar=true\toperation-policy=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
 }
 
 #[test]

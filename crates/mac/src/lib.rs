@@ -23,13 +23,14 @@ pub use fileprovider::{
     FileProviderStateSnapshotEntry,
 };
 pub use finder::{FinderKindSource, NativeFinderKindReport};
+pub use gfm_mac_sys::NativeVolumeStatus;
 pub use host::{
     current_host_profile, CpuArchitecture, HardwareProfile, HostProfile, MacOsVersion,
     SupportEvaluation, SupportMatrix, SupportTier,
 };
 pub use icon::{
     NativeIconBadge, NativeIconBridgeContract, NativeIconBridgeDecision, NativeIconDescriptor,
-    NativeIconProvider, NativeIconRole,
+    NativeIconInvalidationReport, NativeIconProvider, NativeIconRole,
 };
 pub use permissions::{
     current_permission_onboarding, PermissionAction, PermissionOnboardingPlan, PermissionPolicy,
@@ -51,8 +52,8 @@ pub use spotlight::{
 };
 pub use volume::{
     MountState, VolumeCapacity, VolumeCommandPolicy, VolumeCommandState, VolumeDescriptor,
-    VolumeDiscoveryReport, VolumeEventKind, VolumeEventReport, VolumeEventStream, VolumeKind,
-    VolumeOperation, VolumeOperationDisposition, VolumeOperationReport, VolumeTopologyChange,
-    VolumeTopologyChangeKind, VolumeTopologyDiff,
+    VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind, VolumeEventReport,
+    VolumeEventStream, VolumeKind, VolumeOperation, VolumeOperationDisposition,
+    VolumeOperationReport, VolumeTopologyChange, VolumeTopologyChangeKind, VolumeTopologyDiff,
 };
 pub use watch::{map_notify_event, FileEventStream, WatchDepth, WatchRoot};

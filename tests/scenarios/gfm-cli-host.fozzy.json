@@ -2005,6 +2005,19 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "native-icon-fileprovider-invalidation",
+        "evicted",
+        "tmp/gfm-fozzy-downloaded.icloud.md"
+      ],
+      "exit_code": 0,
+      "stdout": "native-icon-invalidation\ttmp/gfm-fozzy-downloaded.icloud.md\tprevious=evicted\tcurrent=downloaded\tprevious-badges=cloud\tcurrent-badges=cloud-available-offline\tprevious-cache=fileprovider:evicted:cloud\tcurrent-cache=fileprovider:downloaded:cloud-available-offline\tinvalidate-cache=true\treason=native-icon-badges-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "fileprovider-state",
         "tmp/gfm-fozzy-downloaded.icloud.md"
       ],
@@ -2301,6 +2314,31 @@
         "volume-events-probe"
       ],
       "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-event-invalidation",
+        "description-changed",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-invalidation\tkind=description-changed\tnative-status=available\tpath=tmp/gfm-fozzy-dist\tcurrent-kind=external\tcurrent-mount=mounted\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-event-description-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-event-invalidation",
+        "unavailable"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-invalidation\tkind=unavailable\tnative-status=unavailable\tpath=-\tcurrent-kind=-\tcurrent-mount=-\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-event-unavailable\n",
+      "stderr": "",
       "times": 1
     },
     {

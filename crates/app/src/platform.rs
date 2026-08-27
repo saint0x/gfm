@@ -17,10 +17,11 @@ use gfm_mac::{
     FileProviderDomainReport, FileProviderInvalidationReport, FileProviderObservedInvalidation,
     FileProviderOperation, FileProviderOperationReport, FileProviderProgressReport,
     FileProviderStateInvalidationReport, FileProviderStateReport, FileProviderStateSnapshot,
-    MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
-    SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore, SpotlightMetadataReader,
-    SpotlightReconciliationReport, VolumeDiscoveryReport, VolumeEventStream, VolumeOperation,
-    VolumeOperationReport, VolumeTopologyDiff,
+    MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor,
+    NativeIconInvalidationReport, SecurityScopedAccessReport, SecurityScopedBookmarkStatus,
+    SecurityScopedBookmarkStore, SpotlightMetadataReader, SpotlightReconciliationReport,
+    VolumeDescriptor, VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind,
+    VolumeEventStream, VolumeOperation, VolumeOperationReport, VolumeTopologyDiff,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path, IconPreviewContract,
@@ -83,6 +84,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             println!(
                 "{}",
                 NativeIconBridgeContract::for_record_on_host(&record, &host).as_tsv()
+            );
+        }
+        "native-icon-fileprovider-invalidation" => {
+            let previous = CloudStorageState::parse(&required_string(
+                args.next(),
+                "native-icon-fileprovider-invalidation requires a previous state",
+            )?)?;
+            let path = required_path(
+                args.next(),
+                "native-icon-fileprovider-invalidation requires a path",
+            )?;
+            let report = FileProviderInvalidationReport::evaluate(path, previous)?;
+            println!(
+                "{}",
+                NativeIconInvalidationReport::from_fileprovider(&report).as_tsv()
             );
         }
         "fileprovider-state" => {
@@ -200,6 +216,36 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "volume-events\tattached={}\tpending={}",
                 stream.is_attached(),
                 stream.try_recv().is_some()
+            );
+        }
+        "volume-event-invalidation" => {
+            let kind = parse_volume_event_kind(&required_string(
+                args.next(),
+                "volume-event-invalidation requires an event kind",
+            )?)?;
+            let path = args.next().map(PathBuf::from);
+            let descriptor = path
+                .as_ref()
+                .filter(|path| path.exists())
+                .map(VolumeDescriptor::for_path)
+                .transpose()?;
+            let native_status = if descriptor.is_some() {
+                gfm_mac::NativeVolumeStatus::Available
+            } else if path.is_some() {
+                gfm_mac::NativeVolumeStatus::Missing
+            } else {
+                gfm_mac::NativeVolumeStatus::Unavailable
+            };
+            println!(
+                "{}",
+                VolumeEventInvalidationReport::from_parts(
+                    kind,
+                    native_status,
+                    path,
+                    descriptor.as_ref(),
+                    None,
+                )
+                .as_tsv()
             );
         }
         "volume-operation" => {
@@ -727,6 +773,18 @@ fn parse_fileprovider_event(kind: &str, path: PathBuf, to: Option<PathBuf>) -> R
         }
     };
     Ok(FileEvent::new(path, event_kind))
+}
+
+fn parse_volume_event_kind(kind: &str) -> Result<VolumeEventKind> {
+    match kind {
+        "appeared" => Ok(VolumeEventKind::Appeared),
+        "description-changed" => Ok(VolumeEventKind::DescriptionChanged),
+        "disappeared" => Ok(VolumeEventKind::Disappeared),
+        "unavailable" => Ok(VolumeEventKind::Unavailable),
+        other => Err(GfmError::Format(format!(
+            "unsupported volume event kind `{other}`"
+        ))),
+    }
 }
 
 fn parse_preview_kind(value: Option<String>) -> Result<PreviewKind> {

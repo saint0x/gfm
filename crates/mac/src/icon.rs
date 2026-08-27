@@ -1,9 +1,10 @@
 use crate::{
-    CloudBadge, FileProviderDomain, FileProviderStateReport, MacBridgeThreadPolicy, MacFramework,
-    SupportEvaluation, SupportMatrix, SupportTier,
+    CloudBadge, CloudStorageState, FileProviderDomain, FileProviderInvalidationReport,
+    FileProviderStateReport, MacBridgeThreadPolicy, MacFramework, SupportEvaluation, SupportMatrix,
+    SupportTier,
 };
 use gfm_types::{FileKind, FileRecord};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const FINDER_INFO_XATTR: &str = "com.apple.FinderInfo";
 const FINDER_FLAG_CUSTOM_ICON: u16 = 0x0400;
@@ -124,6 +125,19 @@ pub struct NativeIconBridgeContract {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeIconInvalidationReport {
+    pub path: PathBuf,
+    pub previous: CloudStorageState,
+    pub current: CloudStorageState,
+    pub previous_badges: Vec<NativeIconBadge>,
+    pub current_badges: Vec<NativeIconBadge>,
+    pub previous_cache_key: String,
+    pub current_cache_key: String,
+    pub invalidate_cache: bool,
+    pub reason: String,
+}
+
 impl NativeIconBridgeContract {
     pub fn for_record(record: &FileRecord) -> Self {
         Self::for_record_with_evaluation(
@@ -172,6 +186,61 @@ impl NativeIconBridgeContract {
             self.descriptor.cache_key,
             self.support_tier.as_str(),
             self.decision.as_str(),
+            self.reason
+        )
+    }
+}
+
+impl NativeIconInvalidationReport {
+    pub fn from_fileprovider(report: &FileProviderInvalidationReport) -> Self {
+        let previous_badges = native_cloud_badges_for_state(report.previous);
+        let current_badges = report
+            .current
+            .badges
+            .iter()
+            .copied()
+            .map(cloud_badge)
+            .collect::<Vec<_>>();
+        let previous_cache_key = provider_badge_cache_key(report.previous, &previous_badges);
+        let current_cache_key =
+            provider_badge_cache_key(report.current.storage_state, &current_badges);
+        let badge_changed = previous_badges != current_badges;
+        let cache_key_changed = previous_cache_key != current_cache_key;
+        let invalidate_cache = report.invalidate_icon && (badge_changed || cache_key_changed);
+        let reason = if !report.invalidate_icon {
+            "provider-did-not-invalidate-icon".to_string()
+        } else if badge_changed {
+            "native-icon-badges-changed".to_string()
+        } else if cache_key_changed {
+            "native-icon-cache-key-changed".to_string()
+        } else {
+            report.reason.to_string()
+        };
+
+        Self {
+            path: report.path.clone(),
+            previous: report.previous,
+            current: report.current.storage_state,
+            previous_badges,
+            current_badges,
+            previous_cache_key,
+            current_cache_key,
+            invalidate_cache,
+            reason,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "native-icon-invalidation\t{}\tprevious={}\tcurrent={}\tprevious-badges={}\tcurrent-badges={}\tprevious-cache={}\tcurrent-cache={}\tinvalidate-cache={}\treason={}",
+            self.path.display(),
+            self.previous.as_str(),
+            self.current.as_str(),
+            native_badges_tsv(&self.previous_badges),
+            native_badges_tsv(&self.current_badges),
+            self.previous_cache_key,
+            self.current_cache_key,
+            self.invalidate_cache,
             self.reason
         )
     }
@@ -278,6 +347,39 @@ fn cloud_badge(badge: CloudBadge) -> NativeIconBadge {
         CloudBadge::Conflict => NativeIconBadge::CloudConflict,
         CloudBadge::Offline => NativeIconBadge::CloudOffline,
     }
+}
+
+fn native_cloud_badges_for_state(state: CloudStorageState) -> Vec<NativeIconBadge> {
+    match state {
+        CloudStorageState::LocalOnly => Vec::new(),
+        CloudStorageState::Downloaded => vec![NativeIconBadge::CloudAvailableOffline],
+        CloudStorageState::Evicted => vec![NativeIconBadge::Cloud],
+        CloudStorageState::Downloading => {
+            vec![NativeIconBadge::Cloud, NativeIconBadge::CloudDownloading]
+        }
+        CloudStorageState::Uploading => vec![NativeIconBadge::CloudUploading],
+        CloudStorageState::Waiting | CloudStorageState::Unknown => {
+            vec![NativeIconBadge::CloudWaiting]
+        }
+        CloudStorageState::Conflict => vec![NativeIconBadge::CloudConflict],
+        CloudStorageState::Offline => vec![NativeIconBadge::CloudOffline],
+    }
+}
+
+fn provider_badge_cache_key(state: CloudStorageState, badges: &[NativeIconBadge]) -> String {
+    format!(
+        "fileprovider:{}:{}",
+        state.as_str(),
+        native_badges_tsv(badges)
+    )
+}
+
+fn native_badges_tsv(badges: &[NativeIconBadge]) -> String {
+    badges
+        .iter()
+        .map(|badge| badge.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn type_hint_for_record(record: &FileRecord) -> String {
@@ -554,6 +656,48 @@ mod tests {
     }
 
     #[test]
+    fn fileprovider_icon_invalidation_tracks_native_badge_cache_changes() {
+        let report = fileprovider_report(
+            CloudStorageState::Downloaded,
+            CloudStorageState::Evicted,
+            vec![CloudBadge::Cloud],
+            true,
+        );
+
+        let invalidation = NativeIconInvalidationReport::from_fileprovider(&report);
+
+        assert!(invalidation.invalidate_cache);
+        assert_eq!(
+            invalidation.previous_badges,
+            vec![NativeIconBadge::CloudAvailableOffline]
+        );
+        assert_eq!(invalidation.current_badges, vec![NativeIconBadge::Cloud]);
+        assert_eq!(invalidation.reason, "native-icon-badges-changed");
+        assert_eq!(
+            invalidation.as_tsv(),
+            "native-icon-invalidation\t/tmp/Remote.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tprevious-badges=cloud-available-offline\tcurrent-badges=cloud\tprevious-cache=fileprovider:downloaded:cloud-available-offline\tcurrent-cache=fileprovider:evicted:cloud\tinvalidate-cache=true\treason=native-icon-badges-changed"
+        );
+    }
+
+    #[test]
+    fn fileprovider_icon_invalidation_respects_provider_noop() {
+        let report = fileprovider_report(
+            CloudStorageState::Downloaded,
+            CloudStorageState::Downloaded,
+            vec![CloudBadge::AvailableOffline],
+            false,
+        );
+
+        let invalidation = NativeIconInvalidationReport::from_fileprovider(&report);
+
+        assert!(!invalidation.invalidate_cache);
+        assert_eq!(
+            invalidation.reason,
+            "provider-did-not-invalidate-icon".to_string()
+        );
+    }
+
+    #[test]
     fn bridge_contract_uses_native_launchservices_on_supported_hosts() {
         let record = record("Report.PDF", FileKind::File);
         let contract = NativeIconBridgeContract::for_record_with_evaluation(
@@ -626,5 +770,55 @@ mod tests {
             "{prefix}-{}-{nanos}.{extension}",
             std::process::id()
         ))
+    }
+
+    fn fileprovider_report(
+        previous: CloudStorageState,
+        current: CloudStorageState,
+        badges: Vec<CloudBadge>,
+        invalidate_icon: bool,
+    ) -> FileProviderInvalidationReport {
+        FileProviderInvalidationReport {
+            path: PathBuf::from("/tmp/Remote.icloud-placeholder"),
+            previous,
+            current: FileProviderStateReport {
+                path: PathBuf::from("/tmp/Remote.icloud-placeholder"),
+                domain: FileProviderDomain::ICloudDrive,
+                storage_state: current,
+                materialization: crate::CloudMaterialization::RemotePlaceholder,
+                materialization_source: crate::CloudMaterializationSource::StateFallback,
+                progress: crate::CloudTransferProgress {
+                    direction: crate::CloudTransferDirection::Idle,
+                    percent_milli: None,
+                    requested: false,
+                    complete: false,
+                    indeterminate: false,
+                    source: "test",
+                    reason: Some("test".to_string()),
+                },
+                badges,
+                commands: crate::CloudCommandPolicy {
+                    download: crate::CloudCommandState::Hidden,
+                    evict: crate::CloudCommandState::Hidden,
+                    reveal_conflict: crate::CloudCommandState::Hidden,
+                    reason: None,
+                },
+                offline: false,
+                conflict: false,
+                provider_identifier: None,
+                source: "test".to_string(),
+            },
+            state_changed: previous != current,
+            invalidate_icon,
+            invalidate_preview_memory: false,
+            invalidate_preview_disk: false,
+            invalidate_sidebar: false,
+            reindex_metadata: false,
+            reason: if previous == current {
+                "fileprovider-state-unchanged"
+            } else {
+                "fileprovider-state-changed"
+            },
+        }
     }
 }

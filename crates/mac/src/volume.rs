@@ -737,6 +737,20 @@ pub struct VolumeEventReport {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeEventInvalidationReport {
+    pub kind: VolumeEventKind,
+    pub native_status: NativeVolumeStatus,
+    pub path: Option<PathBuf>,
+    pub current_kind: Option<VolumeKind>,
+    pub current_mount_state: Option<MountState>,
+    pub invalidate_sidebar: bool,
+    pub invalidate_operation_policy: bool,
+    pub invalidate_index_admission: bool,
+    pub rescan_index: bool,
+    pub reason: String,
+}
+
 pub struct VolumeEventStream {
     stream: gfm_mac_sys::NativeVolumeEventStream,
 }
@@ -798,6 +812,77 @@ impl VolumeEventReport {
                 .map(escape_field)
                 .unwrap_or_else(|| "-".to_string()),
             descriptor
+        )
+    }
+}
+
+impl VolumeEventInvalidationReport {
+    pub fn from_event(event: &VolumeEventReport) -> Self {
+        Self::from_parts(
+            event.kind,
+            event.native_status,
+            event.path.clone(),
+            event.descriptor.as_ref(),
+            event.reason.clone(),
+        )
+    }
+
+    pub fn from_parts(
+        kind: VolumeEventKind,
+        native_status: NativeVolumeStatus,
+        path: Option<PathBuf>,
+        descriptor: Option<&VolumeDescriptor>,
+        native_reason: Option<String>,
+    ) -> Self {
+        let descriptor_visible = descriptor.is_some();
+        let event_visible =
+            descriptor_visible || path.is_some() || native_status != NativeVolumeStatus::Available;
+        let invalidates = event_visible
+            && matches!(
+                kind,
+                VolumeEventKind::Appeared
+                    | VolumeEventKind::DescriptionChanged
+                    | VolumeEventKind::Disappeared
+                    | VolumeEventKind::Unavailable
+            );
+        let reason = match kind {
+            VolumeEventKind::Appeared => "volume-event-appeared",
+            VolumeEventKind::DescriptionChanged => "volume-event-description-changed",
+            VolumeEventKind::Disappeared => "volume-event-disappeared",
+            VolumeEventKind::Unavailable => native_reason
+                .as_deref()
+                .unwrap_or("volume-event-unavailable"),
+        };
+        Self {
+            kind,
+            native_status,
+            path,
+            current_kind: descriptor.map(|descriptor| descriptor.kind),
+            current_mount_state: descriptor.map(|descriptor| descriptor.mount_state),
+            invalidate_sidebar: invalidates,
+            invalidate_operation_policy: invalidates,
+            invalidate_index_admission: invalidates,
+            rescan_index: invalidates,
+            reason: reason.to_string(),
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tcurrent-kind={}\tcurrent-mount={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
+            self.kind.as_str(),
+            self.native_status.as_str(),
+            self.path
+                .as_ref()
+                .map(|path| escape_field(&path.to_string_lossy()))
+                .unwrap_or_else(|| "-".to_string()),
+            self.current_kind.map(VolumeKind::as_str).unwrap_or("-"),
+            self.current_mount_state.map(MountState::as_str).unwrap_or("-"),
+            self.invalidate_sidebar,
+            self.invalidate_operation_policy,
+            self.invalidate_index_admission,
+            self.rescan_index,
+            escape_field(&self.reason)
         )
     }
 }
@@ -1762,6 +1847,53 @@ mod tests {
 
         assert!(stream.is_attached() || stream.try_recv().is_some());
         drop(stream);
+    }
+
+    #[test]
+    fn volume_event_invalidation_updates_sidebar_policy_and_index_admission() {
+        let root = unique_temp_dir("gfm-volume-event-invalidation");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let descriptor = VolumeDescriptor::for_path(&root).unwrap();
+
+        let report = VolumeEventInvalidationReport::from_parts(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Available,
+            Some(root.clone()),
+            Some(&descriptor),
+            None,
+        );
+
+        assert_eq!(report.current_kind, Some(VolumeKind::External));
+        assert_eq!(report.current_mount_state, Some(MountState::Mounted));
+        assert!(report.invalidate_sidebar);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report
+            .as_tsv()
+            .starts_with("volume-event-invalidation\tkind=description-changed\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unavailable_volume_event_still_invalidates_downstream_state() {
+        let report = VolumeEventInvalidationReport::from_parts(
+            VolumeEventKind::Unavailable,
+            NativeVolumeStatus::Unavailable,
+            None,
+            None,
+            Some("diskarbitration-session-unavailable".to_string()),
+        );
+
+        assert_eq!(report.current_kind, None);
+        assert!(report.invalidate_sidebar);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report
+            .as_tsv()
+            .contains("\treason=diskarbitration-session-unavailable"));
     }
 
     #[test]
