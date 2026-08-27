@@ -113,6 +113,46 @@ fn diagnostics_rebuild_refuses_unreachable_volume_before_writing_indexes_from_bi
 }
 
 #[test]
+fn diagnostics_trace_and_storage_refuse_unreachable_paths_before_io_from_binary() {
+    let offline = unique_temp_dir("gfm-cli-diagnostics-io-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let trace = offline.join("trace.json");
+    let storage = offline.join("records.gfmidx");
+    fs::write(&storage, "gfm-records-v1\n").unwrap();
+
+    let trace_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["diagnostics-trace-export", trace.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!trace_output.status.success());
+    let trace_stdout = String::from_utf8_lossy(&trace_output.stdout);
+    let trace_stderr = String::from_utf8_lossy(&trace_output.stderr);
+    assert!(!trace_stdout.contains("trace.json"), "{trace_stdout}");
+    assert!(
+        trace_stderr
+            .contains("diagnostics trace export volume access blocked: unreachable volume network"),
+        "{trace_stderr}"
+    );
+    assert!(!trace.exists());
+
+    let storage_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["diagnostics-storage-inspect", storage.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!storage_output.status.success());
+    let storage_stdout = String::from_utf8_lossy(&storage_output.stdout);
+    let storage_stderr = String::from_utf8_lossy(&storage_output.stderr);
+    assert!(!storage_stdout.starts_with("records\t"), "{storage_stdout}");
+    assert!(
+        storage_stderr
+            .contains("diagnostics storage volume access blocked: unreachable volume network"),
+        "{storage_stderr}"
+    );
+
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn diagnostics_plans_and_recovers_persistent_index_from_binary() {
     let root = unique_temp_dir("gfm-cli-diagnostics-recovery");
     let records = root.join("records.gfmidx");

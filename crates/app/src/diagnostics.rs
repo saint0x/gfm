@@ -182,6 +182,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "diagnostics-trace-export requires an output path",
             )?;
+            let _access = preflight_access_scope(
+                write_probe_path(&output),
+                AccessIntent::Write,
+                "diagnostics trace export",
+            )?;
             let report = export_operator_trace(output)?;
             println!("{}\t{}", report.path.display(), report.bytes_written);
         }
@@ -213,6 +218,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "diagnostics-storage-inspect requires a storage path",
             )?;
+            let _access =
+                preflight_access_scope(&storage, AccessIntent::Read, "diagnostics storage")?;
             match inspect_storage(storage)? {
                 StorageInspection::Records(report) => println!(
                     "records\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
