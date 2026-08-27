@@ -545,6 +545,23 @@ impl VolumeDiscoveryReport {
         Self { volumes }
     }
 
+    pub fn for_containing_path(path: impl AsRef<Path>) -> Self {
+        let path = path.as_ref();
+        let mut paths = containing_mounted_volume_paths(path);
+        paths.extend(marker_ancestor_volume_paths(path));
+        if paths.is_empty() {
+            paths = fallback_volume_paths();
+        }
+        Self::from_paths(paths)
+    }
+
+    pub fn volume_for_path(&self, path: &Path) -> Option<&VolumeDescriptor> {
+        self.volumes
+            .iter()
+            .filter(|volume| path.starts_with(&volume.path))
+            .max_by_key(|volume| volume.path.components().count())
+    }
+
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!("volumes\tcount={}", self.volumes.len())];
         lines.extend(self.volumes.iter().map(VolumeDescriptor::as_tsv));
@@ -1496,6 +1513,28 @@ fn mounted_volume_paths() -> Vec<PathBuf> {
     paths
 }
 
+fn containing_mounted_volume_paths(path: &Path) -> Vec<PathBuf> {
+    let mut paths = mounted_volume_paths()
+        .into_iter()
+        .filter(|root| path.starts_with(root))
+        .collect::<Vec<_>>();
+    if paths.is_empty() && !path.exists() {
+        paths = path
+            .ancestors()
+            .find(|ancestor| ancestor.exists())
+            .map(mounted_volume_paths_for_existing_path)
+            .unwrap_or_default();
+    }
+    paths
+}
+
+fn mounted_volume_paths_for_existing_path(path: &Path) -> Vec<PathBuf> {
+    mounted_volume_paths()
+        .into_iter()
+        .filter(|root| path.starts_with(root))
+        .collect()
+}
+
 fn fallback_volume_paths() -> Vec<PathBuf> {
     let mut paths = vec![PathBuf::from("/")];
     if let Ok(entries) = fs::read_dir("/Volumes") {
@@ -1511,6 +1550,13 @@ fn fallback_volume_paths() -> Vec<PathBuf> {
 
 fn finder_visible_mount_path(path: &Path) -> bool {
     path == Path::new("/") || path.starts_with("/Volumes")
+}
+
+fn marker_ancestor_volume_paths(path: &Path) -> Vec<PathBuf> {
+    path.ancestors()
+        .filter(|ancestor| marker_kind(ancestor).is_some())
+        .map(PathBuf::from)
+        .collect()
 }
 
 fn command_policy(
@@ -1738,6 +1784,23 @@ mod tests {
         assert_eq!(descriptor.commands.unmount, VolumeCommandState::Enabled);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn containing_path_report_prefers_marker_volume_ancestor() {
+        let root = unique_temp_dir("gfm-volume-containing");
+        let nested = root.join("Project").join("Preview.pdf");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::write(root.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        fs::write(&nested, "%PDF-1.7\n").unwrap();
+
+        let report = VolumeDiscoveryReport::for_containing_path(&nested);
+        let volume = report.volume_for_path(&nested).unwrap();
+
+        assert_eq!(volume.path, root);
+        assert_eq!(volume.kind, VolumeKind::Network);
+
+        fs::remove_dir_all(volume.path.clone()).unwrap();
     }
 
     #[test]
