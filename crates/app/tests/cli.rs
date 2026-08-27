@@ -5933,6 +5933,45 @@ fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
 }
 
 #[test]
+fn deferred_adaptive_extraction_worker_does_not_touch_unreachable_target_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-worker-deferred-unreachable");
+    let path = root.join("document.txt");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&path, "deferred worker marker").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "extract-worker-adaptive",
+            path.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("extract\t"), "{stdout}");
+    assert!(
+        stderr.contains("adaptive-extraction-deferred\taction=Defer"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn adaptive_extraction_worker_refuses_unreachable_scratch_before_launch_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-worker-scratch-root");
     let scratch = unique_temp_dir("gfm-cli-extract-worker-scratch-unreachable");
@@ -5960,9 +5999,7 @@ fn adaptive_extraction_worker_refuses_unreachable_scratch_before_launch_from_bin
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stdout.contains("extract\t"), "{stdout}");
     assert!(
-        stderr.contains(
-            "adaptive extraction stdout volume access blocked: unreachable volume network"
-        ),
+        stderr.contains("adaptive extraction volume access blocked: unreachable volume network"),
         "{stderr}"
     );
     assert_eq!(
@@ -6146,6 +6183,52 @@ fn quarantined_adaptive_extraction_worker_records_timeout_from_binary() {
     assert!(store.is_file());
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn deferred_quarantined_adaptive_extraction_worker_does_not_touch_unreachable_store_from_binary() {
+    let source_root = unique_temp_dir("gfm-cli-extract-worker-quarantine-deferred-source");
+    let store_root = unique_temp_dir("gfm-cli-extract-worker-quarantine-deferred-store");
+    fs::write(store_root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = source_root.join("document.txt");
+    let store = store_root.join("quarantine.gfmquarantine");
+    fs::write(&path, "deferred quarantine marker").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "extract-worker-quarantine-adaptive",
+            path.to_str().unwrap(),
+            store.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+            "0",
+            "2",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("quarantine\t"), "{stdout}");
+    assert!(
+        stderr.contains("quarantined-adaptive-extraction-deferred\taction=Defer"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!store.exists());
+
+    fs::remove_dir_all(source_root).unwrap();
+    fs::remove_dir_all(store_root).unwrap();
 }
 
 #[test]

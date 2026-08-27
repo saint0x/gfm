@@ -82,16 +82,27 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "extract-worker-adaptive" => {
             let path = required_path(args.next(), "extract-worker-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(args, "extract worker")?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Read, "adaptive extraction worker")?;
-            let volume = detect_volume_id(&path)
-                .ok()
-                .or_else(|| parent_volume(&path));
-            let report = run_volume_task_cancellable(
-                volume,
+            let volume_path = path.clone();
+            let outcome = run_scheduled_volume_task_cancellable_with_volume(
                 Priority::Background,
                 "adaptive extraction",
+                pressure,
+                move || {
+                    let _access = preflight_access_scope(
+                        &volume_path,
+                        AccessIntent::Read,
+                        "adaptive extraction worker",
+                    )?;
+                    Ok(detect_volume_id(&volume_path)
+                        .ok()
+                        .or_else(|| parent_volume(&volume_path)))
+                },
                 move |cancellation| {
+                    let _access = preflight_access_scope(
+                        &path,
+                        AccessIntent::Read,
+                        "adaptive extraction worker",
+                    )?;
                     run_adaptive_extraction_worker_cancellable(
                         &path,
                         pressure,
@@ -100,7 +111,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     )
                 },
             )?;
-            print!("{}", report);
+            if outcome.deferred {
+                eprintln!(
+                    "adaptive-extraction-deferred\taction={:?}",
+                    outcome.scheduling_action
+                );
+            } else {
+                let report = outcome.result.ok_or_else(|| {
+                    GfmError::Format("adaptive extraction ran without a report".to_string())
+                })?;
+                eprintln!(
+                    "adaptive-extraction-action\t{:?}",
+                    outcome.scheduling_action
+                );
+                print!("{}", report);
+            }
         }
         "extract-worker-cancel-adaptive" => {
             let path = required_path(
@@ -144,19 +169,28 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(|value| parse_u32(&value, "failure threshold"))
                 .transpose()?
                 .unwrap_or(2);
-            let _access = retain_extraction_quarantine_access(
-                &path,
-                &store,
-                "quarantined adaptive extraction",
-            )?;
-            let volume = detect_volume_id(&path)
-                .ok()
-                .or_else(|| parent_volume(&path));
-            let output = run_volume_task_cancellable(
-                volume,
+            let volume_path = path.clone();
+            let volume_store = store.clone();
+            let outcome = run_scheduled_volume_task_cancellable_with_volume(
                 Priority::Background,
                 "quarantined adaptive extraction",
+                pressure,
+                move || {
+                    let _access = retain_extraction_quarantine_access(
+                        &volume_path,
+                        &volume_store,
+                        "quarantined adaptive extraction",
+                    )?;
+                    Ok(detect_volume_id(&volume_path)
+                        .ok()
+                        .or_else(|| parent_volume(&volume_path)))
+                },
                 move |cancellation| {
+                    let _access = retain_extraction_quarantine_access(
+                        &path,
+                        &store,
+                        "quarantined adaptive extraction",
+                    )?;
                     run_quarantined_adaptive_extraction_worker_cancellable(
                         &path,
                         &store,
@@ -167,7 +201,23 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     )
                 },
             )?;
-            print!("{output}");
+            if outcome.deferred {
+                eprintln!(
+                    "quarantined-adaptive-extraction-deferred\taction={:?}",
+                    outcome.scheduling_action
+                );
+            } else {
+                let output = outcome.result.ok_or_else(|| {
+                    GfmError::Format(
+                        "quarantined adaptive extraction ran without output".to_string(),
+                    )
+                })?;
+                eprintln!(
+                    "quarantined-adaptive-extraction-action\t{:?}",
+                    outcome.scheduling_action
+                );
+                print!("{output}");
+            }
         }
         "extract-cache" => {
             let path = required_path(args.next(), "extract-cache requires a path")?;
