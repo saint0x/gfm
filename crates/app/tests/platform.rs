@@ -876,6 +876,7 @@ fn reports_fileprovider_state_from_binary() {
     let downloaded = root.join("Downloaded.icloud.md");
     let evicted = root.join("Evicted.icloud-placeholder");
     let value_evicted = root.join("ValueEvicted.icloud.md");
+    let local_with_provider_xattr = root.join("Local.md");
     let conflict = root.join("Conflict.icloud-conflict.md");
     std::fs::write(&downloaded, "downloaded").unwrap();
     std::fs::write(&evicted, "placeholder").unwrap();
@@ -885,6 +886,19 @@ fn reports_fileprovider_state_from_binary() {
         &value_evicted,
         "com.apple.fileprovider.state",
         b"not-downloaded",
+    )
+    .unwrap();
+    std::fs::write(&local_with_provider_xattr, "local").unwrap();
+    xattr::set(
+        &local_with_provider_xattr,
+        "com.apple.fileprovider.state",
+        b"not-downloaded",
+    )
+    .unwrap();
+    xattr::set(
+        &local_with_provider_xattr,
+        "com.apple.fileprovider.domain",
+        b"com.example.drive",
     )
     .unwrap();
     std::fs::write(&conflict, "conflict").unwrap();
@@ -993,6 +1007,23 @@ fn reports_fileprovider_state_from_binary() {
     assert!(value_evicted_stdout.contains("\tstate=evicted\tmaterialization=remote-placeholder\t"));
     assert!(value_evicted_stdout.contains("\tmaterialization-source=xattr-fallback\t"));
     assert!(value_evicted_stdout.contains("\tsource=fixture-name+xattr\t"));
+
+    let local_with_provider_xattr_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-state")
+        .arg(&local_with_provider_xattr)
+        .output()
+        .unwrap();
+    assert!(
+        local_with_provider_xattr_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&local_with_provider_xattr_output.stderr)
+    );
+    let local_with_provider_xattr_stdout =
+        String::from_utf8(local_with_provider_xattr_output.stdout).unwrap();
+    assert!(local_with_provider_xattr_stdout
+        .contains("\tdomain=local\tstate=local-only\tmaterialization=not-provider-backed\t"));
+    assert!(local_with_provider_xattr_stdout.contains("\tprovider=-\t"));
+    assert!(!local_with_provider_xattr_stdout.contains("xattr"));
 
     let conflict_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-state")

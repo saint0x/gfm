@@ -1392,6 +1392,7 @@ impl CloudHints {
         let mut xattr_values = Vec::new();
         let mut provider_identifier = None;
         let mut sources = Vec::new();
+        let path_sources = provider_path_sources(path);
 
         if native_has_fileprovider_values(&native) {
             sources.push("native-url-resource".to_string());
@@ -1401,41 +1402,31 @@ impl CloudHints {
             provider_identifier = native_identity.domain_identifier.clone();
         }
 
-        if let Ok(attrs) = xattr::list(path) {
-            for attr in attrs {
-                let attr = attr.to_string_lossy().to_string();
-                if attr.contains("icloud")
-                    || attr.contains("fileprovider")
-                    || attr.contains("ubiquit")
-                {
-                    if let Some(value) = xattr_string_value(path, &attr) {
-                        if provider_identifier.is_none() {
-                            provider_identifier =
-                                provider_identifier_from_xattr_value(&attr, &value);
+        if should_read_provider_xattrs(&native, &native_identity, !path_sources.is_empty()) {
+            if let Ok(attrs) = xattr::list(path) {
+                for attr in attrs {
+                    let attr = attr.to_string_lossy().to_string();
+                    if attr.contains("icloud")
+                        || attr.contains("fileprovider")
+                        || attr.contains("ubiquit")
+                    {
+                        if let Some(value) = xattr_string_value(path, &attr) {
+                            if provider_identifier.is_none() {
+                                provider_identifier =
+                                    provider_identifier_from_xattr_value(&attr, &value);
+                            }
+                            xattr_values.push(value);
                         }
-                        xattr_values.push(value);
+                        xattrs.push(attr);
                     }
-                    xattrs.push(attr);
                 }
-            }
-            if !xattrs.is_empty() {
-                sources.push("xattr".to_string());
+                if !xattrs.is_empty() {
+                    sources.push("xattr".to_string());
+                }
             }
         }
 
-        if path_components(path)
-            .iter()
-            .any(|component| component == ICLOUD_DRIVE_COMPONENT)
-        {
-            sources.push("icloud-path".to_string());
-        }
-        if path.extension().and_then(|value| value.to_str()) == Some("icloud") {
-            sources.push("icloud-extension".to_string());
-        }
-        let name = file_name_lower(path);
-        if name.contains("icloud") || name.contains("fileprovider") {
-            sources.push("fixture-name".to_string());
-        }
+        sources.extend(path_sources);
 
         Self {
             native,
@@ -1452,6 +1443,36 @@ impl CloudHints {
             },
         }
     }
+}
+
+fn provider_path_sources(path: &Path) -> Vec<String> {
+    let mut sources = Vec::new();
+    if path_components(path)
+        .iter()
+        .any(|component| component == ICLOUD_DRIVE_COMPONENT)
+    {
+        sources.push("icloud-path".to_string());
+    }
+    if path.extension().and_then(|value| value.to_str()) == Some("icloud") {
+        sources.push("icloud-extension".to_string());
+    }
+    let name = file_name_lower(path);
+    if name.contains("icloud") || name.contains("fileprovider") {
+        sources.push("fixture-name".to_string());
+    }
+    sources
+}
+
+fn should_read_provider_xattrs(
+    native: &NativeFileProviderResourceValues,
+    native_identity: &NativeFileProviderIdentity,
+    has_path_hint: bool,
+) -> bool {
+    has_path_hint
+        || native_identity.status == NativeFileProviderIdentityStatus::Available
+        || native.status != gfm_mac_sys::NativeFileProviderStatus::Available
+        || native.is_ubiquitous == Some(true)
+        || native_has_ubiquitous_materialization_evidence(native)
 }
 
 fn identity_not_queried() -> NativeFileProviderIdentity {
@@ -4066,6 +4087,83 @@ mod tests {
             .contains(&"a".repeat(MAX_PROVIDER_XATTR_VALUE_BYTES + 1)));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hot_state_read_ignores_provider_xattrs_for_plain_local_file_without_provider_path_hints() {
+        let root = unique_temp_dir();
+        let path = root.join("Local.md");
+        fs::write(&path, "local").unwrap();
+        xattr::set(&path, "com.apple.fileprovider.state", b"not-downloaded").unwrap();
+        xattr::set(&path, "com.apple.fileprovider.domain", b"com.example.drive").unwrap();
+
+        let report = FileProviderStateReport::read_path(&path).unwrap();
+
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_eq!(report.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::NotProviderBacked
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::Filesystem
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("not-fileprovider-backed")
+        );
+        assert!(report.provider_identifier.is_none());
+        assert!(!report.source.split('+').any(|source| source == "xattr"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn provider_xattr_gate_skips_plain_local_native_state() {
+        let mut native = native_values();
+        native.is_ubiquitous = Some(false);
+
+        assert!(!should_read_provider_xattrs(
+            &native,
+            &identity_not_queried(),
+            false
+        ));
+    }
+
+    #[test]
+    fn provider_xattr_gate_keeps_fallback_paths_for_provider_uncertainty() {
+        let mut missing_native = native_values();
+        missing_native.status = NativeFileProviderStatus::Missing;
+        let mut provider_native = native_values();
+        provider_native.is_ubiquitous = Some(true);
+        let identity = NativeFileProviderIdentity {
+            status: NativeFileProviderIdentityStatus::Available,
+            item_identifier: Some("item".to_string()),
+            domain_identifier: Some("com.example.drive".to_string()),
+            reason: None,
+        };
+
+        assert!(should_read_provider_xattrs(
+            &native_values(),
+            &identity_not_queried(),
+            true
+        ));
+        assert!(should_read_provider_xattrs(
+            &missing_native,
+            &identity_not_queried(),
+            false
+        ));
+        assert!(should_read_provider_xattrs(
+            &provider_native,
+            &identity_not_queried(),
+            false
+        ));
+        assert!(should_read_provider_xattrs(
+            &native_values(),
+            &identity,
+            false
+        ));
     }
 
     fn mark_evicted_fixture(path: &Path) {
