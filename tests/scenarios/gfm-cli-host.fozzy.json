@@ -2654,6 +2654,44 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "diagnostics-index-rebuild",
+        "tmp/gfm-fozzy-offline-volume",
+        "tmp/gfm-fozzy-offline-volume/records.gfmidx",
+        "tmp/gfm-fozzy-offline-volume/content.gfmcontent"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-index-recovery-plan",
+        "tmp/gfm-fozzy-offline-volume",
+        "tmp/gfm-fozzy-offline-volume/records.gfmidx",
+        "tmp/gfm-fozzy-offline-volume/state.gfmstate",
+        "tmp/gfm-fozzy-offline-volume/quarantine"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-index-recover",
+        "tmp/gfm-fozzy-offline-volume",
+        "tmp/gfm-fozzy-offline-volume/records.gfmidx",
+        "tmp/gfm-fozzy-offline-volume/state.gfmstate",
+        "tmp/gfm-fozzy-offline-volume/quarantine"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "thumbnail-generation",
         "tmp/gfm-fozzy-offline-volume/Project/Preview.png"
       ],

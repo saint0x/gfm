@@ -1,3 +1,4 @@
+use crate::access::{preflight_access_scope, ScopedAccessGuard};
 use crate::runtime::{run_scheduled_volume_task_cancellable, run_volume_task_cancellable};
 use crate::{
     config_store, detect_volume_id, parent_volume, parse_required_scheduling_pressure,
@@ -10,8 +11,9 @@ use gfm_diagnostics::{
 };
 use gfm_index::PersistentIndexRecovery;
 use gfm_jobs::Priority;
+use gfm_mac::AccessIntent;
 use gfm_types::{GfmError, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
@@ -31,6 +33,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&spec.root)
                 .ok()
                 .or_else(|| parent_volume(&spec.records_path));
+            let _access = retain_rebuild_access(&spec)?;
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -56,6 +59,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&spec.root)
                 .ok()
                 .or_else(|| parent_volume(&spec.records_path));
+            let _access = retain_rebuild_access(&spec)?;
             let outcome = run_scheduled_volume_task_cancellable(
                 volume,
                 Priority::Background,
@@ -94,6 +98,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or_else(|| records.with_extension("quarantine"));
             let spec = PersistentIndexRecoverySpec::new(root, records, state, quarantine);
+            let _access = retain_recovery_plan_access(&spec)?;
             println!("{}", plan_index_recovery(&spec).as_tsv());
         }
         "diagnostics-index-recover" => {
@@ -117,6 +122,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&spec.root)
                 .ok()
                 .or_else(|| parent_volume(&spec.records_path));
+            let _access = retain_recovery_access(&spec)?;
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -147,6 +153,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&spec.root)
                 .ok()
                 .or_else(|| parent_volume(&spec.records_path));
+            let _access = retain_recovery_access(&spec)?;
             let outcome = run_scheduled_volume_task_cancellable(
                 volume,
                 Priority::Background,
@@ -223,6 +230,71 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn retain_rebuild_access(spec: &RebuildSpec) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = Vec::new();
+    guards.push(preflight_access_scope(
+        &spec.root,
+        AccessIntent::Index,
+        "index rebuild root",
+    )?);
+    guards.push(preflight_access_scope(
+        write_probe_path(&spec.records_path),
+        AccessIntent::Write,
+        "index rebuild records",
+    )?);
+    if let Some(content_path) = &spec.content_path {
+        guards.push(preflight_access_scope(
+            write_probe_path(content_path),
+            AccessIntent::Write,
+            "index rebuild content",
+        )?);
+    }
+    Ok(guards)
+}
+
+fn retain_recovery_plan_access(
+    spec: &PersistentIndexRecoverySpec,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![preflight_access_scope(
+        &spec.root,
+        AccessIntent::Index,
+        "persistent index repair root",
+    )?])
+}
+
+fn retain_recovery_access(spec: &PersistentIndexRecoverySpec) -> Result<Vec<ScopedAccessGuard>> {
+    let guards = vec![
+        preflight_access_scope(
+            &spec.root,
+            AccessIntent::Index,
+            "persistent index repair root",
+        )?,
+        preflight_access_scope(
+            write_probe_path(&spec.records_path),
+            AccessIntent::Write,
+            "persistent index repair records",
+        )?,
+        preflight_access_scope(
+            write_probe_path(&spec.state_path),
+            AccessIntent::Write,
+            "persistent index repair state",
+        )?,
+        preflight_access_scope(
+            write_probe_path(&spec.quarantine_dir),
+            AccessIntent::Write,
+            "persistent index repair quarantine",
+        )?,
+    ];
+    Ok(guards)
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.is_dir() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
 }
 
 fn print_index_rebuild_report(report: gfm_diagnostics::RebuildReport) {

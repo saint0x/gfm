@@ -81,6 +81,38 @@ fn diagnostics_rebuilds_and_inspects_indexes_from_binary() {
 }
 
 #[test]
+fn diagnostics_rebuild_refuses_unreachable_volume_before_writing_indexes_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-rebuild-unreachable");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(root.join("needle.md"), "diagnostic needle").unwrap();
+    let records = root.join("records.gfmidx");
+    let content = root.join("content.gfmcontent");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-index-rebuild",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("records.gfmidx"), "{stdout}");
+    assert!(
+        stderr.contains("index rebuild root volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!records.exists());
+    assert!(!content.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn diagnostics_plans_and_recovers_persistent_index_from_binary() {
     let root = unique_temp_dir("gfm-cli-diagnostics-recovery");
     let records = root.join("records.gfmidx");
@@ -179,6 +211,58 @@ fn diagnostics_plans_and_recovers_persistent_index_from_binary() {
     );
     assert!(recover_stdout.contains("action=ready"), "{recover_stdout}");
     assert!(state.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn diagnostics_recover_refuses_unreachable_volume_before_repair_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-recovery-unreachable");
+    let records = root.join("records.gfmidx");
+    let state = root.join("state.gfmstate");
+    let quarantine = root.join("quarantine");
+    fs::write(root.join("needle.md"), "diagnostic needle").unwrap();
+
+    let rebuild = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        rebuild.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuild.stderr)
+    );
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::remove_file(&state).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-index-recover",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("persistent-index-recovery"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "persistent index repair root volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!state.exists());
+    assert!(!quarantine.exists());
 
     fs::remove_dir_all(root).unwrap();
 }
