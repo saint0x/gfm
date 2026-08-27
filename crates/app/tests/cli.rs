@@ -7197,6 +7197,41 @@ fn scheduled_runtime_retry_probe_retries_transient_failure_from_binary() {
 }
 
 #[test]
+fn scheduled_runtime_refuses_unreachable_job_journal_before_runtime_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-journal-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-runtime-journal-preflight-offline");
+    let state = root.join("retry.state");
+    let journal = offline.join("jobs.journal");
+    let catalog = root.join("runtime.gfmjobs");
+    let progress = root.join("runtime.gfmprogress");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["jobs-runtime-retry-probe", state.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("runtime-retry-probe\t"), "{stdout}");
+    assert!(
+        stderr.contains("runtime retry probe volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!state.exists());
+    assert!(!journal.exists());
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn reports_job_payload_catalog_from_binary() {
     let catalog = unique_temp_path("gfm-cli-job-payload-catalog", "gfmjobs");
 

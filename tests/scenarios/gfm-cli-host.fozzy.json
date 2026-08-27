@@ -2776,6 +2776,21 @@
     {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-offline-volume/scheduled-jobs.journal",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-scheduled-journal-progress.gfmprogress",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-scheduled-journal-catalog.gfmjobs"
+      },
+      "args": [
+        "jobs-runtime-retry-probe",
+        "tmp/gfm-fozzy-scheduled-journal.state"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
         "fileprovider-state",
         "tmp/gfm-fozzy-offline-volume/Project/Preview.pdf"

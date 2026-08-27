@@ -124,6 +124,10 @@ where
     } else {
         scheduler.schedule(priority, label)
     };
+    let journal = JobJournal::new(default_job_journal_path());
+    let _journal_access = (scheduling.action != SchedulingAction::Defer)
+        .then(|| preflight_runtime_write(journal.path(), label))
+        .transpose()?;
     let runtime = RuntimeJobHandle::begin(
         &job,
         payload_kind_for_label(label),
@@ -152,7 +156,6 @@ where
             .expect("scheduled task result lock poisoned") = Some(result);
         Ok(())
     });
-    let journal = JobJournal::new(default_job_journal_path());
     let report = WorkerPool::new(scheduling.worker_threads).run_retriable_isolated(
         vec![task],
         &journal,
