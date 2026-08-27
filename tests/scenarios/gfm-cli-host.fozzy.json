@@ -2626,6 +2626,11 @@
       "data": "should not be listed\n"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/spotlight.tsv",
+      "data": "kMDItemDisplayName\tVisible.txt\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -2695,6 +2700,60 @@
         "search-stream",
         "tmp/gfm-fozzy-offline-volume",
         "listed"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "native-icon",
+        "tmp/gfm-fozzy-offline-volume/Visible.txt"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "icon-preview",
+        "tmp/gfm-fozzy-offline-volume/Visible.txt"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "spotlight-reconcile",
+        "tmp/gfm-fozzy-offline-volume/Visible.txt",
+        "tmp/gfm-fozzy-offline-volume/spotlight.tsv"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "preview-cache-fileprovider-invalidation",
+        "tmp/gfm-fozzy-offline-volume/cache",
+        "downloaded",
+        "tmp/gfm-fozzy-offline-volume/Visible.txt",
+        "thumbnail"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "watch-once",
+        "tmp/gfm-fozzy-offline-volume"
       ],
       "exit_code": 1,
       "times": 1

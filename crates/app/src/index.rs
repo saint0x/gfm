@@ -237,6 +237,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "watch-once" => {
             let root = required_path(args.next(), "watch-once requires a root path")?;
+            enforce_index_access(&root)?;
             let stream = FileEventStream::watch(&[WatchRoot::tree(root)])?;
             let event = stream.recv()?;
             println!("{}\t{}", event_marker(&event.kind), event.path.display());

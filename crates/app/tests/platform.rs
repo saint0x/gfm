@@ -317,6 +317,36 @@ fn reports_native_icon_descriptor_from_binary() {
 }
 
 #[test]
+fn native_icon_refuses_unreachable_network_volume_before_record_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-native-icon-unreachable-volume-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Report.pdf");
+    std::fs::write(&path, "pdf").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("native-icon")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("native-icon\t"), "{stdout}");
+    assert!(
+        stderr.contains("native icon volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_icloud_badges_in_native_icon_descriptor_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-native-icon-cloud-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -482,6 +512,39 @@ fn reports_spotlight_reconciliation_from_binary() {
 }
 
 #[test]
+fn spotlight_reconcile_refuses_unreachable_network_volume_before_record_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-spotlight-unreachable-volume-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Primary.md");
+    let fixture = root.join("spotlight.tsv");
+    std::fs::write(&path, "spotlight body").unwrap();
+    std::fs::write(&fixture, "kMDItemDisplayName\tPrimary.md\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("spotlight-reconcile")
+        .arg(&path)
+        .arg(&fixture)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("spotlight-reconciliation\t"), "{stdout}");
+    assert!(
+        stderr.contains("spotlight reconcile volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_icon_preview_contract_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-icon-preview-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -504,6 +567,36 @@ fn reports_icon_preview_contract_from_binary() {
             "icon-preview\t{}\tapplication\tlaunchservices-application-icon\tcom.apple.application-bundle\tbadges=package\tcache=refresh-memory-only\tinvalidate-memory=true\tinvalidate-disk=false",
             root.join("GFM.app").display()
         )
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn icon_preview_refuses_unreachable_network_volume_before_record_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-icon-preview-unreachable-volume-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("GFM.app");
+    std::fs::create_dir_all(&path).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("icon-preview")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("icon-preview\t"), "{stdout}");
+    assert!(
+        stderr.contains("icon preview volume access blocked: unreachable volume network"),
+        "{stderr}"
     );
 
     let _ = std::fs::remove_dir_all(root);
@@ -972,6 +1065,40 @@ fn reports_preview_cache_fileprovider_invalidation_from_binary() {
     assert!(stdout.contains("\tkind=thumbnail\treason=content-or-icloud\t"));
     assert!(stdout.contains("\tinvalidate-memory=true\tinvalidate-disk=true\t"));
     assert!(stdout.contains("\tremoved-memory=false\tremoved-disk=false\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn preview_cache_refuses_unreachable_network_volume_before_record_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-preview-cache-unreachable-volume-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let cache = root.join("cache");
+    let evicted = root.join("Remote.icloud-placeholder");
+    std::fs::write(&evicted, "placeholder").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("preview-cache-fileprovider-invalidation")
+        .arg(&cache)
+        .arg("downloaded")
+        .arg(&evicted)
+        .arg("thumbnail")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("preview-cache-invalidation\t"), "{stdout}");
+    assert!(
+        stderr.contains("preview cache volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

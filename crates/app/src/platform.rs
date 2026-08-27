@@ -32,8 +32,8 @@ use gfm_preview::{
     PreviewSchedulingPolicy, PreviewSecurityPolicy, PreviewTask, QuickLookSessionContract,
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
-use gfm_types::{FileEvent, FileEventKind, FileId, GfmError, Result, VolumeId};
-use std::path::PathBuf;
+use gfm_types::{FileEvent, FileEventKind, FileId, FileRecord, GfmError, Result, VolumeId};
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -95,12 +95,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "native-icon" => {
             let path = required_path(args.next(), "native-icon requires a path")?;
-            let record = record_for_path(&path, None, false)?;
+            let record = record_for_path_with_access(&path, AccessIntent::Preview, "native icon")?;
             println!("{}", NativeIconDescriptor::for_record(&record).as_tsv());
         }
         "native-icon-bridge" => {
             let path = required_path(args.next(), "native-icon-bridge requires a path")?;
-            let record = record_for_path(&path, None, false)?;
+            let record =
+                record_for_path_with_access(&path, AccessIntent::Preview, "native icon bridge")?;
             let host = current_host_profile()?;
             println!(
                 "{}",
@@ -217,7 +218,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "preview-cache-fileprovider-invalidation requires a path",
             )?;
             let kind = parse_preview_kind(args.next())?;
-            let record = record_for_path(&path, None, false)?;
+            let record =
+                record_for_path_with_access(&path, AccessIntent::Preview, "preview cache")?;
             let report = FileProviderInvalidationReport::evaluate(path.clone(), previous)?;
             let key = PreviewRequestKey::new(record.id, path, kind);
             let mut cache = PreviewCache::new(PreviewCacheConfig::new(cache_root))?;
@@ -447,7 +449,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "spotlight-reconcile" => {
             let path = required_path(args.next(), "spotlight-reconcile requires a path")?;
             let fixture_path = args.next().map(PathBuf::from);
-            let record = record_for_path(&path, None, false)?;
+            let record =
+                record_for_path_with_access(&path, AccessIntent::Index, "spotlight reconcile")?;
             let snapshot = match fixture_path {
                 Some(fixture_path) => {
                     let text = std::fs::read_to_string(&fixture_path)
@@ -483,7 +486,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "icon-preview" => {
             let path = required_path(args.next(), "icon-preview requires a path")?;
-            let record = record_for_path(&path, None, false)?;
+            let record = record_for_path_with_access(&path, AccessIntent::Preview, "icon preview")?;
             let input = IconPreviewInput::new(
                 PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Icon),
                 record,
@@ -998,6 +1001,15 @@ fn index_volume_event_kind(kind: VolumeEventKind) -> IndexVolumeEventKind {
         VolumeEventKind::Disappeared => IndexVolumeEventKind::Disappeared,
         VolumeEventKind::Unavailable => IndexVolumeEventKind::Unavailable,
     }
+}
+
+fn record_for_path_with_access(
+    path: &Path,
+    intent: AccessIntent,
+    worker: &str,
+) -> Result<FileRecord> {
+    let _access = preflight_access_scope(path, intent, worker)?;
+    record_for_path(path, None, false)
 }
 
 fn parse_preview_kind(value: Option<String>) -> Result<PreviewKind> {
