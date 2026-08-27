@@ -56,6 +56,7 @@ pub struct ParityCaptureProvenance {
     pub captured_at: String,
     pub capture_command: String,
     pub reviewer: String,
+    pub signer: String,
     pub approved_mask_set: String,
     pub appearance: ParityAppearance,
     pub scale: DisplayScale,
@@ -106,6 +107,11 @@ impl ParityCaptureProvenance {
         if self.reviewer.trim().is_empty() {
             return Err(GfmError::Format(
                 "parity manifest reviewer cannot be empty".to_string(),
+            ));
+        }
+        if self.signer.trim().is_empty() {
+            return Err(GfmError::Format(
+                "parity manifest signer cannot be empty".to_string(),
             ));
         }
         if self.approved_mask_set.trim().is_empty() {
@@ -437,6 +443,7 @@ fn parse_versioned_entry(
         captured_at: profile.captured_at.clone(),
         capture_command: profile.capture_command.clone(),
         reviewer: profile.reviewer.clone(),
+        signer: profile.signer.clone(),
         approved_mask_set: profile.approved_mask_set.clone(),
         appearance: profile.appearance,
         scale: profile.scale,
@@ -470,6 +477,7 @@ struct ManifestProfile {
     captured_at: String,
     capture_command: String,
     reviewer: String,
+    signer: String,
     approved_mask_set: String,
     appearance: ParityAppearance,
     scale: DisplayScale,
@@ -485,6 +493,7 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
     let mut captured_at = None;
     let mut capture_command = None;
     let mut reviewer = None;
+    let mut signer = None;
     let mut approved_mask_set = None;
     let mut appearance = None;
     let mut scale = None;
@@ -505,6 +514,7 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
             "captured-at" => captured_at = Some(value.to_string()),
             "capture-command" => capture_command = Some(value.to_string()),
             "reviewer" => reviewer = Some(value.to_string()),
+            "signer" => signer = Some(value.to_string()),
             "approved-mask-set" => approved_mask_set = Some(value.to_string()),
             "appearance" => {
                 appearance = Some(
@@ -571,6 +581,12 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
         reviewer: reviewer.ok_or_else(|| {
             GfmError::Format(format!(
                 "parity gate manifest line {} missing reviewer",
+                line_index + 1
+            ))
+        })?,
+        signer: signer.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing signer",
                 line_index + 1
             ))
         })?,
@@ -647,6 +663,12 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
             line_index + 1
         )));
     }
+    if profile.signer.trim().is_empty() {
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} has empty signer",
+            line_index + 1
+        )));
+    }
     if profile.approved_mask_set.trim().is_empty() {
         return Err(GfmError::Format(format!(
             "parity gate manifest line {} has empty approved-mask-set",
@@ -695,12 +717,12 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
 
 fn render_entries_tsv(report: &ParityGateReport) -> String {
     let mut text =
-        "surface\twidth\theight\texpected\tactual\tmask\tmacos-build\thardware-profile\tdisplay-profile\tapp-version\tfixture-manifest\tcaptured-at\tcapture-command\treviewer\tapproved-mask-set\tappearance\tscale\tcolor-profile\twindow-width\twindow-height\tfocus\tview-mode\tfixture-root\tmismatched\tunmasked\tmasked\tmax-channel-delta\tpassed\n"
+        "surface\twidth\theight\texpected\tactual\tmask\tmacos-build\thardware-profile\tdisplay-profile\tapp-version\tfixture-manifest\tcaptured-at\tcapture-command\treviewer\tsigner\tapproved-mask-set\tappearance\tscale\tcolor-profile\twindow-width\twindow-height\tfocus\tview-mode\tfixture-root\tmismatched\tunmasked\tmasked\tmax-channel-delta\tpassed\n"
             .to_string();
     for entry in &report.entries {
         let provenance = entry.input.provenance.as_ref();
         text.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             entry.input.surface.as_str(),
             entry.diff.size.width,
             entry.diff.size.height,
@@ -735,6 +757,9 @@ fn render_entries_tsv(report: &ParityGateReport) -> String {
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.reviewer.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.signer.as_str())
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.approved_mask_set.as_str())
@@ -1012,7 +1037,7 @@ mod tests {
         fs::write(root.join("actual.rgba"), [1, 2, 3, 255]).unwrap();
         fs::write(
             root.join("gate.tsv"),
-            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ticon\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ticon\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
         )
         .unwrap();
 
@@ -1047,7 +1072,7 @@ mod tests {
         fs::write(root.join("gfm.png"), [1, 2, 3, 255]).unwrap();
         fs::write(
             root.join("gate.tsv"),
-            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
         )
         .unwrap();
 
@@ -1064,6 +1089,7 @@ mod tests {
         assert_eq!(provenance.captured_at, "2026-08-27T00:00:00Z");
         assert_eq!(provenance.capture_command, "screencapture:-x");
         assert_eq!(provenance.reviewer, "codex");
+        assert_eq!(provenance.signer, "codex");
         assert_eq!(provenance.approved_mask_set, "macos-25A354-default");
         assert_eq!(provenance.appearance, ParityAppearance::Dark);
         assert_eq!(provenance.scale, DisplayScale::Two);
@@ -1080,7 +1106,7 @@ mod tests {
     fn versioned_parity_manifest_rejects_incomplete_capture_profile() {
         let root = unique_temp_dir("gfm-parity-gate-incomplete-profile");
         let err = parse_parity_gate_manifest(
-            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
             &root,
         )
         .unwrap_err();
@@ -1143,7 +1169,7 @@ mod tests {
         fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
         fs::write(
             root.join("gate.tsv"),
-            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\texpected.rgba\tactual.rgba\t2\t1\t\t1040\t720\tactive\tlist\tfixtures/text\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\texpected.rgba\tactual.rgba\t2\t1\t\t1040\t720\tactive\tlist\tfixtures/text\n",
         )
         .unwrap();
 

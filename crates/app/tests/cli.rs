@@ -650,7 +650,7 @@ fn parity_gate_and_review_use_governed_masks_from_binary() {
     fs::write(
         &manifest,
         format!(
-            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\t{}\t{}\t2\t1\t{}\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\t{}\t{}\t2\t1\t{}\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
             expected.display(),
             actual.display(),
             mask.display()
@@ -3981,6 +3981,82 @@ fn sidecar_recover_refuses_unreachable_volume_before_repair_from_binary() {
     assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn deferred_sidecar_recover_adaptive_does_not_touch_unreachable_records_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-recovery-deferred-unreachable-root");
+    let records = root.join("records.gfmidx");
+    let prefixes = root.join("prefixes.gfmprefix");
+    let dictionary = root.join("dictionary.gfmdict");
+    let quarantine = root.join("quarantine");
+    let catalog = unique_temp_path("gfm-cli-sidecar-recovery-deferred-unreachable", "gfmjobs");
+    let progress = unique_temp_path(
+        "gfm-cli-sidecar-recovery-deferred-unreachable",
+        "gfmprogress",
+    );
+    fs::create_dir_all(&quarantine).unwrap();
+    fs::write(&records, "not-a-record-archive").unwrap();
+    fs::write(&dictionary, "not-a-dictionary").unwrap();
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "sidecar-recover-adaptive",
+            records.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            "saturated",
+            "critical",
+            "low",
+            "active",
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            "-",
+            dictionary.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("sidecar-recovery\t"), "{stdout}");
+    assert!(
+        stderr.contains("sidecar-recovery-deferred") && stderr.contains("action=Defer"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&records).unwrap(),
+        "not-a-record-archive"
+    );
+    assert_eq!(fs::read_to_string(&dictionary).unwrap(), "not-a-dictionary");
+    assert!(!prefixes.exists());
+    assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tbackground\tbackground\tsidecar repair"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
+        "{progress_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
 }
 
 #[test]
