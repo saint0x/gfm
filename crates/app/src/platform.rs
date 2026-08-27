@@ -379,7 +379,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let _root_access =
                 preflight_access_scope(&root, AccessIntent::Index, "fileprovider observer root")?;
             let _target_access = preflight_access_scope(
-                &target,
+                &write_probe_existing_ancestor(&target),
                 AccessIntent::Write,
                 "fileprovider observer target",
             )?;
