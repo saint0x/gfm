@@ -139,6 +139,7 @@ pub enum NativeFileProviderStatus {
     Available,
     Missing,
     UnsupportedPath,
+    Unavailable,
 }
 
 impl NativeFileProviderStatus {
@@ -147,6 +148,7 @@ impl NativeFileProviderStatus {
             Self::Available => "available",
             Self::Missing => "missing",
             Self::UnsupportedPath => "unsupported-path",
+            Self::Unavailable => "unavailable",
         }
     }
 }
@@ -373,40 +375,89 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
         return unsupported(format!("invalid path URL: {}", path.display()));
     };
 
-    let is_ubiquitous = copy_bool(url.as_concrete_TypeRef(), unsafe {
-        NSURLIsUbiquitousItemKey
-    });
-    let has_unresolved_conflicts = copy_bool(url.as_concrete_TypeRef(), unsafe {
-        NSURLUbiquitousItemHasUnresolvedConflictsKey
-    });
-    let is_downloaded = copy_bool(url.as_concrete_TypeRef(), unsafe {
-        NSURLUbiquitousItemIsDownloadedKey
-    });
-    let is_downloading = copy_bool(url.as_concrete_TypeRef(), unsafe {
-        NSURLUbiquitousItemIsDownloadingKey
-    });
-    let is_uploading = copy_bool(url.as_concrete_TypeRef(), unsafe {
-        NSURLUbiquitousItemIsUploadingKey
-    });
-    let is_uploaded = copy_bool(url.as_concrete_TypeRef(), unsafe {
-        NSURLUbiquitousItemIsUploadedKey
-    });
-    let download_requested = copy_bool(url.as_concrete_TypeRef(), unsafe {
-        NSURLUbiquitousItemDownloadRequestedKey
-    });
-    let percent_downloaded_milli = copy_percent_milli(url.as_concrete_TypeRef(), unsafe {
-        NSURLUbiquitousItemPercentDownloadedKey
-    });
-    let percent_uploaded_milli = copy_percent_milli(url.as_concrete_TypeRef(), unsafe {
-        NSURLUbiquitousItemPercentUploadedKey
-    });
-    let downloading_status = copy_downloading_status(url.as_concrete_TypeRef());
-    let downloading_error = copy_error(url.as_concrete_TypeRef(), unsafe {
-        NSURLUbiquitousItemDownloadingErrorKey
-    });
-    let uploading_error = copy_error(url.as_concrete_TypeRef(), unsafe {
-        NSURLUbiquitousItemUploadingErrorKey
-    });
+    let mut errors = Vec::new();
+    let is_ubiquitous = copy_bool(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLIsUbiquitousItemKey },
+        "NSURLIsUbiquitousItemKey",
+        &mut errors,
+    );
+    let has_unresolved_conflicts = copy_bool(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLUbiquitousItemHasUnresolvedConflictsKey },
+        "NSURLUbiquitousItemHasUnresolvedConflictsKey",
+        &mut errors,
+    );
+    let is_downloaded = copy_bool(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLUbiquitousItemIsDownloadedKey },
+        "NSURLUbiquitousItemIsDownloadedKey",
+        &mut errors,
+    );
+    let is_downloading = copy_bool(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLUbiquitousItemIsDownloadingKey },
+        "NSURLUbiquitousItemIsDownloadingKey",
+        &mut errors,
+    );
+    let is_uploading = copy_bool(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLUbiquitousItemIsUploadingKey },
+        "NSURLUbiquitousItemIsUploadingKey",
+        &mut errors,
+    );
+    let is_uploaded = copy_bool(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLUbiquitousItemIsUploadedKey },
+        "NSURLUbiquitousItemIsUploadedKey",
+        &mut errors,
+    );
+    let download_requested = copy_bool(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLUbiquitousItemDownloadRequestedKey },
+        "NSURLUbiquitousItemDownloadRequestedKey",
+        &mut errors,
+    );
+    let percent_downloaded_milli = copy_percent_milli(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLUbiquitousItemPercentDownloadedKey },
+        "NSURLUbiquitousItemPercentDownloadedKey",
+        &mut errors,
+    );
+    let percent_uploaded_milli = copy_percent_milli(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLUbiquitousItemPercentUploadedKey },
+        "NSURLUbiquitousItemPercentUploadedKey",
+        &mut errors,
+    );
+    let downloading_status = copy_downloading_status(url.as_concrete_TypeRef(), &mut errors);
+    let downloading_error = copy_error(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLUbiquitousItemDownloadingErrorKey },
+        "NSURLUbiquitousItemDownloadingErrorKey",
+        &mut errors,
+    );
+    let uploading_error = copy_error(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLUbiquitousItemUploadingErrorKey },
+        "NSURLUbiquitousItemUploadingErrorKey",
+        &mut errors,
+    );
+    let has_values = is_ubiquitous.is_some()
+        || has_unresolved_conflicts.is_some()
+        || is_downloaded.is_some()
+        || is_downloading.is_some()
+        || is_uploading.is_some()
+        || is_uploaded.is_some()
+        || download_requested.is_some()
+        || percent_downloaded_milli.is_some()
+        || percent_uploaded_milli.is_some()
+        || downloading_status.is_some()
+        || downloading_error.is_some()
+        || uploading_error.is_some();
+    let status = resource_status_for_values(has_values, &errors);
+    let reason = (status == NativeFileProviderStatus::Unavailable)
+        .then(|| unavailable_resource_values_reason(path, &errors));
 
     NativeFileProviderResourceValues {
         is_ubiquitous,
@@ -421,8 +472,8 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
         downloading_status,
         downloading_error,
         uploading_error,
-        status: NativeFileProviderStatus::Available,
-        reason: None,
+        status,
+        reason,
     }
 }
 
@@ -535,8 +586,13 @@ pub fn copy_fileprovider_identity(path: &Path) -> NativeFileProviderIdentity {
     }
 }
 
-fn copy_bool(url: CFURLRef, key: CFStringRef) -> Option<bool> {
-    let value = copy_resource_value(url, key)?;
+fn copy_bool(
+    url: CFURLRef,
+    key: CFStringRef,
+    key_name: &'static str,
+    errors: &mut Vec<String>,
+) -> Option<bool> {
+    let value = copy_resource_value(url, key, key_name, errors)?;
     if unsafe { CFGetTypeID(value.as_CFTypeRef()) } != unsafe { CFBooleanGetTypeID() } {
         return None;
     }
@@ -544,8 +600,16 @@ fn copy_bool(url: CFURLRef, key: CFStringRef) -> Option<bool> {
     Some(typed.into())
 }
 
-fn copy_downloading_status(url: CFURLRef) -> Option<NativeUbiquitousDownloadingStatus> {
-    let value = copy_resource_value(url, unsafe { NSURLUbiquitousItemDownloadingStatusKey })?;
+fn copy_downloading_status(
+    url: CFURLRef,
+    errors: &mut Vec<String>,
+) -> Option<NativeUbiquitousDownloadingStatus> {
+    let value = copy_resource_value(
+        url,
+        unsafe { NSURLUbiquitousItemDownloadingStatusKey },
+        "NSURLUbiquitousItemDownloadingStatusKey",
+        errors,
+    )?;
     if unsafe { CFGetTypeID(value.as_CFTypeRef()) } != unsafe { CFStringGetTypeID() } {
         return None;
     }
@@ -569,8 +633,13 @@ fn copy_downloading_status(url: CFURLRef) -> Option<NativeUbiquitousDownloadingS
     }
 }
 
-fn copy_percent_milli(url: CFURLRef, key: CFStringRef) -> Option<u32> {
-    let value = copy_resource_value(url, key)?;
+fn copy_percent_milli(
+    url: CFURLRef,
+    key: CFStringRef,
+    key_name: &'static str,
+    errors: &mut Vec<String>,
+) -> Option<u32> {
+    let value = copy_resource_value(url, key, key_name, errors)?;
     if unsafe { CFGetTypeID(value.as_CFTypeRef()) } != unsafe { CFNumberGetTypeID() } {
         return None;
     }
@@ -589,8 +658,13 @@ fn copy_percent_milli(url: CFURLRef, key: CFStringRef) -> Option<u32> {
     Some((bounded * 1_000.0).round() as u32)
 }
 
-fn copy_error(url: CFURLRef, key: CFStringRef) -> Option<NativeUbiquitousError> {
-    let value = copy_resource_value(url, key)?;
+fn copy_error(
+    url: CFURLRef,
+    key: CFStringRef,
+    key_name: &'static str,
+    errors: &mut Vec<String>,
+) -> Option<NativeUbiquitousError> {
+    let value = copy_resource_value(url, key, key_name, errors)?;
     let object = value.as_CFTypeRef() as *mut Object;
     Some(NativeUbiquitousError {
         code: unsafe { ns_error_code(object) },
@@ -598,13 +672,46 @@ fn copy_error(url: CFURLRef, key: CFStringRef) -> Option<NativeUbiquitousError> 
     })
 }
 
-fn copy_resource_value(url: CFURLRef, key: CFStringRef) -> Option<CFType> {
+fn copy_resource_value(
+    url: CFURLRef,
+    key: CFStringRef,
+    key_name: &'static str,
+    errors: &mut Vec<String>,
+) -> Option<CFType> {
     let mut value: CFTypeRef = ptr::null();
-    let copied = unsafe { CFURLCopyResourcePropertyForKey(url, key, &mut value, ptr::null_mut()) };
+    let mut error: CFErrorRef = ptr::null_mut();
+    let copied = unsafe { CFURLCopyResourcePropertyForKey(url, key, &mut value, &mut error) };
     if copied == 0 || value.is_null() {
+        if !error.is_null() {
+            let description = unsafe { ns_error_description(error as *mut Object) }
+                .unwrap_or_else(|| "resource value unavailable".to_string());
+            let _error = unsafe { CFType::wrap_under_create_rule(error as CFTypeRef) };
+            errors.push(format!("{}={}", key_name, description));
+        }
         None
     } else {
         Some(unsafe { CFType::wrap_under_create_rule(value) })
+    }
+}
+
+fn unavailable_resource_values_reason(path: &Path, errors: &[String]) -> String {
+    let details = if errors.is_empty() {
+        "no resource values returned".to_string()
+    } else {
+        errors.join("; ")
+    };
+    format!(
+        "native FileProvider URL resource values unavailable for {}: {}",
+        path.display(),
+        details
+    )
+}
+
+fn resource_status_for_values(has_values: bool, errors: &[String]) -> NativeFileProviderStatus {
+    if !has_values && !errors.is_empty() {
+        NativeFileProviderStatus::Unavailable
+    } else {
+        NativeFileProviderStatus::Available
     }
 }
 
@@ -963,6 +1070,28 @@ mod tests {
         assert_eq!(
             reason,
             "start downloading ubiquitous item returned false for /tmp/Remote.icloud: NSError 257: Operation not permitted"
+        );
+    }
+
+    #[test]
+    fn native_resource_status_reports_unavailable_only_when_all_values_fail() {
+        let errors = vec!["NSURLIsUbiquitousItemKey=Operation not permitted".to_string()];
+
+        assert_eq!(
+            resource_status_for_values(false, &errors),
+            NativeFileProviderStatus::Unavailable
+        );
+        assert_eq!(
+            resource_status_for_values(true, &errors),
+            NativeFileProviderStatus::Available
+        );
+        assert_eq!(
+            unavailable_resource_values_reason(Path::new("/tmp/Remote.icloud"), &errors),
+            "native FileProvider URL resource values unavailable for /tmp/Remote.icloud: NSURLIsUbiquitousItemKey=Operation not permitted"
+        );
+        assert_eq!(
+            NativeFileProviderStatus::Unavailable.as_str(),
+            "unavailable"
         );
     }
 

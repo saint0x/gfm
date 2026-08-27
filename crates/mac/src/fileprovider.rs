@@ -1753,7 +1753,11 @@ fn materialization_source_for_state(
     {
         CloudMaterializationSource::NativeUrlResourceUnsupported
     } else if state == CloudStorageState::Unknown
-        && hints.native.status == gfm_mac_sys::NativeFileProviderStatus::Missing
+        && matches!(
+            hints.native.status,
+            gfm_mac_sys::NativeFileProviderStatus::Missing
+                | gfm_mac_sys::NativeFileProviderStatus::Unavailable
+        )
     {
         CloudMaterializationSource::NativeUrlResourceUnavailable
     } else if hints.native_identity.status == NativeFileProviderIdentityStatus::Available
@@ -1840,6 +1844,7 @@ fn materialization_reason_for_state(
             hints.native.status,
             gfm_mac_sys::NativeFileProviderStatus::UnsupportedPath
                 | gfm_mac_sys::NativeFileProviderStatus::Missing
+                | gfm_mac_sys::NativeFileProviderStatus::Unavailable
         ) {
             return hints.native.reason.clone();
         }
@@ -4326,6 +4331,46 @@ mod tests {
         let report = FileProviderStateReport::from_hints(path, hints);
         assert!(report.as_tsv().contains(
             "\tmaterialization-source=native-url-resource:unsupported\tmaterialization-confidence=native\tmaterialization-reason=native URL resource values unsupported\t"
+        ));
+    }
+
+    #[test]
+    fn native_url_unavailable_unknown_state_reports_typed_source() {
+        let path = PathBuf::from("/tmp/Remote.fileprovider");
+        let mut native = native_values();
+        native.status = gfm_mac_sys::NativeFileProviderStatus::Unavailable;
+        native.reason = Some("native FileProvider URL resource values unavailable".to_string());
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+
+        assert_eq!(domain, FileProviderDomain::FileProvider);
+        assert_eq!(state, CloudStorageState::Unknown);
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            CloudMaterializationSource::NativeUrlResourceUnavailable
+        );
+        assert_eq!(
+            materialization_reason_for_state(state, &hints).as_deref(),
+            Some("native FileProvider URL resource values unavailable")
+        );
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+        assert!(report.as_tsv().contains(
+            "\tmaterialization-source=native-url-resource:unavailable\tmaterialization-confidence=native\tmaterialization-reason=native FileProvider URL resource values unavailable\t"
         ));
     }
 
