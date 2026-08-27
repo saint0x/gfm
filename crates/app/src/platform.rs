@@ -336,6 +336,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 AccessIntent::Write,
                 "fileprovider observer target",
             )?;
+            let _state_access = retain_fileprovider_snapshot_access(
+                &state_path,
+                std::slice::from_ref(&target),
+                "fileprovider observer state",
+            )?;
             let previous = if state_path.is_file() {
                 Some(FileProviderStateSnapshot::read(&state_path)?)
             } else {

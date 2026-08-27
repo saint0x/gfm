@@ -1,8 +1,9 @@
 use crate::runtime::default_permission_state_path;
 use gfm_mac::{
     current_permission_onboarding, PermissionStateInvalidationReport, PermissionStateSnapshot,
+    VolumeDiscoveryReport,
 };
-use gfm_types::Result;
+use gfm_types::{GfmError, Result};
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +57,7 @@ pub(crate) fn refresh_permission_state(
 pub(crate) fn refresh_permission_state_at_path(
     path: &Path,
 ) -> Result<PermissionStateInvalidationReport> {
+    preflight_permission_state_volume(path)?;
     let previous = if path.is_file() {
         Some(PermissionStateSnapshot::read(path)?)
     } else {
@@ -65,6 +67,35 @@ pub(crate) fn refresh_permission_state_at_path(
     let report = PermissionStateInvalidationReport::evaluate(previous.as_ref(), &current);
     current.write(path)?;
     Ok(report)
+}
+
+fn preflight_permission_state_volume(path: &Path) -> Result<()> {
+    let probe_path = write_probe_path(path);
+    let report = VolumeDiscoveryReport::for_containing_path(probe_path);
+    let Some(volume) = report.volume_for_path(probe_path) else {
+        return Ok(());
+    };
+    if volume.reachable != Some(false) {
+        return Ok(());
+    }
+    Err(GfmError::Permission {
+        path: path.to_path_buf(),
+        message: format!(
+            "permission state volume access blocked: unreachable volume {}; label={}; root={}; stable-id={}; mount={}",
+            volume.kind.as_str(),
+            volume.label,
+            volume.path.display(),
+            volume.stable_identity,
+            volume.mount_state.as_str()
+        ),
+    })
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.is_dir() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
 }
 
 fn escape_field(value: &str) -> String {

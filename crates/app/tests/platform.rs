@@ -111,6 +111,36 @@ fn persists_permission_invalidation_state_from_binary() {
 }
 
 #[test]
+fn permission_invalidation_refuses_unreachable_state_before_persisting_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-permission-invalidation-offline-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let state = root.join("permission-state.tsv");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation")
+        .arg(&state)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("permission-invalidation\t"), "{stdout}");
+    assert!(
+        stderr.contains("permission state volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!state.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_security_scoped_access_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-security-{}", std::process::id()));
     let unprotected = root.join("plain.md");
@@ -1604,6 +1634,56 @@ fn fileprovider_observer_probe_refuses_unreachable_volume_before_watching_from_b
     assert!(!state.exists());
 
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn fileprovider_observer_probe_refuses_unreachable_state_before_watching_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-observer-state-root-{}",
+        std::process::id()
+    ));
+    let offline = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-observer-state-offline-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&offline);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&offline).unwrap();
+    std::fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let state = offline.join("fileprovider-state.tsv");
+    let target = root.join("Observed.icloud-placeholder");
+    std::fs::write(&target, "local placeholder").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-observer-probe")
+        .arg(&state)
+        .arg(&root)
+        .arg(&target)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("fileprovider-observed-invalidation\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(
+            "fileprovider observer state volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "local placeholder"
+    );
+    assert!(!state.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(offline);
 }
 
 #[test]

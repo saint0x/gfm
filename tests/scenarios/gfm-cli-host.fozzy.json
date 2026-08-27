@@ -2385,6 +2385,11 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-observer-local.icloud-placeholder",
+      "data": "local placeholder\n"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-fileprovider-observer-state.tsv",
       "data": "gfm-fileprovider-state-v1\ndownloaded\ttmp/gfm-fozzy-fileprovider-observer.icloud-placeholder\n"
     },
@@ -3537,6 +3542,18 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "fileprovider-observer-probe",
+        "tmp/gfm-fozzy-offline-volume/fileprovider-observer-state.tsv",
+        "tmp",
+        "tmp/gfm-fozzy-fileprovider-observer-local.icloud-placeholder"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-topology-diff",
         "tmp/gfm-fozzy-dist",
         "--",
@@ -3714,6 +3731,16 @@
         "tmp/gfm-fozzy-permission-state.tsv"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "permission-invalidation",
+        "tmp/gfm-fozzy-offline-volume/permission-state.tsv"
+      ],
+      "exit_code": 1,
+      "times": 1
     },
     {
       "type": "fs_write",
