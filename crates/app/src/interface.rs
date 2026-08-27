@@ -878,6 +878,8 @@ fn parse_package_traversal_mode(value: Option<&str>) -> Result<PackageTraversalM
 }
 
 fn read_trash_restore_metadata(path: &PathBuf) -> Result<BTreeMap<String, TrashEntryMetadata>> {
+    let _access =
+        crate::access::preflight_access_scope(path, AccessIntent::Read, "ui trash metadata")?;
     let text = std::fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
     let mut metadata = BTreeMap::new();
     for (line_index, line) in text.lines().enumerate() {

@@ -1,3 +1,4 @@
+use crate::access::{preflight_access_scope, ScopedAccessGuard};
 use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
 use crate::runtime::{
     default_journal_path, default_security_bookmarks_path, default_trash_metadata_path,
@@ -23,6 +24,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     match command {
         "ops-recover" => {
             let (journal, policy) = parse_ops_recover_args(args)?;
+            let _journal_access = preflight_operation_journal_write(&journal)?;
             let report =
                 Operator::new(OperationContext::new(journal)).recover_with_policy(policy)?;
             for outcome in report.outcomes {
@@ -313,6 +315,7 @@ fn restore_destination_from_metadata(trashed_path: &Path) -> Result<PathBuf> {
             ))
         })?;
     let metadata_path = default_trash_metadata_path();
+    let _metadata_access = preflight_trash_metadata_read(&metadata_path)?;
     let metadata = read_trash_metadata(&metadata_path)?;
     metadata
         .get(&name)
@@ -329,9 +332,12 @@ fn restore_destination_from_metadata(trashed_path: &Path) -> Result<PathBuf> {
 fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<()> {
     let journal = default_journal_path();
     let trash_metadata = default_trash_metadata_path();
-    let volume_report = VolumeDiscoveryReport::discover();
     let label = operation_kind(&operation);
     let _ = refresh_permission_state(PermissionRefreshAudience::Operations, label)?;
+    let _journal_access = preflight_operation_journal_write(&journal)?;
+    let _trash_metadata_access =
+        retain_operation_trash_metadata_access(&operation, &trash_metadata)?;
+    let volume_report = VolumeDiscoveryReport::discover();
     let conflict_report = OperationConflictReport::evaluate(&operation, conflict);
     if conflict_report.blocks_operation {
         if let Some(store) = runtime_operation_conflict_store() {
@@ -354,6 +360,53 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     })?;
     println!("{}\t{}", entry.id, operation_status(entry.status));
     Ok(())
+}
+
+fn retain_operation_trash_metadata_access(
+    operation: &Operation,
+    path: &Path,
+) -> Result<Option<ScopedAccessGuard>> {
+    if !operation_uses_trash_metadata(operation) {
+        return Ok(None);
+    }
+    preflight_trash_metadata_write(path).map(Some)
+}
+
+fn operation_uses_trash_metadata(operation: &Operation) -> bool {
+    matches!(
+        operation,
+        Operation::Delete { .. }
+            | Operation::Trash { .. }
+            | Operation::EmptyTrash { .. }
+            | Operation::Restore { .. }
+    )
+}
+
+fn preflight_operation_journal_write(path: &Path) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(
+        write_probe_path(path),
+        AccessIntent::Write,
+        "operation journal",
+    )
+}
+
+fn preflight_trash_metadata_read(path: &Path) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(path, AccessIntent::Read, "trash metadata")
+}
+
+fn preflight_trash_metadata_write(path: &Path) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(
+        write_probe_path(path),
+        AccessIntent::Write,
+        "trash metadata",
+    )
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.exists() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
 }
 
 fn operation_access_gate(

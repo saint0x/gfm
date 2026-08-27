@@ -3110,6 +3110,45 @@ fn failed_operation_from_binary_still_journals_failure() {
 }
 
 #[test]
+fn operation_refuses_unreachable_journal_before_mutating_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ops-journal-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-ops-journal-preflight-offline");
+    let journal = offline.join("ops.journal");
+    let source = root.join("source.txt");
+    let destination = root.join("destination.txt");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&source, "do not copy without durable journal").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("\tcompleted"), "{stdout}");
+    assert!(
+        stderr.contains("operation journal volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&source).unwrap(),
+        "do not copy without durable journal"
+    );
+    assert!(!destination.exists());
+    assert!(!journal.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn copy_skip_from_binary_journals_skipped_without_overwrite() {
     let root = unique_temp_dir("gfm-cli-ops-skip-root");
     let journal = root.join("ops.journal");
@@ -3721,6 +3760,45 @@ fn recovers_paused_operation_from_binary() {
 }
 
 #[test]
+fn ops_recover_refuses_unreachable_journal_before_reading_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ops-recover-journal-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-ops-recover-journal-preflight-offline");
+    let journal = offline.join("ops.journal");
+    let source = root.join("source.txt");
+    let destination = root.join("destination.txt");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&source, "recoverable bytes").unwrap();
+    fs::write(
+        &journal,
+        format!(
+            "991\tstarted\t1\tcopy\t{}\t{}\t\n",
+            source.to_string_lossy(),
+            destination.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["ops-recover", journal.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("991\tcompleted\tcopy\t"), "{stdout}");
+    assert!(
+        stderr.contains("operation journal volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), "recoverable bytes");
+    assert!(!destination.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn restores_trash_entry_from_binary_using_metadata_destination() {
     let root = unique_temp_dir("gfm-cli-ops-restore-root");
     let journal = root.join("ops.journal");
@@ -3804,6 +3882,86 @@ fn restores_trash_entry_from_binary_with_metadata_destination_and_replace() {
     assert!(fs::read_to_string(&metadata).unwrap().trim().is_empty());
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn trash_refuses_unreachable_metadata_before_mutating_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ops-trash-metadata-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-ops-trash-metadata-preflight-offline");
+    let journal = root.join("ops.journal");
+    let metadata = offline.join("trash.tsv");
+    let file = root.join("report.md");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&file, "do not trash without metadata access").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .env("GFM_TRASH_METADATA", &metadata)
+        .args(["trash", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("\tcompleted"), "{stdout}");
+    assert!(
+        stderr.contains("trash metadata volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        "do not trash without metadata access"
+    );
+    assert!(!journal.exists());
+    assert!(!metadata.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn restore_refuses_unreachable_metadata_before_resolving_default_destination_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ops-restore-metadata-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-ops-restore-metadata-preflight-offline");
+    let metadata = offline.join("trash.tsv");
+    let trash_dir = root.join("Trash");
+    let trashed = trash_dir.join("report.md");
+    let original = root.join("Documents").join("report.md");
+    fs::create_dir_all(&trash_dir).unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&trashed, "restore only after metadata read is allowed").unwrap();
+    fs::write(
+        &metadata,
+        format!(
+            "report.md\t{}\t7\ttrue\ttrue\t\n",
+            original.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_TRASH_METADATA", &metadata)
+        .args(["restore", trashed.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("\tcompleted"), "{stdout}");
+    assert!(
+        stderr.contains("trash metadata volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&trashed).unwrap(),
+        "restore only after metadata read is allowed"
+    );
+    assert!(!original.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
 }
 
 #[test]
@@ -3931,6 +4089,50 @@ fn empty_trash_from_binary_reconciles_stale_metadata() {
     assert!(journal_text.contains("\tcompleted\t"), "{journal_text}");
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn ui_trash_view_refuses_unreachable_restore_metadata_before_rendering_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ui-trash-view-root");
+    let offline = unique_temp_dir("gfm-cli-ui-trash-metadata-unreachable");
+    let trash_dir = root.join("Trash");
+    let trashed = trash_dir.join("report.md");
+    let metadata = offline.join("trash.tsv");
+    fs::create_dir_all(&trash_dir).unwrap();
+    fs::write(&trashed, "trashed bytes").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(
+        &metadata,
+        format!(
+            "{}\t{}\t2026-08-27T04:00:00Z\ttrue\ttrue\t\n",
+            trashed.file_name().unwrap().to_string_lossy(),
+            root.join("report.md").display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-trash-view-contract",
+            trash_dir.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+            "6",
+            "0",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("trash-view\t"), "{stdout}");
+    assert!(
+        stderr.contains("ui trash metadata volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
 }
 
 #[test]

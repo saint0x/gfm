@@ -3097,6 +3097,26 @@
       "data": "gfm-job-progress-v1\nprogress\t2\tvisible\tvisible\tcopy file\t-\trunning\t42\t100\tcopying\t123\n"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/ops-recover.journal",
+      "data": "991\tstarted\t1\tcopy\ttmp/gfm-fozzy-operation-conflict-offline-source.txt\ttmp/gfm-fozzy-offline-recover-target.txt\t\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-trash-entry.txt",
+      "data": "restore only with metadata access\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/trash-metadata.tsv",
+      "data": "gfm-fozzy-trash-entry.txt\ttmp/gfm-fozzy-restored-entry.txt\t7\ttrue\ttrue\t\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/trash-restore.tsv",
+      "data": "Visible.txt\ttmp/Visible.txt\t2026-08-27T04:00:00Z\ttrue\ttrue\t\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -3104,6 +3124,70 @@
         "tmp/gfm-fozzy-offline-volume/apply-operation-conflicts.tsv",
         "tmp/gfm-fozzy-operation-conflict-offline-target.txt",
         "keep-both"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-trash-view-contract",
+        "tmp",
+        "tmp/gfm-fozzy-offline-volume/trash-restore.tsv",
+        "6",
+        "0"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_OPS_JOURNAL": "tmp/gfm-fozzy-offline-volume/ops.journal"
+      },
+      "args": [
+        "copy",
+        "tmp/gfm-fozzy-operation-conflict-offline-source.txt",
+        "tmp/gfm-fozzy-offline-journal-copy.txt"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ops-recover",
+        "tmp/gfm-fozzy-offline-volume/ops-recover.journal"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_OPS_JOURNAL": "tmp/gfm-fozzy-trash-offline-metadata.journal",
+        "GFM_TRASH_METADATA": "tmp/gfm-fozzy-offline-volume/trash-metadata.tsv"
+      },
+      "args": [
+        "trash",
+        "tmp/gfm-fozzy-operation-conflict-offline-source.txt"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_TRASH_METADATA": "tmp/gfm-fozzy-offline-volume/trash-metadata.tsv"
+      },
+      "args": [
+        "restore",
+        "tmp/gfm-fozzy-trash-entry.txt"
       ],
       "exit_code": 1,
       "times": 1
