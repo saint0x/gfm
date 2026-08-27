@@ -555,6 +555,8 @@ impl VolumeTopologyChange {
                 | "volume-access-changed"
                 | "volume-locality-changed"
                 | "volume-ejectability-changed"
+                | "volume-identity-changed"
+                | "volume-filesystem-changed"
         );
         let rescan_index = matches!(
             reason,
@@ -563,6 +565,8 @@ impl VolumeTopologyChange {
                 | "volume-kind-changed"
                 | "volume-access-changed"
                 | "volume-locality-changed"
+                | "volume-identity-changed"
+                | "volume-filesystem-changed"
         );
         Some(Self {
             kind: VolumeTopologyChangeKind::Changed,
@@ -895,6 +899,23 @@ fn topology_change_reason(
         Some("volume-locality-changed")
     } else if previous.ejectable != current.ejectable || previous.commands != current.commands {
         Some("volume-ejectability-changed")
+    } else if previous.volume_uuid != current.volume_uuid
+        || previous.media_uuid != current.media_uuid
+        || previous.resource_uuid != current.resource_uuid
+        || previous.bsd_name != current.bsd_name
+        || previous.media_content != current.media_content
+    {
+        Some("volume-identity-changed")
+    } else if previous.filesystem != current.filesystem
+        || previous.mount_filesystem != current.mount_filesystem
+        || previous.case_sensitive != current.case_sensitive
+        || previous.case_preserving != current.case_preserving
+        || previous.resource_automounted != current.resource_automounted
+        || previous.resource_browsable != current.resource_browsable
+        || previous.resource_remount_url != current.resource_remount_url
+        || previous.device_protocol != current.device_protocol
+    {
+        Some("volume-filesystem-changed")
     } else if previous.label != current.label {
         Some("volume-label-changed")
     } else {
@@ -1466,6 +1487,64 @@ mod tests {
         assert!(!diff.changes[0].invalidate_operation_policy);
         assert!(!diff.changes[0].invalidate_index_admission);
         assert!(!diff.changes[0].rescan_index);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_invalidates_policy_for_native_identity_changes() {
+        let root = unique_temp_dir("gfm-volume-topology-identity");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        let mut current_volume = previous_volume.clone();
+        current_volume.volume_uuid = Some("APFS-VOLUME-UUID".to_string());
+        current_volume.media_uuid = Some("APFS-CONTAINER-UUID".to_string());
+        current_volume.media_content = Some("Apple_APFS".to_string());
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].reason, "volume-identity-changed");
+        assert!(diff.changes[0].invalidate_sidebar);
+        assert!(diff.changes[0].invalidate_operation_policy);
+        assert!(diff.changes[0].invalidate_index_admission);
+        assert!(diff.changes[0].rescan_index);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_invalidates_policy_for_filesystem_trait_changes() {
+        let root = unique_temp_dir("gfm-volume-topology-filesystem");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        let mut current_volume = previous_volume.clone();
+        current_volume.filesystem = Some("apfs".to_string());
+        current_volume.mount_filesystem = Some("apfs".to_string());
+        current_volume.case_sensitive = Some(true);
+        current_volume.case_preserving = Some(true);
+        current_volume.device_protocol = Some("USB".to_string());
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].reason, "volume-filesystem-changed");
+        assert!(diff.changes[0].invalidate_sidebar);
+        assert!(diff.changes[0].invalidate_operation_policy);
+        assert!(diff.changes[0].invalidate_index_admission);
+        assert!(diff.changes[0].rescan_index);
 
         fs::remove_dir_all(root).unwrap();
     }
