@@ -2451,6 +2451,41 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-local-notes.txt",
+      "data": "ordinary local file\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-local-event-state.tsv",
+      "data": "gfm-fileprovider-state-v1\nevicted\ttmp/gfm-fozzy-fileprovider-untouched.icloud-placeholder\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-invalidation-event",
+        "tmp/gfm-fozzy-fileprovider-local-event-state.tsv",
+        "modify",
+        "tmp/gfm-fozzy-local-notes.txt"
+      ],
+      "exit_code": 0,
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tpaths=0\nfileprovider-state-invalidation\tinitialized=false\tchanged=0\ticon=false\tpreview-memory=false\tpreview-disk=false\tsidebar=false\treindex-metadata=false\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/bin/cat",
+      "args": [
+        "tmp/gfm-fozzy-fileprovider-local-event-state.tsv"
+      ],
+      "exit_code": 0,
+      "stdout": "gfm-fileprovider-state-v1\nevicted\ttmp/gfm-fozzy-fileprovider-untouched.icloud-placeholder\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-fileprovider-observer.icloud-placeholder",
       "data": "placeholder\n"
     },

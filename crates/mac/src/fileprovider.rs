@@ -1058,9 +1058,25 @@ fn is_observable_fileprovider_path(
     previous: Option<&FileProviderStateSnapshot>,
     path: &Path,
 ) -> bool {
-    path.exists()
-        || is_evicted_placeholder_path(path)
-        || previous.is_some_and(|snapshot| snapshot.contains_path(path))
+    if previous.is_some_and(|snapshot| snapshot.contains_path(path)) || provider_path_hint(path) {
+        return true;
+    }
+    if !path.exists() {
+        return false;
+    }
+    let hints = CloudHints::read(path);
+    hints.source != "filesystem" || domain_for_path(path, &hints) != FileProviderDomain::Local
+}
+
+fn provider_path_hint(path: &Path) -> bool {
+    if path_components(path)
+        .iter()
+        .any(|component| component == ICLOUD_DRIVE_COMPONENT)
+    {
+        return true;
+    }
+    let name = file_name_lower(path);
+    is_evicted_placeholder_path(path) || name.contains("icloud") || name.contains("fileprovider")
 }
 
 impl FileProviderOperationReport {
@@ -2058,6 +2074,33 @@ mod tests {
         assert!(!observed.report.invalidate_preview_memory);
         assert!(!observed.report.invalidate_preview_disk);
         assert_eq!(snapshot, previous);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_ignores_existing_local_file_events() {
+        let root = unique_temp_dir();
+        let tracked = root.join("Remote.icloud-placeholder");
+        let local = root.join("Notes.txt");
+        fs::write(&tracked, "placeholder").unwrap();
+        fs::write(&local, "ordinary local file").unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: tracked.clone(),
+                state: CloudStorageState::Evicted,
+            }],
+        };
+        let events = vec![FileEvent::new(&local, FileEventKind::Modify)];
+
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate(Some(&previous), events).unwrap();
+
+        assert_eq!(observed.events, 1);
+        assert!(observed.paths.is_empty());
+        assert!(observed.report.changes.is_empty());
+        assert_eq!(snapshot, previous);
+        assert!(!snapshot.entries.iter().any(|entry| entry.path == local));
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -1612,6 +1612,57 @@ fn fileprovider_invalidation_event_removes_deleted_tracked_item_from_binary() {
 }
 
 #[test]
+fn fileprovider_invalidation_event_ignores_existing_local_file_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-invalidation-local-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let tracked = root.join("Remote.icloud-placeholder");
+    let local = root.join("Notes.txt");
+    std::fs::write(&tracked, "placeholder").unwrap();
+    std::fs::write(&local, "ordinary local file").unwrap();
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v1\nevicted\t{}\n",
+            tracked.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-event")
+        .arg(&state)
+        .arg("modify")
+        .arg(&local)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        "fileprovider-observed-invalidation\tevents=1\tpaths=0\nfileprovider-state-invalidation\tinitialized=false\tchanged=0\ticon=false\tpreview-memory=false\tpreview-disk=false\tsidebar=false\treindex-metadata=false\n"
+    );
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert_eq!(
+        state_text,
+        format!(
+            "gfm-fileprovider-state-v1\nevicted\t{}\n",
+            tracked.display()
+        )
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_fileprovider_observer_probe_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-observer-probe-{}",
