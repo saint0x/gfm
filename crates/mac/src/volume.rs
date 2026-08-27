@@ -1221,8 +1221,8 @@ fn disposition_for_native_operation(
             VolumeOperationDisposition::Denied
         }
         NativeVolumeOperationStatus::Unsupported => VolumeOperationDisposition::Unsupported,
-        NativeVolumeOperationStatus::NotMounted
-        | NativeVolumeOperationStatus::Failed
+        NativeVolumeOperationStatus::NotMounted => VolumeOperationDisposition::Refused,
+        NativeVolumeOperationStatus::Failed
         | NativeVolumeOperationStatus::Missing
         | NativeVolumeOperationStatus::Unavailable => VolumeOperationDisposition::Failed,
     }
@@ -2342,7 +2342,7 @@ mod tests {
         );
         assert_eq!(
             disposition_for_native_operation(NativeVolumeOperationStatus::NotMounted),
-            VolumeOperationDisposition::Failed
+            VolumeOperationDisposition::Refused
         );
     }
 
