@@ -246,8 +246,6 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "extract-quarantine requires a quarantine store path",
             )?;
-            let _access =
-                retain_extraction_quarantine_access(&path, &store, "extraction quarantine")?;
             let kind = parse_quarantine_failure_kind(
                 args.next().as_deref().unwrap_or("timeout"),
                 "failure kind",
@@ -257,21 +255,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(|value| parse_u32(&value, "attempts"))
                 .transpose()?
                 .unwrap_or(2);
-            let fingerprint = ExtractionFingerprint::for_path(&path)?;
-            let mut quarantine = ExtractionQuarantine::new(2);
-            let mut decision = quarantine.before_extract(&path, &fingerprint);
-            for _ in 0..attempts {
-                decision = quarantine.record_failure(
-                    &path,
-                    &fingerprint,
-                    kind,
-                    format!("worker-{}", kind.as_str()),
-                );
+            for line in run_extraction_quarantine(path, store, kind, attempts)? {
+                println!("{line}");
             }
-            quarantine.write(&store)?;
-            let reloaded = ExtractionQuarantine::read(&store)?;
-            println!("{}", decision.as_tsv());
-            println!("{}", reloaded.before_extract(&path, &fingerprint).as_tsv());
         }
         "index-content-segment" => {
             let root = required_path(args.next(), "index-content-segment requires a root path")?;
@@ -1049,6 +1035,48 @@ fn retain_extraction_quarantine_access(
         preflight_access_scope(path, AccessIntent::Read, worker)?,
         preflight_access_scope(write_probe_path(store), AccessIntent::Write, worker)?,
     ])
+}
+
+fn preflight_extraction_quarantine_volumes(path: &Path, store: &Path, worker: &str) -> Result<()> {
+    preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
+    preflight_volume_access_scope(write_probe_path(store), AccessIntent::Write, worker)
+}
+
+fn run_extraction_quarantine(
+    path: PathBuf,
+    store: PathBuf,
+    kind: gfm_content::QuarantineFailureKind,
+    attempts: u32,
+) -> Result<Vec<String>> {
+    const WORKER: &str = "extraction quarantine";
+    preflight_extraction_quarantine_volumes(&path, &store, WORKER)?;
+    let volume = detect_volume_id(&path)
+        .ok()
+        .or_else(|| parent_volume(&path))
+        .or_else(|| parent_volume(write_probe_path(&store)));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_extraction_quarantine_access(&path, &store, WORKER)?;
+        cancellation.check()?;
+        let fingerprint = ExtractionFingerprint::for_path(&path)?;
+        let mut quarantine = ExtractionQuarantine::new(2);
+        let mut decision = quarantine.before_extract(&path, &fingerprint);
+        for _ in 0..attempts {
+            decision = quarantine.record_failure(
+                &path,
+                &fingerprint,
+                kind,
+                format!("worker-{}", kind.as_str()),
+            );
+        }
+        cancellation.check()?;
+        quarantine.write(&store)?;
+        let reloaded = ExtractionQuarantine::read(&store)?;
+        Ok(vec![
+            decision.as_tsv(),
+            reloaded.before_extract(&path, &fingerprint).as_tsv(),
+        ])
+    })
 }
 
 fn retain_foreground_content_index_access(

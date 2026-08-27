@@ -7474,6 +7474,107 @@ fn fileprovider_progress_job_persists_runtime_payload_and_progress_from_binary()
 }
 
 #[test]
+fn ui_fileprovider_observed_invalidation_persists_snapshot_on_visible_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ui-fileprovider-observed-root");
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    fs::write(&item, "remote placeholder").unwrap();
+    xattr::set(&item, "com.apple.icloud.placeholder", b"1").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-sidebar-fileprovider-observed-invalidation",
+            state.to_str().unwrap(),
+            "metadata",
+            item.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(
+        &stderr,
+        "ui fileprovider sidebar observed invalidation",
+        &root,
+    );
+    assert_worker_admitted(
+        &stderr,
+        "ui fileprovider sidebar observed invalidation",
+        &item,
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(
+            "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("fileprovider-state-invalidation\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("sidebar-cloud-invalidation\t"), "{stdout}");
+
+    let stored = fs::read_to_string(&state).unwrap();
+    assert!(
+        stored.starts_with("gfm-fileprovider-state-v1\n"),
+        "{stored}"
+    );
+    assert!(stored.contains(&item.display().to_string()), "{stored}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn ui_fileprovider_observed_invalidation_refuses_unreachable_state_before_snapshot_io_from_binary()
+{
+    let root = unique_temp_dir("gfm-cli-ui-fileprovider-observed-unreachable");
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&item, "remote placeholder").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-sidebar-fileprovider-observed-invalidation",
+            state.to_str().unwrap(),
+            "metadata",
+            item.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("fileprovider-observed-invalidation\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(
+            "ui fileprovider sidebar observed invalidation volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(
+            "security-worker-admission\tworker=ui fileprovider sidebar observed invalidation\t"
+        ),
+        "{stderr}"
+    );
+    assert!(!state.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cancellable_adaptive_extraction_worker_stops_before_launch_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-worker-cancel-root");
     let path = root.join("document.txt");
@@ -7839,6 +7940,9 @@ fn reports_extraction_quarantine_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "extraction quarantine", &path);
+    assert_worker_admitted(&stderr, "extraction quarantine", &root);
     let lines = stdout.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 2, "{stdout}");
     assert!(lines[0].starts_with("quarantine\tblocked\t"), "{stdout}");
@@ -7875,6 +7979,10 @@ fn extract_quarantine_refuses_unreachable_store_before_recording_from_binary() {
     assert!(!stdout.contains("quarantine\t"), "{stdout}");
     assert!(
         stderr.contains("extraction quarantine volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=extraction quarantine\t"),
         "{stderr}"
     );
     assert!(!store.exists());

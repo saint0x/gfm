@@ -299,24 +299,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let event =
                 parse_fileprovider_event(&event_kind, path, args.next().map(PathBuf::from))?;
-            let mut access = vec![crate::access::preflight_access_scope(
-                &write_probe_existing_ancestor(&state_path),
-                AccessIntent::Write,
-                "ui fileprovider sidebar observed invalidation",
-            )?];
-            let previous = if state_path.is_file() {
-                Some(FileProviderStateSnapshot::read(&state_path)?)
-            } else {
-                None
-            };
-            access.extend(retain_fileprovider_event_access(
-                &event,
-                previous.as_ref(),
-                "ui fileprovider sidebar observed invalidation",
-            )?);
-            let (observed, snapshot) =
-                FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
-            snapshot.write(&state_path)?;
+            let observed = run_ui_fileprovider_observed_invalidation(state_path, event)?;
             println!("{}", observed_sidebar_invalidation_tsv(&observed));
         }
         "ui-sidebar-volume-invalidation" => {
@@ -900,6 +883,18 @@ fn fileprovider_event_access_paths(
     }
 }
 
+fn fileprovider_raw_event_paths(event: &FileEvent) -> Vec<PathBuf> {
+    match &event.kind {
+        FileEventKind::Rename { from, to } => vec![from.clone(), to.clone()],
+        FileEventKind::Create
+        | FileEventKind::Metadata
+        | FileEventKind::Modify
+        | FileEventKind::Remove
+        | FileEventKind::Rescan
+        | FileEventKind::Other => vec![event.path.clone()],
+    }
+}
+
 fn fileprovider_event_access_path(
     path: &Path,
     previous: Option<&FileProviderStateSnapshot>,
@@ -1030,6 +1025,51 @@ fn resolve_ui_operation_conflict(
             let resolved = store.resolve(&target, policy.as_str())?;
             cancellation.check()?;
             Ok((resolved, store_path))
+        },
+    )
+}
+
+fn run_ui_fileprovider_observed_invalidation(
+    state_path: PathBuf,
+    event: FileEvent,
+) -> Result<FileProviderObservedInvalidation> {
+    const WORKER: &str = "ui fileprovider sidebar observed invalidation";
+    let state_probe = write_probe_existing_ancestor(&state_path);
+    crate::access::preflight_volume_access_scope(&state_probe, AccessIntent::Write, WORKER)?;
+    for path in fileprovider_raw_event_paths(&event) {
+        crate::access::preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
+    }
+    let volume = crate::detect_volume_id(&state_probe)
+        .ok()
+        .or_else(|| crate::parent_volume(&state_probe));
+    crate::runtime::run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        WORKER,
+        move |cancellation| {
+            cancellation.check()?;
+            let state_probe = write_probe_existing_ancestor(&state_path);
+            let mut access = vec![crate::access::preflight_access_scope(
+                &state_probe,
+                AccessIntent::Write,
+                WORKER,
+            )?];
+            cancellation.check()?;
+            let previous = if state_path.is_file() {
+                Some(FileProviderStateSnapshot::read(&state_path)?)
+            } else {
+                None
+            };
+            access.extend(retain_fileprovider_event_access(
+                &event,
+                previous.as_ref(),
+                WORKER,
+            )?);
+            cancellation.check()?;
+            let (observed, snapshot) =
+                FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
+            snapshot.write(&state_path)?;
+            Ok(observed)
         },
     )
 }
