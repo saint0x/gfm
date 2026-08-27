@@ -79,10 +79,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 })
                 .collect::<Result<Vec<_>>>()?;
             let total = pending.len();
+            let mut completed_targets = Vec::with_capacity(total);
             for (record, operation) in pending.iter().zip(operations) {
-                execute_operation(operation, conflict)?;
-                store.resolve(&record.target, conflict.as_str())?;
+                if let Err(err) = execute_operation(operation, conflict) {
+                    store.resolve_targets(&completed_targets, conflict.as_str())?;
+                    return Err(err);
+                }
+                completed_targets.push(record.target.clone());
             }
+            store.resolve_targets(&completed_targets, conflict.as_str())?;
             println!(
                 "operation-conflict-control\tapply-all\tpolicy={}\tresolved={total}\tblocks-operation=false",
                 conflict.as_str()

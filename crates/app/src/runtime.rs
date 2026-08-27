@@ -6,6 +6,7 @@ use gfm_jobs::{
 };
 use gfm_ops::OperationConflictReport;
 use gfm_types::{GfmError, Result, VolumeId};
+use std::collections::BTreeSet;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -417,30 +418,62 @@ impl OperationConflictStore {
         target: &str,
         selected_policy: &str,
     ) -> Result<RuntimeOperationConflict> {
+        let resolved =
+            self.resolve_target_set(BTreeSet::from([target.to_string()]), selected_policy)?;
+        resolved.into_iter().next().ok_or_else(|| {
+            GfmError::Format(format!(
+                "operation conflict store {} has no blocking conflict for `{target}`",
+                self.path.display()
+            ))
+        })
+    }
+
+    pub(crate) fn resolve_targets(
+        &self,
+        targets: &[String],
+        selected_policy: &str,
+    ) -> Result<Vec<RuntimeOperationConflict>> {
+        self.resolve_target_set(targets.iter().cloned().collect(), selected_policy)
+    }
+
+    fn resolve_target_set(
+        &self,
+        targets: BTreeSet<String>,
+        selected_policy: &str,
+    ) -> Result<Vec<RuntimeOperationConflict>> {
+        if targets.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut conflicts = self.read()?;
-        let conflict = conflicts
-            .iter_mut()
-            .find(|conflict| conflict.target == target && conflict.blocks_operation)
-            .ok_or_else(|| {
-                GfmError::Format(format!(
-                    "operation conflict store {} has no blocking conflict for `{target}`",
-                    self.path.display()
-                ))
-            })?;
-        if !conflict
-            .available_policies
-            .iter()
-            .any(|policy| policy == selected_policy)
-        {
+        let mut unresolved_targets = targets.clone();
+        let mut resolved = Vec::new();
+        for conflict in conflicts.iter_mut() {
+            if !targets.contains(&conflict.target) || !conflict.blocks_operation {
+                continue;
+            }
+            unresolved_targets.remove(&conflict.target);
+            if !conflict
+                .available_policies
+                .iter()
+                .any(|policy| policy == selected_policy)
+            {
+                return Err(GfmError::Format(format!(
+                    "operation conflict for `{}` cannot resolve with `{selected_policy}`; available={}",
+                    conflict.target,
+                    conflict.available_policies.join(",")
+                )));
+            }
+            conflict.selected_policy = selected_policy.to_string();
+            conflict.blocks_operation = false;
+            conflict.reason = format!("destination-conflict-resolved-by-{selected_policy}");
+            resolved.push(conflict.clone());
+        }
+        if let Some(target) = unresolved_targets.into_iter().next() {
             return Err(GfmError::Format(format!(
-                "operation conflict for `{target}` cannot resolve with `{selected_policy}`; available={}",
-                conflict.available_policies.join(",")
+                "operation conflict store {} has no blocking conflict for `{target}`",
+                self.path.display()
             )));
         }
-        conflict.selected_policy = selected_policy.to_string();
-        conflict.blocks_operation = false;
-        conflict.reason = format!("destination-conflict-resolved-by-{selected_policy}");
-        let resolved = conflict.clone();
         self.write_all(&conflicts)?;
         Ok(resolved)
     }

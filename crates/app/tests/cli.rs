@@ -3036,6 +3036,76 @@ fn operation_conflict_apply_all_rejects_unavailable_policy_before_mutation() {
 }
 
 #[test]
+fn operation_conflict_apply_all_resolves_successful_prefix_on_later_failure() {
+    let root = unique_temp_dir("gfm-cli-operation-conflict-apply-all-partial-root");
+    let journal = root.join("ops.journal");
+    let conflicts = root.join("operation-conflicts.tsv");
+    let copy_source = root.join("copy-source.md");
+    let copy_target = root.join("copy-target.md");
+    let copy_keep_both = root.join("copy-target copy.md");
+    let missing_source = root.join("missing-source.md");
+    let failing_target = root.join("failing-target.md");
+    fs::write(&copy_source, "incoming copy").unwrap();
+    fs::write(&copy_target, "existing copy").unwrap();
+    fs::write(&failing_target, "existing failing target").unwrap();
+    fs::write(
+        &conflicts,
+        format!(
+            "operation-conflict\toperation=copy\tsource={}\ttarget={}\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\noperation-conflict\toperation=copy\tsource={}\ttarget={}\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n",
+            copy_source.display(),
+            copy_target.display(),
+            missing_source.display(),
+            failing_target.display()
+        ),
+    )
+    .unwrap();
+
+    let apply = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "operation-conflict-apply-all",
+            conflicts.to_str().unwrap(),
+            "keep-both",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !apply.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&copy_keep_both).unwrap(),
+        "incoming copy"
+    );
+    assert_eq!(
+        fs::read_to_string(&failing_target).unwrap(),
+        "existing failing target"
+    );
+    let store_text = fs::read_to_string(&conflicts).unwrap();
+    assert_eq!(store_text.matches("\tpolicy=keep-both\t").count(), 1);
+    assert_eq!(store_text.matches("\tblocks-operation=false\t").count(), 1);
+    assert_eq!(store_text.matches("\tblocks-operation=true\t").count(), 1);
+    assert!(
+        store_text.contains(&format!(
+            "\tsource={}\ttarget={}\t",
+            missing_source.display(),
+            failing_target.display()
+        )),
+        "{store_text}"
+    );
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("copy-target copy.md"),
+        "{journal_text}"
+    );
+    assert!(journal_text.contains("\tfailed\t"), "{journal_text}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn copy_merge_from_binary_combines_directories_without_overwrite() {
     let root = unique_temp_dir("gfm-cli-ops-merge-root");
     let journal = root.join("ops.journal");
