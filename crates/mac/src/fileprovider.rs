@@ -928,7 +928,10 @@ impl FileProviderObservedInvalidation {
                 snapshot,
             )
         } else {
-            FileProviderStateInvalidationReport::evaluate(previous, paths.clone())?
+            let (report, event_snapshot) =
+                FileProviderStateInvalidationReport::evaluate(previous, paths.clone())?;
+            let snapshot = merge_observed_snapshot(previous, &paths, event_snapshot);
+            (report, snapshot)
         };
         Ok((
             Self {
@@ -949,6 +952,21 @@ impl FileProviderObservedInvalidation {
         lines.push(self.report.as_tsv());
         lines.join("\n")
     }
+}
+
+fn merge_observed_snapshot(
+    previous: Option<&FileProviderStateSnapshot>,
+    observed_paths: &[PathBuf],
+    event_snapshot: FileProviderStateSnapshot,
+) -> FileProviderStateSnapshot {
+    let mut entries = previous
+        .map(|snapshot| snapshot.entries.clone())
+        .unwrap_or_default();
+    entries.retain(|entry| !observed_paths.iter().any(|path| path == &entry.path));
+    entries.extend(event_snapshot.entries);
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    entries.dedup_by(|left, right| left.path == right.path);
+    FileProviderStateSnapshot { entries }
 }
 
 impl FileProviderStateObserver {
@@ -2053,6 +2071,79 @@ mod tests {
             change.current.progress.reason.as_deref(),
             Some("fileprovider-item-removed")
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_preserves_unrelated_snapshot_entries() {
+        let root = unique_temp_dir();
+        let changed = root.join("Changed.icloud-placeholder");
+        let untouched = root.join("Untouched.icloud-placeholder");
+        fs::write(&changed, "placeholder").unwrap();
+        fs::write(&untouched, "placeholder").unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![
+                FileProviderStateSnapshotEntry {
+                    path: changed.clone(),
+                    state: CloudStorageState::Downloaded,
+                },
+                FileProviderStateSnapshotEntry {
+                    path: untouched.clone(),
+                    state: CloudStorageState::Evicted,
+                },
+            ],
+        };
+        let events = vec![FileEvent::new(&changed, FileEventKind::Metadata)];
+
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate(Some(&previous), events).unwrap();
+
+        assert_eq!(observed.paths, vec![changed.clone()]);
+        assert_eq!(observed.report.changes.len(), 1);
+        assert_eq!(snapshot.entries.len(), 2);
+        assert!(snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.path == changed && entry.state == CloudStorageState::Evicted));
+        assert!(snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.path == untouched && entry.state == CloudStorageState::Evicted));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_delete_preserves_unrelated_snapshot_entries() {
+        let root = unique_temp_dir();
+        let removed = root.join("Removed.icloud.md");
+        let untouched = root.join("Untouched.icloud-placeholder");
+        fs::write(&removed, "downloaded").unwrap();
+        fs::write(&untouched, "placeholder").unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![
+                FileProviderStateSnapshotEntry {
+                    path: removed.clone(),
+                    state: CloudStorageState::Downloaded,
+                },
+                FileProviderStateSnapshotEntry {
+                    path: untouched.clone(),
+                    state: CloudStorageState::Evicted,
+                },
+            ],
+        };
+        fs::remove_file(&removed).unwrap();
+        let events = vec![FileEvent::new(&removed, FileEventKind::Remove)];
+
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate(Some(&previous), events).unwrap();
+
+        assert_eq!(observed.paths, vec![removed.clone()]);
+        assert_eq!(observed.report.changes.len(), 1);
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].path, untouched);
+        assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
 
         fs::remove_dir_all(root).unwrap();
     }

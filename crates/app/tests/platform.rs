@@ -1562,12 +1562,15 @@ fn fileprovider_invalidation_event_removes_deleted_tracked_item_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let state = root.join("fileprovider-state.tsv");
     let item = root.join("Downloaded.icloud.md");
+    let untouched = root.join("Untouched.icloud-placeholder");
     std::fs::write(&item, "downloaded").unwrap();
+    std::fs::write(&untouched, "placeholder").unwrap();
     std::fs::write(
         &state,
         format!(
-            "gfm-fileprovider-state-v1\ndownloaded\t{}\n",
-            item.display()
+            "gfm-fileprovider-state-v1\ndownloaded\t{}\nevicted\t{}\n",
+            item.display(),
+            untouched.display()
         ),
     )
     .unwrap();
@@ -1591,7 +1594,8 @@ fn fileprovider_invalidation_event_removes_deleted_tracked_item_from_binary() {
     assert!(stdout.contains("\ticon=true\tpreview-memory=true\tpreview-disk=true\t"));
     assert!(stdout.contains("\tsidebar=true\treindex-metadata=true\t"));
     let state_text = std::fs::read_to_string(&state).unwrap();
-    assert_eq!(state_text, "gfm-fileprovider-state-v1\n");
+    assert!(!state_text.contains(&item.display().to_string()));
+    assert!(state_text.contains(&format!("evicted\t{}\n", untouched.display())));
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -2091,6 +2095,35 @@ fn reports_volume_operation_refusal_from_binary() {
     assert!(stdout.contains("\tdisposition=refused\tnative-status=-\tdissenter-status=-\t"));
     assert!(stdout.contains("\tvolume-kind=external\tmount=mounted\t"));
     assert!(stdout.contains("\treason=fixture-volume-native-operation-disabled\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn volume_operation_refuses_unreachable_volume_before_descriptor_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-operation-unreachable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-operation")
+        .arg("eject")
+        .arg(&root)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("volume-operation\t"), "{stdout}");
+    assert!(
+        stderr.contains("volume operation volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

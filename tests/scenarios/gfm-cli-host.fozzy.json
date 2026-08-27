@@ -2404,8 +2404,13 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-untouched.icloud-placeholder",
+      "data": "placeholder\n"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-fileprovider-remove-state.tsv",
-      "data": "gfm-fileprovider-state-v1\ndownloaded\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\n"
+      "data": "gfm-fileprovider-state-v1\ndownloaded\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\nevicted\ttmp/gfm-fozzy-fileprovider-untouched.icloud-placeholder\n"
     },
     {
       "type": "proc_when",
@@ -2440,7 +2445,7 @@
         "tmp/gfm-fozzy-fileprovider-remove-state.tsv"
       ],
       "exit_code": 0,
-      "stdout": "gfm-fileprovider-state-v1\n",
+      "stdout": "gfm-fileprovider-state-v1\nevicted\ttmp/gfm-fozzy-fileprovider-untouched.icloud-placeholder\n",
       "stderr": "",
       "times": 1
     },
@@ -3217,6 +3222,17 @@
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
         "list",
+        "tmp/gfm-fozzy-offline-volume"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-operation",
+        "eject",
         "tmp/gfm-fozzy-offline-volume"
       ],
       "exit_code": 1,
