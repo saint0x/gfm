@@ -2461,6 +2461,13 @@ fn search_content_refuses_unreachable_network_volume_before_extracting_from_bina
         stderr.contains("content search volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content search\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -2490,6 +2497,13 @@ fn search_content_adaptive_refuses_unreachable_network_volume_before_extracting_
     assert!(!stdout.contains("Needle.md"), "{stdout}");
     assert!(
         stderr.contains("content search volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content search\tpath={}",
+            root.display()
+        )),
         "{stderr}"
     );
 
