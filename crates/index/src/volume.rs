@@ -200,6 +200,9 @@ pub struct IndexVolumeDescriptor {
     pub mount_state: IndexMountState,
     pub reachable: Option<bool>,
     pub read_only: Option<bool>,
+    pub writable: Option<bool>,
+    pub ejectable: Option<bool>,
+    pub mountable: Option<bool>,
     pub stable_identity: Option<String>,
     pub filesystem_signature: Option<String>,
 }
@@ -219,6 +222,9 @@ impl IndexVolumeDescriptor {
             mount_state,
             reachable: Some(mount_state == IndexMountState::Mounted),
             read_only: None,
+            writable: None,
+            ejectable: None,
+            mountable: None,
             stable_identity: None,
             filesystem_signature: None,
         }
@@ -241,6 +247,21 @@ impl IndexVolumeDescriptor {
 
     pub fn with_read_only(mut self, read_only: Option<bool>) -> Self {
         self.read_only = read_only;
+        self
+    }
+
+    pub fn with_writable(mut self, writable: Option<bool>) -> Self {
+        self.writable = writable;
+        self
+    }
+
+    pub fn with_ejectable(mut self, ejectable: Option<bool>) -> Self {
+        self.ejectable = ejectable;
+        self
+    }
+
+    pub fn with_mountable(mut self, mountable: Option<bool>) -> Self {
+        self.mountable = mountable;
         self
     }
 
@@ -431,10 +452,16 @@ pub struct VolumeInvalidationReport {
     pub previous_mount_state: Option<IndexMountState>,
     pub previous_reachable: Option<bool>,
     pub previous_read_only: Option<bool>,
+    pub previous_writable: Option<bool>,
+    pub previous_ejectable: Option<bool>,
+    pub previous_mountable: Option<bool>,
     pub current_class: Option<IndexVolumeClass>,
     pub current_mount_state: Option<IndexMountState>,
     pub current_reachable: Option<bool>,
     pub current_read_only: Option<bool>,
+    pub current_writable: Option<bool>,
+    pub current_ejectable: Option<bool>,
+    pub current_mountable: Option<bool>,
     pub invalidate_sidebar: bool,
     pub invalidate_operation_policy: bool,
     pub invalidate_index_admission: bool,
@@ -453,12 +480,21 @@ pub struct VolumeEventIndexInvalidationReport {
     pub previous_mount_state: Option<IndexMountState>,
     pub previous_reachable: Option<bool>,
     pub previous_read_only: Option<bool>,
+    pub previous_writable: Option<bool>,
+    pub previous_ejectable: Option<bool>,
+    pub previous_mountable: Option<bool>,
     pub current_volume_id: Option<VolumeId>,
     pub current_class: Option<IndexVolumeClass>,
     pub current_mount_state: Option<IndexMountState>,
     pub current_reachable: Option<bool>,
     pub current_read_only: Option<bool>,
+    pub current_writable: Option<bool>,
+    pub current_ejectable: Option<bool>,
+    pub current_mountable: Option<bool>,
     pub read_only_changed: bool,
+    pub writable_changed: bool,
+    pub ejectable_changed: bool,
+    pub mountable_changed: bool,
     pub stable_identity_changed: bool,
     pub filesystem_signature_changed: bool,
     pub invalidate_index_admission: bool,
@@ -481,10 +517,16 @@ impl VolumeInvalidationReport {
         let previous_mount_state = previous.map(|volume| volume.mount_state);
         let previous_reachable = previous.and_then(|volume| volume.reachable);
         let previous_read_only = previous.and_then(|volume| volume.read_only);
+        let previous_writable = previous.and_then(|volume| volume.writable);
+        let previous_ejectable = previous.and_then(|volume| volume.ejectable);
+        let previous_mountable = previous.and_then(|volume| volume.mountable);
         let current_class = current.map(|volume| volume.class);
         let current_mount_state = current.map(|volume| volume.mount_state);
         let current_reachable = current.and_then(|volume| volume.reachable);
         let current_read_only = current.and_then(|volume| volume.read_only);
+        let current_writable = current.and_then(|volume| volume.writable);
+        let current_ejectable = current.and_then(|volume| volume.ejectable);
+        let current_mountable = current.and_then(|volume| volume.mountable);
 
         let (
             invalidate_sidebar,
@@ -548,6 +590,45 @@ impl VolumeInvalidationReport {
                 )
             }
             (Some(previous), Some(current))
+                if known_optional_value_changed(&previous.writable, &current.writable) =>
+            {
+                (
+                    true,
+                    true,
+                    true,
+                    true,
+                    previous.mount_state == IndexMountState::Mounted,
+                    true,
+                    "volume-writable-changed",
+                )
+            }
+            (Some(previous), Some(current))
+                if known_optional_value_changed(&previous.ejectable, &current.ejectable) =>
+            {
+                (
+                    true,
+                    true,
+                    true,
+                    true,
+                    previous.mount_state == IndexMountState::Mounted,
+                    true,
+                    "volume-ejectable-changed",
+                )
+            }
+            (Some(previous), Some(current))
+                if known_optional_value_changed(&previous.mountable, &current.mountable) =>
+            {
+                (
+                    true,
+                    true,
+                    true,
+                    true,
+                    previous.mount_state == IndexMountState::Mounted,
+                    true,
+                    "volume-mountable-changed",
+                )
+            }
+            (Some(previous), Some(current))
                 if known_optional_value_changed(
                     &previous.stable_identity,
                     &current.stable_identity,
@@ -597,10 +678,16 @@ impl VolumeInvalidationReport {
             previous_mount_state,
             previous_reachable,
             previous_read_only,
+            previous_writable,
+            previous_ejectable,
+            previous_mountable,
             current_class,
             current_mount_state,
             current_reachable,
             current_read_only,
+            current_writable,
+            current_ejectable,
+            current_mountable,
             invalidate_sidebar,
             invalidate_operation_policy,
             invalidate_index_admission,
@@ -613,7 +700,7 @@ impl VolumeInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
+            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-mountable={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-mountable={}\treason={}",
             self.path.display(),
             self.previous_class
                 .map(IndexVolumeClass::as_str)
@@ -643,6 +730,12 @@ impl VolumeInvalidationReport {
             self.rescan_index,
             self.cancel_index_jobs,
             self.clear_fsevents_cursor,
+            format_optional_bool(self.previous_writable),
+            format_optional_bool(self.previous_ejectable),
+            format_optional_bool(self.previous_mountable),
+            format_optional_bool(self.current_writable),
+            format_optional_bool(self.current_ejectable),
+            format_optional_bool(self.current_mountable),
             escape_field(&self.reason)
         )
     }
@@ -669,12 +762,28 @@ impl VolumeEventIndexInvalidationReport {
             &previous.and_then(|volume| volume.read_only),
             &current.and_then(|volume| volume.read_only),
         );
+        let writable_changed = known_optional_value_changed(
+            &previous.and_then(|volume| volume.writable),
+            &current.and_then(|volume| volume.writable),
+        );
+        let ejectable_changed = known_optional_value_changed(
+            &previous.and_then(|volume| volume.ejectable),
+            &current.and_then(|volume| volume.ejectable),
+        );
+        let mountable_changed = known_optional_value_changed(
+            &previous.and_then(|volume| volume.mountable),
+            &current.and_then(|volume| volume.mountable),
+        );
         let event_visible = path.is_some()
             || previous.is_some()
             || current.is_some()
             || source_invalidates_index_admission;
-        let descriptor_changed =
-            stable_identity_changed || filesystem_signature_changed || read_only_changed;
+        let descriptor_changed = stable_identity_changed
+            || filesystem_signature_changed
+            || read_only_changed
+            || writable_changed
+            || ejectable_changed
+            || mountable_changed;
         let invalidate_index_admission =
             event_visible && (source_invalidates_index_admission || descriptor_changed);
         let rescan_index = event_visible && (source_rescans_index || descriptor_changed);
@@ -693,11 +802,20 @@ impl VolumeEventIndexInvalidationReport {
             IndexVolumeEventKind::DescriptionChanged if stable_identity_changed => {
                 "volume-event-identity-changed"
             }
-            IndexVolumeEventKind::DescriptionChanged if filesystem_signature_changed => {
-                "volume-event-filesystem-changed"
-            }
             IndexVolumeEventKind::DescriptionChanged if read_only_changed => {
                 "volume-event-read-only-changed"
+            }
+            IndexVolumeEventKind::DescriptionChanged if writable_changed => {
+                "volume-event-writable-changed"
+            }
+            IndexVolumeEventKind::DescriptionChanged if ejectable_changed => {
+                "volume-event-ejectable-changed"
+            }
+            IndexVolumeEventKind::DescriptionChanged if mountable_changed => {
+                "volume-event-mountable-changed"
+            }
+            IndexVolumeEventKind::DescriptionChanged if filesystem_signature_changed => {
+                "volume-event-filesystem-changed"
             }
             IndexVolumeEventKind::DescriptionChanged if current.is_some() => {
                 "volume-event-descriptor-changed"
@@ -715,12 +833,21 @@ impl VolumeEventIndexInvalidationReport {
             previous_mount_state: previous.map(|volume| volume.mount_state),
             previous_reachable: previous.and_then(|volume| volume.reachable),
             previous_read_only: previous.and_then(|volume| volume.read_only),
+            previous_writable: previous.and_then(|volume| volume.writable),
+            previous_ejectable: previous.and_then(|volume| volume.ejectable),
+            previous_mountable: previous.and_then(|volume| volume.mountable),
             current_volume_id: current.and_then(|volume| volume.id),
             current_class: current.map(|volume| volume.class),
             current_mount_state: current.map(|volume| volume.mount_state),
             current_reachable: current.and_then(|volume| volume.reachable),
             current_read_only: current.and_then(|volume| volume.read_only),
+            current_writable: current.and_then(|volume| volume.writable),
+            current_ejectable: current.and_then(|volume| volume.ejectable),
+            current_mountable: current.and_then(|volume| volume.mountable),
             read_only_changed,
+            writable_changed,
+            ejectable_changed,
+            mountable_changed,
             stable_identity_changed,
             filesystem_signature_changed,
             invalidate_index_admission,
@@ -733,7 +860,7 @@ impl VolumeEventIndexInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tread-only-changed={}\tidentity-changed={}\tfilesystem-changed={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
+            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tread-only-changed={}\tidentity-changed={}\tfilesystem-changed={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-mountable={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-mountable={}\twritable-changed={}\tejectable-changed={}\tmountable-changed={}\treason={}",
             self.kind.as_str(),
             self.path
                 .as_ref()
@@ -774,6 +901,15 @@ impl VolumeEventIndexInvalidationReport {
             self.rescan_index,
             self.cancel_index_jobs,
             self.clear_fsevents_cursor,
+            format_optional_bool(self.previous_writable),
+            format_optional_bool(self.previous_ejectable),
+            format_optional_bool(self.previous_mountable),
+            format_optional_bool(self.current_writable),
+            format_optional_bool(self.current_ejectable),
+            format_optional_bool(self.current_mountable),
+            self.writable_changed,
+            self.ejectable_changed,
+            self.mountable_changed,
             escape_field(&self.reason)
         )
     }
@@ -781,6 +917,12 @@ impl VolumeEventIndexInvalidationReport {
 
 fn known_optional_value_changed<T: Eq>(previous: &Option<T>, current: &Option<T>) -> bool {
     matches!((previous, current), (Some(previous), Some(current)) if previous != current)
+}
+
+fn format_optional_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 impl VolumeIndexPlan {

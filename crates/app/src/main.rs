@@ -259,6 +259,9 @@ pub(crate) fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeD
     .with_stable_identity(volume.stable_identity.clone())
     .with_reachable(volume.reachable)
     .with_read_only(Some(volume.read_only))
+    .with_writable(Some(volume.writable))
+    .with_ejectable(Some(volume.ejectable))
+    .with_mountable(volume.mountable)
     .with_filesystem_signature(index_volume_filesystem_signature(volume))
 }
 
@@ -764,6 +767,25 @@ mod tests {
         assert!(current_signature.contains("read-only=1"));
         assert!(current_signature.contains("ejectable=0"));
         assert!(current_signature.contains("mountable=1"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_volume_descriptor_carries_operation_capabilities() {
+        let root = unique_temp_dir("gfm-app-volume-operation-descriptor");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.writable = false;
+        volume.read_only = true;
+        volume.ejectable = true;
+        volume.mountable = Some(false);
+
+        let descriptor = index_volume_descriptor(&volume);
+
+        assert_eq!(descriptor.writable, Some(false));
+        assert_eq!(descriptor.read_only, Some(true));
+        assert_eq!(descriptor.ejectable, Some(true));
+        assert_eq!(descriptor.mountable, Some(false));
 
         std::fs::remove_dir_all(root).unwrap();
     }

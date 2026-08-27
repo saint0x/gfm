@@ -1950,6 +1950,47 @@ fn volume_invalidation_rescans_policy_when_read_only_state_changes() {
 }
 
 #[test]
+fn volume_invalidation_rescans_policy_when_operation_capabilities_change() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_writable(Some(true))
+    .with_ejectable(Some(true))
+    .with_mountable(Some(false));
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_writable(Some(false))
+    .with_ejectable(Some(false))
+    .with_mountable(Some(true));
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+    assert!(report.invalidate_sidebar);
+    assert!(report.invalidate_operation_policy);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.previous_writable, Some(true));
+    assert_eq!(report.current_writable, Some(false));
+    assert_eq!(report.previous_ejectable, Some(true));
+    assert_eq!(report.current_ejectable, Some(false));
+    assert_eq!(report.previous_mountable, Some(false));
+    assert_eq!(report.current_mountable, Some(true));
+    assert_eq!(report.reason, "volume-writable-changed");
+    assert!(report.as_tsv().contains("\tprevious-writable=true\t"));
+    assert!(report.as_tsv().contains("\tcurrent-ejectable=false\t"));
+    assert!(report.as_tsv().contains("\tcurrent-mountable=true"));
+}
+
+#[test]
 fn volume_event_index_invalidation_cancels_jobs_when_identity_changes() {
     let previous = IndexVolumeDescriptor::new(
         "Work Drive",
@@ -1984,6 +2025,52 @@ fn volume_event_index_invalidation_cancels_jobs_when_identity_changes() {
     assert_eq!(report.reason, "volume-event-identity-changed");
     assert!(report.as_tsv().contains("\tidentity-changed=true\t"));
     assert!(report.as_tsv().contains("\tfilesystem-changed=false\t"));
+}
+
+#[test]
+fn volume_event_index_invalidation_reports_operation_capability_drift() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_writable(Some(true))
+    .with_ejectable(Some(true))
+    .with_mountable(Some(false))
+    .with_filesystem_signature("fs=apfs|writable=1|ejectable=1|mountable=0");
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_writable(Some(false))
+    .with_ejectable(Some(false))
+    .with_mountable(Some(true))
+    .with_filesystem_signature("fs=apfs|writable=0|ejectable=0|mountable=1");
+
+    let report = VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/Work")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    );
+
+    assert!(report.writable_changed);
+    assert!(report.ejectable_changed);
+    assert!(report.mountable_changed);
+    assert!(report.filesystem_signature_changed);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-event-writable-changed");
+    assert!(report.as_tsv().contains("\twritable-changed=true\t"));
+    assert!(report.as_tsv().contains("\tejectable-changed=true\t"));
+    assert!(report.as_tsv().contains("\tmountable-changed=true"));
 }
 
 #[test]
