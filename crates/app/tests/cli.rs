@@ -5919,6 +5919,62 @@ fn runs_background_content_indexer_from_binary() {
 }
 
 #[test]
+fn background_content_indexer_refuses_unreachable_outputs_before_job_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-background-content-access-root");
+    let output_root = unique_temp_dir("gfm-cli-background-content-access-output");
+    let segments = output_root.join("segments");
+    let records = output_root.join("records.gfmidx");
+    let content = output_root.join("content.gfmcontent");
+    let journal = unique_temp_path("gfm-cli-background-content-access", "journal");
+    let spec = unique_temp_path("gfm-cli-background-content-access", "job");
+    let catalog = unique_temp_path("gfm-cli-background-content-access", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-background-content-access", "gfmprogress");
+    fs::write(root.join("worker.md"), "blocked worker marker").unwrap();
+    fs::write(
+        output_root.join(".gfm-volume-kind"),
+        "network-unreachable\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_CONTENT_JOB", &spec)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "index-content-background",
+            root.to_str().unwrap(),
+            segments.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr
+            .contains("background content index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!segments.exists());
+    assert!(!records.exists());
+    assert!(!content.exists());
+    assert!(!journal.exists());
+    assert!(!spec.exists());
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(output_root).unwrap();
+}
+
+#[test]
 fn background_content_indexer_incrementally_updates_archive_from_binary() {
     let root = unique_temp_dir("gfm-cli-background-content-incremental-root");
     let segments = unique_temp_dir("gfm-cli-background-content-incremental-segments");
@@ -6330,6 +6386,62 @@ fn resumes_content_index_job_from_binary() {
     fs::remove_dir_all(segments).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(content).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(spec).unwrap();
+}
+
+#[test]
+fn resume_content_index_job_refuses_unreachable_outputs_before_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-resume-content-access-root");
+    let output_root = unique_temp_dir("gfm-cli-resume-content-access-output");
+    let segments = output_root.join("segments");
+    let records = output_root.join("records.gfmidx");
+    let content = output_root.join("content.gfmcontent");
+    let journal = unique_temp_path("gfm-cli-resume-content-access", "journal");
+    let spec = unique_temp_path("gfm-cli-resume-content-access", "job");
+    fs::write(root.join("resume.md"), "blocked resume marker").unwrap();
+    fs::write(
+        &spec,
+        format!(
+            "gfm-content-job-v1\nroot\t{}\nsegment_dir\t{}\nrecords_path\t{}\ncontent_path\t{}\nbatch_size\t1024\n",
+            root.display(),
+            segments.display(),
+            records.display(),
+            content.display()
+        ),
+    )
+    .unwrap();
+    fs::write(&journal, "99\t1\tstarted\tbackground content index\n").unwrap();
+    fs::write(
+        output_root.join(".gfm-volume-kind"),
+        "network-unreachable\n",
+    )
+    .unwrap();
+
+    let resume_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "resume-content-background",
+            spec.to_str().unwrap(),
+            journal.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!resume_output.status.success());
+    let stderr = String::from_utf8_lossy(&resume_output.stderr);
+    assert!(
+        stderr
+            .contains("background content index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!segments.exists());
+    assert!(!records.exists());
+    assert!(!content.exists());
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert_eq!(journal_text, "99\t1\tstarted\tbackground content index\n");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(output_root).unwrap();
     fs::remove_file(journal).unwrap();
     fs::remove_file(spec).unwrap();
 }
@@ -6826,6 +6938,136 @@ fn reports_payload_restore_plan_from_existing_stores() {
 
     fs::remove_file(catalog).unwrap();
     fs::remove_file(progress).unwrap();
+}
+
+#[test]
+fn jobs_file_store_routes_refuse_unreachable_volume_before_persisting_from_binary() {
+    let root = unique_temp_dir("gfm-cli-jobs-store-unreachable");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let catalog = root.join("jobs.gfmjobs");
+    let progress = root.join("jobs.gfmprogress");
+    let retry_state = root.join("retry.state");
+
+    for args in [
+        vec![
+            "jobs-payload-catalog".to_string(),
+            catalog.display().to_string(),
+        ],
+        vec![
+            "jobs-progress-snapshot".to_string(),
+            progress.display().to_string(),
+        ],
+        vec![
+            "jobs-runtime-retry-probe".to_string(),
+            retry_state.display().to_string(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(&args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{args:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stdout.is_empty(), "{args:?}: {stdout}");
+        assert!(
+            stderr.contains("volume access blocked: unreachable volume network"),
+            "{args:?}: {stderr}"
+        );
+    }
+
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+    assert!(!retry_state.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn jobs_restore_routes_refuse_unreachable_stores_before_mutating_from_binary() {
+    let root = unique_temp_dir("gfm-cli-jobs-restore-unreachable");
+    let source = unique_temp_dir("gfm-cli-jobs-restore-source");
+    let catalog = source.join("jobs.gfmjobs");
+    let progress = root.join("jobs.gfmprogress");
+    let offline_catalog = root.join("jobs.gfmjobs");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let catalog_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["jobs-payload-catalog", catalog.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        catalog_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&catalog_output.stderr)
+    );
+
+    let progress_restore = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["jobs-progress-restore", progress.to_str().unwrap(), "2000"])
+        .output()
+        .unwrap();
+    assert!(!progress_restore.status.success());
+    let progress_restore_stderr = String::from_utf8_lossy(&progress_restore.stderr);
+    assert!(
+        progress_restore_stderr
+            .contains("jobs progress restore volume access blocked: unreachable volume network"),
+        "{progress_restore_stderr}"
+    );
+    assert!(!progress.exists());
+
+    let progress_control = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "jobs-progress-control",
+            progress.to_str().unwrap(),
+            "1",
+            "pause",
+            "2000",
+        ])
+        .output()
+        .unwrap();
+    assert!(!progress_control.status.success());
+    let progress_control_stderr = String::from_utf8_lossy(&progress_control.stderr);
+    assert!(
+        progress_control_stderr
+            .contains("jobs progress control volume access blocked: unreachable volume network"),
+        "{progress_control_stderr}"
+    );
+    assert!(!progress.exists());
+
+    let payload_restore = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "jobs-payload-restore-plan",
+            catalog.to_str().unwrap(),
+            progress.to_str().unwrap(),
+            "2000",
+        ])
+        .output()
+        .unwrap();
+    assert!(!payload_restore.status.success());
+    let payload_restore_stderr = String::from_utf8_lossy(&payload_restore.stderr);
+    assert!(
+        payload_restore_stderr.contains(
+            "jobs payload restore plan volume access blocked: unreachable volume network"
+        ),
+        "{payload_restore_stderr}"
+    );
+    assert!(!progress.exists());
+
+    let recover = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["jobs-recover", offline_catalog.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!recover.status.success());
+    let recover_stderr = String::from_utf8_lossy(&recover.stderr);
+    assert!(
+        recover_stderr.contains("jobs recover volume access blocked: unreachable volume network"),
+        "{recover_stderr}"
+    );
+
+    fs::remove_file(catalog).unwrap();
+    fs::remove_dir_all(source).unwrap();
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

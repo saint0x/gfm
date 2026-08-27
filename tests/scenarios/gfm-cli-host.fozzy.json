@@ -1782,6 +1782,72 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "jobs-payload-catalog",
+        "tmp/gfm-fozzy-offline-volume/jobs.gfmjobs"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-progress-snapshot",
+        "tmp/gfm-fozzy-offline-volume/jobs.gfmprogress"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-progress-restore",
+        "tmp/gfm-fozzy-offline-volume/jobs.gfmprogress",
+        "2000"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-progress-control",
+        "tmp/gfm-fozzy-offline-volume/jobs.gfmprogress",
+        "1",
+        "pause",
+        "2000"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-payload-restore-plan",
+        "/tmp/gfm-fozzy-jobs.gfmjobs",
+        "tmp/gfm-fozzy-offline-volume/jobs.gfmprogress",
+        "2000"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-runtime-retry-probe",
+        "tmp/gfm-fozzy-offline-volume/retry.state"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "jobs-cancel-volume",
         "7",
         "background"
@@ -2631,6 +2697,16 @@
       "data": "kMDItemDisplayName\tVisible.txt\n"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-resume-content-offline.job",
+      "data": "gfm-content-job-v1\nroot\t.\nsegment_dir\ttmp/gfm-fozzy-offline-volume/background-segments\nrecords_path\ttmp/gfm-fozzy-offline-volume/background-records.gfmidx\ncontent_path\ttmp/gfm-fozzy-offline-volume/background-content.gfmcontent\nbatch_size\t1024\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-resume-content-offline.journal",
+      "data": "99\t1\tstarted\tbackground content index\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -2726,6 +2802,34 @@
         "tmp/gfm-fozzy-offline-volume/records.gfmidx",
         "tmp/gfm-fozzy-offline-volume/state.gfmstate",
         "tmp/gfm-fozzy-offline-volume/quarantine"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-content-background",
+        ".",
+        "tmp/gfm-fozzy-offline-volume/background-segments",
+        "tmp/gfm-fozzy-offline-volume/background-records.gfmidx",
+        "tmp/gfm-fozzy-offline-volume/background-content.gfmcontent",
+        "saturated",
+        "nominal",
+        "ac",
+        "idle"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "resume-content-background",
+        "tmp/gfm-fozzy-resume-content-offline.job",
+        "tmp/gfm-fozzy-resume-content-offline.journal"
       ],
       "exit_code": 1,
       "times": 1

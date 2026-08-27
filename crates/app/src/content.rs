@@ -377,12 +377,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "index-content-background requires a content path",
             )?;
             let pressure = parse_optional_scheduling_pressure(args)?;
-            let _access =
-                preflight_access_scope(&root, AccessIntent::Index, "background content index")?;
             let journal = JobJournal::new(default_job_journal_path());
             let spec = ContentIndexJobSpec::new(&root, segment_dir, records, content)
                 .with_volume(detect_volume_id(&root)?);
             let spec_path = default_content_job_path();
+            let _access = retain_content_job_access(&spec, &spec_path, "background content index")?;
             spec.write(&spec_path)?;
             let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
             if outcome.deferred {
@@ -425,6 +424,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             if recoverable == 0 {
                 eprintln!("no recoverable background content jobs");
             } else {
+                let _access = preflight_access_scope(
+                    &spec_path,
+                    AccessIntent::Read,
+                    "resume background content index",
+                )?;
                 let spec = ContentIndexJobSpec::read(&spec_path)?;
                 let outcome =
                     run_content_job(&spec, &journal, SchedulingPressure::default(), &spec_path)?;
@@ -469,6 +473,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             if recoverable == 0 {
                 eprintln!("no recoverable background content jobs");
             } else {
+                let _access = preflight_access_scope(
+                    &spec_path,
+                    AccessIntent::Read,
+                    "resume background content index",
+                )?;
                 let spec = ContentIndexJobSpec::read(&spec_path)?;
                 let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
                 if outcome.deferred {
@@ -728,6 +737,37 @@ fn retain_content_segments_access(
     Ok(guards)
 }
 
+fn retain_content_job_access(
+    spec: &ContentIndexJobSpec,
+    spec_path: &Path,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(&spec.root, AccessIntent::Index, worker)?,
+        preflight_access_scope(
+            write_probe_path(&spec.segment_dir),
+            AccessIntent::Write,
+            worker,
+        )?,
+        preflight_access_scope(
+            write_probe_path(&spec.records_path),
+            AccessIntent::Write,
+            worker,
+        )?,
+        preflight_access_scope(
+            write_probe_path(&spec.content_path),
+            AccessIntent::Write,
+            worker,
+        )?,
+        preflight_access_scope(write_probe_path(spec_path), AccessIntent::Write, worker)?,
+        preflight_access_scope(
+            write_probe_path(&default_extraction_quarantine_path()),
+            AccessIntent::Write,
+            worker,
+        )?,
+    ])
+}
+
 fn write_probe_path(path: &Path) -> &Path {
     if path.is_dir() {
         return path;
@@ -749,8 +789,7 @@ pub(crate) fn run_content_job(
     pressure: SchedulingPressure,
     spec_path: &Path,
 ) -> Result<ContentJobOutcome> {
-    let _access =
-        preflight_access_scope(&spec.root, AccessIntent::Index, "background content index")?;
+    let _access = retain_content_job_access(spec, spec_path, "background content index")?;
     let scheduling = pressure.decide(Priority::Background, 1, 1);
     let label = "background content index";
     if scheduling.action == SchedulingAction::Defer {

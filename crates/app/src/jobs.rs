@@ -1,3 +1,4 @@
+use crate::access::{preflight_access_scope, ScopedAccessGuard};
 use crate::runtime::{default_job_journal_path, run_scheduled_volume_task};
 use crate::{
     parent_volume, parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg,
@@ -8,6 +9,7 @@ use gfm_jobs::{
     JobPayloadRecord, JobProgressCommand, JobProgressSnapshot, JobProgressState, JobProgressStore,
     Priority, RecoveryReason, RetryPolicy, Scheduler,
 };
+use gfm_mac::AccessIntent;
 use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,6 +22,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .next()
                 .map(PathBuf::from)
                 .unwrap_or_else(default_job_journal_path);
+            let _access = preflight_access_scope(&journal, AccessIntent::Read, "jobs recover")?;
             let recoverable =
                 JobJournal::new(journal).recoverable(RetryPolicy { max_attempts: 2 })?;
             for job in recoverable {
@@ -55,6 +58,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "jobs-payload-catalog" => {
             let path = required_path(args.next(), "jobs-payload-catalog requires a catalog path")?;
+            let _access = preflight_access_scope(
+                write_probe_path(&path),
+                AccessIntent::Write,
+                "jobs payload catalog",
+            )?;
             let catalog = JobPayloadCatalog::new(&path);
             let records = sample_payload_catalog_records();
             catalog.write_all(&records)?;
@@ -94,6 +102,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "jobs-progress-snapshot requires a progress path",
             )?;
+            let _access = preflight_access_scope(
+                write_probe_path(&path),
+                AccessIntent::Write,
+                "jobs progress snapshot",
+            )?;
             let store = JobProgressStore::new(&path);
             for snapshot in sample_progress_snapshots() {
                 store.upsert(snapshot)?;
@@ -108,6 +121,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "jobs-progress-restore requires a progress path",
             )?;
             let updated_ms = parse_optional_timestamp_ms("jobs-progress-restore", args.next())?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Write, "jobs progress restore")?;
             let store = JobProgressStore::new(&path);
             for snapshot in store.restore_interrupted(updated_ms)? {
                 println!("{}", snapshot.as_tsv());
@@ -121,6 +136,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let job_id = parse_u64_arg(args.next(), "jobs-progress-control requires a job id")?;
             let command = parse_progress_command(args.next())?;
             let updated_ms = parse_optional_timestamp_ms("jobs-progress-control", args.next())?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Write, "jobs progress control")?;
             let store = JobProgressStore::new(&path);
             let snapshot =
                 store.apply_command(gfm_jobs::JobId::from_raw(job_id), command, updated_ms)?;
@@ -143,6 +160,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "jobs-payload-restore-plan requires a progress path",
             )?;
             let updated_ms = parse_optional_timestamp_ms("jobs-payload-restore-plan", args.next())?;
+            let _access = retain_payload_restore_access(&catalog_path, &progress_path)?;
             let store = JobProgressStore::new(&progress_path);
             let restored = store.restore_interrupted(updated_ms)?;
             let payloads = JobPayloadCatalog::new(&catalog_path)
@@ -191,6 +209,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "jobs-runtime-retry-probe requires an attempt state path",
             )?;
             let pressure = parse_optional_scheduling_pressure(args)?;
+            let _access = preflight_access_scope(
+                write_probe_path(&state),
+                AccessIntent::Write,
+                "runtime retry probe",
+            )?;
             let outcome = run_scheduled_volume_task(
                 parent_volume(&state),
                 Priority::Background,
@@ -214,6 +237,31 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn retain_payload_restore_access(
+    catalog_path: &Path,
+    progress_path: &Path,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(
+            catalog_path,
+            AccessIntent::Read,
+            "jobs payload restore plan",
+        )?,
+        preflight_access_scope(
+            progress_path,
+            AccessIntent::Write,
+            "jobs payload restore plan",
+        )?,
+    ])
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.is_dir() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
 }
 
 fn parse_progress_command(value: Option<String>) -> Result<JobProgressCommand> {
