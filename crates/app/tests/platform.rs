@@ -2359,6 +2359,62 @@ fn fileprovider_invalidation_event_removes_deleted_tracked_item_from_binary() {
 }
 
 #[test]
+fn fileprovider_invalidation_event_removes_deleted_tracked_subtree_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-invalidation-remove-subtree-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let removed_dir = root.join("Removed.icloud");
+    let child = removed_dir.join("Child.icloud.md");
+    let untouched = root.join("Untouched.icloud-placeholder");
+    std::fs::create_dir_all(&removed_dir).unwrap();
+    std::fs::write(&child, "downloaded").unwrap();
+    std::fs::write(&untouched, "placeholder").unwrap();
+    mark_evicted_fixture(&untouched);
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v1\ndownloaded\t{}\nevicted\t{}\n",
+            child.display(),
+            untouched.display()
+        ),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&removed_dir).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-event")
+        .arg(&state)
+        .arg("remove")
+        .arg(&removed_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(
+        "fileprovider-observed-invalidation\tevents=1\tevent-kinds=remove\tpaths=1\n"
+    ));
+    assert!(stdout.contains(&format!(
+        "fileprovider-invalidation\t{}\tprevious=downloaded\tcurrent=removed\tchanged=true\t",
+        child.display()
+    )));
+    assert!(stdout.contains("\ticon=true\tpreview-memory=true\tpreview-disk=true\t"));
+    assert!(stdout.contains("\tsidebar=true\treindex-metadata=true\t"));
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert!(!state_text.contains(&child.display().to_string()));
+    assert!(state_text.contains(&format!("evicted\t{}\n", untouched.display())));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_invalidation_event_ignores_existing_local_file_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-invalidation-local-{}",

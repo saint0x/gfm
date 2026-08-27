@@ -895,17 +895,22 @@ fn fileprovider_event_access_path(
     path: &Path,
     previous: Option<&FileProviderStateSnapshot>,
 ) -> PathBuf {
-    if path.exists() || !snapshot_contains_path(previous, path) {
+    if path.exists() || !snapshot_tracks_path_or_descendant(previous, path) {
         return path.to_path_buf();
     }
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(path)
-        .to_path_buf()
+    write_probe_existing_ancestor(path)
 }
 
-fn snapshot_contains_path(previous: Option<&FileProviderStateSnapshot>, path: &Path) -> bool {
-    previous.is_some_and(|snapshot| snapshot.entries.iter().any(|entry| entry.path == path))
+fn snapshot_tracks_path_or_descendant(
+    previous: Option<&FileProviderStateSnapshot>,
+    path: &Path,
+) -> bool {
+    previous.is_some_and(|snapshot| {
+        snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.path == path || entry.path.starts_with(path))
+    })
 }
 
 fn write_probe_path(path: &Path) -> &Path {

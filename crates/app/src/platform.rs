@@ -1940,17 +1940,54 @@ fn fileprovider_event_access_path(
     path: &Path,
     previous: Option<&FileProviderStateSnapshot>,
 ) -> PathBuf {
-    if path.exists() || !snapshot_contains_path(previous, path) {
+    if path.exists() || !snapshot_tracks_path_or_descendant(previous, path) {
         return path.to_path_buf();
     }
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(path)
-        .to_path_buf()
+    write_probe_existing_ancestor(path)
 }
 
-fn snapshot_contains_path(previous: Option<&FileProviderStateSnapshot>, path: &Path) -> bool {
-    previous.is_some_and(|snapshot| snapshot.entries.iter().any(|entry| entry.path == path))
+fn snapshot_tracks_path_or_descendant(
+    previous: Option<&FileProviderStateSnapshot>,
+    path: &Path,
+) -> bool {
+    previous.is_some_and(|snapshot| {
+        snapshot
+            .entries
+            .iter()
+            .any(|entry| path_matches_or_contains(path, &entry.path))
+    })
+}
+
+fn path_matches_or_contains(root: &Path, candidate: &Path) -> bool {
+    if candidate == root || candidate.starts_with(root) {
+        return true;
+    }
+    let Some(root) = normalized_existing_ancestor_path(root) else {
+        return false;
+    };
+    normalized_existing_ancestor_path(candidate)
+        .as_deref()
+        .is_some_and(|candidate| candidate == root || candidate.starts_with(root))
+}
+
+fn normalized_existing_ancestor_path(path: &Path) -> Option<PathBuf> {
+    if let Ok(canonical) = path.canonicalize() {
+        return Some(canonical);
+    }
+
+    let mut candidate = path;
+    let mut missing = Vec::new();
+    loop {
+        if candidate.exists() {
+            let mut normalized = candidate.canonicalize().ok()?;
+            for component in missing.iter().rev() {
+                normalized.push(component);
+            }
+            return Some(normalized);
+        }
+        missing.push(candidate.file_name()?.to_os_string());
+        candidate = candidate.parent()?;
+    }
 }
 
 fn write_probe_path(path: &Path) -> &Path {

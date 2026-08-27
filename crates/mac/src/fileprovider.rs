@@ -894,6 +894,14 @@ impl FileProviderStateSnapshot {
     fn contains_path(&self, path: &Path) -> bool {
         self.previous_state_for(path).is_some()
     }
+
+    fn tracked_descendants_of(&self, root: &Path) -> Vec<PathBuf> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.path != root && entry.path.starts_with(root))
+            .map(|entry| entry.path.clone())
+            .collect()
+    }
 }
 
 impl FileProviderStateInvalidationReport {
@@ -1039,7 +1047,11 @@ fn merge_observed_snapshot(
     let mut entries = previous
         .map(|snapshot| snapshot.entries.clone())
         .unwrap_or_default();
-    entries.retain(|entry| !observed_paths.iter().any(|path| path == &entry.path));
+    entries.retain(|entry| {
+        !observed_paths
+            .iter()
+            .any(|path| path == &entry.path || entry.path.starts_with(path))
+    });
     entries.extend(event_snapshot.entries);
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     entries.dedup_by(|left, right| left.path == right.path);
@@ -1111,30 +1123,69 @@ fn paths_for_fileprovider_event(
     event: &FileEvent,
 ) -> Vec<PathBuf> {
     match &event.kind {
-        FileEventKind::Rename { from, to } => [from, to]
-            .into_iter()
-            .filter(|path| is_observable_fileprovider_path(previous, path))
-            .cloned()
-            .collect(),
-        FileEventKind::Remove => {
-            if is_observable_fileprovider_path(previous, &event.path) {
-                vec![event.path.clone()]
-            } else {
-                Vec::new()
-            }
+        FileEventKind::Rename { from, to } => {
+            let mut paths = BTreeSet::new();
+            paths.extend(observed_fileprovider_paths_for_root(previous, from));
+            paths.extend(observed_fileprovider_paths_for_root(previous, to));
+            paths.extend(remapped_tracked_fileprovider_paths(previous, from, to));
+            paths.into_iter().collect()
         }
+        FileEventKind::Remove => observed_fileprovider_paths_for_root(previous, &event.path),
         FileEventKind::Create
         | FileEventKind::Metadata
         | FileEventKind::Modify
         | FileEventKind::Rescan
         | FileEventKind::Other => {
-            if is_observable_fileprovider_path(previous, &event.path) {
+            if should_read_observed_fileprovider_path(previous, &event.path) {
                 vec![event.path.clone()]
             } else {
                 Vec::new()
             }
         }
     }
+}
+
+fn observed_fileprovider_paths_for_root(
+    previous: Option<&FileProviderStateSnapshot>,
+    root: &Path,
+) -> Vec<PathBuf> {
+    let mut paths = BTreeSet::new();
+    if should_read_observed_fileprovider_path(previous, root) {
+        paths.insert(root.to_path_buf());
+    }
+    if let Some(snapshot) = previous {
+        paths.extend(snapshot.tracked_descendants_of(root));
+    }
+    paths.into_iter().collect()
+}
+
+fn remapped_tracked_fileprovider_paths(
+    previous: Option<&FileProviderStateSnapshot>,
+    from: &Path,
+    to: &Path,
+) -> Vec<PathBuf> {
+    let Some(snapshot) = previous else {
+        return Vec::new();
+    };
+    snapshot
+        .tracked_descendants_of(from)
+        .into_iter()
+        .filter_map(|path| path.strip_prefix(from).ok().map(|suffix| to.join(suffix)))
+        .filter(|path| should_read_observed_fileprovider_path(previous, path))
+        .collect()
+}
+
+fn should_read_observed_fileprovider_path(
+    previous: Option<&FileProviderStateSnapshot>,
+    path: &Path,
+) -> bool {
+    if previous.is_some_and(|snapshot| snapshot.contains_path(path)) {
+        return true;
+    }
+    if !path.exists() {
+        return false;
+    }
+    is_observable_fileprovider_path(previous, path)
 }
 
 fn is_observable_fileprovider_path(
@@ -2875,6 +2926,104 @@ mod tests {
             change.current.progress.reason.as_deref(),
             Some("fileprovider-item-removed")
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_removes_deleted_tracked_provider_subtree() {
+        let root = unique_temp_dir();
+        let removed_dir = root.join("Removed.icloud");
+        let removed_child = removed_dir.join("Child.icloud.md");
+        let untouched = root.join("Untouched.icloud-placeholder");
+        fs::create_dir_all(&removed_dir).unwrap();
+        fs::write(&removed_child, "downloaded").unwrap();
+        fs::write(&untouched, "placeholder").unwrap();
+        mark_evicted_fixture(&untouched);
+        let previous = FileProviderStateSnapshot {
+            entries: vec![
+                FileProviderStateSnapshotEntry {
+                    path: removed_child.clone(),
+                    state: CloudStorageState::Downloaded,
+                },
+                FileProviderStateSnapshotEntry {
+                    path: untouched.clone(),
+                    state: CloudStorageState::Evicted,
+                },
+            ],
+        };
+        fs::remove_dir_all(&removed_dir).unwrap();
+        let events = vec![FileEvent::new(&removed_dir, FileEventKind::Remove)];
+
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate(Some(&previous), events).unwrap();
+
+        assert_eq!(observed.events, 1);
+        assert_eq!(observed.paths, vec![removed_child.clone()]);
+        assert_eq!(observed.report.changes.len(), 1);
+        let change = &observed.report.changes[0];
+        assert_eq!(change.path, removed_child);
+        assert_eq!(change.previous, CloudStorageState::Downloaded);
+        assert_eq!(change.current.storage_state, CloudStorageState::Removed);
+        assert!(observed.report.invalidate_preview_disk);
+        assert!(observed.report.invalidate_sidebar);
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].path, untouched);
+        assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_moves_tracked_provider_subtree_on_rename() {
+        let root = unique_temp_dir();
+        let old_dir = root.join("Old.icloud");
+        let new_dir = root.join("New.icloud");
+        let old_child = old_dir.join("Child.icloud-placeholder");
+        let new_child = new_dir.join("Child.icloud-placeholder");
+        fs::create_dir_all(&old_dir).unwrap();
+        fs::write(&old_child, "placeholder").unwrap();
+        mark_evicted_fixture(&old_child);
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: old_child.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+        fs::rename(&old_dir, &new_dir).unwrap();
+        let events = vec![FileEvent::new(
+            &new_dir,
+            FileEventKind::Rename {
+                from: old_dir.clone(),
+                to: new_dir.clone(),
+            },
+        )];
+
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate(Some(&previous), events).unwrap();
+
+        assert_eq!(observed.events, 1);
+        assert_eq!(
+            observed.paths,
+            vec![new_dir.clone(), new_child.clone(), old_child.clone()]
+        );
+        assert!(observed.report.changes.iter().any(|change| {
+            change.path == old_child
+                && change.previous == CloudStorageState::Downloaded
+                && change.current.storage_state == CloudStorageState::Removed
+        }));
+        assert!(observed
+            .report
+            .changes
+            .iter()
+            .any(|change| change.path == new_child
+                && change.previous == CloudStorageState::LocalOnly
+                && change.current.storage_state == CloudStorageState::Evicted));
+        assert!(!snapshot.entries.iter().any(|entry| entry.path == old_child));
+        assert!(snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.path == new_child && entry.state == CloudStorageState::Evicted));
 
         fs::remove_dir_all(root).unwrap();
     }
