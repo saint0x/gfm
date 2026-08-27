@@ -33,7 +33,7 @@ use gfm_types::{GfmError, Result, SearchHit};
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
 use std::time::Duration;
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -1388,8 +1388,7 @@ pub(crate) fn run_content_job(
         })?;
     let job_spec = spec.clone();
     let job_spec_path = spec_path.to_path_buf();
-    let job_result = Arc::new(Mutex::new(None));
-    let job_result_task = Arc::clone(&job_result);
+    let (job_result_tx, job_result_rx) = mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
     let job = scheduler.schedule_on_volume(Priority::Background, label, volume);
     let runtime = RuntimeJobHandle::begin_with_payload_path(
@@ -1413,7 +1412,7 @@ pub(crate) fn run_content_job(
         .map(|scheduled| {
             let job_spec = job_spec.clone();
             let job_spec_path = job_spec_path.clone();
-            let job_result_task = Arc::clone(&job_result_task);
+            let job_result_tx = job_result_tx.clone();
             let runtime = runtime.clone();
             RetriableTask::new(scheduled, move |cancellation| {
                 runtime.running()?;
@@ -1456,13 +1455,14 @@ pub(crate) fn run_content_job(
                     &mut extraction_quarantine,
                 )?;
                 extraction_quarantine.write(&quarantine_store)?;
-                *job_result_task
-                    .lock()
-                    .expect("content index result lock poisoned") = Some((report, inaccessible));
+                job_result_tx.send((report, inaccessible)).map_err(|_| {
+                    GfmError::Format("background content index result receiver dropped".to_string())
+                })?;
                 Ok(())
             })
         })
         .collect();
+    drop(job_result_tx);
     let worker_report = WorkerPool::new(scheduling.worker_threads).run_retriable_isolated(
         tasks,
         journal,
@@ -1489,13 +1489,9 @@ pub(crate) fn run_content_job(
             )))
         }
     }
-    let (report, inaccessible) = job_result
-        .lock()
-        .expect("content index result lock poisoned")
-        .clone()
-        .ok_or_else(|| {
-            GfmError::Format("background content index completed without a report".to_string())
-        })?;
+    let (report, inaccessible) = job_result_rx.try_recv().map_err(|_| {
+        GfmError::Format("background content index completed without a report".to_string())
+    })?;
     Ok(ContentJobOutcome {
         report: Some(report),
         inaccessible,
