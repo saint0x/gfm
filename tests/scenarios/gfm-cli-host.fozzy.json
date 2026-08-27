@@ -4131,6 +4131,24 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-home/Documents/Plan.md",
+      "data": "protected lifecycle path\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "HOME": "tmp/gfm-fozzy-home"
+      },
+      "args": [
+        "ui-contract",
+        "tmp/gfm-fozzy-home/Documents/Plan.md"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
