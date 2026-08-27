@@ -3,7 +3,7 @@ use crate::runtime::{
     default_job_journal_path, run_scheduled_volume_task, run_volume_task_cancellable,
 };
 use crate::{
-    parent_volume, parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg,
+    parent_volume, parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg, path_volume,
     required_path,
 };
 use gfm_jobs::{
@@ -161,7 +161,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "runtime retry probe",
             )?;
             let outcome = run_scheduled_volume_task(
-                parent_volume(&state),
+                path_volume(write_probe_path(&state)),
                 Priority::Background,
                 "runtime retry probe",
                 pressure,
@@ -380,7 +380,10 @@ fn write_probe_path(path: &Path) -> &Path {
     if path.is_dir() {
         return path;
     }
-    path.parent().unwrap_or(path)
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
 }
 
 fn parse_progress_command(value: Option<String>) -> Result<JobProgressCommand> {

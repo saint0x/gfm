@@ -11914,6 +11914,8 @@ fn resumes_content_index_job_from_binary() {
     let content = unique_temp_path("gfm-cli-resume-content", "gfmcontent");
     let journal = unique_temp_path("gfm-cli-resume-jobs", "journal");
     let spec = unique_temp_path("gfm-cli-resume-content", "job");
+    let catalog = unique_temp_path("gfm-cli-resume-content", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-resume-content", "gfmprogress");
     fs::write(root.join("resume.md"), "the body contains resumemarker").unwrap();
     fs::write(
         &spec,
@@ -11929,6 +11931,8 @@ fn resumes_content_index_job_from_binary() {
     fs::write(&journal, "99\t1\tstarted\tbackground content index\n").unwrap();
 
     let resume_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "resume-content-background",
             spec.to_str().unwrap(),
@@ -11941,6 +11945,19 @@ fn resumes_content_index_job_from_binary() {
         "{}",
         String::from_utf8_lossy(&resume_output.stderr)
     );
+    let resume_stderr = String::from_utf8(resume_output.stderr).unwrap();
+    assert_worker_admitted(
+        &resume_stderr,
+        "background content recovery journal",
+        journal.parent().unwrap(),
+    );
+    assert_worker_admitted(
+        &resume_stderr,
+        "background content recovery progress",
+        progress.parent().unwrap(),
+    );
+    assert_worker_admitted(&resume_stderr, "resume background content index", &spec);
+    assert_worker_admitted(&resume_stderr, "background content index", &root);
 
     let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -11962,6 +11979,15 @@ fn resumes_content_index_job_from_binary() {
     let journal_text = fs::read_to_string(&journal).unwrap();
     assert!(journal_text.contains("99\t1\tstarted"));
     assert!(journal_text.contains("completed"));
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("background content index"),
+        "{progress_text}"
+    );
+    assert!(
+        !progress_text.contains("resume background content recovery"),
+        "{progress_text}"
+    );
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(segments).unwrap();
@@ -11969,6 +11995,8 @@ fn resumes_content_index_job_from_binary() {
     fs::remove_file(content).unwrap();
     fs::remove_file(journal).unwrap();
     fs::remove_file(spec).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
 }
 
 #[test]
@@ -12401,6 +12429,52 @@ fn scheduled_runtime_retry_probe_retries_transient_failure_from_binary() {
     fs::remove_file(journal).unwrap();
     fs::remove_file(catalog).unwrap();
     fs::remove_file(progress).unwrap();
+}
+
+#[test]
+fn runtime_retry_probe_persists_cwd_volume_for_relative_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-retry-relative-volume");
+    let journal = root.join("jobs.journal");
+    let catalog = root.join("runtime.gfmjobs");
+    let progress = root.join("runtime.gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["jobs-runtime-retry-probe", "retry.state"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read_to_string(root.join("retry.state")).unwrap(), "2");
+    let volume = test_volume_id(&root);
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text
+            .lines()
+            .any(|line| line.starts_with("payload\t1\t")
+                && line.contains("\truntime retry probe\t")
+                && line.contains(&format!("\t{volume}\t"))),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text
+            .lines()
+            .any(|line| line.starts_with("progress\t1\t")
+                && line.contains("\truntime retry probe\t")
+                && line.contains(&format!("\t{volume}\t"))
+                && line.contains("\tcompleted\t")),
+        "{progress_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
