@@ -1160,6 +1160,58 @@ fn publishes_fileprovider_progress_to_runtime_job_store_from_binary() {
 }
 
 #[test]
+fn fileprovider_progress_job_refuses_unreachable_runtime_store_before_provider_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-progress-runtime-blocked-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("target")).unwrap();
+    std::fs::create_dir_all(root.join("runtime")).unwrap();
+    std::fs::write(
+        root.join("runtime").join(".gfm-volume-kind"),
+        "network-unreachable\n",
+    )
+    .unwrap();
+    let downloading = root
+        .join("target")
+        .join("Downloading.icloud-downloading.md");
+    let progress = root.join("runtime").join("progress.gfmprogress");
+    let catalog = root.join("runtime").join("payloads.gfmjobs");
+    std::fs::write(&downloading, "downloading").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .arg("fileprovider-progress-job")
+        .arg(&downloading)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("fileprovider-progress\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "fileprovider progress job volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=fileprovider progress job\tpath={}",
+            downloading.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!progress.exists());
+    assert!(!catalog.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_state_controls_preview_generation_from_binary() {
     let root =
         std::env::temp_dir().join(format!("gfm-fileprovider-preview-{}", std::process::id()));

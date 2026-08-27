@@ -826,6 +826,17 @@ pub(crate) fn runtime_progress_store() -> Option<JobProgressStore> {
     env::var_os("GFM_JOB_PROGRESS_STORE").map(JobProgressStore::new)
 }
 
+pub(crate) fn preflight_runtime_job_state(worker: &str) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = Vec::new();
+    if let Some(catalog) = runtime_payload_catalog() {
+        guards.push(preflight_runtime_write(catalog.path(), worker)?);
+    }
+    if let Some(store) = runtime_progress_store() {
+        guards.push(preflight_runtime_write(store.path(), worker)?);
+    }
+    Ok(guards)
+}
+
 fn runtime_payload_path(kind: JobPayloadKind, label: &str) -> PathBuf {
     PathBuf::from("runtime")
         .join(kind.as_str())

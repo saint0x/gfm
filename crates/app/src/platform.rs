@@ -5,7 +5,7 @@ use crate::access::{
 use crate::{
     detect_volume_id, index_volume_descriptor, parse_required_scheduling_pressure,
     run_preview_contract_adaptive_with_volume, run_preview_contract_cancellable,
-    runtime::RuntimeJobHandle,
+    runtime::{preflight_runtime_job_state, RuntimeJobHandle},
 };
 use gfm_fs::record_for_path;
 use gfm_index::{
@@ -179,6 +179,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "fileprovider-progress-job" => {
             let path = required_path(args.next(), "fileprovider-progress-job requires a path")?;
+            let _runtime_access = preflight_runtime_job_state("fileprovider progress job")?;
             let _access =
                 preflight_access_scope(&path, AccessIntent::Read, "fileprovider progress job")?;
             println!("{}", publish_fileprovider_progress_job(path)?.as_tsv());
