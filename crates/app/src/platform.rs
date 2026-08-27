@@ -1660,24 +1660,58 @@ fn run_fileprovider_observer_probe(
     let root_worker = format!("{worker} root");
     let target_worker = format!("{worker} target");
     let state_worker = format!("{worker} state");
-    let _root_access = preflight_access_scope(root, AccessIntent::Index, &root_worker)?;
-    let _target_access = preflight_access_scope(
+    preflight_volume_access_scope(root, AccessIntent::Index, &root_worker)?;
+    preflight_volume_access_scope(
         &write_probe_existing_ancestor(target),
         AccessIntent::Write,
         &target_worker,
     )?;
-    let _state_access =
-        retain_fileprovider_snapshot_access(state_path, &[target.to_path_buf()], &state_worker)?;
-    let previous = if state_path.is_file() {
-        Some(FileProviderStateSnapshot::read(state_path)?)
-    } else {
-        None
-    };
-    let mut observer = FileProviderStateObserver::watch(&[WatchRoot::tree(root)], previous)?;
-    std::fs::write(target, b"observer-probe").map_err(|err| GfmError::io(target, err))?;
-    let observed = drain_fileprovider_observer_probe(&mut observer)?;
-    observer.snapshot().write(state_path)?;
-    Ok(observed)
+    preflight_fileprovider_snapshot_volumes(state_path, &[target.to_path_buf()], &state_worker)?;
+    let state_path = state_path.to_path_buf();
+    let root = root.to_path_buf();
+    let target = target.to_path_buf();
+    let worker_name = worker.to_string();
+    let volume = parent_volume(&root)
+        .or_else(|| parent_volume(&write_probe_existing_ancestor(&target)))
+        .or_else(|| parent_volume(&write_probe_existing_ancestor(&state_path)));
+    run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        "fileprovider observer probe",
+        move |cancellation| {
+            cancellation.check()?;
+            let root_worker = format!("{worker_name} root");
+            let target_worker = format!("{worker_name} target");
+            let state_worker = format!("{worker_name} state");
+            let _root_access = preflight_access_scope(&root, AccessIntent::Index, &root_worker)?;
+            let _target_access = preflight_access_scope(
+                &write_probe_existing_ancestor(&target),
+                AccessIntent::Write,
+                &target_worker,
+            )?;
+            let _state_access = retain_fileprovider_snapshot_access(
+                &state_path,
+                std::slice::from_ref(&target),
+                &state_worker,
+            )?;
+            cancellation.check()?;
+            let previous = if state_path.is_file() {
+                Some(FileProviderStateSnapshot::read(&state_path)?)
+            } else {
+                None
+            };
+            cancellation.check()?;
+            let mut observer =
+                FileProviderStateObserver::watch(&[WatchRoot::tree(&root)], previous)?;
+            cancellation.check()?;
+            std::fs::write(&target, b"observer-probe").map_err(|err| GfmError::io(&target, err))?;
+            cancellation.check()?;
+            let observed = drain_fileprovider_observer_probe(&mut observer, &cancellation)?;
+            cancellation.check()?;
+            observer.snapshot().write(&state_path)?;
+            Ok(observed)
+        },
+    )
 }
 
 fn observed_preview_cache_invalidation_tsv(
@@ -1722,9 +1756,11 @@ fn preview_cache_key_for_path_kind(
 
 fn drain_fileprovider_observer_probe(
     observer: &mut FileProviderStateObserver,
+    cancellation: &Cancellation,
 ) -> Result<FileProviderObservedInvalidation> {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
+        cancellation.check()?;
         if let Some(observed) = observer.drain_available(64)? {
             if !observed.paths.is_empty() {
                 return Ok(observed);

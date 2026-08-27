@@ -2346,6 +2346,11 @@ fn reports_fileprovider_observer_probe_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "fileprovider observer root", &root);
+    assert_worker_admitted(&stderr, "fileprovider observer target", &root);
+    assert_worker_admitted(&stderr, "fileprovider observer state", &root);
+    assert_worker_admitted(&stderr, "fileprovider observer state", &item);
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("fileprovider-observed-invalidation\t"));
     assert!(stdout.contains("\tevent-kinds="));
@@ -2393,6 +2398,11 @@ fn reports_fileprovider_observer_metadata_probe_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "fileprovider observer metadata root", &root);
+    assert_worker_admitted(&stderr, "fileprovider observer metadata target", &root);
+    assert_worker_admitted(&stderr, "fileprovider observer metadata state", &root);
+    assert_worker_admitted(&stderr, "fileprovider observer metadata state", &item);
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("fileprovider-observed-invalidation\t"));
     assert!(stdout.contains("\tpaths=1\n"));

@@ -22,9 +22,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     match command {
         "macrobench" => {
             let options = macrobench_options(args.next(), args.next(), "macrobench")?;
-            let _access =
-                retain_workspace_write_access(&options.workspace, "macrobench workspace")?;
-            let report = run_macrobench(&options)?;
+            let workspace = options.workspace.clone();
+            let report = run_workspace_write_task(&workspace, "macrobench workspace", move |_| {
+                run_macrobench(&options)
+            })?;
             println!(
                 "fixture\t{}\tfiles\t{}\tpassed\t{}",
                 report.fixture_root.display(),
@@ -48,8 +49,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "macrobench-fixture" => {
             let (root, scale) =
                 macrobench_fixture_options(args.next(), args.next(), "macrobench-fixture")?;
-            let _access = retain_workspace_write_access(&root, "macrobench fixture workspace")?;
-            let report = materialize_macrobench_fixture_report(root, scale)?;
+            let workspace = root.clone();
+            let report =
+                run_workspace_write_task(&workspace, "macrobench fixture workspace", move |_| {
+                    materialize_macrobench_fixture_report(root, scale)
+                })?;
             println!(
                 "fixture\t{}\tmanifest\t{}\tfiles\t{}\tdirectories\t{}\tscenarios\t{}",
                 report.fixture_root.display(),
@@ -70,9 +74,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "parity-fixture" => {
             let options = parity_fixture_options(args.next(), args.next(), "parity-fixture")?;
-            let _access =
-                retain_workspace_write_access(&options.workspace, "parity fixture workspace")?;
-            let report = materialize_parity_fixture(&options)?;
+            let workspace = options.workspace.clone();
+            let report =
+                run_workspace_write_task(&workspace, "parity fixture workspace", move |_| {
+                    materialize_parity_fixture(&options)
+                })?;
             println!(
                 "fixture\t{}\tmanifest\t{}\tfiles\t{}\tscenarios\t{}",
                 report.fixture_root.display(),
@@ -336,9 +342,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "regression-gate" => {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
-            let _access =
-                retain_workspace_write_access(&options.workspace, "regression gate workspace")?;
-            let run = run_regression_gate(&options, RegressionGateOptions::default())?;
+            let workspace = options.workspace.clone();
+            let run =
+                run_workspace_write_task(&workspace, "regression gate workspace", move |_| {
+                    run_regression_gate(&options, RegressionGateOptions::default())
+                })?;
             println!(
                 "fixture\t{}\tfiles\t{}\tindex-bytes\t{}\tsidecar-prefix-candidates\t{}\tsidecar-substring-candidates\t{}\tsidecar-fuzzy-verified\t{}\tsidecar-prefix-cache-hits\t{}\tsidecar-substring-cache-hits\t{}\tsidecar-fuzzy-cache-hits\t{}\tsidecar-prefix-cutoffs\t{}\tsidecar-prefix-truncated\t{}\tsidecar-substring-cutoffs\t{}\tsidecar-substring-truncated\t{}\tsidecar-fuzzy-truncated\t{}\tpassed\t{}",
                 run.macrobench.fixture_root.display(),
@@ -377,9 +385,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "large-sidecar-gate requires a synthetic record count",
             )?;
-            let _access =
-                retain_workspace_write_access(&workspace, "large sidecar gate workspace")?;
-            let report = run_large_sidecar_gate(&LargeSidecarGateOptions::new(workspace, records))?;
+            let worker_workspace = workspace.clone();
+            let report =
+                run_workspace_write_task(&workspace, "large sidecar gate workspace", move |_| {
+                    run_large_sidecar_gate(&LargeSidecarGateOptions::new(worker_workspace, records))
+                })?;
             println!(
                 "large-sidecar-gate\tfixture={}\tthresholds={}\thistory={}\tprofile={}\tmin-ci-records={}\trecords={}\tprobe-records={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tsubstring-bytes={}\tfuzzy-bytes={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tsubstring-cutoffs={}\tsubstring-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
                 report.fixture_root.display(),
@@ -429,8 +439,6 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-typing-benchmark requires a synthetic record count",
             )?;
-            let _access =
-                retain_workspace_write_access(&workspace, "search typing benchmark workspace")?;
             let mut options = SearchTypingBenchmarkOptions::new(workspace, records);
             if let Some(repetitions) = args.next() {
                 options.repetitions = repetitions.parse().map_err(|_| {
@@ -442,7 +450,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             if let Some(query) = args.next() {
                 options.query = query;
             }
-            let report = run_search_typing_benchmark(&options)?;
+            let workspace = options.workspace.clone();
+            let report = run_workspace_write_task(
+                &workspace,
+                "search typing benchmark workspace",
+                move |_| run_search_typing_benchmark(&options),
+            )?;
             println!(
                 "search-typing-benchmark\tfixture={}\thistory={}\trecords={}\tprobe-records={}\trepetitions={}\tqueries={}\tsamples={}\thits={}\tp50-ns={}\tp95-ns={}\tp99-ns={}\tmax-ns={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tviolations={}\tpassed={}",
                 report.fixture_root.display(),
@@ -484,10 +497,6 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-typing-session-benchmark requires a synthetic record count",
             )?;
-            let _access = retain_workspace_write_access(
-                &workspace,
-                "search typing session benchmark workspace",
-            )?;
             let mut options = SearchTypingBenchmarkOptions::new(workspace, records);
             if let Some(repetitions) = args.next() {
                 options.repetitions = repetitions.parse().map_err(|_| {
@@ -499,7 +508,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             if let Some(query) = args.next() {
                 options.query = query;
             }
-            let report = run_search_typing_session_benchmark(&options)?;
+            let workspace = options.workspace.clone();
+            let report = run_workspace_write_task(
+                &workspace,
+                "search typing session benchmark workspace",
+                move |_| run_search_typing_session_benchmark(&options),
+            )?;
             println!(
                 "search-typing-session-benchmark\tfixture={}\thistory={}\trecords={}\tindexed-records={}\tindexed-prefixes={}\tindexed-substring-grams={}\tindexed-fuzzy-keys={}\trepetitions={}\tqueries={}\tsamples={}\thits={}\tp50-ns={}\tp95-ns={}\tp99-ns={}\tmax-ns={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tcontent-cache-hits={}\tcontent-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}\tresult-cache-hits={}\tresult-cache-misses={}\tviolations={}\tpassed={}",
                 report.fixture_root.display(),
@@ -557,6 +571,26 @@ fn preflight_pixel_diff_volumes(expected: &Path, actual: &Path, mask: Option<&Pa
 
 fn primary_volume(path: &Path) -> Option<gfm_types::VolumeId> {
     detect_volume_id(path).ok().or_else(|| parent_volume(path))
+}
+
+fn run_workspace_write_task<T>(
+    workspace: &Path,
+    worker: &'static str,
+    work: impl FnOnce(gfm_jobs::Cancellation) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    let workspace = workspace.to_path_buf();
+    let probe = write_probe_path(&workspace).to_path_buf();
+    preflight_volume_access_scope(&probe, AccessIntent::Write, worker)?;
+    let volume = primary_volume(&probe);
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_workspace_write_access(&workspace, worker)?;
+        cancellation.check()?;
+        work(cancellation)
+    })
 }
 
 fn retain_pixel_diff_access(
