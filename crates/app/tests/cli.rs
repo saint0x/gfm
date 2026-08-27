@@ -6145,10 +6145,14 @@ fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
 fn deferred_adaptive_extraction_worker_does_not_touch_unreachable_target_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-worker-deferred-unreachable");
     let path = root.join("document.txt");
+    let catalog = unique_temp_path("gfm-cli-extract-worker-deferred-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-extract-worker-deferred-runtime", "gfmprogress");
     fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     fs::write(&path, "deferred worker marker").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "extract-worker-adaptive",
             path.to_str().unwrap(),
@@ -6176,7 +6180,28 @@ fn deferred_adaptive_extraction_worker_does_not_touch_unreachable_target_from_bi
         !stderr.contains("volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(catalog_text.contains("\textraction\t"), "{catalog_text}");
+    assert!(
+        catalog_text.contains("adaptive extraction"),
+        "{catalog_text}"
+    );
+    assert!(
+        catalog_text.contains("runtime/extraction/adaptive-extraction.gfmjob"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tbackground\tbackground\tadaptive extraction"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
+        "{progress_text}"
+    );
 
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -6398,12 +6423,22 @@ fn quarantined_adaptive_extraction_worker_records_timeout_from_binary() {
 fn deferred_quarantined_adaptive_extraction_worker_does_not_touch_unreachable_store_from_binary() {
     let source_root = unique_temp_dir("gfm-cli-extract-worker-quarantine-deferred-source");
     let store_root = unique_temp_dir("gfm-cli-extract-worker-quarantine-deferred-store");
+    let catalog = unique_temp_path(
+        "gfm-cli-extract-worker-quarantine-deferred-runtime",
+        "gfmjobs",
+    );
+    let progress = unique_temp_path(
+        "gfm-cli-extract-worker-quarantine-deferred-runtime",
+        "gfmprogress",
+    );
     fs::write(store_root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     let path = source_root.join("document.txt");
     let store = store_root.join("quarantine.gfmquarantine");
     fs::write(&path, "deferred quarantine marker").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "extract-worker-quarantine-adaptive",
             path.to_str().unwrap(),
@@ -6435,7 +6470,29 @@ fn deferred_quarantined_adaptive_extraction_worker_does_not_touch_unreachable_st
         "{stderr}"
     );
     assert!(!store.exists());
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(catalog_text.contains("\textraction\t"), "{catalog_text}");
+    assert!(
+        catalog_text.contains("quarantined adaptive extraction"),
+        "{catalog_text}"
+    );
+    assert!(
+        catalog_text.contains("runtime/extraction/quarantined-adaptive-extraction.gfmjob"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text
+            .contains("progress\t1\tbackground\tbackground\tquarantined adaptive extraction"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
+        "{progress_text}"
+    );
 
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
     fs::remove_dir_all(source_root).unwrap();
     fs::remove_dir_all(store_root).unwrap();
 }

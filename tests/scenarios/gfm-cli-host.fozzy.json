@@ -5239,6 +5239,38 @@
     {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-deferred-extract.gfmprogress",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-deferred-extract.gfmjobs"
+      },
+      "args": [
+        "extract-worker-adaptive",
+        "tmp/gfm-fozzy-preview.pdf",
+        "saturated",
+        "nominal",
+        "ac",
+        "idle"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "adaptive-extraction-deferred\taction=Defer\n",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-payload-restore-plan",
+        "tmp/gfm-fozzy-deferred-extract.gfmjobs",
+        "tmp/gfm-fozzy-deferred-extract.gfmprogress",
+        "2000"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
         "extract-worker-quarantine-adaptive",
         "tmp/gfm-fozzy-preview.pdf",
