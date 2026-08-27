@@ -1,6 +1,6 @@
 # Agent 2 Remaining Work
 
-Date: 2026-08-26
+Date: 2026-08-27
 
 This is an undone-only handoff. Remove an item only when the whole item is implemented in production code, verified at the stated scope, committed, pushed to `origin/main`, and followed by a clean `git status --branch --short`.
 
@@ -78,11 +78,11 @@ GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GF
 
    ```sh
    fozzy doctor --deep --scenario tests/scenarios/gfm-cli-host.fozzy.json --runs 5 --seed 424242 --json
-   fozzy test --det --strict-verify tests/scenarios/gfm-cli-host.fozzy.json --json
-   fozzy run tests/scenarios/gfm-cli-host.fozzy.json --det --record /tmp/gfm-cli-host.trace.fozzy --proc-backend host --fs-backend host --http-backend host --json
-   fozzy trace verify /tmp/gfm-cli-host.trace.fozzy --strict --json
-   fozzy replay /tmp/gfm-cli-host.trace.fozzy --json
-   fozzy ci /tmp/gfm-cli-host.trace.fozzy --json
+   fozzy test --det --strict tests/scenarios/gfm-cli-host.fozzy.json --json
+   fozzy run tests/scenarios/gfm-cli-host.fozzy.json --det --record gfm-cli-host.trace.fozzy --proc-backend host --fs-backend host --http-backend host --json
+   fozzy trace verify gfm-cli-host.trace.fozzy --strict --json
+   fozzy replay gfm-cli-host.trace.fozzy --json
+   fozzy ci gfm-cli-host.trace.fozzy --json
    fz doctor project . --strict
    fz audit unsafe .
    ```
@@ -90,10 +90,9 @@ GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GF
 3. Clean verifier artifacts before committing unless the artifact is an intentional source artifact:
 
    ```sh
-   if [ -d .fz ]; then /bin/rm -r .fz; fi
-   if [ -d .fozzy ]; then /bin/rm -r .fozzy; fi
-   if [ -e /tmp/gfm-cli-host.trace.fozzy ]; then /bin/rm /tmp/gfm-cli-host.trace.fozzy; fi
-   if [ -e /tmp/gfm-cli-host.trace.1.fozzy ]; then /bin/rm /tmp/gfm-cli-host.trace.1.fozzy; fi
+   find .fz .fozzy -depth -delete 2>/dev/null || true
+   find . -maxdepth 1 -name 'gfm-cli-host.trace*.fozzy' -delete
+   find /tmp -maxdepth 1 -name 'gfm-cli-host.trace*.fozzy' -delete
    ```
 
 4. Before removing anything from this file or `STATUS.md`, cite the exact verification evidence in the commit body or PR notes: commands, changed crates, host assumptions, and why the evidence covers the full item.
