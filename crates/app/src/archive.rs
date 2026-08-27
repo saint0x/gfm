@@ -202,12 +202,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&records)
                 .ok()
                 .or_else(|| parent_volume(&records));
-            let _access = retain_derived_sidecar_rebuild_access(&records, &sidecar, &backup_dir)?;
+            preflight_derived_sidecar_rebuild_volumes(&records, &sidecar, &backup_dir)?;
             let rebuild = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "derived sidecar rebuild",
                 move |cancellation| {
+                    let _access =
+                        retain_derived_sidecar_rebuild_access(&records, &sidecar, &backup_dir)?;
                     rebuild_derived_sidecar_checked(records, kind, sidecar, backup_dir, || {
                         cancellation.check()
                     })
@@ -346,12 +348,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = detect_volume_id(&records)
                 .ok()
                 .or_else(|| parent_volume(&records));
-            let _access = retain_sidecar_recovery_access(&records, &sidecars, &quarantine)?;
+            preflight_sidecar_recovery_volumes(&records, &sidecars, &quarantine)?;
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "sidecar repair",
                 move |cancellation| {
+                    let _access = retain_sidecar_recovery_access(&records, &sidecars, &quarantine)?;
                     recover_sidecars_checked(&records, &sidecars, &quarantine, || {
                         cancellation.check()
                     })
@@ -590,6 +593,28 @@ fn retain_derived_sidecar_rebuild_access(
             "derived sidecar rebuild backup",
         )?,
     ])
+}
+
+fn preflight_derived_sidecar_rebuild_volumes(
+    records: &Path,
+    sidecar: &Path,
+    backup_dir: &Path,
+) -> Result<()> {
+    preflight_volume_access_scope(
+        records,
+        AccessIntent::Read,
+        "derived sidecar rebuild records",
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(sidecar),
+        AccessIntent::Write,
+        "derived sidecar rebuild output",
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(backup_dir),
+        AccessIntent::Write,
+        "derived sidecar rebuild backup",
+    )
 }
 
 fn retain_sidecar_recovery_plan_access(records: &Path) -> Result<Vec<ScopedAccessGuard>> {

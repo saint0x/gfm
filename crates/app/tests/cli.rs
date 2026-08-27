@@ -1771,6 +1771,13 @@ fn derived_sidecar_rebuild_refuses_unreachable_volume_before_repair_from_binary(
         ),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=derived sidecar rebuild records\tpath={}",
+            records.display()
+        )),
+        "{stderr}"
+    );
     assert!(!prefixes.exists());
     assert!(fs::read_dir(&backup).unwrap().next().is_none());
 
@@ -4226,6 +4233,13 @@ fn sidecar_recover_refuses_unreachable_volume_before_repair_from_binary() {
     assert!(!stdout.contains("sidecar-recovery\t"), "{stdout}");
     assert!(
         stderr.contains("sidecar repair records volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar repair records\tpath={}",
+            records.display()
+        )),
         "{stderr}"
     );
     assert!(!prefixes.exists());
