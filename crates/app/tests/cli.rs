@@ -10010,10 +10010,12 @@ fn scheduled_runtime_refuses_unreachable_job_journal_before_runtime_state_from_b
 #[test]
 fn deferred_runtime_retry_probe_does_not_touch_attempt_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-runtime-retry-probe-deferred");
-    let state = root.join("retry.state");
+    let attempts = root.join("attempts");
+    let state = attempts.join("retry.state");
     let journal = root.join("jobs.journal");
     let catalog = root.join("runtime.gfmjobs");
     let progress = root.join("runtime.gfmprogress");
+    fs::create_dir_all(&attempts).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_JOB_JOURNAL", &journal)
@@ -10036,11 +10038,17 @@ fn deferred_runtime_retry_probe_does_not_touch_attempt_state_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stdout.contains("runtime-retry-probe\tdeferred\tDefer"),
         "{stdout}"
     );
+    assert!(
+        !stderr.contains(&format!("path={}", attempts.display())),
+        "{stderr}"
+    );
     assert!(!state.exists());
+    assert!(attempts.exists());
     assert!(catalog.exists());
     assert!(progress.exists());
 
