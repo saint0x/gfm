@@ -455,6 +455,7 @@ fn reports_icloud_badges_in_native_icon_descriptor_from_binary() {
     let evicted = root.join("Remote.icloud-placeholder");
     let downloading = root.join("Asset.icloud-downloading.png");
     std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
     std::fs::write(&downloading, "downloading").unwrap();
 
     let evicted_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -502,6 +503,7 @@ fn reports_native_icon_fileprovider_invalidation_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("native-icon-fileprovider-invalidation")
@@ -753,6 +755,7 @@ fn reports_fileprovider_state_from_binary() {
     let conflict = root.join("Conflict.icloud-conflict.md");
     std::fs::write(&downloaded, "downloaded").unwrap();
     std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
     std::fs::write(&conflict, "conflict").unwrap();
 
     let downloaded_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -988,6 +991,7 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
     let evicted = root.join("Remote.icloud-placeholder.pdf");
     let downloading = root.join("Downloading.icloud-downloading.png");
     std::fs::write(&evicted, "%PDF-1.7\nplaceholder").unwrap();
+    mark_evicted_fixture(&evicted);
     std::fs::write(&downloading, "png").unwrap();
 
     let quicklook = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -1059,6 +1063,7 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     let evicted = root.join("Remote.icloud-placeholder");
     let downloaded = root.join("Downloaded.icloud.md");
     std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
     std::fs::write(&downloaded, "downloaded").unwrap();
 
     let download_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -1125,6 +1130,7 @@ fn reports_fileprovider_invalidation_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-invalidation")
@@ -1157,6 +1163,7 @@ fn reports_fileprovider_metadata_invalidation_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-metadata-invalidation")
@@ -1190,6 +1197,7 @@ fn reports_preview_cache_fileprovider_invalidation_from_binary() {
     let cache = root.join("cache");
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
     let mut seeded_cache = PreviewCache::new(PreviewCacheConfig::new(&cache)).unwrap();
     let seeded_key = PreviewRequestKey::new(
         FileId::new(VolumeId(42), 9001),
@@ -2561,4 +2569,8 @@ fn reports_volume_mount_bsd_refusal_from_binary() {
     assert!(malformed_stdout.contains("\tdisposition=unsupported\tnative-status=unsupported\t"));
     assert!(malformed_stdout.contains("\tdissenter-status=-\t"));
     assert!(malformed_stdout.contains("\treason=diskarbitration-mount-requires-bsd-name\n"));
+}
+
+fn mark_evicted_fixture(path: impl AsRef<std::path::Path>) {
+    xattr::set(path.as_ref(), "com.apple.icloud.placeholder", b"1").unwrap();
 }

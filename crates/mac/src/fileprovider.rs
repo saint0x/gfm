@@ -1508,8 +1508,7 @@ fn storage_state_for_path(
         CloudStorageState::Conflict
     } else if name.contains("offline") || attr_blob.contains("offline") {
         CloudStorageState::Offline
-    } else if name.ends_with(".icloud")
-        || name.contains("placeholder")
+    } else if has_evicted_materialization_evidence(path, hints)
         || attr_blob.contains("placeholder")
         || attr_blob.contains("evict")
     {
@@ -1819,7 +1818,15 @@ fn provider_commands_available(hints: &CloudHints) -> bool {
 
 fn is_evicted_placeholder_path(path: &Path) -> bool {
     let name = file_name_lower(path);
-    name.ends_with(".icloud") || name.contains("placeholder")
+    name.ends_with(".icloud")
+}
+
+fn has_evicted_materialization_evidence(path: &Path, hints: &CloudHints) -> bool {
+    path.extension().and_then(|value| value.to_str()) == Some("icloud")
+        || hints.xattrs.iter().any(|attr| {
+            let attr = attr.to_ascii_lowercase();
+            attr.contains("placeholder") || attr.contains("evict")
+        })
 }
 
 fn provider_from_attr(path: &Path, attr: &str) -> Option<String> {
@@ -2045,10 +2052,42 @@ mod tests {
     }
 
     #[test]
-    fn reports_path_only_evicted_placeholder_without_provider_command() {
+    fn reports_path_only_placeholder_as_unknown_without_provider_evidence() {
         let root = unique_temp_dir();
         let path = root.join("Evicted.icloud-placeholder");
         fs::write(&path, "placeholder").unwrap();
+
+        let report = FileProviderStateReport::read_path(&path).unwrap();
+
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::PathFallback
+        );
+        assert_eq!(report.progress.direction, CloudTransferDirection::Idle);
+        assert_eq!(report.progress.percent_milli, None);
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("unknown-provider-state")
+        );
+        assert_eq!(report.badges, vec![CloudBadge::Waiting]);
+        assert!(!report.offline);
+        assert_eq!(report.commands.download, CloudCommandState::Disabled);
+        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+        assert_eq!(
+            report.commands.reason.as_deref(),
+            Some("unknown-provider-state")
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reports_xattr_evicted_placeholder_without_provider_command() {
+        let root = unique_temp_dir();
+        let path = root.join("Evicted.icloud-placeholder");
+        fs::write(&path, "placeholder").unwrap();
+        xattr::set(&path, "com.apple.icloud.placeholder", b"1").unwrap();
 
         let report = FileProviderStateReport::read_path(&path).unwrap();
 
@@ -2188,6 +2227,7 @@ mod tests {
         let root = unique_temp_dir();
         let evicted = root.join("Remote.icloud-placeholder");
         fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
         let previous = FileProviderStateSnapshot {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: evicted.clone(),
@@ -2219,6 +2259,7 @@ mod tests {
         let root = unique_temp_dir();
         let evicted = root.join("Remote.icloud-placeholder");
         fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
         let previous = FileProviderStateSnapshot {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: evicted.clone(),
@@ -2258,6 +2299,8 @@ mod tests {
         let new = root.join("New.icloud-placeholder");
         fs::write(&old, "placeholder").unwrap();
         fs::write(&new, "placeholder").unwrap();
+        mark_evicted_fixture(&old);
+        mark_evicted_fixture(&new);
         let previous = FileProviderStateSnapshot {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: old.clone(),
@@ -2302,6 +2345,7 @@ mod tests {
         let root = unique_temp_dir();
         let tracked = root.join("Remote.icloud-placeholder");
         fs::write(&tracked, "placeholder").unwrap();
+        mark_evicted_fixture(&tracked);
         let previous = FileProviderStateSnapshot {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: tracked.clone(),
@@ -2399,6 +2443,8 @@ mod tests {
         let untouched = root.join("Untouched.icloud-placeholder");
         fs::write(&changed, "placeholder").unwrap();
         fs::write(&untouched, "placeholder").unwrap();
+        mark_evicted_fixture(&changed);
+        mark_evicted_fixture(&untouched);
         let previous = FileProviderStateSnapshot {
             entries: vec![
                 FileProviderStateSnapshotEntry {
@@ -2693,9 +2739,9 @@ mod tests {
         );
         assert_eq!(
             download.reason.as_deref(),
-            Some("not-native-provider-backed")
+            Some("operation-disabled-for-current-state")
         );
-        assert_eq!(download.before.storage_state, CloudStorageState::Evicted);
+        assert_eq!(download.before.storage_state, CloudStorageState::Unknown);
 
         let evict = FileProviderOperationReport::execute(&downloaded, FileProviderOperation::Evict)
             .unwrap();
@@ -2786,6 +2832,7 @@ mod tests {
         let root = unique_temp_dir();
         let evicted = root.join("Remote.icloud-placeholder");
         fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
 
         let report =
             FileProviderInvalidationReport::evaluate(&evicted, CloudStorageState::Downloaded)
@@ -3553,7 +3600,7 @@ mod tests {
     }
 
     #[test]
-    fn materialization_report_marks_path_fallback_placeholders() {
+    fn materialization_report_marks_xattr_fallback_placeholders() {
         let path = PathBuf::from("/tmp/Remote.icloud-placeholder");
         let hints = CloudHints {
             native: native_values(),
@@ -3563,9 +3610,9 @@ mod tests {
                 domain_identifier: None,
                 reason: Some("test fixture has no native manager identity".to_string()),
             },
-            xattrs: Vec::new(),
+            xattrs: vec!["com.apple.icloud.placeholder".to_string()],
             provider_identifier: None,
-            source: "fixture-name+icloud-extension".to_string(),
+            source: "fixture-name+xattr".to_string(),
         };
 
         let domain = domain_for_path(&path, &hints);
@@ -3579,8 +3626,12 @@ mod tests {
         );
         assert_eq!(
             materialization_source_for_state(state, &hints),
-            CloudMaterializationSource::PathFallback
+            CloudMaterializationSource::XattrFallback
         );
+    }
+
+    fn mark_evicted_fixture(path: &Path) {
+        xattr::set(path, "com.apple.icloud.placeholder", b"1").unwrap();
     }
 
     fn unique_temp_dir() -> PathBuf {
