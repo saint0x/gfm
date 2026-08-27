@@ -285,6 +285,10 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
     push_signature_bool(&mut tokens, "case-preserving", volume.case_preserving);
     push_signature_bool(&mut tokens, "automounted", volume.resource_automounted);
     push_signature_bool(&mut tokens, "browsable", volume.resource_browsable);
+    push_signature_bool(&mut tokens, "writable", Some(volume.writable));
+    push_signature_bool(&mut tokens, "read-only", Some(volume.read_only));
+    push_signature_bool(&mut tokens, "ejectable", Some(volume.ejectable));
+    push_signature_bool(&mut tokens, "mountable", volume.mountable);
     push_signature_str(
         &mut tokens,
         "remount-url",
@@ -693,6 +697,10 @@ mod tests {
         descriptor.resource_automounted = Some(false);
         descriptor.resource_browsable = Some(true);
         descriptor.resource_remount_url = Some("file:///Volumes/Work".to_string());
+        descriptor.writable = true;
+        descriptor.read_only = false;
+        descriptor.ejectable = true;
+        descriptor.mountable = Some(false);
         descriptor.device_protocol = Some("PCI-Express".to_string());
         descriptor.media_encrypted = Some(true);
         descriptor.media_block_size_bytes = Some(4096);
@@ -714,6 +722,10 @@ mod tests {
             "case-preserving=1",
             "automounted=0",
             "browsable=1",
+            "writable=1",
+            "read-only=0",
+            "ejectable=1",
+            "mountable=0",
             "remount-url=file:///Volumes/Work",
             "protocol=PCI-Express",
             "encrypted=1",
@@ -722,6 +734,36 @@ mod tests {
         ] {
             assert!(signature.contains(token), "{signature}");
         }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_volume_signature_changes_when_operation_capabilities_change() {
+        let root = unique_temp_dir("gfm-app-volume-operation-signature");
+        let mut previous = VolumeDescriptor::for_path(&root).unwrap();
+        previous.writable = true;
+        previous.read_only = false;
+        previous.ejectable = true;
+        previous.mountable = Some(false);
+        let mut current = previous.clone();
+        current.writable = false;
+        current.read_only = true;
+        current.ejectable = false;
+        current.mountable = Some(true);
+
+        let previous_signature = index_volume_filesystem_signature(&previous);
+        let current_signature = index_volume_filesystem_signature(&current);
+
+        assert_ne!(previous_signature, current_signature);
+        assert!(previous_signature.contains("writable=1"));
+        assert!(previous_signature.contains("read-only=0"));
+        assert!(previous_signature.contains("ejectable=1"));
+        assert!(previous_signature.contains("mountable=0"));
+        assert!(current_signature.contains("writable=0"));
+        assert!(current_signature.contains("read-only=1"));
+        assert!(current_signature.contains("ejectable=0"));
+        assert!(current_signature.contains("mountable=1"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
