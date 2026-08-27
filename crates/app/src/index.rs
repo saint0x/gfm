@@ -129,12 +129,30 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let visible_burst =
                 parse_usize_arg(args.next(), "fair-scan requires a visible burst size")?;
             let visible_roots = args.map(PathBuf::from).collect::<Vec<_>>();
-            let _root_access = enforce_index_access(&root)?;
-            let _visible_accesses = visible_roots
+            preflight_index_volume_access(&root)?;
+            visible_roots
                 .iter()
-                .map(|visible_root| enforce_index_access(visible_root))
+                .map(|visible_root| preflight_index_volume_access(visible_root))
                 .collect::<Result<Vec<_>>>()?;
-            let report = Indexer::default().build_fair(root, &visible_roots, visible_burst)?;
+            let volume = detect_volume_id(&root).ok();
+            let report = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "index",
+                move |cancellation| {
+                    let _root_access = enforce_index_access(&root)?;
+                    let _visible_accesses = visible_roots
+                        .iter()
+                        .map(|visible_root| enforce_index_access(visible_root))
+                        .collect::<Result<Vec<_>>>()?;
+                    Indexer::default().build_fair_cancellable(
+                        root,
+                        &visible_roots,
+                        visible_burst,
+                        &cancellation,
+                    )
+                },
+            )?;
             println!("{}", report.as_tsv());
         }
         "rename-correlation" => {

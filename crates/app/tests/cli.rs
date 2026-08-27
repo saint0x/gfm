@@ -1945,11 +1945,57 @@ fn reports_fair_scan_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_index_security_preflight(&output.stderr);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=index\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
     assert!(stdout.starts_with("fair-scan\t"), "{stdout}");
     assert!(stdout.contains("\tvisible-records="), "{stdout}");
     assert!(stdout.contains("\tbackground-records="), "{stdout}");
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn fair_scan_refuses_unreachable_visible_root_before_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-fair-scan-visible-root");
+    let offline = unique_temp_dir("gfm-cli-fair-scan-visible-offline");
+    fs::write(root.join("Background.md"), "background").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(offline.join("Visible.md"), "visible").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fair-scan",
+            root.to_str().unwrap(),
+            "2",
+            offline.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("fair-scan\t"), "{stdout}");
+    assert!(
+        stderr.contains("index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=index\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
 }
 
 #[test]
