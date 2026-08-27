@@ -614,12 +614,14 @@ impl JobPayloadCatalog {
         if !self.path.exists() {
             self.write_all(&[])?;
         }
-        let mut records = self.read()?;
-        if let Some(existing) = records.iter_mut().find(|existing| existing.id == record.id) {
-            if existing == record {
-                return Ok(());
+        if self.contains_id(record.id)? {
+            let mut records = self.read()?;
+            if let Some(existing) = records.iter_mut().find(|existing| existing.id == record.id) {
+                if existing == record {
+                    return Ok(());
+                }
+                *existing = record.clone();
             }
-            *existing = record.clone();
             self.write_all(&records)?;
             return Ok(());
         }
@@ -677,6 +679,42 @@ impl JobPayloadCatalog {
             .into_iter()
             .filter(|record| wanted.contains(&record.id))
             .collect())
+    }
+
+    fn contains_id(&self, id: JobId) -> Result<bool> {
+        if !self.path.exists() {
+            return Ok(false);
+        }
+        let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
+        let mut lines = BufReader::new(file).lines();
+        let header = lines
+            .next()
+            .transpose()
+            .map_err(|err| GfmError::io(&self.path, err))?
+            .ok_or_else(|| {
+                GfmError::Format(format!("empty payload catalog {}", self.path.display()))
+            })?;
+        if header != "gfm-job-payload-catalog-v1" {
+            return Err(GfmError::Format(format!(
+                "unsupported payload catalog header `{header}` in {}",
+                self.path.display()
+            )));
+        }
+        for (line_index, line) in lines.enumerate() {
+            let line = line.map_err(|err| GfmError::io(&self.path, err))?;
+            let record = parse_payload_record(&line).map_err(|err| {
+                GfmError::Format(format!(
+                    "{} line {}: {}",
+                    self.path.display(),
+                    line_index + 2,
+                    err
+                ))
+            })?;
+            if record.id == id {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn temp_path(&self) -> PathBuf {
