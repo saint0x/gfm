@@ -11,7 +11,7 @@ use crate::runtime::{
 };
 use crate::{
     detect_volume_id, optional_path_arg, parent_volume, parse_battery_state, parse_io_pressure,
-    parse_optional_scheduling_pressure, parse_quarantine_failure_kind,
+    parse_optional_scheduling_pressure, parse_quarantine_failure_kind, path_volume,
     parse_required_scheduling_pressure, parse_thermal_state, parse_u32, parse_u64,
     parse_user_activity, required_path, required_string,
 };
@@ -300,9 +300,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "compact-content requires at least one segment path".to_string(),
                 ));
             }
-            let _access =
-                retain_content_segments_access(None, &output, &segments, "content compaction")?;
-            let terms = Indexer::default().compact_content_segments(output, &segments)?;
+            let terms = run_content_compaction(output, segments)?;
             eprintln!("compacted {terms} content terms");
         }
         "compact-content-tiered" => {
@@ -316,17 +314,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "compact-content-tiered requires at least one segment path".to_string(),
                 ));
             }
-            let _access = retain_content_segments_access(
-                None,
-                &output,
-                &segments,
-                "tiered content compaction",
-            )?;
-            let outcome = Indexer::default().compact_content_segments_with_policy(
-                output,
-                &segments,
-                &ContentMergePolicy::default(),
-            )?;
+            let outcome = run_tiered_content_compaction(output, segments)?;
             eprintln!(
                 "tiered-compacted {} content terms; merged {}; retained {}; bytes {}; tombstone-segments {}; tier {:?}",
                 outcome.postings.len(),
@@ -355,19 +343,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-maintain-segments requires at least one segment".to_string(),
                 ));
             }
-            let _access = retain_content_segments_access(
-                Some(&manifest_path),
-                &output_archive,
-                &segments,
-                "content maintenance",
-            )?;
-            let worker = BackgroundContentIndexer::default();
-            let report = worker.maintain_segments(
-                &manifest_path,
-                &output_archive,
-                &segments,
-                &ContentMaintenanceOptions::default(),
-            )?;
+            let report = run_content_segment_maintenance(manifest_path, output_archive, segments)?;
             print_content_maintenance_report(report);
         }
         "content-maintain-segments-adaptive" => {
@@ -831,6 +807,72 @@ fn run_extraction_cache(path: PathBuf) -> Result<String> {
         cancellation.check()?;
         let second = cached.extract_record_report(&record)?.as_tsv();
         Ok(format!("{first}\n{second}\n"))
+    })
+}
+
+fn run_content_compaction(output: PathBuf, segments: Vec<PathBuf>) -> Result<usize> {
+    const WORKER: &str = "content compaction";
+    preflight_content_segments_volumes(None, &output, &segments, WORKER)?;
+    let volume = path_volume(write_probe_path(&output));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_content_segments_access(None, &output, &segments, WORKER)?;
+        cancellation.check()?;
+        let terms = Indexer::default().compact_content_segments(output, &segments)?;
+        cancellation.check()?;
+        Ok(terms)
+    })
+}
+
+fn run_tiered_content_compaction(
+    output: PathBuf,
+    segments: Vec<PathBuf>,
+) -> Result<gfm_index::ContentMergeOutcome> {
+    const WORKER: &str = "tiered content compaction";
+    preflight_content_segments_volumes(None, &output, &segments, WORKER)?;
+    let volume = path_volume(write_probe_path(&output));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_content_segments_access(None, &output, &segments, WORKER)?;
+        cancellation.check()?;
+        let outcome = Indexer::default().compact_content_segments_with_policy(
+            output,
+            &segments,
+            &ContentMergePolicy::default(),
+        )?;
+        cancellation.check()?;
+        Ok(outcome)
+    })
+}
+
+fn run_content_segment_maintenance(
+    manifest_path: PathBuf,
+    output_archive: PathBuf,
+    segments: Vec<PathBuf>,
+) -> Result<ContentMaintenanceReport> {
+    const WORKER: &str = "content maintenance";
+    preflight_content_segments_volumes(Some(&manifest_path), &output_archive, &segments, WORKER)?;
+    let volume =
+        path_volume(&manifest_path).or_else(|| path_volume(write_probe_path(&output_archive)));
+    let worker = BackgroundContentIndexer::default();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_content_segments_access(
+            Some(&manifest_path),
+            &output_archive,
+            &segments,
+            WORKER,
+        )?;
+        cancellation.check()?;
+        let report = worker.maintain_segments_cancellable(
+            &manifest_path,
+            &output_archive,
+            &segments,
+            &ContentMaintenanceOptions::default(),
+            &cancellation,
+        )?;
+        cancellation.check()?;
+        Ok(report)
     })
 }
 

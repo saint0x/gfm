@@ -10304,6 +10304,68 @@ fn recovers_corrupt_content_manifest_from_binary() {
 }
 
 #[test]
+fn content_manifest_recover_persists_parent_volume_for_missing_manifest_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-recovery-volume");
+    let manifest = root.join("missing.gfmmanifest");
+    let content = root.join("content.gfmcontent");
+    let quarantine = root.join("quarantine");
+    let catalog = unique_temp_path("gfm-cli-content-manifest-recovery-volume", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-content-manifest-recovery-volume", "gfmprogress");
+    fs::create_dir_all(&quarantine).unwrap();
+    write_content_postings(
+        &content,
+        &[ContentPosting {
+            term: "recoverneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 7)],
+            positions: Vec::new(),
+        }],
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "content-manifest-recover",
+            manifest.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let volume = test_volume_id(&root);
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text
+            .lines()
+            .any(|line| line.starts_with("payload\t1\t")
+                && line.contains("\tcontent manifest recovery\t")
+                && line.contains(&format!("\t{volume}\t"))),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text
+            .lines()
+            .any(|line| line.starts_with("progress\t1\t")
+                && line.contains("\tcontent manifest recovery\t")
+                && line.contains(&format!("\t{volume}\t"))
+                && line.contains("\tcompleted\t")),
+        "{progress_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+}
+
+#[test]
 fn content_manifest_promote_refuses_unreachable_volume_before_journaling_from_binary() {
     let root = unique_temp_dir("gfm-cli-content-manifest-promote-unreachable");
     let manifest = root.join("content.gfmmanifest");
@@ -10526,6 +10588,13 @@ fn compacts_content_segments_from_binary() {
         "{}",
         String::from_utf8_lossy(&compact_output.stderr)
     );
+    let compact_stderr = String::from_utf8(compact_output.stderr).unwrap();
+    assert_worker_admitted(
+        &compact_stderr,
+        "content compaction",
+        content.parent().unwrap(),
+    );
+    assert_worker_admitted(&compact_stderr, "content compaction", &segment);
     let tiered_content = unique_temp_path("gfm-cli-segment-tiered-compact", "gfmcontent");
     let tiered_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -10544,6 +10613,12 @@ fn compacts_content_segments_from_binary() {
         String::from_utf8_lossy(&tiered_output.stderr)
     );
     let tiered_stderr = String::from_utf8(tiered_output.stderr).unwrap();
+    assert_worker_admitted(
+        &tiered_stderr,
+        "tiered content compaction",
+        tiered_content.parent().unwrap(),
+    );
+    assert_worker_admitted(&tiered_stderr, "tiered content compaction", &segment);
     assert!(
         tiered_stderr.contains("tiered-compacted")
             && tiered_stderr.contains("merged 4")
@@ -10716,6 +10791,13 @@ fn compacts_content_segments_from_binary() {
         String::from_utf8_lossy(&maintenance_output.stderr)
     );
     let maintenance_stderr = String::from_utf8(maintenance_output.stderr).unwrap();
+    assert_worker_admitted(&maintenance_stderr, "content maintenance", &manifest);
+    assert_worker_admitted(
+        &maintenance_stderr,
+        "content maintenance",
+        maintained_content.parent().unwrap(),
+    );
+    assert_worker_admitted(&maintenance_stderr, "content maintenance", &segment);
     assert!(
         maintenance_stderr.contains("content-maintenance")
             && maintenance_stderr.contains("scheduled=true")
@@ -13640,4 +13722,16 @@ fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
         }),
         "{stderr}"
     );
+}
+
+#[cfg(unix)]
+fn test_volume_id(path: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+
+    fs::metadata(path).unwrap().dev()
+}
+
+#[cfg(not(unix))]
+fn test_volume_id(_path: &Path) -> u64 {
+    0
 }

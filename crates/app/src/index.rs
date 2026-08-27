@@ -1,6 +1,6 @@
 use crate::{
     access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard},
-    detect_volume_id, parse_u64_arg, parse_usize_arg, required_path,
+    parse_u64_arg, parse_usize_arg, path_volume, required_path,
     runtime::run_volume_task_cancellable,
 };
 use gfm_fs::read_directory;
@@ -22,7 +22,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or(std::env::current_dir().unwrap());
             preflight_volume_access_scope(&path, AccessIntent::Read, "directory listing")?;
-            let volume = detect_volume_id(&path).ok();
+            let volume = path_volume(&path);
             let page = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -51,7 +51,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let output = required_path(args.next(), "index requires an output path")?;
             preflight_index_volume_access(&root)?;
             let _output_access = preflight_index_write(&output, "index records")?;
-            let volume = detect_volume_id(&root).ok();
+            let volume = path_volume(&root).or_else(|| path_volume(write_probe_path(&output)));
             let (record_count, inaccessible_count) = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -74,7 +74,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             preflight_index_volume_access(&root)?;
             let _records_access = preflight_index_write(&records, "index records")?;
             let _state_access = preflight_index_write(&state, "index state")?;
-            let volume = detect_volume_id(&root).ok();
+            let volume = path_volume(&root)
+                .or_else(|| path_volume(write_probe_path(&records)))
+                .or_else(|| path_volume(write_probe_path(&state)));
             let state = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -108,7 +110,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             preflight_index_volume_access(&root)?;
             let _records_access = preflight_index_write(&records, "scan progress records")?;
             let _progress_access = preflight_index_write(&progress, "scan progress checkpoint")?;
-            let volume = detect_volume_id(&root).ok();
+            let volume = path_volume(&root)
+                .or_else(|| path_volume(write_probe_path(&records)))
+                .or_else(|| path_volume(write_probe_path(&progress)));
             let checkpoint = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -142,7 +146,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .iter()
                 .map(|visible_root| preflight_index_volume_access(visible_root))
                 .collect::<Result<Vec<_>>>()?;
-            let volume = detect_volume_id(&root).ok();
+            let volume = path_volume(&root)
+                .or_else(|| visible_roots.iter().find_map(|root| path_volume(root)));
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -176,7 +181,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             preflight_index_volume_access(&root)?;
             preflight_index_write_volume(&from, "rename correlation source")?;
             preflight_index_write_volume(&to, "rename correlation destination")?;
-            let volume = detect_volume_id(&root).ok();
+            let volume = path_volume(&root)
+                .or_else(|| path_volume(write_probe_path(&from)))
+                .or_else(|| path_volume(write_probe_path(&to)));
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -205,7 +212,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             if append.is_some() {
                 preflight_index_write_volume(&path, "metadata update")?;
             }
-            let volume = detect_volume_id(&root).ok();
+            let volume = path_volume(&root).or_else(|| path_volume(&path));
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -389,11 +396,7 @@ fn run_fsevents_cursor_checkpoint(
         "fsevents cursor checkpoint state",
     )?;
     preflight_index_write_volume(&cursor, "fsevents cursor checkpoint")?;
-    let volume = detect_volume_id(&state)
-        .ok()
-        .or_else(|| crate::parent_volume(&state))
-        .or_else(|| detect_volume_id(write_probe_path(&cursor)).ok())
-        .or_else(|| crate::parent_volume(write_probe_path(&cursor)));
+    let volume = path_volume(&state).or_else(|| path_volume(write_probe_path(&cursor)));
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
@@ -414,11 +417,7 @@ fn run_fsevents_cursor_resume(
 ) -> Result<gfm_index::FseventsResumePlan> {
     preflight_volume_access_scope(&state, AccessIntent::Read, "fsevents cursor resume state")?;
     preflight_volume_access_scope(&cursor, AccessIntent::Read, "fsevents cursor resume")?;
-    let volume = detect_volume_id(&state)
-        .ok()
-        .or_else(|| crate::parent_volume(&state))
-        .or_else(|| detect_volume_id(&cursor).ok())
-        .or_else(|| crate::parent_volume(&cursor));
+    let volume = path_volume(&state).or_else(|| path_volume(&cursor));
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
@@ -454,17 +453,12 @@ fn run_fsevents_repair_schedule(
             "fsevents repair schedule dropped root",
         )?;
     }
-    let volume = detect_volume_id(&state)
-        .ok()
-        .or_else(|| crate::parent_volume(&state))
-        .or_else(|| detect_volume_id(&cursor).ok())
-        .or_else(|| crate::parent_volume(&cursor))
+    let volume = path_volume(&state)
+        .or_else(|| path_volume(&cursor))
         .or_else(|| {
-            existing_dropped_roots.iter().find_map(|root| {
-                detect_volume_id(root)
-                    .ok()
-                    .or_else(|| crate::parent_volume(root))
-            })
+            existing_dropped_roots
+                .iter()
+                .find_map(|root| path_volume(root))
         });
     run_volume_task_cancellable(
         volume,
@@ -507,9 +501,7 @@ where
     T: Send + 'static,
 {
     preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| crate::parent_volume(&path));
+    let volume = path_volume(&path);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_index_read(&path, worker)?;

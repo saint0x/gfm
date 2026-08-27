@@ -3,8 +3,8 @@ use crate::content::run_content_search;
 use crate::extract::extraction_budget_profile;
 use crate::runtime::run_volume_task_cancellable;
 use crate::{
-    detect_volume_id, parse_required_scheduling_pressure, parse_usize_arg, required_path,
-    required_string,
+    first_path_volume, parse_required_scheduling_pressure, parse_usize_arg, path_volume,
+    required_path, required_string,
 };
 use gfm_content::Extractor;
 use gfm_index::{
@@ -27,7 +27,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "search requires a root path")?;
             let query = required_string(args.next(), "search requires a query string")?;
             preflight_volume_access_scope(&root, AccessIntent::Index, "search")?;
-            let volume = detect_volume_id(&root).ok();
+            let volume = path_volume(&root);
             let hits = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -47,7 +47,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "search-stream requires a root path")?;
             let query = required_string(args.next(), "search-stream requires a query string")?;
             preflight_volume_access_scope(&root, AccessIntent::Index, "search stream")?;
-            let volume = detect_volume_id(&root).ok();
+            let volume = path_volume(&root);
             let batches = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -782,7 +782,7 @@ where
     T: Send + 'static,
 {
     preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
-    let volume = detect_volume_id(&path).ok();
+    let volume = path_volume(&path);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_content_archive_access(&path, worker)?;
@@ -800,7 +800,7 @@ where
     T: Send + 'static,
 {
     preflight_content_archive_volumes(&paths, worker)?;
-    let volume = paths.iter().find_map(|path| detect_volume_id(path).ok());
+    let volume = first_path_volume(paths.iter());
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_content_archives_access(&paths, worker)?;
@@ -818,7 +818,7 @@ where
     T: Send + 'static,
 {
     preflight_volume_access_scope(&manifest, AccessIntent::Read, worker)?;
-    let volume = detect_volume_id(&manifest).ok();
+    let volume = path_volume(&manifest);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_content_manifest_access(&manifest, worker)?;
@@ -843,7 +843,7 @@ where
     T: Send + 'static,
 {
     preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
-    let volume = detect_volume_id(&path).ok();
+    let volume = path_volume(&path);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_search_archive_access(&path, worker)?;
@@ -879,9 +879,7 @@ fn run_search_index_columns(
 ) -> Result<SearchIndexColumnsOutput> {
     preflight_volume_access_scope(&records, AccessIntent::Read, "search index columns records")?;
     preflight_volume_access_scope(&columns, AccessIntent::Read, "search index columns columns")?;
-    let volume = detect_volume_id(&records)
-        .ok()
-        .or_else(|| detect_volume_id(&columns).ok());
+    let volume = path_volume(&records).or_else(|| path_volume(&columns));
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
@@ -925,9 +923,7 @@ fn run_content_index_search(
 ) -> Result<ContentIndexSearchOutput> {
     preflight_volume_access_scope(&records, AccessIntent::Read, &format!("{worker} records"))?;
     preflight_volume_access_scope(&content, AccessIntent::Read, &format!("{worker} content"))?;
-    let volume = detect_volume_id(&records)
-        .ok()
-        .or_else(|| detect_volume_id(&content).ok());
+    let volume = path_volume(&records).or_else(|| path_volume(&content));
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_content_index_search_access(&records, &content, worker)?;
@@ -955,7 +951,7 @@ fn run_content_index_set_search(
 ) -> Result<ContentIndexSetSearchOutput> {
     const WORKER: &str = "content index set search";
     preflight_content_index_set_volume_access(&records, &content_paths, WORKER)?;
-    let volume = detect_volume_id(&records).ok();
+    let volume = path_volume(&records);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_content_index_set_search_access(&records, &content_paths, WORKER)?;
@@ -987,7 +983,7 @@ fn run_content_index_set_session(
 ) -> Result<ContentIndexSessionOutput> {
     const WORKER: &str = "content index set session";
     preflight_content_index_set_volume_access(&records, &content_paths, WORKER)?;
-    let volume = detect_volume_id(&records).ok();
+    let volume = path_volume(&records);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_content_index_set_search_access(&records, &content_paths, WORKER)?;
@@ -1021,9 +1017,7 @@ fn run_content_index_manifest_search(
     const WORKER: &str = "content index manifest search";
     preflight_volume_access_scope(&records, AccessIntent::Read, &format!("{WORKER} records"))?;
     preflight_volume_access_scope(&manifest, AccessIntent::Read, &format!("{WORKER} manifest"))?;
-    let volume = detect_volume_id(&records)
-        .ok()
-        .or_else(|| detect_volume_id(&manifest).ok());
+    let volume = path_volume(&records).or_else(|| path_volume(&manifest));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_content_index_manifest_search_access(&records, &manifest, WORKER)?;
@@ -1054,9 +1048,7 @@ fn run_content_index_manifest_session(
     const WORKER: &str = "content index manifest session";
     preflight_volume_access_scope(&records, AccessIntent::Read, &format!("{WORKER} records"))?;
     preflight_volume_access_scope(&manifest, AccessIntent::Read, &format!("{WORKER} manifest"))?;
-    let volume = detect_volume_id(&records)
-        .ok()
-        .or_else(|| detect_volume_id(&manifest).ok());
+    let volume = path_volume(&records).or_else(|| path_volume(&manifest));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_content_index_manifest_search_access(&records, &manifest, WORKER)?;
@@ -1222,7 +1214,7 @@ fn run_sidecar_index_search(
 ) -> Result<SidecarSearchOutput> {
     const WORKER: &str = "sidecar search";
     preflight_sidecar_index_volume_access(&paths, WORKER)?;
-    let volume = detect_volume_id(&paths.records).ok();
+    let volume = sidecar_index_volume(&paths);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
@@ -1277,7 +1269,7 @@ fn run_sidecar_index_session(
 ) -> Result<SidecarSessionOutput> {
     const WORKER: &str = "sidecar session";
     preflight_sidecar_index_volume_access(&paths, WORKER)?;
-    let volume = detect_volume_id(&paths.records).ok();
+    let volume = sidecar_index_volume(&paths);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
@@ -1305,7 +1297,7 @@ fn run_sidecar_index_budget(
 ) -> Result<SidecarSearchOutput> {
     const WORKER: &str = "sidecar budget";
     preflight_sidecar_index_volume_access(&paths, WORKER)?;
-    let volume = detect_volume_id(&paths.records).ok();
+    let volume = sidecar_index_volume(&paths);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
@@ -1328,7 +1320,7 @@ fn run_sidecar_index_volume_scope(
 ) -> Result<SidecarSearchOutput> {
     const WORKER: &str = "sidecar volume scope";
     preflight_sidecar_index_volume_access(&paths, WORKER)?;
-    let volume = detect_volume_id(&paths.records).ok();
+    let volume = sidecar_index_volume(&paths);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
@@ -1373,6 +1365,13 @@ fn preflight_sidecar_index_volume_access(
         preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} {role}"))?;
     }
     Ok(())
+}
+
+fn sidecar_index_volume(paths: &OwnedSidecarIndexAccessPaths) -> Option<VolumeId> {
+    paths
+        .paths_with_roles()
+        .into_iter()
+        .find_map(|(path, _)| path_volume(path))
 }
 
 fn preflight_sidecar_index_search_access(

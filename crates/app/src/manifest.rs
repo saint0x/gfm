@@ -1,6 +1,6 @@
 use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
 use crate::runtime::run_volume_task_cancellable;
-use crate::{detect_volume_id, parse_u64_arg, parse_usize_arg, required_path};
+use crate::{parse_u64_arg, parse_usize_arg, path_volume, required_path};
 use gfm_index::{
     ContentArchiveCleanupPolicy, ContentArchiveManifest, ContentArchiveManifestEntry,
     ContentMergeTier,
@@ -159,7 +159,7 @@ fn run_manifest_cleanup(
 ) -> Result<(String, Vec<String>)> {
     const WORKER: &str = "content manifest cleanup";
     preflight_manifest_cleanup_volumes(&manifest_path, &candidates, true, WORKER)?;
-    let volume = detect_volume_id(&manifest_path).ok();
+    let volume = path_volume(&manifest_path);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_manifest_cleanup_access(&manifest_path, &candidates, true, WORKER)?;
@@ -176,7 +176,7 @@ fn run_content_cleanup_plan(
     const WORKER: &str = "content cleanup plan";
     const ACTIVE_ARCHIVE_WORKER: &str = "content cleanup plan active archive";
     preflight_manifest_cleanup_volumes(&manifest_path, &candidates, false, WORKER)?;
-    let volume = detect_volume_id(&manifest_path).ok();
+    let volume = path_volume(&manifest_path);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_manifest_cleanup_access(&manifest_path, &candidates, false, WORKER)?;
@@ -322,7 +322,7 @@ fn run_manifest_write(
 ) -> Result<String> {
     const WORKER: &str = "content manifest write";
     preflight_manifest_write_volumes(&manifest_path, &archives)?;
-    let volume = detect_volume_id(write_probe_path(&manifest_path)).ok();
+    let volume = path_volume(write_probe_path(&manifest_path));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_manifest_write_access(&manifest_path, &archives)?;
@@ -356,7 +356,7 @@ fn run_manifest_inspect(manifest_path: PathBuf) -> Result<Vec<String>> {
         AccessIntent::Read,
         "content manifest inspect",
     )?;
-    let volume = detect_volume_id(&manifest_path).ok();
+    let volume = path_volume(&manifest_path);
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
@@ -405,7 +405,7 @@ fn retain_manifest_recovery_plan_access<'a>(
     discovered: impl Iterator<Item = &'a ContentArchiveManifestEntry>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = vec![preflight_access_scope(
-        manifest_path,
+        existing_read_probe_path(manifest_path),
         AccessIntent::Read,
         "content manifest recovery plan",
     )?];
@@ -424,7 +424,7 @@ fn preflight_manifest_recovery_plan_volumes(
     discovered: &[ContentArchiveManifestEntry],
 ) -> Result<()> {
     preflight_volume_access_scope(
-        manifest_path,
+        existing_read_probe_path(manifest_path),
         AccessIntent::Read,
         "content manifest recovery plan",
     )?;
@@ -443,7 +443,7 @@ fn run_manifest_recovery_plan(
     discovered: Vec<ContentArchiveManifestEntry>,
 ) -> Result<Vec<String>> {
     preflight_manifest_recovery_plan_volumes(&manifest_path, &discovered)?;
-    let volume = detect_volume_id(&manifest_path).ok();
+    let volume = path_volume(existing_read_probe_path(&manifest_path));
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
@@ -487,7 +487,9 @@ fn run_manifest_recover(
     discovered: Vec<ContentArchiveManifestEntry>,
 ) -> Result<Vec<String>> {
     preflight_manifest_recovery_volumes(&manifest_path, &quarantine, &discovered)?;
-    let volume = detect_volume_id(&manifest_path).ok();
+    let volume = path_volume(&manifest_path)
+        .or_else(|| path_volume(write_probe_path(&manifest_path)))
+        .or_else(|| path_volume(write_probe_path(&quarantine)));
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
@@ -608,7 +610,7 @@ fn run_manifest_promotion(
 ) -> Result<(String, Vec<String>)> {
     const WORKER: &str = "content manifest promotion";
     preflight_manifest_promotion_volumes(&manifest_path, &new_archive, &retired_paths)?;
-    let volume = detect_volume_id(&manifest_path).ok();
+    let volume = path_volume(&manifest_path);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access =
@@ -711,7 +713,7 @@ fn run_manifest_promotion_recovery_plan(manifest_path: PathBuf) -> Result<String
     const WORKER: &str = "content manifest promotion recovery plan";
     const ARCHIVE_WORKER: &str = "content manifest promotion recovery archive";
     preflight_manifest_promotion_recovery_plan_volumes(&manifest_path)?;
-    let volume = detect_volume_id(&manifest_path).ok();
+    let volume = path_volume(&manifest_path);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_manifest_promotion_recovery_plan_access(&manifest_path)?;
@@ -735,7 +737,8 @@ fn run_manifest_promotion_recover(manifest_path: PathBuf) -> Result<Vec<String>>
     const WORKER: &str = "content manifest promotion recovery";
     const ARCHIVE_WORKER: &str = "content manifest promotion recovery archive";
     preflight_manifest_promotion_recovery_volumes(&manifest_path)?;
-    let volume = detect_volume_id(&manifest_path).ok();
+    let volume =
+        path_volume(&manifest_path).or_else(|| path_volume(write_probe_path(&manifest_path)));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_manifest_promotion_recovery_access(&manifest_path)?;

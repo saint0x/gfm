@@ -542,6 +542,16 @@ pub(crate) fn parent_volume(path: &Path) -> Option<VolumeId> {
         .and_then(|parent| detect_volume_id(parent).ok())
 }
 
+pub(crate) fn path_volume(path: &Path) -> Option<VolumeId> {
+    detect_volume_id(path).ok().or_else(|| parent_volume(path))
+}
+
+pub(crate) fn first_path_volume<'a>(
+    paths: impl IntoIterator<Item = &'a PathBuf>,
+) -> Option<VolumeId> {
+    paths.into_iter().find_map(|path| path_volume(path))
+}
+
 pub(crate) fn run_preview_contract_cancellable<T>(
     volume: Option<VolumeId>,
     label: &'static str,
