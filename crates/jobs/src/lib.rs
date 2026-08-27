@@ -1,13 +1,15 @@
 use gfm_types::{GfmError, Result, VolumeId};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet, VecDeque};
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
+static PAYLOAD_CATALOG_TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 mod cancel;
 mod fair;
@@ -585,14 +587,27 @@ impl JobPayloadCatalog {
     }
 
     pub fn write_all(&self, records: &[JobPayloadRecord]) -> Result<()> {
-        let file = File::create(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
-        let mut writer = BufWriter::new(file);
-        writeln!(writer, "gfm-job-payload-catalog-v1")
-            .map_err(|err| GfmError::io(&self.path, err))?;
-        for record in records {
-            writeln!(writer, "{}", record.as_tsv()).map_err(|err| GfmError::io(&self.path, err))?;
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+        let temporary = self.temp_path();
+        {
+            let file = File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
+            let mut writer = BufWriter::new(file);
+            writeln!(writer, "gfm-job-payload-catalog-v1")
+                .map_err(|err| GfmError::io(&temporary, err))?;
+            for record in records {
+                writeln!(writer, "{}", record.as_tsv())
+                    .map_err(|err| GfmError::io(&temporary, err))?;
+            }
+            writer
+                .flush()
+                .map_err(|err| GfmError::io(&temporary, err))?;
         }
-        writer.flush().map_err(|err| GfmError::io(&self.path, err))
+        if let Err(err) = fs::rename(&temporary, &self.path) {
+            let _ = fs::remove_file(&temporary);
+            return Err(GfmError::io(&self.path, err));
+        }
+        Ok(())
     }
 
     pub fn append(&self, record: &JobPayloadRecord) -> Result<()> {
@@ -653,6 +668,17 @@ impl JobPayloadCatalog {
             .into_iter()
             .filter(|record| wanted.contains(&record.id))
             .collect())
+    }
+
+    fn temp_path(&self) -> PathBuf {
+        let mut name = self
+            .path
+            .file_name()
+            .map(|name| name.to_os_string())
+            .unwrap_or_else(|| "job-payload-catalog".into());
+        let sequence = PAYLOAD_CATALOG_TEMP_FILE_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+        name.push(format!(".{}.{sequence}.tmp", std::process::id()));
+        self.path.with_file_name(name)
     }
 }
 

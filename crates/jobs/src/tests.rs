@@ -917,6 +917,48 @@ fn payload_catalog_round_trips_all_job_families() {
 }
 
 #[test]
+fn payload_catalog_write_all_creates_parent_directory() {
+    let root = temp_path("gfm-job-payload-catalog-parent", "root");
+    let path = root.join("nested").join("payloads.gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+    let record = JobPayloadRecord::new(
+        JobId::from_raw(8),
+        JobPayloadKind::Preview,
+        "preview",
+        "preview/item.gfmjob",
+        None,
+        "render preview",
+    );
+
+    catalog.write_all(std::slice::from_ref(&record)).unwrap();
+
+    assert_eq!(catalog.read().unwrap(), vec![record]);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn payload_catalog_temp_paths_are_unique_within_process() {
+    let path = temp_path("gfm-job-payload-catalog-unique-temp", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+
+    let first = catalog.temp_path();
+    let second = catalog.temp_path();
+
+    assert_ne!(first, second);
+    assert_eq!(first.parent(), path.parent());
+    assert_eq!(second.parent(), path.parent());
+    assert!(first
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".tmp")));
+    assert!(second
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".tmp")));
+}
+
+#[test]
 fn payload_catalog_reads_requested_records_only() {
     let path = temp_path("gfm-job-payload-catalog-filtered", "gfmjobs");
     let catalog = JobPayloadCatalog::new(&path);
