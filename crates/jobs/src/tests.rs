@@ -574,6 +574,34 @@ fn worker_pool_enforces_per_volume_concurrency_limit() {
 }
 
 #[test]
+fn worker_pool_enforces_late_bound_volume_concurrency_limit() {
+    let mut scheduler = Scheduler::new();
+    let volume = VolumeId(11);
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let tasks: Vec<_> = (0..4)
+        .map(|index| {
+            let job = scheduler.schedule(Priority::Background, format!("preview-{index}"));
+            let job = scheduler.bind_volume(job.id, volume).unwrap();
+            let active = Arc::clone(&active);
+            let peak = Arc::clone(&peak);
+            Task::new(job, move |_| {
+                let current = active.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                peak.fetch_max(current, AtomicOrdering::SeqCst);
+                std::thread::sleep(Duration::from_millis(5));
+                active.fetch_sub(1, AtomicOrdering::SeqCst);
+                Ok(())
+            })
+        })
+        .collect();
+
+    let report = WorkerPool::new(4).run_isolated(tasks, VolumeConcurrencyPolicy::new(1));
+
+    assert_eq!(report.completed(), 4);
+    assert_eq!(peak.load(AtomicOrdering::SeqCst), 1);
+}
+
+#[test]
 fn worker_pool_runs_independent_volumes_concurrently() {
     let mut scheduler = Scheduler::new();
     let barrier = Arc::new(Barrier::new(2));

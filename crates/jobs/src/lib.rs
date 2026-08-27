@@ -323,6 +323,20 @@ impl Scheduler {
         self.cancelled.insert(id);
     }
 
+    pub fn bind_volume(&mut self, id: JobId, volume: VolumeId) -> Option<Job> {
+        let mut retained = BinaryHeap::new();
+        let mut rebound = None;
+        while let Some(QueuedJob(mut job)) = self.queue.pop() {
+            if job.id == id {
+                job.volume = Some(volume);
+                rebound = Some(job.clone());
+            }
+            retained.push(QueuedJob(job));
+        }
+        self.queue = retained;
+        rebound
+    }
+
     pub fn cancel_volume_jobs(
         &mut self,
         volume: VolumeId,

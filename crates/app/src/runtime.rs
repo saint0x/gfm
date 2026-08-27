@@ -137,17 +137,8 @@ where
     T: Send + 'static,
 {
     let scheduling = pressure.decide(priority, 1, 1);
-    let volume = if scheduling.action == SchedulingAction::Defer {
-        None
-    } else {
-        volume()?
-    };
     let mut scheduler = Scheduler::new();
-    let job = if let Some(volume) = volume {
-        scheduler.schedule_on_volume(priority, label, volume)
-    } else {
-        scheduler.schedule(priority, label)
-    };
+    let mut job = scheduler.schedule(priority, label);
     let journal = JobJournal::new(default_job_journal_path());
     let _journal_access = (scheduling.action != SchedulingAction::Defer)
         .then(|| preflight_runtime_write(journal.path(), label))
@@ -166,6 +157,12 @@ where
             scheduling_action: scheduling.action,
             deferred: true,
         });
+    }
+
+    if let Some(volume) = volume()? {
+        job = scheduler
+            .bind_volume(job.id, volume)
+            .ok_or_else(|| GfmError::Format(format!("{label} job was not queued")))?;
     }
 
     let result_slot = Arc::new(Mutex::new(None));
