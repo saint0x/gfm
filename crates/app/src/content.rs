@@ -767,13 +767,14 @@ pub(crate) fn run_content_search(
     query: String,
     extractor: Extractor,
 ) -> Result<(usize, Vec<SearchHit>)> {
-    let _access = preflight_access_scope(&root, AccessIntent::Index, "content search")?;
+    preflight_volume_access_scope(&root, AccessIntent::Index, "content search")?;
     let volume = detect_volume_id(&root).ok();
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
         "content extraction search",
         move |cancellation| {
+            let _access = preflight_access_scope(&root, AccessIntent::Index, "content search")?;
             let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
             let mut live = snapshot.into_live();
             let indexed = live.index_content_cancellable(&extractor, &cancellation)?;
