@@ -431,8 +431,8 @@ mod tests {
     }
 
     #[test]
-    fn operation_conflict_store_rejects_invalid_field_escape() {
-        let path = temp_path("gfm-operation-conflict-invalid-escape", "tsv");
+    fn operation_conflict_store_preserves_legacy_literal_backslash_fields() {
+        let path = temp_path("gfm-operation-conflict-legacy-backslash", "tsv");
         std::fs::write(
             &path,
             "operation-conflict\toperation=copy\tsource=/tmp/source\\x.md\ttarget=/tmp/target.md\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both\tblocks-operation=true\treason=needs-choice\n",
@@ -440,13 +440,10 @@ mod tests {
         .unwrap();
         let store = OperationConflictStore::new(&path);
 
-        let err = store.read().unwrap_err();
+        let conflicts = store.read().unwrap();
 
-        assert!(
-            err.to_string()
-                .contains("invalid operation-conflict escape \\x"),
-            "{err}"
-        );
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].source, "/tmp/source\\x.md");
 
         std::fs::remove_file(path).unwrap();
     }
@@ -856,14 +853,11 @@ fn unescape_field(value: &str) -> Result<String> {
             Some('n') => output.push('\n'),
             Some('r') => output.push('\r'),
             Some(other) => {
-                return Err(GfmError::Format(format!(
-                    "invalid operation-conflict escape \\{other}"
-                )));
+                output.push('\\');
+                output.push(other);
             }
             None => {
-                return Err(GfmError::Format(
-                    "operation-conflict field ends with incomplete escape".to_string(),
-                ));
+                output.push('\\');
             }
         }
     }
