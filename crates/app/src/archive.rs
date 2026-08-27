@@ -21,7 +21,7 @@ use gfm_store::{
     ArchiveRebuildInputs, ArchiveSchemaKind, MmapRecordArchive, MmapRecordColumns, SidecarHealth,
     SidecarKind, SidecarPaths, SidecarRecovery,
 };
-use gfm_types::{FileId, GfmError, Result, VolumeId};
+use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -221,11 +221,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let records = required_path(args.next(), "index-columns requires a records path")?;
             let output =
                 required_path(args.next(), "index-columns requires an output columns path")?;
-            let _access = retain_record_sidecar_build_access(&records, &output, "index columns")?;
-            let archive = MmapRecordArchive::open(records)?;
-            let records = archive.records()?;
-            write_record_columns(output, &records)?;
-            eprintln!("columns-indexed {} records", records.len());
+            let records =
+                build_record_sidecar(records, output, "index columns", |output, records| {
+                    let count = records.len();
+                    write_record_columns(output, &records)?;
+                    Ok(count)
+                })?;
+            eprintln!("columns-indexed {} records", records);
         }
         "columns-verify" => {
             let columns = required_path(args.next(), "columns-verify requires a columns path")?;
@@ -268,11 +270,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-metadata requires an output metadata path",
             )?;
-            let _access = retain_record_sidecar_build_access(&records, &output, "index metadata")?;
-            let archive = MmapRecordArchive::open(records)?;
-            let postings = metadata_postings_from_records(&archive.records()?);
-            write_metadata_postings(output, &postings)?;
-            eprintln!("metadata-indexed {} terms", postings.len());
+            let terms =
+                build_record_sidecar(records, output, "index metadata", |output, records| {
+                    let postings = metadata_postings_from_records(&records);
+                    let terms = postings.len();
+                    write_metadata_postings(output, &postings)?;
+                    Ok(terms)
+                })?;
+            eprintln!("metadata-indexed {} terms", terms);
         }
         "index-dictionary" => {
             let records = required_path(args.next(), "index-dictionary requires a records path")?;
@@ -280,11 +285,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-dictionary requires an output dictionary path",
             )?;
-            let _access =
-                retain_record_sidecar_build_access(&records, &output, "index dictionary")?;
-            let archive = MmapRecordArchive::open(records)?;
-            let report = dictionary_term_report_from_records(&archive.records()?);
-            write_dictionary(output, &report.terms)?;
+            let report =
+                build_record_sidecar(records, output, "index dictionary", |output, records| {
+                    let report = dictionary_term_report_from_records(&records);
+                    write_dictionary(output, &report.terms)?;
+                    Ok(report)
+                })?;
             eprintln!(
                 "dictionary-indexed\tterms={}\tpaths={}\tpath-prefixes={}\textensions={}\ttags={}\tkinds={}\tmetadata-keys={}\tcomment-tokens={}",
                 report.terms.len(),
@@ -301,11 +307,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let records = required_path(args.next(), "index-prefixes requires a records path")?;
             let output =
                 required_path(args.next(), "index-prefixes requires an output prefix path")?;
-            let _access = retain_record_sidecar_build_access(&records, &output, "index prefixes")?;
-            let archive = MmapRecordArchive::open(records)?;
-            let postings = prefix_postings_from_records(&archive.records()?);
-            write_prefix_postings(output, &postings)?;
-            eprintln!("prefixes-indexed {} prefixes", postings.len());
+            let prefixes =
+                build_record_sidecar(records, output, "index prefixes", |output, records| {
+                    let postings = prefix_postings_from_records(&records);
+                    let prefixes = postings.len();
+                    write_prefix_postings(output, &postings)?;
+                    Ok(prefixes)
+                })?;
+            eprintln!("prefixes-indexed {} prefixes", prefixes);
         }
         "index-substrings" => {
             let records = required_path(args.next(), "index-substrings requires a records path")?;
@@ -313,21 +322,25 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-substrings requires an output substring path",
             )?;
-            let _access =
-                retain_record_sidecar_build_access(&records, &output, "index substrings")?;
-            let archive = MmapRecordArchive::open(records)?;
-            let postings = substring_postings_from_records(&archive.records()?);
-            write_substring_postings(output, &postings)?;
-            eprintln!("substrings-indexed {} grams", postings.len());
+            let grams =
+                build_record_sidecar(records, output, "index substrings", |output, records| {
+                    let postings = substring_postings_from_records(&records);
+                    let grams = postings.len();
+                    write_substring_postings(output, &postings)?;
+                    Ok(grams)
+                })?;
+            eprintln!("substrings-indexed {} grams", grams);
         }
         "index-fuzzy" => {
             let records = required_path(args.next(), "index-fuzzy requires a records path")?;
             let output = required_path(args.next(), "index-fuzzy requires an output fuzzy path")?;
-            let _access = retain_record_sidecar_build_access(&records, &output, "index fuzzy")?;
-            let archive = MmapRecordArchive::open(records)?;
-            let postings = fuzzy_postings_from_records(&archive.records()?);
-            write_fuzzy_postings(output, &postings)?;
-            eprintln!("fuzzy-indexed {} keys", postings.len());
+            let keys = build_record_sidecar(records, output, "index fuzzy", |output, records| {
+                let postings = fuzzy_postings_from_records(&records);
+                let keys = postings.len();
+                write_fuzzy_postings(output, &postings)?;
+                Ok(keys)
+            })?;
+            eprintln!("fuzzy-indexed {} keys", keys);
         }
         "sidecar-recovery-plan" => {
             let records =
@@ -432,6 +445,42 @@ fn retain_record_sidecar_build_access(
             &format!("{worker} output"),
         )?,
     ])
+}
+
+fn preflight_record_sidecar_build_volumes(
+    records: &Path,
+    output: &Path,
+    worker: &str,
+) -> Result<()> {
+    preflight_volume_access_scope(records, AccessIntent::Read, &format!("{worker} records"))?;
+    preflight_volume_access_scope(
+        write_probe_path(output),
+        AccessIntent::Write,
+        &format!("{worker} output"),
+    )
+}
+
+fn build_record_sidecar<T>(
+    records: PathBuf,
+    output: PathBuf,
+    worker: &'static str,
+    build: impl FnOnce(PathBuf, Vec<FileRecord>) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    preflight_record_sidecar_build_volumes(&records, &output, worker)?;
+    let volume = detect_volume_id(&records)
+        .ok()
+        .or_else(|| parent_volume(&records));
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        let _access = retain_record_sidecar_build_access(&records, &output, worker)?;
+        cancellation.check()?;
+        let archive = MmapRecordArchive::open(records)?;
+        let records = archive.records()?;
+        cancellation.check()?;
+        build(output, records)
+    })
 }
 
 fn retain_archive_migration_access(

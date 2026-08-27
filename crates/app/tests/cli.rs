@@ -1567,6 +1567,12 @@ fn record_sidecar_build_routes_refuse_unreachable_output_before_mapping_from_bin
             )),
             "{route}: {stderr}"
         );
+        assert!(
+            !stderr.contains(&format!(
+                "security-worker-admission\tworker={worker} records\t"
+            )),
+            "{route}: {stderr}"
+        );
         assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
         assert!(!output_path.exists(), "{route}: {}", output_path.display());
     }
@@ -3910,6 +3916,12 @@ fn record_sidecar_builders_refuse_unreachable_records_before_mapping_from_binary
             )),
             "{route}: {stderr}"
         );
+        assert!(
+            !stderr.contains(&format!(
+                "security-worker-admission\tworker={worker} records\t"
+            )),
+            "{route}: {stderr}"
+        );
         assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
         assert!(!output_path.exists(), "{route}");
     }
@@ -3950,6 +3962,12 @@ fn record_sidecar_builders_refuse_unreachable_outputs_before_mapping_from_binary
         assert!(
             stderr.contains(&format!(
                 "{worker} output volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(
+            !stderr.contains(&format!(
+                "security-worker-admission\tworker={worker} records\t"
             )),
             "{route}: {stderr}"
         );
