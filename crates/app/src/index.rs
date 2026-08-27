@@ -1,12 +1,14 @@
 use crate::{
-    access::{preflight_access_scope, ScopedAccessGuard},
-    parse_u64_arg, parse_usize_arg, required_path,
+    access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard},
+    detect_volume_id, parse_u64_arg, parse_usize_arg, required_path,
+    runtime::run_volume_task_cancellable,
 };
 use gfm_fs::read_directory;
 use gfm_index::{
     EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth, IndexVolumeState,
     Indexer, LiveIndex,
 };
+use gfm_jobs::Priority;
 use gfm_mac::{AccessIntent, FileEventStream, WatchRoot};
 use gfm_types::{FileEvent, FileEventKind, FileKind, GfmError, Result};
 use std::io::Write;
@@ -36,9 +38,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "index" => {
             let root = required_path(args.next(), "index requires a root path")?;
             let output = required_path(args.next(), "index requires an output path")?;
-            let _root_access = enforce_index_access(&root)?;
+            preflight_index_volume_access(&root)?;
             let _output_access = preflight_index_write(&output, "index records")?;
-            let snapshot = Indexer::default().build(root)?;
+            let volume = detect_volume_id(&root).ok();
+            let snapshot = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "index",
+                move |cancellation| {
+                    let _root_access = enforce_index_access(&root)?;
+                    Indexer::default().build_cancellable(root, &cancellation)
+                },
+            )?;
             snapshot.save(output)?;
             eprintln!(
                 "indexed {} records; {} inaccessible",
@@ -50,10 +61,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "index-state requires a root path")?;
             let records = required_path(args.next(), "index-state requires a records path")?;
             let state = required_path(args.next(), "index-state requires a state path")?;
-            let _root_access = enforce_index_access(&root)?;
+            preflight_index_volume_access(&root)?;
             let _records_access = preflight_index_write(&records, "index records")?;
             let _state_access = preflight_index_write(&state, "index state")?;
-            let state = Indexer::default().build_persistent(root, records, state)?;
+            let volume = detect_volume_id(&root).ok();
+            let state = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "index",
+                move |cancellation| {
+                    let _root_access = enforce_index_access(&root)?;
+                    Indexer::default().build_persistent_cancellable(
+                        root,
+                        records,
+                        state,
+                        &cancellation,
+                    )
+                },
+            )?;
             println!("{}", state.as_tsv());
         }
         "index-state-inspect" => {
@@ -71,10 +96,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "scan-progress requires a progress checkpoint path",
             )?;
-            let _root_access = enforce_index_access(&root)?;
+            preflight_index_volume_access(&root)?;
             let _records_access = preflight_index_write(&records, "scan progress records")?;
             let _progress_access = preflight_index_write(&progress, "scan progress checkpoint")?;
-            let checkpoint = Indexer::default().build_with_progress(root, records, progress)?;
+            let volume = detect_volume_id(&root).ok();
+            let checkpoint = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "index",
+                move |cancellation| {
+                    let _root_access = enforce_index_access(&root)?;
+                    Indexer::default().build_with_progress_cancellable(
+                        root,
+                        records,
+                        progress,
+                        &cancellation,
+                    )
+                },
+            )?;
             println!("{}", checkpoint.as_tsv());
         }
         "scan-progress-inspect" => {
@@ -295,6 +334,10 @@ fn parse_event_ids(value: &str) -> Result<Vec<u64>> {
 
 fn enforce_index_access(root: &Path) -> Result<ScopedAccessGuard> {
     preflight_access_scope(root, AccessIntent::Index, "index")
+}
+
+fn preflight_index_volume_access(root: &Path) -> Result<()> {
+    preflight_volume_access_scope(root, AccessIntent::Index, "index")
 }
 
 fn preflight_index_read(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {

@@ -32,6 +32,13 @@ fn indexes_and_searches_real_files_from_binary() {
     let index_stderr = String::from_utf8_lossy(&index_output.stderr);
     assert!(index_stderr.contains("security-scope\t"), "{index_stderr}");
     assert!(index_stderr.contains("\tintent=index\t"), "{index_stderr}");
+    assert!(
+        index_stderr.contains(&format!(
+            "security-worker-admission\tworker=index\tpath={}",
+            root.display()
+        )),
+        "{index_stderr}"
+    );
 
     let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["search-index", index.to_str().unwrap(), "quarterly"])
@@ -169,6 +176,36 @@ fn watch_once_refuses_unreachable_network_volume_before_subscribing_from_binary(
 }
 
 #[test]
+fn index_refuses_unreachable_network_volume_before_worker_admission_from_binary() {
+    let root = unique_temp_dir("gfm-cli-index-unreachable-volume");
+    let index = unique_temp_path("gfm-cli-index-unreachable-volume", "gfmidx");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(root.join("Visible.txt"), "should not be indexed").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), index.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=index\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!index.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn index_routes_refuse_unreachable_outputs_before_writing_from_binary() {
     let root = unique_temp_dir("gfm-cli-index-route-root");
     let offline = unique_temp_dir("gfm-cli-index-route-output-unreachable");
@@ -184,6 +221,13 @@ fn index_routes_refuse_unreachable_outputs_before_writing_from_binary() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("index records volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=index\tpath={}",
+            root.display()
+        )),
         "{stderr}"
     );
     assert!(!index.exists());
