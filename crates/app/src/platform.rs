@@ -1706,8 +1706,7 @@ fn run_fileprovider_worker_without_runtime_progress<T>(
 where
     T: Send + 'static,
 {
-    let result_slot = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let result_slot_task = std::sync::Arc::clone(&result_slot);
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
     let job = if let Some(volume) = volume {
         scheduler.schedule_on_volume_in_class(Priority::Visible, JobClass::Visible, worker, volume)
@@ -1716,9 +1715,9 @@ where
     };
     let task = Task::new(job.clone(), move |cancellation| {
         let result = work(cancellation)?;
-        *result_slot_task
-            .lock()
-            .expect("fileprovider worker result lock poisoned") = Some(result);
+        result_tx
+            .send(result)
+            .map_err(|_| GfmError::Format(format!("{worker} result receiver dropped")))?;
         Ok(())
     });
     let report = WorkerPool::new(1).run_isolated(vec![task], VolumeConcurrencyPolicy::new(1));
@@ -1737,12 +1736,9 @@ where
             return Err(GfmError::Format(format!("{worker} job failed: {message}")))
         }
     }
-    let result = result_slot
-        .lock()
-        .expect("fileprovider worker result lock poisoned")
-        .take()
-        .ok_or_else(|| GfmError::Format(format!("{worker} job completed without a result")))?;
-    Ok(result)
+    result_rx
+        .try_recv()
+        .map_err(|_| GfmError::Format(format!("{worker} job completed without a result")))
 }
 
 fn run_fileprovider_observer_probe(
