@@ -1,8 +1,8 @@
 use crate::access::{preflight_access_scope, ScopedAccessGuard};
 use crate::runtime::{run_scheduled_volume_task_cancellable, run_volume_task_cancellable};
 use crate::{
-    config_store, detect_volume_id, parent_volume, parse_required_scheduling_pressure,
-    required_path,
+    config_store, detect_volume_id, existing_read_probe_path, parent_volume,
+    parse_required_scheduling_pressure, preflight_config_write, required_path,
 };
 use gfm_diagnostics::{
     export_operator_trace, inspect_storage, plan_index_recovery, rebuild_index_cancellable,
@@ -194,6 +194,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let macos_build = args.next().ok_or_else(|| {
                 GfmError::Format("diagnostics-parity-baseline requires a macOS build".to_string())
             })?;
+            let _config_access = preflight_config_write(&store, "diagnostics parity config")?;
+            let _baseline_access = preflight_access_scope(
+                existing_read_probe_path(&baseline),
+                AccessIntent::Read,
+                "diagnostics parity baseline",
+            )?;
             let report = select_parity_baseline(&store, baseline, macos_build)?;
             println!(
                 "{}\t{}\t{}",

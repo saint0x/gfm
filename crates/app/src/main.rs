@@ -8,7 +8,7 @@ use gfm_jobs::{
     JobBatteryState, JobIoPressure, JobThermalState, JobUserActivity, Priority, SchedulingPressure,
 };
 use gfm_mac::{
-    current_host_profile, current_permission_onboarding, MountState, SupportMatrix,
+    current_host_profile, current_permission_onboarding, AccessIntent, MountState, SupportMatrix,
     VolumeDescriptor, VolumeKind,
 };
 use gfm_types::{GfmError, Result, VolumeId};
@@ -55,17 +55,20 @@ fn run() -> Result<()> {
         }
         Some("config-init") => {
             let store = config_store(args.next())?;
+            let _access = preflight_config_init(&store)?;
             let config = store.load_or_create_default()?;
             println!("{}\t{}", config.schema_version, store.path().display());
         }
         Some("config-check") => {
             let store = config_store(args.next())?;
+            let _access = preflight_config_read(&store, "config check")?;
             let config = store.load()?;
             config.validate()?;
             println!("{}\t{}", config.schema_version, store.path().display());
         }
         Some("config-dump") => {
             let store = config_store(args.next())?;
+            let _access = preflight_config_read(&store, "config dump")?;
             let config = store.load_or_create_default()?;
             print!("{}", config.to_toml()?);
         }
@@ -410,6 +413,43 @@ pub(crate) fn config_store(value: Option<String>) -> Result<ConfigStore> {
     value
         .map(|path| Ok(ConfigStore::new(path)))
         .unwrap_or_else(ConfigStore::platform_default)
+}
+
+pub(crate) fn preflight_config_write(
+    store: &ConfigStore,
+    worker: &str,
+) -> Result<access::ScopedAccessGuard> {
+    access::preflight_access_scope(
+        config_write_probe_path(store.path()),
+        AccessIntent::Write,
+        worker,
+    )
+}
+
+fn preflight_config_read(store: &ConfigStore, worker: &str) -> Result<access::ScopedAccessGuard> {
+    access::preflight_access_scope(store.path(), AccessIntent::Read, worker)
+}
+
+fn preflight_config_init(store: &ConfigStore) -> Result<access::ScopedAccessGuard> {
+    if store.path().exists() {
+        preflight_config_read(store, "config init")
+    } else {
+        preflight_config_write(store, "config init")
+    }
+}
+
+pub(crate) fn existing_read_probe_path(path: &Path) -> &Path {
+    if path.exists() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
+}
+
+fn config_write_probe_path(path: &Path) -> &Path {
+    if path.is_dir() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
 }
 
 pub(crate) fn parent_volume(path: &Path) -> Option<VolumeId> {

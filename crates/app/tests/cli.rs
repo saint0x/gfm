@@ -1802,6 +1802,41 @@ fn reports_rename_correlation_from_binary() {
 }
 
 #[test]
+fn rename_correlation_refuses_unreachable_destination_before_indexing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-rename-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-rename-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let from = root.join("RenameOld.md");
+    let to = offline.join("RenameNew.md");
+    fs::write(&from, "rename identity").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "rename-correlation",
+            from.to_str().unwrap(),
+            to.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("rename-correlation\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "rename correlation destination volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&from).unwrap(), "rename identity");
+    assert!(!to.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn reports_metadata_update_from_binary() {
     let root = unique_temp_dir("gfm-cli-metadata-root");
     let path = root.join("Metadata.md");
@@ -1826,6 +1861,35 @@ fn reports_metadata_update_from_binary() {
     assert!(stdout.starts_with("metadata-update\t"), "{stdout}");
     assert!(stdout.contains("\texisted=true\t"), "{stdout}");
     assert!(stdout.contains("size"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn metadata_update_refuses_unreachable_write_before_appending_from_binary() {
+    let root = unique_temp_dir("gfm-cli-metadata-preflight-root");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Metadata.md");
+    fs::write(&path, "metadata").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "metadata-update",
+            path.to_str().unwrap(),
+            " appended content",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("metadata-update\t"), "{stdout}");
+    assert!(
+        stderr.contains("index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), "metadata");
 
     fs::remove_dir_all(root).unwrap();
 }

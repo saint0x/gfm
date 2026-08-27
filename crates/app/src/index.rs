@@ -110,9 +110,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
             let _root_access = enforce_index_access(&root)?;
-            let snapshot = Indexer::default().build(root)?;
             let _from_access = preflight_index_write(&from, "rename correlation source")?;
             let _to_access = preflight_index_write(&to, "rename correlation destination")?;
+            let snapshot = Indexer::default().build(root)?;
             std::fs::rename(&from, &to).map_err(|err| GfmError::io(&from, err))?;
             let mut live = LiveIndex::from_records(snapshot.records);
             let report = live.apply_rename(&from, &to)?;
@@ -125,9 +125,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
             let _root_access = enforce_index_access(&root)?;
+            let append = args.next();
+            let _path_access = if append.is_some() {
+                Some(preflight_index_write(&path, "metadata update")?)
+            } else {
+                None
+            };
             let snapshot = Indexer::default().build(root)?;
-            if let Some(append) = args.next() {
-                let _path_access = preflight_index_write(&path, "metadata update")?;
+            if let Some(append) = append {
                 let mut file = std::fs::OpenOptions::new()
                     .append(true)
                     .open(&path)

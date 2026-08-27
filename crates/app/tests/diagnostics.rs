@@ -308,6 +308,63 @@ fn diagnostics_exports_trace_and_selects_parity_baseline_from_binary() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn diagnostics_parity_baseline_refuses_unreachable_paths_before_config_write_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-parity-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-diagnostics-parity-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let config = root.join("config.toml");
+    let offline_config = offline.join("config.toml");
+    let baseline = root.join("baselines");
+    let offline_baseline = offline.join("baselines");
+    fs::create_dir_all(&baseline).unwrap();
+
+    let baseline_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-parity-baseline",
+            config.to_str().unwrap(),
+            offline_baseline.to_str().unwrap(),
+            "25A354",
+        ])
+        .output()
+        .unwrap();
+    assert!(!baseline_output.status.success());
+    let baseline_stdout = String::from_utf8_lossy(&baseline_output.stdout);
+    let baseline_stderr = String::from_utf8_lossy(&baseline_output.stderr);
+    assert!(!baseline_stdout.contains("25A354"), "{baseline_stdout}");
+    assert!(
+        baseline_stderr.contains(
+            "diagnostics parity baseline volume access blocked: unreachable volume network"
+        ),
+        "{baseline_stderr}"
+    );
+    assert!(!config.exists());
+
+    let config_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-parity-baseline",
+            offline_config.to_str().unwrap(),
+            baseline.to_str().unwrap(),
+            "25A354",
+        ])
+        .output()
+        .unwrap();
+    assert!(!config_output.status.success());
+    let config_stdout = String::from_utf8_lossy(&config_output.stdout);
+    let config_stderr = String::from_utf8_lossy(&config_output.stderr);
+    assert!(!config_stdout.contains("25A354"), "{config_stdout}");
+    assert!(
+        config_stderr.contains(
+            "diagnostics parity config volume access blocked: unreachable volume network"
+        ),
+        "{config_stderr}"
+    );
+    assert!(!offline_config.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
