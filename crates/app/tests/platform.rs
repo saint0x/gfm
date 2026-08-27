@@ -499,6 +499,8 @@ fn reports_native_icon_descriptor_from_binary() {
         "{}",
         String::from_utf8_lossy(&app.stderr)
     );
+    let app_stderr = String::from_utf8_lossy(&app.stderr);
+    assert_worker_admitted(&app_stderr, "native icon", &root.join("GFM.app"));
     let app_stdout = String::from_utf8(app.stdout).unwrap();
     assert_eq!(
         app_stdout.trim(),
@@ -515,6 +517,8 @@ fn reports_native_icon_descriptor_from_binary() {
         "{}",
         String::from_utf8_lossy(&document.stderr)
     );
+    let document_stderr = String::from_utf8_lossy(&document.stderr);
+    assert_worker_admitted(&document_stderr, "native icon", &root.join("Report.PDF"));
     let document_stdout = String::from_utf8(document.stdout).unwrap();
     assert_eq!(
         document_stdout.trim(),
@@ -530,6 +534,12 @@ fn reports_native_icon_descriptor_from_binary() {
         bridge.status.success(),
         "{}",
         String::from_utf8_lossy(&bridge.stderr)
+    );
+    let bridge_stderr = String::from_utf8_lossy(&bridge.stderr);
+    assert_worker_admitted(
+        &bridge_stderr,
+        "native icon bridge",
+        &root.join("Report.PDF"),
     );
     let bridge_stdout = String::from_utf8(bridge.stdout).unwrap();
     assert!(bridge_stdout.starts_with(
@@ -565,6 +575,33 @@ fn native_icon_refuses_unreachable_network_volume_before_record_read_from_binary
     assert!(
         stderr.contains("native icon volume access blocked: unreachable volume network"),
         "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=native icon\t"),
+        "{stderr}"
+    );
+
+    let bridge = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("native-icon-bridge")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    assert!(!bridge.status.success());
+    let bridge_stdout = String::from_utf8_lossy(&bridge.stdout);
+    let bridge_stderr = String::from_utf8_lossy(&bridge.stderr);
+    assert!(
+        !bridge_stdout.contains("native-icon-bridge\t"),
+        "{bridge_stdout}"
+    );
+    assert!(
+        bridge_stderr
+            .contains("native icon bridge volume access blocked: unreachable volume network"),
+        "{bridge_stderr}"
+    );
+    assert!(
+        !bridge_stderr.contains("security-worker-admission\tworker=native icon bridge\t"),
+        "{bridge_stderr}"
     );
 
     let _ = std::fs::remove_dir_all(root);
@@ -676,6 +713,8 @@ fn reports_custom_finder_icon_descriptor_from_binary() {
         "{}",
         String::from_utf8_lossy(&native.stderr)
     );
+    let native_stderr = String::from_utf8_lossy(&native.stderr);
+    assert_worker_admitted(&native_stderr, "native icon", &app);
     let native_stdout = String::from_utf8(native.stdout).unwrap();
     assert!(native_stdout.starts_with("native-icon\tapplication\tfinder-custom-icon\t"));
     assert!(native_stdout.contains("\tbadges=package"));

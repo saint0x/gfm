@@ -88,18 +88,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "native-icon" => {
             let path = required_path(args.next(), "native-icon requires a path")?;
-            let record = record_for_path_with_access(&path, AccessIntent::Preview, "native icon")?;
-            println!("{}", NativeIconDescriptor::for_record(&record).as_tsv());
+            println!("{}", run_native_icon(path)?.as_tsv());
         }
         "native-icon-bridge" => {
             let path = required_path(args.next(), "native-icon-bridge requires a path")?;
-            let record =
-                record_for_path_with_access(&path, AccessIntent::Preview, "native icon bridge")?;
-            let host = current_host_profile()?;
-            println!(
-                "{}",
-                NativeIconBridgeContract::for_record_on_host(&record, &host).as_tsv()
-            );
+            println!("{}", run_native_icon_bridge(path)?.as_tsv());
         }
         "native-icon-fileprovider-invalidation" => {
             let previous = CloudStorageState::parse(&required_string(
@@ -1387,6 +1380,36 @@ fn run_fileprovider_operation(
         let _access = preflight_access_scope(&path, AccessIntent::Operate, WORKER)?;
         cancellation.check()?;
         FileProviderOperationReport::execute(path, operation)
+    })
+}
+
+fn run_native_icon(path: PathBuf) -> Result<NativeIconDescriptor> {
+    const WORKER: &str = "native icon";
+    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
+    let volume = detect_volume_id(&path)
+        .ok()
+        .or_else(|| parent_volume(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
+        cancellation.check()?;
+        Ok(NativeIconDescriptor::for_record(&record))
+    })
+}
+
+fn run_native_icon_bridge(path: PathBuf) -> Result<NativeIconBridgeContract> {
+    const WORKER: &str = "native icon bridge";
+    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
+    let volume = detect_volume_id(&path)
+        .ok()
+        .or_else(|| parent_volume(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
+        cancellation.check()?;
+        let host = current_host_profile()?;
+        cancellation.check()?;
+        Ok(NativeIconBridgeContract::for_record_on_host(&record, &host))
     })
 }
 
