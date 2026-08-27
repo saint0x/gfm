@@ -6,14 +6,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[test]
 fn bundles_unsigned_app_from_binary() {
     let root = unique_temp_dir("gfm-cli-bundle");
+    let executable = root.join("gfm");
     let icon = root.join("GFM.icns");
     let dist = root.join("dist");
+    fs::write(&executable, b"#!/bin/sh\n").unwrap();
     fs::write(&icon, b"icns-test").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "bundle-app",
-            env!("CARGO_BIN_EXE_gfm"),
+            executable.to_str().unwrap(),
             icon.to_str().unwrap(),
             dist.to_str().unwrap(),
             "--unsigned",
@@ -59,6 +61,112 @@ fn bundles_unsigned_app_from_binary() {
     );
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn packaging_routes_refuse_unreachable_paths_before_toolchain_or_bundle_io_from_binary() {
+    let root = unique_temp_dir("gfm-cli-packaging-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-packaging-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let executable = root.join("gfm");
+    let icon = root.join("GFM.icns");
+    let app = root.join("GFM.app");
+    let offline_app = offline.join("GFM.app");
+    let offline_dist = offline.join("dist");
+    let offline_notary = offline.join("notary");
+    let offline_key = offline.join("AuthKey.p8");
+    let local_notary = root.join("notary");
+    fs::write(&executable, b"bin").unwrap();
+    fs::write(&icon, b"icns").unwrap();
+    fs::create_dir_all(&app).unwrap();
+
+    let cases = [
+        (
+            vec![
+                "release-validate".to_string(),
+                offline_app.to_string_lossy().into_owned(),
+                "--allow-unsigned".to_string(),
+                "--skip-notarization".to_string(),
+                "--skip-gatekeeper".to_string(),
+            ],
+            "release validate app",
+            "com.saint0x.gfm",
+        ),
+        (
+            vec![
+                "bundle-app".to_string(),
+                executable.to_string_lossy().into_owned(),
+                icon.to_string_lossy().into_owned(),
+                offline_dist.to_string_lossy().into_owned(),
+                "--unsigned".to_string(),
+            ],
+            "bundle app output",
+            "GFM.app",
+        ),
+        (
+            vec![
+                "register-app".to_string(),
+                offline_app.to_string_lossy().into_owned(),
+            ],
+            "register app",
+            "GFM.app",
+        ),
+        (
+            vec![
+                "notarize-app".to_string(),
+                app.to_string_lossy().into_owned(),
+                offline_notary.to_string_lossy().into_owned(),
+                "--keychain-profile".to_string(),
+                "release".to_string(),
+            ],
+            "notarize output",
+            "accepted",
+        ),
+        (
+            vec![
+                "notarize-app".to_string(),
+                app.to_string_lossy().into_owned(),
+                local_notary.to_string_lossy().into_owned(),
+                "--api-key".to_string(),
+                offline_key.to_string_lossy().into_owned(),
+                "--key-id".to_string(),
+                "KEYID".to_string(),
+                "--issuer".to_string(),
+                "ISSUER".to_string(),
+            ],
+            "notarize api key",
+            "accepted",
+        ),
+    ];
+
+    for (args, worker, forbidden_stdout) in cases {
+        let route = args[0].clone();
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains(forbidden_stdout), "{route}: {stdout}");
+        assert!(
+            stderr.contains(&format!(
+                "{worker} volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("requires xcrun") && !stderr.contains("requires codesign"),
+            "{route}: {stderr}"
+        );
+    }
+
+    assert!(!offline.join("dist").exists());
+    assert!(!offline.join("notary").exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
 }
 
 #[test]

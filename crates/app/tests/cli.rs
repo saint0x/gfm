@@ -5711,6 +5711,57 @@ fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
 }
 
 #[test]
+fn adaptive_extraction_worker_refuses_unreachable_scratch_before_launch_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-worker-scratch-root");
+    let scratch = unique_temp_dir("gfm-cli-extract-worker-scratch-unreachable");
+    let path = root.join("document.txt");
+    let permission_state = root.join("permission-state.tsv");
+    fs::write(&path, "scratch preflight marker").unwrap();
+    fs::write(scratch.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("TMPDIR", &scratch)
+        .env("GFM_PERMISSION_STATE", &permission_state)
+        .args([
+            "extract-worker-adaptive",
+            path.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("extract\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "adaptive extraction stdout volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "scratch preflight marker"
+    );
+    let scratch_entries = fs::read_dir(&scratch)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        scratch_entries,
+        vec![".gfm-volume-kind"],
+        "{scratch_entries:?}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
 fn fileprovider_progress_job_persists_runtime_payload_and_progress_from_binary() {
     let root = unique_temp_dir("gfm-cli-fileprovider-progress-runtime-root");
     let item = root.join("Remote.icloud-downloading");

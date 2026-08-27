@@ -1,4 +1,7 @@
-use crate::permission_refresh::refresh_permission_state_at_path;
+use crate::{
+    access::{preflight_access_scope, ScopedAccessGuard},
+    permission_refresh::refresh_permission_state_at_path,
+};
 use gfm_content::{
     ExtractionBatteryState, ExtractionBudgetProfile, ExtractionFingerprint, ExtractionQuarantine,
     ExtractionThermalState, ExtractionUserActivity, ExtractionVolumeClass, QuarantineDecision,
@@ -8,6 +11,7 @@ use gfm_jobs::{
     Cancellation, JobBatteryState, JobIoPressure, JobThermalState, JobUserActivity,
     SchedulingPressure,
 };
+use gfm_mac::AccessIntent;
 use gfm_types::{GfmError, Result};
 use std::env;
 use std::os::unix::process::CommandExt;
@@ -81,6 +85,8 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
     let stderr_path = worker_temp_path("stderr");
     let permission_state_dir = worker_temp_dir("permission-state");
     let permission_state_path = permission_state_dir.join("state.tsv");
+    let _scratch_access =
+        retain_worker_scratch_access(&stdout_path, &stderr_path, &permission_state_dir)?;
     std::fs::File::create(&stdout_path).map_err(|err| GfmError::io(&stdout_path, err))?;
     std::fs::File::create(&stderr_path).map_err(|err| GfmError::io(&stderr_path, err))?;
     if let Err(err) = std::fs::create_dir(&permission_state_dir) {
@@ -228,6 +234,11 @@ impl WorkerSandbox {
             std::process::id(),
             monotonic_nanos()
         ));
+        let _profile_access = preflight_access_scope(
+            write_probe_path(&profile_path),
+            AccessIntent::Write,
+            "adaptive extraction sandbox profile",
+        )?;
         std::fs::write(&profile_path, profile).map_err(|err| GfmError::io(&profile_path, err))?;
         Ok(Self {
             profile_path: Some(profile_path),
@@ -372,6 +383,37 @@ fn worker_temp_dir(label: &str) -> PathBuf {
         std::process::id(),
         monotonic_nanos()
     ))
+}
+
+fn retain_worker_scratch_access(
+    stdout_path: &Path,
+    stderr_path: &Path,
+    permission_state_dir: &Path,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(
+            write_probe_path(stdout_path),
+            AccessIntent::Write,
+            "adaptive extraction stdout",
+        )?,
+        preflight_access_scope(
+            write_probe_path(stderr_path),
+            AccessIntent::Write,
+            "adaptive extraction stderr",
+        )?,
+        preflight_access_scope(
+            write_probe_path(permission_state_dir),
+            AccessIntent::Write,
+            "adaptive extraction permission state",
+        )?,
+    ])
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.exists() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
 }
 
 fn sandbox_exec_path() -> Option<PathBuf> {

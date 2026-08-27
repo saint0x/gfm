@@ -1,3 +1,5 @@
+use crate::access::{preflight_access_scope, ScopedAccessGuard};
+use gfm_mac::AccessIntent;
 use gfm_packaging::{
     build_app_bundle, notarize_app_bundle, register_launch_services, require_codesign_toolchain,
     require_release_xcode_toolchain, validate_release_artifact, AppBundleSpec,
@@ -5,7 +7,7 @@ use gfm_packaging::{
     ReleasePolicy, SigningIdentity,
 };
 use gfm_types::{GfmError, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn release_policy() -> Result<()> {
     let policy = ReleasePolicy::default();
@@ -16,6 +18,7 @@ pub fn release_policy() -> Result<()> {
 
 pub fn release_validate(args: &mut impl Iterator<Item = String>) -> Result<()> {
     let app_path = required_path(args.next(), "release-validate requires a .app path")?;
+    let _access = retain_packaging_read_access(&app_path, "release validate app")?;
     let mut spec = ReleaseArtifactSpec::new(app_path);
     for arg in args {
         match arg.as_str() {
@@ -50,6 +53,7 @@ pub fn bundle_app(args: &mut impl Iterator<Item = String>) -> Result<()> {
     let executable = required_path(args.next(), "bundle-app requires an executable path")?;
     let icon = required_path(args.next(), "bundle-app requires an icon path")?;
     let output_dir = required_path(args.next(), "bundle-app requires an output directory")?;
+    let _access = retain_bundle_access(&executable, &icon, &output_dir)?;
     let mut spec = AppBundleSpec::new(executable, icon, output_dir);
     spec.signing_identity = match args.next().as_deref() {
         Some("--unsigned") => SigningIdentity::Unsigned,
@@ -71,6 +75,7 @@ pub fn bundle_app(args: &mut impl Iterator<Item = String>) -> Result<()> {
 
 pub fn register_app(args: &mut impl Iterator<Item = String>) -> Result<()> {
     let app_path = required_path(args.next(), "register-app requires an .app path")?;
+    let _access = preflight_access_scope(&app_path, AccessIntent::Operate, "register app")?;
     register_launch_services(&app_path)?;
     println!("{}", app_path.display());
     Ok(())
@@ -80,6 +85,7 @@ pub fn notarize_app(args: &mut impl Iterator<Item = String>) -> Result<()> {
     let app_path = required_path(args.next(), "notarize-app requires an .app path")?;
     let output_dir = required_path(args.next(), "notarize-app requires an output directory")?;
     let credentials = notarization_credentials(args)?;
+    let _access = retain_notarize_access(&app_path, &output_dir, &credentials)?;
     require_release_xcode_toolchain()?;
     let ticket = notarize_app_bundle(&NotarizationSpec::new(app_path, output_dir, credentials))?;
     println!(
@@ -135,6 +141,52 @@ fn print_toolchain_report(report: &AppleToolchainReport) {
         println!("tool\t{}\t{}", utility.name, utility.path.display());
     }
     println!("metal-smoke-test\t{}", report.metal_smoke_tested);
+}
+
+fn retain_packaging_read_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(path, AccessIntent::Read, worker)
+}
+
+fn retain_bundle_access(
+    executable: &Path,
+    icon: &Path,
+    output_dir: &Path,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        retain_packaging_read_access(executable, "bundle app executable")?,
+        retain_packaging_read_access(icon, "bundle app icon")?,
+        preflight_access_scope(
+            write_probe_path(output_dir),
+            AccessIntent::Write,
+            "bundle app output",
+        )?,
+    ])
+}
+
+fn retain_notarize_access(
+    app_path: &Path,
+    output_dir: &Path,
+    credentials: &NotarizationCredentials,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = vec![
+        retain_packaging_read_access(app_path, "notarize app")?,
+        preflight_access_scope(
+            write_probe_path(output_dir),
+            AccessIntent::Write,
+            "notarize output",
+        )?,
+    ];
+    if let NotarizationCredentials::ApiKey { key_path, .. } = credentials {
+        guards.push(retain_packaging_read_access(key_path, "notarize api key")?);
+    }
+    Ok(guards)
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.is_dir() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
 }
 
 fn notarization_credentials(
