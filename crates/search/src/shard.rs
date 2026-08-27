@@ -1,8 +1,8 @@
 use crate::{
     top_hits, BoundedHitMerge, SearchFuzzyPosting, SearchIndex, SearchLookup, SearchLookupBudget,
-    SearchLookupIds, SearchLookupTelemetry, SearchMetadataPosting, SearchPrefixPosting,
-    SearchQuery, SearchQueryReport, SearchRecordColumns, SearchStreamBatch, SearchStreamStage,
-    SearchSubstringPosting,
+    SearchLookupIds, SearchLookupTelemetry, SearchLookupTerms, SearchMetadataPosting,
+    SearchPrefixPosting, SearchQuery, SearchQueryReport, SearchRecordColumns, SearchStreamBatch,
+    SearchStreamStage, SearchSubstringPosting,
 };
 use gfm_jobs::Cancellation;
 use gfm_types::{
@@ -527,6 +527,10 @@ impl SearchLookup for VolumeScopedSearchLookup<'_> {
 
     fn fuzzy_terms(&self, key: &str) -> Result<Vec<String>> {
         self.lookup.fuzzy_terms(key)
+    }
+
+    fn fuzzy_terms_bounded(&self, key: &str, limit: usize) -> Result<SearchLookupTerms> {
+        self.lookup.fuzzy_terms_bounded(key, limit)
     }
 
     fn cache_telemetry(&self) -> SearchLookupTelemetry {
