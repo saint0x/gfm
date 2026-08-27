@@ -49,6 +49,14 @@ fn indexes_and_searches_real_files_from_binary() {
         "{}",
         String::from_utf8_lossy(&search_output.stderr)
     );
+    let search_stderr = String::from_utf8_lossy(&search_output.stderr);
+    assert!(
+        search_stderr.contains(&format!(
+            "security-worker-admission\tworker=search index\tpath={}",
+            index.display()
+        )),
+        "{search_stderr}"
+    );
 
     let stdout = String::from_utf8(search_output.stdout).unwrap();
     assert!(stdout.contains("QuarterlyPlan.md"), "{stdout}");
@@ -61,6 +69,14 @@ fn indexes_and_searches_real_files_from_binary() {
         mmap_output.status.success(),
         "{}",
         String::from_utf8_lossy(&mmap_output.stderr)
+    );
+    let mmap_stderr = String::from_utf8_lossy(&mmap_output.stderr);
+    assert!(
+        mmap_stderr.contains(&format!(
+            "security-worker-admission\tworker=search index mmap\tpath={}",
+            index.display()
+        )),
+        "{mmap_stderr}"
     );
     assert_eq!(String::from_utf8(mmap_output.stdout).unwrap(), stdout);
 
@@ -1555,6 +1571,13 @@ fn archive_read_routes_refuse_unreachable_volume_before_mapping_from_binary() {
         assert!(
             stderr.contains(&format!(
                 "{worker} volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(
+            !stderr.contains(&format!(
+                "security-worker-admission\tworker={worker}\tpath={}",
+                archive.display()
             )),
             "{route}: {stderr}"
         );

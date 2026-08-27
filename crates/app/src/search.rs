@@ -296,9 +296,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "search-index" => {
             let index_path = required_path(args.next(), "search-index requires an index path")?;
             let query = required_string(args.next(), "search-index requires a query string")?;
-            let _access = preflight_search_archive_access(&index_path, "search index")?;
-            let session = Indexer::default().load_query_session(index_path)?;
-            for hit in session.search(&query, 50) {
+            let hits = run_search_archive_read(index_path, "search index", move |index_path| {
+                let session = Indexer::default().load_query_session(index_path)?;
+                Ok(session.search(&query, 50))
+            })?;
+            for hit in hits {
                 print_hit(&hit);
             }
         }
@@ -306,9 +308,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let index_path =
                 required_path(args.next(), "search-index-mmap requires an index path")?;
             let query = required_string(args.next(), "search-index-mmap requires a query string")?;
-            let _access = preflight_search_archive_access(&index_path, "search index mmap")?;
-            let live = LiveIndex::from_records(MmapRecordArchive::open(index_path)?.records()?);
-            for hit in live.search(&query, 50) {
+            let hits =
+                run_search_archive_read(index_path, "search index mmap", move |index_path| {
+                    let live =
+                        LiveIndex::from_records(MmapRecordArchive::open(index_path)?.records()?);
+                    Ok(live.search(&query, 50))
+                })?;
+            for hit in hits {
                 print_hit(&hit);
             }
         }
@@ -880,6 +886,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
 
 fn preflight_content_archive_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
     preflight_access_scope(path, AccessIntent::Read, worker)
+}
+
+fn run_search_archive_read<T>(
+    path: PathBuf,
+    worker: &'static str,
+    read: impl FnOnce(PathBuf) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    let volume = detect_volume_id(&path).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_search_archive_access(&path, worker)?;
+        cancellation.check()?;
+        read(path)
+    })
 }
 
 fn preflight_search_archive_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
