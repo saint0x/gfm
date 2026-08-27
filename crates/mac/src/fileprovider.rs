@@ -1444,6 +1444,9 @@ fn identity_not_queried() -> NativeFileProviderIdentity {
 }
 
 fn domain_for_path(path: &Path, hints: &CloudHints) -> FileProviderDomain {
+    if native_proves_local_only(hints) {
+        return FileProviderDomain::Local;
+    }
     if hints
         .native_identity
         .domain_identifier
@@ -1472,6 +1475,14 @@ fn domain_for_path(path: &Path, hints: &CloudHints) -> FileProviderDomain {
     } else {
         FileProviderDomain::Local
     }
+}
+
+fn native_proves_local_only(hints: &CloudHints) -> bool {
+    hints.native.status == gfm_mac_sys::NativeFileProviderStatus::Available
+        && hints.native.is_ubiquitous == Some(false)
+        && !native_has_ubiquitous_materialization_evidence(&hints.native)
+        && hints.native_identity.status != NativeFileProviderIdentityStatus::Available
+        && hints.xattrs.is_empty()
 }
 
 fn is_icloud_domain_identifier(identifier: &str) -> bool {
@@ -1519,8 +1530,10 @@ fn storage_state_for_path(
         CloudStorageState::Uploading
     } else if name.contains("waiting") || attr_blob.contains("waiting") {
         CloudStorageState::Waiting
-    } else if (domain == FileProviderDomain::FileProvider
-        && !native_has_fileprovider_values(&hints.native))
+    } else if (hints.native_identity.status == NativeFileProviderIdentityStatus::Available
+        && !native_has_ubiquitous_materialization_evidence(&hints.native))
+        || (domain == FileProviderDomain::FileProvider
+            && !native_has_fileprovider_values(&hints.native))
         || (path_only_provider_hint(&hints.source) && hints.xattrs.is_empty())
     {
         CloudStorageState::Unknown
@@ -1602,7 +1615,8 @@ fn materialization_source_for_state(
     state: CloudStorageState,
     hints: &CloudHints,
 ) -> CloudMaterializationSource {
-    if hints.native.is_ubiquitous == Some(true)
+    if (state == CloudStorageState::LocalOnly && native_proves_local_only(hints))
+        || hints.native.is_ubiquitous == Some(true)
         || native_has_ubiquitous_materialization_evidence(&hints.native)
     {
         CloudMaterializationSource::NativeUrlResource
@@ -1646,6 +1660,9 @@ fn materialization_reason_for_state(
     state: CloudStorageState,
     hints: &CloudHints,
 ) -> Option<String> {
+    if state == CloudStorageState::LocalOnly && native_proves_local_only(hints) {
+        return Some("native-url-resource-not-provider-backed".to_string());
+    }
     if hints.native.is_ubiquitous == Some(true)
         || native_has_ubiquitous_materialization_evidence(&hints.native)
     {
@@ -2530,6 +2547,78 @@ mod tests {
             .any(|source| source == "nsfileprovidermanager"));
         assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
         assert_eq!(report.storage_state, CloudStorageState::Unknown);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_url_resource_false_keeps_path_hints_local_only() {
+        let root = unique_temp_dir();
+        let path = root.join("Downloaded.icloud.md");
+        fs::write(&path, "downloaded").unwrap();
+        let mut native = native_values();
+        native.is_ubiquitous = Some(false);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name+native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path.clone(), hints);
+
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_eq!(report.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::NotProviderBacked
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-not-provider-backed")
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_provider_metadata_overrides_native_local_false() {
+        let root = unique_temp_dir();
+        let path = root.join("Remote.icloud.md");
+        fs::write(&path, "downloaded").unwrap();
+        let mut native = native_values();
+        native.is_ubiquitous = Some(false);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::Available,
+                item_identifier: Some("item-123".to_string()),
+                domain_identifier: Some("com.apple.CloudDocs".to_string()),
+                reason: None,
+            },
+            xattrs: Vec::new(),
+            provider_identifier: Some("com.apple.CloudDocs".to_string()),
+            source: "fixture-name+native-url-resource+nsfileprovidermanager".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path.clone(), hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeFileProviderIdentityUnknown
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
