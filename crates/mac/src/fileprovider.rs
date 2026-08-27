@@ -1048,6 +1048,10 @@ impl FileProviderStateObserver {
         self.apply_events(events).map(Some)
     }
 
+    pub fn snapshot(&self) -> &FileProviderStateSnapshot {
+        &self.snapshot
+    }
+
     fn apply_events(
         &mut self,
         events: impl IntoIterator<Item = FileEvent>,
@@ -1141,6 +1145,14 @@ impl FileProviderOperationReport {
                 operation,
                 before,
                 "provider-conflict-requires-resolution",
+            ));
+        }
+        if before.commands.reason.as_deref() == Some("not-native-provider-backed") {
+            return Ok(Self::refused(
+                path,
+                operation,
+                before,
+                "not-native-provider-backed",
             ));
         }
         if command != CloudCommandState::Enabled {

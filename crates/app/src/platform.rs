@@ -397,8 +397,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 FileProviderStateObserver::watch(&[WatchRoot::tree(root)], previous)?;
             std::fs::write(&target, b"observer-probe").map_err(|err| GfmError::io(&target, err))?;
             let observed = drain_fileprovider_observer_probe(&mut observer)?;
-            let snapshot = FileProviderStateSnapshot::from_paths(observed.paths.clone())?;
-            snapshot.write(&state_path)?;
+            observer.snapshot().write(&state_path)?;
             println!("{}", observed.as_tsv());
         }
         "volume-discovery" => {

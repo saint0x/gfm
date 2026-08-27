@@ -1635,12 +1635,15 @@ fn reports_fileprovider_invalidation_event_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let state = root.join("fileprovider-state.tsv");
     let item = root.join("Remote.icloud-placeholder");
+    let untouched = root.join("Untouched.icloud-placeholder");
     std::fs::write(&item, "placeholder").unwrap();
+    std::fs::write(&untouched, "placeholder").unwrap();
     std::fs::write(
         &state,
         format!(
-            "gfm-fileprovider-state-v1\ndownloaded\t{}\n",
-            item.display()
+            "gfm-fileprovider-state-v1\ndownloaded\t{}\nevicted\t{}\n",
+            item.display(),
+            untouched.display()
         ),
     )
     .unwrap();
@@ -1667,6 +1670,11 @@ fn reports_fileprovider_invalidation_event_from_binary() {
     assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\tchanged=true\t"));
     let state_text = std::fs::read_to_string(&state).unwrap();
     assert!(state_text.contains("evicted\t"));
+    assert!(state_text.contains(&untouched.display().to_string()));
+    assert_eq!(
+        state_text.matches("Untouched.icloud-placeholder").count(),
+        1
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
