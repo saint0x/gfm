@@ -265,6 +265,7 @@ pub(crate) fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeD
     .with_writable(Some(volume.writable))
     .with_ejectable(Some(volume.ejectable))
     .with_mountable(volume.mountable)
+    .with_case_sensitive(volume.case_sensitive)
     .with_filesystem_signature(index_volume_filesystem_signature(volume))
 }
 
@@ -688,6 +689,7 @@ fn print_usage() {
   gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]
   gfm volume-invalidation <previous-class> <previous-mount> <path>
   gfm volume-event-index-invalidation <appeared|description-changed|disappeared|unavailable> [path]
+  gfm volume-case-sensitivity-invalidation <previous:true|false> <current:true|false>
   gfm volume-event-runtime-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-topology-diff <previous-paths...> -- <current-paths...>
   gfm spotlight-reconcile <path> [spotlight-fixture.tsv]
@@ -880,6 +882,7 @@ mod tests {
         volume.read_only = true;
         volume.ejectable = true;
         volume.mountable = Some(false);
+        volume.case_sensitive = Some(true);
 
         let descriptor = index_volume_descriptor(&volume);
 
@@ -887,6 +890,7 @@ mod tests {
         assert_eq!(descriptor.read_only, Some(true));
         assert_eq!(descriptor.ejectable, Some(true));
         assert_eq!(descriptor.mountable, Some(false));
+        assert_eq!(descriptor.case_sensitive, Some(true));
 
         std::fs::remove_dir_all(root).unwrap();
     }

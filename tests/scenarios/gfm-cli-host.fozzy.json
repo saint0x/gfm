@@ -2693,6 +2693,19 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-case-sensitivity-invalidation",
+        "false",
+        "true"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-index-invalidation\tkind=description-changed\tpath=/Volumes/Case Test\tprevious-volume=42\tprevious-class=external\tprevious-mount=mounted\tprevious-reachable=true\tprevious-read-only=-\tcurrent-volume=42\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tcurrent-read-only=-\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=true\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\tprevious-writable=-\tprevious-ejectable=-\tprevious-mountable=-\tprevious-case-sensitive=false\tcurrent-writable=-\tcurrent-ejectable=-\tcurrent-mountable=-\tcurrent-case-sensitive=true\twritable-changed=false\tejectable-changed=false\tmountable-changed=false\tcase-sensitive-changed=true\treason=volume-event-case-sensitivity-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-event-index-invalidation",
         "appeared",
         "tmp/gfm-fozzy-dist"
@@ -3669,6 +3682,17 @@
         "content-ids-mmap-manifest",
         "tmp/gfm-fozzy-manifest-offline.gfmmanifest",
         "needle"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-write",
+        "tmp/gfm-fozzy-manifest-refused.gfmmanifest",
+        "hot:tmp/gfm-fozzy-offline-volume/content-query.gfmcontent"
       ],
       "exit_code": 1,
       "times": 1

@@ -2397,6 +2397,31 @@ fn reports_volume_event_index_invalidation_from_binary() {
 }
 
 #[test]
+fn reports_case_sensitivity_volume_event_index_invalidation_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-case-sensitivity-invalidation")
+        .arg("false")
+        .arg("true")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(
+        "volume-event-index-invalidation\tkind=description-changed\tpath=/Volumes/Case Test\t"
+    ));
+    assert!(stdout.contains("\tprevious-case-sensitive=false\t"));
+    assert!(stdout.contains("\tcurrent-case-sensitive=true\t"));
+    assert!(stdout.contains("\tcase-sensitive-changed=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.ends_with("reason=volume-event-case-sensitivity-changed\n"));
+}
+
+#[test]
 fn reports_volume_event_runtime_cancellation_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-event-runtime-invalidation-{}",

@@ -449,6 +449,30 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 volume_event_index_invalidation_from_args(args)?.as_tsv()
             );
         }
+        "volume-case-sensitivity-invalidation" => {
+            let previous_case_sensitive = parse_platform_bool(
+                &required_string(
+                    args.next(),
+                    "volume-case-sensitivity-invalidation requires a previous case-sensitive flag",
+                )?,
+                "previous case-sensitive",
+            )?;
+            let current_case_sensitive = parse_platform_bool(
+                &required_string(
+                    args.next(),
+                    "volume-case-sensitivity-invalidation requires a current case-sensitive flag",
+                )?,
+                "current case-sensitive",
+            )?;
+            println!(
+                "{}",
+                volume_case_sensitivity_invalidation(
+                    previous_case_sensitive,
+                    current_case_sensitive
+                )
+                .as_tsv()
+            );
+        }
         "volume-event-runtime-invalidation" => {
             let report = volume_event_index_invalidation_from_args(args)?;
             println!("{}", report.as_tsv());
@@ -998,6 +1022,55 @@ fn volume_event_index_invalidation_from_args(
     ))
 }
 
+fn volume_case_sensitivity_invalidation(
+    previous_case_sensitive: bool,
+    current_case_sensitive: bool,
+) -> VolumeEventIndexInvalidationReport {
+    let previous = IndexVolumeDescriptor::new(
+        "Case Test",
+        "/Volumes/Case Test",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(42))
+    .with_stable_identity("diskarbitration:uuid:CASE-TEST")
+    .with_case_sensitive(Some(previous_case_sensitive))
+    .with_filesystem_signature(format!(
+        "fs=apfs|case-sensitive={}",
+        bool_signature_value(previous_case_sensitive)
+    ));
+    let current = IndexVolumeDescriptor::new(
+        "Case Test",
+        "/Volumes/Case Test",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(42))
+    .with_stable_identity("diskarbitration:uuid:CASE-TEST")
+    .with_case_sensitive(Some(current_case_sensitive))
+    .with_filesystem_signature(format!(
+        "fs=apfs|case-sensitive={}",
+        bool_signature_value(current_case_sensitive)
+    ));
+
+    VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/Case Test")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    )
+}
+
+fn bool_signature_value(value: bool) -> &'static str {
+    if value {
+        "1"
+    } else {
+        "0"
+    }
+}
+
 fn runtime_volume_cancellation(
     report: &VolumeEventIndexInvalidationReport,
 ) -> Option<gfm_jobs::VolumeCancellationReport> {
@@ -1292,4 +1365,14 @@ fn required_path(value: Option<String>, message: &str) -> Result<PathBuf> {
 
 fn required_string(value: Option<String>, message: &str) -> Result<String> {
     value.ok_or_else(|| GfmError::Format(message.to_string()))
+}
+
+fn parse_platform_bool(value: &str, name: &str) -> Result<bool> {
+    match value {
+        "true" | "1" | "yes" => Ok(true),
+        "false" | "0" | "no" => Ok(false),
+        _ => Err(GfmError::Format(format!(
+            "{name} must be true or false; got `{value}`"
+        ))),
+    }
 }

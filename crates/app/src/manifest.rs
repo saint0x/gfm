@@ -23,7 +23,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let archives = args
                 .map(|spec| parse_content_manifest_archive_spec(&spec))
                 .collect::<Result<Vec<_>>>()?;
-            let _access = retain_manifest_write_access(&output)?;
+            let _access = retain_manifest_write_access(&output, &archives)?;
             let manifest = ContentArchiveManifest::new(archives)?;
             manifest.write(&output)?;
             eprintln!("content-manifest\tarchives={}", manifest.archives.len());
@@ -234,12 +234,23 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     Ok(true)
 }
 
-fn retain_manifest_write_access(manifest_path: &Path) -> Result<Vec<ScopedAccessGuard>> {
-    Ok(vec![preflight_access_scope(
+fn retain_manifest_write_access(
+    manifest_path: &Path,
+    archives: &[ContentArchiveManifestEntry],
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = vec![preflight_access_scope(
         write_probe_path(manifest_path),
         AccessIntent::Write,
         "content manifest write",
-    )?])
+    )?];
+    for archive in archives {
+        guards.push(preflight_access_scope(
+            &resolve_manifest_path(manifest_path, &archive.path),
+            AccessIntent::Read,
+            "content manifest write archive",
+        )?);
+    }
+    Ok(guards)
 }
 
 fn retain_manifest_inspect_access(manifest_path: &Path) -> Result<Vec<ScopedAccessGuard>> {

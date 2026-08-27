@@ -7300,6 +7300,42 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
 }
 
 #[test]
+fn content_manifest_write_refuses_unreachable_archive_before_publishing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-write-unreachable");
+    let local = root.join("local");
+    let offline = root.join("offline");
+    fs::create_dir_all(&local).unwrap();
+    fs::create_dir_all(&offline).unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let manifest = local.join("content.gfmmanifest");
+    let content = offline.join("content.gfmcontent");
+    fs::write(&content, "not admitted into manifest").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-write",
+            manifest.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains(
+            "content manifest write archive volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!manifest.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn recovers_corrupt_content_manifest_from_binary() {
     let manifest = unique_temp_path("gfm-cli-content-manifest-recovery", "gfmmanifest");
     let content = unique_temp_path("gfm-cli-content-manifest-recovery", "gfmcontent");

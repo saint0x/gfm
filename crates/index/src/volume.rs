@@ -203,6 +203,7 @@ pub struct IndexVolumeDescriptor {
     pub writable: Option<bool>,
     pub ejectable: Option<bool>,
     pub mountable: Option<bool>,
+    pub case_sensitive: Option<bool>,
     pub stable_identity: Option<String>,
     pub filesystem_signature: Option<String>,
 }
@@ -225,6 +226,7 @@ impl IndexVolumeDescriptor {
             writable: None,
             ejectable: None,
             mountable: None,
+            case_sensitive: None,
             stable_identity: None,
             filesystem_signature: None,
         }
@@ -262,6 +264,11 @@ impl IndexVolumeDescriptor {
 
     pub fn with_mountable(mut self, mountable: Option<bool>) -> Self {
         self.mountable = mountable;
+        self
+    }
+
+    pub fn with_case_sensitive(mut self, case_sensitive: Option<bool>) -> Self {
+        self.case_sensitive = case_sensitive;
         self
     }
 
@@ -455,6 +462,7 @@ pub struct VolumeInvalidationReport {
     pub previous_writable: Option<bool>,
     pub previous_ejectable: Option<bool>,
     pub previous_mountable: Option<bool>,
+    pub previous_case_sensitive: Option<bool>,
     pub current_class: Option<IndexVolumeClass>,
     pub current_mount_state: Option<IndexMountState>,
     pub current_reachable: Option<bool>,
@@ -462,6 +470,7 @@ pub struct VolumeInvalidationReport {
     pub current_writable: Option<bool>,
     pub current_ejectable: Option<bool>,
     pub current_mountable: Option<bool>,
+    pub current_case_sensitive: Option<bool>,
     pub invalidate_sidebar: bool,
     pub invalidate_operation_policy: bool,
     pub invalidate_index_admission: bool,
@@ -483,6 +492,7 @@ pub struct VolumeEventIndexInvalidationReport {
     pub previous_writable: Option<bool>,
     pub previous_ejectable: Option<bool>,
     pub previous_mountable: Option<bool>,
+    pub previous_case_sensitive: Option<bool>,
     pub current_volume_id: Option<VolumeId>,
     pub current_class: Option<IndexVolumeClass>,
     pub current_mount_state: Option<IndexMountState>,
@@ -491,10 +501,12 @@ pub struct VolumeEventIndexInvalidationReport {
     pub current_writable: Option<bool>,
     pub current_ejectable: Option<bool>,
     pub current_mountable: Option<bool>,
+    pub current_case_sensitive: Option<bool>,
     pub read_only_changed: bool,
     pub writable_changed: bool,
     pub ejectable_changed: bool,
     pub mountable_changed: bool,
+    pub case_sensitive_changed: bool,
     pub stable_identity_changed: bool,
     pub filesystem_signature_changed: bool,
     pub invalidate_index_admission: bool,
@@ -520,6 +532,7 @@ impl VolumeInvalidationReport {
         let previous_writable = previous.and_then(|volume| volume.writable);
         let previous_ejectable = previous.and_then(|volume| volume.ejectable);
         let previous_mountable = previous.and_then(|volume| volume.mountable);
+        let previous_case_sensitive = previous.and_then(|volume| volume.case_sensitive);
         let current_class = current.map(|volume| volume.class);
         let current_mount_state = current.map(|volume| volume.mount_state);
         let current_reachable = current.and_then(|volume| volume.reachable);
@@ -527,6 +540,7 @@ impl VolumeInvalidationReport {
         let current_writable = current.and_then(|volume| volume.writable);
         let current_ejectable = current.and_then(|volume| volume.ejectable);
         let current_mountable = current.and_then(|volume| volume.mountable);
+        let current_case_sensitive = current.and_then(|volume| volume.case_sensitive);
 
         let (
             invalidate_sidebar,
@@ -630,6 +644,22 @@ impl VolumeInvalidationReport {
             }
             (Some(previous), Some(current))
                 if known_optional_value_changed(
+                    &previous.case_sensitive,
+                    &current.case_sensitive,
+                ) =>
+            {
+                (
+                    true,
+                    true,
+                    true,
+                    true,
+                    previous.mount_state == IndexMountState::Mounted,
+                    true,
+                    "volume-case-sensitivity-changed",
+                )
+            }
+            (Some(previous), Some(current))
+                if known_optional_value_changed(
                     &previous.stable_identity,
                     &current.stable_identity,
                 ) =>
@@ -681,6 +711,7 @@ impl VolumeInvalidationReport {
             previous_writable,
             previous_ejectable,
             previous_mountable,
+            previous_case_sensitive,
             current_class,
             current_mount_state,
             current_reachable,
@@ -688,6 +719,7 @@ impl VolumeInvalidationReport {
             current_writable,
             current_ejectable,
             current_mountable,
+            current_case_sensitive,
             invalidate_sidebar,
             invalidate_operation_policy,
             invalidate_index_admission,
@@ -700,7 +732,7 @@ impl VolumeInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-mountable={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-mountable={}\treason={}",
+            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\treason={}",
             self.path.display(),
             self.previous_class
                 .map(IndexVolumeClass::as_str)
@@ -733,9 +765,11 @@ impl VolumeInvalidationReport {
             format_optional_bool(self.previous_writable),
             format_optional_bool(self.previous_ejectable),
             format_optional_bool(self.previous_mountable),
+            format_optional_bool(self.previous_case_sensitive),
             format_optional_bool(self.current_writable),
             format_optional_bool(self.current_ejectable),
             format_optional_bool(self.current_mountable),
+            format_optional_bool(self.current_case_sensitive),
             escape_field(&self.reason)
         )
     }
@@ -774,6 +808,10 @@ impl VolumeEventIndexInvalidationReport {
             &previous.and_then(|volume| volume.mountable),
             &current.and_then(|volume| volume.mountable),
         );
+        let case_sensitive_changed = known_optional_value_changed(
+            &previous.and_then(|volume| volume.case_sensitive),
+            &current.and_then(|volume| volume.case_sensitive),
+        );
         let event_visible = path.is_some()
             || previous.is_some()
             || current.is_some()
@@ -783,7 +821,8 @@ impl VolumeEventIndexInvalidationReport {
             || read_only_changed
             || writable_changed
             || ejectable_changed
-            || mountable_changed;
+            || mountable_changed
+            || case_sensitive_changed;
         let invalidate_index_admission =
             event_visible && (source_invalidates_index_admission || descriptor_changed);
         let rescan_index = event_visible && (source_rescans_index || descriptor_changed);
@@ -814,6 +853,9 @@ impl VolumeEventIndexInvalidationReport {
             IndexVolumeEventKind::DescriptionChanged if mountable_changed => {
                 "volume-event-mountable-changed"
             }
+            IndexVolumeEventKind::DescriptionChanged if case_sensitive_changed => {
+                "volume-event-case-sensitivity-changed"
+            }
             IndexVolumeEventKind::DescriptionChanged if filesystem_signature_changed => {
                 "volume-event-filesystem-changed"
             }
@@ -836,6 +878,7 @@ impl VolumeEventIndexInvalidationReport {
             previous_writable: previous.and_then(|volume| volume.writable),
             previous_ejectable: previous.and_then(|volume| volume.ejectable),
             previous_mountable: previous.and_then(|volume| volume.mountable),
+            previous_case_sensitive: previous.and_then(|volume| volume.case_sensitive),
             current_volume_id: current.and_then(|volume| volume.id),
             current_class: current.map(|volume| volume.class),
             current_mount_state: current.map(|volume| volume.mount_state),
@@ -844,10 +887,12 @@ impl VolumeEventIndexInvalidationReport {
             current_writable: current.and_then(|volume| volume.writable),
             current_ejectable: current.and_then(|volume| volume.ejectable),
             current_mountable: current.and_then(|volume| volume.mountable),
+            current_case_sensitive: current.and_then(|volume| volume.case_sensitive),
             read_only_changed,
             writable_changed,
             ejectable_changed,
             mountable_changed,
+            case_sensitive_changed,
             stable_identity_changed,
             filesystem_signature_changed,
             invalidate_index_admission,
@@ -860,7 +905,7 @@ impl VolumeEventIndexInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tread-only-changed={}\tidentity-changed={}\tfilesystem-changed={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-mountable={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-mountable={}\twritable-changed={}\tejectable-changed={}\tmountable-changed={}\treason={}",
+            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tread-only-changed={}\tidentity-changed={}\tfilesystem-changed={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\twritable-changed={}\tejectable-changed={}\tmountable-changed={}\tcase-sensitive-changed={}\treason={}",
             self.kind.as_str(),
             self.path
                 .as_ref()
@@ -904,12 +949,15 @@ impl VolumeEventIndexInvalidationReport {
             format_optional_bool(self.previous_writable),
             format_optional_bool(self.previous_ejectable),
             format_optional_bool(self.previous_mountable),
+            format_optional_bool(self.previous_case_sensitive),
             format_optional_bool(self.current_writable),
             format_optional_bool(self.current_ejectable),
             format_optional_bool(self.current_mountable),
+            format_optional_bool(self.current_case_sensitive),
             self.writable_changed,
             self.ejectable_changed,
             self.mountable_changed,
+            self.case_sensitive_changed,
             escape_field(&self.reason)
         )
     }
