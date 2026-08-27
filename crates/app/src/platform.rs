@@ -646,16 +646,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "icon-preview" => {
             let path = required_path(args.next(), "icon-preview requires a path")?;
-            let record = record_for_path_with_access(&path, AccessIntent::Preview, "icon preview")?;
-            let input = IconPreviewInput::new(
-                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Icon),
-                record,
-            )
-            .with_invalidation(PreviewInvalidationEvent {
-                tags_changed: true,
-                ..PreviewInvalidationEvent::default()
-            });
-            println!("{}", IconPreviewContract::from_input(input).as_tsv());
+            println!("{}", run_icon_preview(path)?.as_tsv());
         }
         "quicklook-session" => {
             let path = required_path(args.next(), "quicklook-session requires a path")?;
@@ -1396,6 +1387,29 @@ fn run_fileprovider_operation(
         let _access = preflight_access_scope(&path, AccessIntent::Operate, WORKER)?;
         cancellation.check()?;
         FileProviderOperationReport::execute(path, operation)
+    })
+}
+
+fn run_icon_preview(path: PathBuf) -> Result<IconPreviewContract> {
+    const WORKER: &str = "icon preview";
+    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
+    let volume = detect_volume_id(&path)
+        .ok()
+        .or_else(|| parent_volume(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
+        cancellation.check()?;
+        let input = IconPreviewInput::new(
+            PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Icon),
+            record,
+        )
+        .with_invalidation(PreviewInvalidationEvent {
+            tags_changed: true,
+            ..PreviewInvalidationEvent::default()
+        });
+        cancellation.check()?;
+        Ok(IconPreviewContract::from_input(input))
     })
 }
 

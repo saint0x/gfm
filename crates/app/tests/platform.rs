@@ -792,6 +792,8 @@ fn reports_icon_preview_contract_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "icon preview", &root.join("GFM.app"));
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(
         stdout.trim(),
@@ -828,6 +830,10 @@ fn icon_preview_refuses_unreachable_network_volume_before_record_read_from_binar
     assert!(!stdout.contains("icon-preview\t"), "{stdout}");
     assert!(
         stderr.contains("icon preview volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=icon preview\t"),
         "{stderr}"
     );
 
