@@ -3284,7 +3284,7 @@
         "idle",
         "/tmp/gfm-fozzy-host.gfmseg"
       ],
-      "exit_code": 1,
+      "exit_code": 0,
       "times": 1
     },
     {

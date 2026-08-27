@@ -8031,11 +8031,19 @@ fn content_maintenance_refuses_unreachable_output_before_merge_from_binary() {
         ])
         .output()
         .unwrap();
-    assert!(!adaptive_output.status.success());
+    assert!(
+        adaptive_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&adaptive_output.stderr)
+    );
     let adaptive_stderr = String::from_utf8_lossy(&adaptive_output.stderr);
     assert!(
-        adaptive_stderr
-            .contains("content maintenance volume access blocked: unreachable volume network"),
+        adaptive_stderr.contains("content-maintenance-deferred")
+            && adaptive_stderr.contains("action=Defer"),
+        "{adaptive_stderr}"
+    );
+    assert!(
+        !adaptive_stderr.contains("volume access blocked: unreachable volume network"),
         "{adaptive_stderr}"
     );
     assert!(!deferred_content.exists());
@@ -8045,6 +8053,59 @@ fn content_maintenance_refuses_unreachable_output_before_merge_from_binary() {
     fs::remove_file(segment).unwrap();
     fs::remove_file(content).unwrap();
     fs::remove_file(manifest).unwrap();
+}
+
+#[test]
+fn deferred_content_maintenance_does_not_touch_unreachable_inputs_from_binary() {
+    let root = unique_temp_dir("gfm-cli-segment-maintenance-deferred-inputs");
+    let output = unique_temp_path("gfm-cli-segment-maintenance-deferred-output", "gfmcontent");
+    let manifest = root.join("manifest.gfmmanifest");
+    let segment = root.join("content.gfmseg");
+    fs::write(&manifest, "not-a-content-manifest").unwrap();
+    fs::write(&segment, "not-a-content-segment").unwrap();
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output_result = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-maintain-segments-adaptive",
+            manifest.to_str().unwrap(),
+            output.to_str().unwrap(),
+            "saturated",
+            "critical",
+            "low",
+            "active",
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output_result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output_result.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output_result.stdout);
+    let stderr = String::from_utf8_lossy(&output_result.stderr);
+    assert!(!stdout.contains("published\t"), "{stdout}");
+    assert!(
+        stderr.contains("content-maintenance-deferred") && stderr.contains("action=Defer"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&manifest).unwrap(),
+        "not-a-content-manifest"
+    );
+    assert_eq!(
+        fs::read_to_string(&segment).unwrap(),
+        "not-a-content-segment"
+    );
+    assert!(!output.exists());
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

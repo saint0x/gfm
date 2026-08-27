@@ -6,8 +6,8 @@ use crate::extract::{
 };
 use crate::runtime::{
     default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
-    run_scheduled_volume_task_cancellable, run_volume_task_cancellable, runtime_progress_store,
-    RuntimeJobHandle,
+    run_scheduled_volume_task_cancellable, run_scheduled_volume_task_cancellable_with_volume,
+    run_volume_task_cancellable, runtime_progress_store, RuntimeJobHandle,
 };
 use crate::{
     detect_volume_id, optional_path_arg, parent_volume, parse_battery_state, parse_io_pressure,
@@ -322,31 +322,56 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-maintain-segments-adaptive requires at least one segment".to_string(),
                 ));
             }
-            let _access = retain_content_segments_access(
-                Some(&manifest_path),
-                &output_archive,
-                &segments,
-                "content maintenance",
-            )?;
-            let volume = detect_volume_id(&manifest_path)
-                .ok()
-                .or_else(|| parent_volume(&output_archive));
             let worker = BackgroundContentIndexer::default();
-            let outcome = run_scheduled_volume_task_cancellable(
-                volume,
-                Priority::Background,
-                "content maintenance",
-                pressure,
-                move |cancellation| {
-                    worker.maintain_segments_cancellable(
-                        &manifest_path,
+            let outcome =
+                if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
+                    run_scheduled_volume_task_cancellable_with_volume(
+                        Priority::Background,
+                        "content maintenance",
+                        pressure,
+                        || Ok(None),
+                        move |cancellation| {
+                            let _access = retain_content_segments_access(
+                                Some(&manifest_path),
+                                &output_archive,
+                                &segments,
+                                "content maintenance",
+                            )?;
+                            worker.maintain_segments_cancellable(
+                                &manifest_path,
+                                &output_archive,
+                                &segments,
+                                &ContentMaintenanceOptions::default(),
+                                &cancellation,
+                            )
+                        },
+                    )?
+                } else {
+                    let _access = retain_content_segments_access(
+                        Some(&manifest_path),
                         &output_archive,
                         &segments,
-                        &ContentMaintenanceOptions::default(),
-                        &cancellation,
-                    )
-                },
-            )?;
+                        "content maintenance",
+                    )?;
+                    let volume = detect_volume_id(&manifest_path)
+                        .ok()
+                        .or_else(|| parent_volume(&output_archive));
+                    run_scheduled_volume_task_cancellable(
+                        volume,
+                        Priority::Background,
+                        "content maintenance",
+                        pressure,
+                        move |cancellation| {
+                            worker.maintain_segments_cancellable(
+                                &manifest_path,
+                                &output_archive,
+                                &segments,
+                                &ContentMaintenanceOptions::default(),
+                                &cancellation,
+                            )
+                        },
+                    )?
+                };
             if outcome.deferred {
                 eprintln!(
                     "content-maintenance-deferred\taction={:?}",

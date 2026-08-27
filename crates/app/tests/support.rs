@@ -1692,6 +1692,44 @@ fn adaptive_quicklook_session_stays_visible_under_pressure_from_binary() {
 }
 
 #[test]
+fn adaptive_quicklook_session_refuses_unreachable_volume_before_preview_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-quicklook-adaptive-unreachable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("Project")).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Project").join("Preview.pdf");
+    std::fs::write(&path, b"%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "quicklook-session-adaptive",
+            path.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("quicklook-session\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "adaptive quicklook preview volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn cancelled_quicklook_session_stops_before_planning_from_binary() {
     let path =
         std::env::temp_dir().join(format!("gfm-quicklook-cancel-{}.pdf", std::process::id()));
