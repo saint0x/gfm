@@ -1439,13 +1439,13 @@ fn topology_change_reason(
 }
 
 fn apfs_container_uuid(
-    native: Option<&NativeVolumeDescription>,
-    mount_table: Option<&NativeVolumeMountTableEntry>,
+    _native: Option<&NativeVolumeDescription>,
+    _mount_table: Option<&NativeVolumeMountTableEntry>,
 ) -> Option<String> {
-    let native = native.filter(|native| native.status == NativeVolumeStatus::Available)?;
-    is_apfs_volume(native, mount_table)
-        .then(|| native.media_uuid.clone())
-        .flatten()
+    // DiskArbitration exposes volume and media UUIDs separately; neither is a
+    // proven APFS container UUID. Keep this field unknown until a native APFS
+    // container source is wired through the platform bridge.
+    None
 }
 
 fn apfs_volume_role(native: Option<&NativeVolumeDescription>) -> Option<ApfsVolumeRole> {
@@ -1459,24 +1459,6 @@ fn apfs_volume_role(native: Option<&NativeVolumeDescription>) -> Option<ApfsVolu
     .into_iter()
     .flatten()
     .find_map(parse_apfs_role)
-}
-
-fn is_apfs_volume(
-    native: &NativeVolumeDescription,
-    mount_table: Option<&NativeVolumeMountTableEntry>,
-) -> bool {
-    [
-        native.volume_type.as_deref(),
-        native.volume_kind.as_deref(),
-        native.media_content.as_deref(),
-        native.media_type.as_deref(),
-        mount_table
-            .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
-            .and_then(|mount_table| mount_table.filesystem_type.as_deref()),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|value| value.to_ascii_lowercase().contains("apfs"))
 }
 
 fn parse_apfs_role(value: &str) -> Option<ApfsVolumeRole> {
@@ -2138,21 +2120,18 @@ mod tests {
     }
 
     #[test]
-    fn extracts_apfs_container_uuid_and_role_from_native_description() {
+    fn leaves_apfs_container_uuid_unknown_without_explicit_container_source() {
         let native = native_description(|description| {
             description.status = NativeVolumeStatus::Available;
             description.volume_type = Some("apfs".to_string());
             description.media_content = Some("Apple_APFS_Role_Data".to_string());
-            description.media_uuid = Some("APFS-CONTAINER-UUID".to_string());
+            description.media_uuid = Some("MEDIA-UUID".to_string());
         });
         let mount_table = mount_table_entry(|entry| {
             entry.filesystem_type = Some("apfs".to_string());
         });
 
-        assert_eq!(
-            apfs_container_uuid(Some(&native), Some(&mount_table)),
-            Some("APFS-CONTAINER-UUID".to_string())
-        );
+        assert_eq!(apfs_container_uuid(Some(&native), Some(&mount_table)), None);
         assert_eq!(apfs_volume_role(Some(&native)), Some(ApfsVolumeRole::Data));
     }
 
