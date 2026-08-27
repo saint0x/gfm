@@ -347,21 +347,10 @@ pub fn parse_parity_gate_manifest_with_provenance(
                 line_index + 1
             )));
         }
-        let surface = ParitySurface::from_str(fields[0]).map_err(GfmError::Format)?;
-        let expected_path = resolve_manifest_path(base, fields[1]);
-        let actual_path = resolve_manifest_path(base, fields[2]);
-        let width = parse_manifest_u32(line_index, "width", fields[3])?;
-        let height = parse_manifest_u32(line_index, "height", fields[4])?;
-        let mut input = ParityGateInput::new(
-            surface,
-            expected_path,
-            actual_path,
-            PixelSize::new(width, height),
-        );
-        if fields.len() == 6 && !fields[5].is_empty() {
-            input = input.with_mask(resolve_manifest_path(base, fields[5]));
-        }
-        inputs.push(input);
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} is missing capture provenance; use manifest-version 1, a profile row, and versioned entry rows",
+            line_index + 1
+        )));
     }
     if inputs.is_empty() {
         return Err(GfmError::Format(
@@ -823,7 +812,7 @@ mod tests {
         fs::write(root.join("actual.rgba"), [1, 2, 3, 255]).unwrap();
         fs::write(
             root.join("gate.tsv"),
-            "icon\texpected.rgba\tactual.rgba\t1\t1\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ticon\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
         )
         .unwrap();
 
@@ -835,6 +824,18 @@ mod tests {
             .input
             .expected_path
             .ends_with("expected.rgba"));
+        assert!(report.entries[0].input.provenance.is_some());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_gate_manifest_rejects_missing_capture_provenance() {
+        let root = unique_temp_dir("gfm-parity-gate-missing-provenance");
+        let err = parse_parity_gate_manifest("icon\texpected.rgba\tactual.rgba\t1\t1\n", &root)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("missing capture provenance"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -920,7 +921,7 @@ mod tests {
         fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
         fs::write(
             root.join("gate.tsv"),
-            "text\texpected.rgba\tactual.rgba\t2\t1\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\texpected.rgba\tactual.rgba\t2\t1\t\t1040\t720\tactive\tlist\tfixtures/text\n",
         )
         .unwrap();
 

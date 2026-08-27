@@ -392,7 +392,7 @@ fn parity_gate_and_review_use_governed_masks_from_binary() {
     fs::write(
         &manifest,
         format!(
-            "toolbar\t{}\t{}\t2\t1\t{}\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\t{}\t{}\t2\t1\t{}\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
             expected.display(),
             actual.display(),
             mask.display()
@@ -439,6 +439,36 @@ fn parity_gate_and_review_use_governed_masks_from_binary() {
     assert!(fs::read_to_string(review.join("mask-justifications.tsv"))
         .unwrap()
         .contains("OS-owned sidebar clock repaint"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn parity_gate_rejects_unprovenanced_manifest_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-gate-missing-provenance");
+    let expected = root.join("finder.rgba");
+    let actual = root.join("gfm.rgba");
+    let manifest = root.join("gate.tsv");
+    fs::write(&expected, [0, 0, 0, 255]).unwrap();
+    fs::write(&actual, [0, 0, 0, 255]).unwrap();
+    fs::write(
+        &manifest,
+        format!(
+            "toolbar\t{}\t{}\t1\t1\n",
+            expected.display(),
+            actual.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["parity-gate", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("missing capture provenance"), "{stderr}");
 
     fs::remove_dir_all(root).unwrap();
 }

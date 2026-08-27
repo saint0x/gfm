@@ -3681,7 +3681,7 @@
     {
       "type": "fs_write",
       "path": "tmp/gfm-parity-gate.tsv",
-      "data": "toolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\n"
+      "data": "manifest-version\t1\nprofile\tmacos-build=25A354\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\ticon\tgfm-parity-fixture/toolbar\n"
     },
     {
       "type": "proc_when",
