@@ -90,7 +90,7 @@ fn config_init_uses_cwd_write_probe_for_relative_store_from_binary() {
     );
     assert!(root.join("config.toml").exists());
     let init_stderr = String::from_utf8_lossy(&init_output.stderr);
-    assert_worker_admitted(&init_stderr, "config init", PathBuf::from(".").as_path());
+    assert_worker_admitted(&init_stderr, "config init", &root);
     assert!(
         !init_stderr.contains("security-worker-admission\tworker=config init\tpath=\t"),
         "{init_stderr}"
@@ -182,7 +182,8 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 
 fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
     let expected_worker = format!("worker={worker}");
-    let expected_path = format!("path={}", path.display());
+    let expected = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let expected_path = format!("path={}", expected.display());
     assert!(
         stderr.lines().any(|line| {
             line.starts_with("security-worker-admission\t")

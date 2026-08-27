@@ -9,10 +9,22 @@ fn preview_security_scope_count(stderr: &str) -> usize {
 }
 
 fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
+    let expected = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     assert!(
         stderr.contains(&format!(
             "security-worker-admission\tworker={worker}\tpath={}",
-            path.display()
+            expected.display()
+        )),
+        "{stderr}"
+    );
+}
+
+fn assert_worker_not_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
+    let expected = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker={worker}\tpath={}",
+            expected.display()
         )),
         "{stderr}"
     );
@@ -950,13 +962,7 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(stdout.starts_with("window\tGFM\t"), "{stdout}");
-    assert!(
-        stderr.contains(&format!(
-            "security-worker-admission\tworker=ui operation conflict store\tpath={}",
-            conflicts.display()
-        )),
-        "{stderr}"
-    );
+    assert_worker_admitted(&stderr, "ui operation conflict store", &conflicts);
     assert!(
         stdout.contains(
             "\noperation-conflict-ui\toperation=batch\ttarget=2 items\tkind=mixed\tpolicy=fail\tavailable=replace,keep-both,skip\t"
@@ -1048,13 +1054,7 @@ fn ui_operation_conflicts_refuse_unreachable_store_before_worker_from_binary() {
         ),
         "{stderr}"
     );
-    assert!(
-        !stderr.contains(&format!(
-            "security-worker-admission\tworker=ui operation conflict store\tpath={}",
-            conflicts.display()
-        )),
-        "{stderr}"
-    );
+    assert_worker_not_admitted(&stderr, "ui operation conflict store", &conflicts);
 
     let _ = std::fs::remove_dir_all(root);
     let _ = std::fs::remove_dir_all(offline);
@@ -1205,13 +1205,7 @@ fn reports_progress_dialog_from_job_progress_store() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(&format!(
-            "security-worker-admission\tworker=ui progress store\tpath={}",
-            progress.display()
-        )),
-        "{stderr}"
-    );
+    assert_worker_admitted(&stderr, "ui progress store", &progress);
 
     assert!(stdout.starts_with("dialog\tsurface=progress\tpresentation=progress-sheet"));
     assert!(stdout.contains("button\tpause\tPause\talternate\tenabled=false"));
@@ -1549,13 +1543,7 @@ fn reports_ui_icon_view_contract_from_binary() {
     assert!(stdout.contains("cell\t0\t"));
     assert!(stdout.contains("\tdir\t0x0\tFolder\t"));
     assert!(stdout.contains("\tfile\t112x0\tNote.txt\t"));
-    assert!(
-        stderr.contains(&format!(
-            "security-worker-admission\tworker=ui icon view\tpath={}",
-            root.display()
-        )),
-        "{stderr}"
-    );
+    assert_worker_admitted(&stderr, "ui icon view", &root);
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -1627,13 +1615,7 @@ fn reports_ui_list_view_contract_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(&format!(
-            "security-worker-admission\tworker=ui list view\tpath={}",
-            root.display()
-        )),
-        "{stderr}"
-    );
+    assert_worker_admitted(&stderr, "ui list view", &root);
 
     assert!(stdout.starts_with("list-view\tsort=finder-name\trow-height=22px"));
     assert!(stdout.contains("\ttotal=2\t"));
@@ -1674,13 +1656,7 @@ fn ui_list_view_refuses_unreachable_network_volume_before_reading_from_binary() 
         stderr.contains("ui list view volume access blocked: unreachable volume network"),
         "{stderr}"
     );
-    assert!(
-        !stderr.contains(&format!(
-            "security-worker-admission\tworker=ui list view\tpath={}",
-            root.display()
-        )),
-        "{stderr}"
-    );
+    assert_worker_not_admitted(&stderr, "ui list view", &root);
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -1708,20 +1684,8 @@ fn reports_ui_column_view_contract_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(&format!(
-            "security-worker-admission\tworker=ui column view\tpath={}",
-            root.display()
-        )),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains(&format!(
-            "security-worker-admission\tworker=ui column child view\tpath={}",
-            root.join("Folder").display()
-        )),
-        "{stderr}"
-    );
+    assert_worker_admitted(&stderr, "ui column view", &root);
+    assert_worker_admitted(&stderr, "ui column child view", &root.join("Folder"));
 
     assert!(stdout.starts_with("column-view\tsort=finder-name\tcolumn-width=220px"));
     assert!(stdout.contains("\tcolumns=2\tpreview=true\t"));
@@ -1763,13 +1727,7 @@ fn reports_ui_gallery_view_contract_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(&format!(
-            "security-worker-admission\tworker=ui gallery view\tpath={}",
-            root.display()
-        )),
-        "{stderr}"
-    );
+    assert_worker_admitted(&stderr, "ui gallery view", &root);
 
     assert!(stdout.starts_with("gallery-view\tsort=finder-name\tpreview=720x420"));
     assert!(stdout.contains("\ttotal=3\t"));
@@ -1810,13 +1768,7 @@ fn reports_ui_search_results_contract_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(&format!(
-            "security-worker-admission\tworker=ui search\tpath={}",
-            root.display()
-        )),
-        "{stderr}"
-    );
+    assert_worker_admitted(&stderr, "ui search", &root);
 
     assert!(stdout
         .starts_with("search-results\tquery=PLAN\tscope=this-mac\tgrouping=kind\trow-height=24px"));
@@ -1856,13 +1808,7 @@ fn ui_search_results_refuses_unreachable_volume_before_worker_from_binary() {
         stderr.contains("ui search volume access blocked: unreachable volume network"),
         "{stderr}"
     );
-    assert!(
-        !stderr.contains(&format!(
-            "security-worker-admission\tworker=ui search\tpath={}",
-            root.display()
-        )),
-        "{stderr}"
-    );
+    assert_worker_not_admitted(&stderr, "ui search", &root);
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -1895,20 +1841,8 @@ fn reports_ui_trash_view_contract_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(&format!(
-            "security-worker-admission\tworker=ui trash view\tpath={}",
-            root.display()
-        )),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains(&format!(
-            "security-worker-admission\tworker=ui trash metadata\tpath={}",
-            metadata.display()
-        )),
-        "{stderr}"
-    );
+    assert_worker_admitted(&stderr, "ui trash view", &root);
+    assert_worker_admitted(&stderr, "ui trash metadata", &metadata);
 
     assert!(stdout.starts_with("trash-view\tsort=deleted-newest\trow-height=24px"));
     assert!(stdout.contains("\ttotal=3\t"));

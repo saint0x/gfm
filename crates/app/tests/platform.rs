@@ -315,6 +315,42 @@ fn reports_security_worker_admission_from_binary() {
 }
 
 #[test]
+fn security_scope_classifies_relative_home_paths_from_binary() {
+    let root =
+        std::env::temp_dir().join(format!("gfm-security-relative-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let documents = root.join("Documents");
+    let protected = documents.join("Plan.md");
+    std::fs::create_dir_all(&documents).unwrap();
+    std::fs::write(&protected, "plan").unwrap();
+    let protected = std::fs::canonicalize(&protected).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &root)
+        .current_dir(&root)
+        .arg("security-scope")
+        .arg("./Documents/../Documents/Plan.md")
+        .arg("read")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.starts_with(&format!("security-scope\t{}", protected.display())),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tintent=read\tscope=documents\tprobe=granted\t"));
+    assert!(stdout.contains("\tmode=security-scoped-bookmark\taction=allow\t"));
+    assert!(stdout.contains("\tbookmark-required=true\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn security_worker_admission_refuses_unreachable_volume_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-security-worker-unreachable-volume-{}",
@@ -3381,10 +3417,11 @@ fn mark_evicted_fixture(path: impl AsRef<std::path::Path>) {
 }
 
 fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
+    let expected = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     assert!(
         stderr.contains(&format!(
             "security-worker-admission\tworker={worker}\tpath={}",
-            path.display()
+            expected.display()
         )),
         "{stderr}"
     );

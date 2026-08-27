@@ -5874,7 +5874,7 @@ fn ui_operation_conflict_resolve_writes_relative_store_on_visible_worker_from_bi
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_worker_admitted(&stderr, "ui operation conflict resolve", Path::new("."));
+    assert_worker_admitted(&stderr, "ui operation conflict resolve", &root);
     assert!(
         !stderr
             .contains("security-worker-admission\tworker=ui operation conflict resolve\tpath=\t"),
@@ -9917,11 +9917,11 @@ fn content_manifest_write_uses_cwd_write_probe_for_relative_manifest_from_binary
     );
     assert!(root.join("content.gfmmanifest").exists());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_worker_admitted(&stderr, "content manifest write", Path::new("."));
+    assert_worker_admitted(&stderr, "content manifest write", &root);
     assert_worker_admitted(
         &stderr,
         "content manifest write archive",
-        Path::new("content.gfmcontent"),
+        &root.join("content.gfmcontent"),
     );
     assert!(
         !stderr.contains("security-worker-admission\tworker=content manifest write\tpath=\t"),
@@ -13622,7 +13622,9 @@ fn unique_temp_path(prefix: &str, extension: &str) -> std::path::PathBuf {
         name.push('.');
         name.push_str(extension);
     }
-    std::env::temp_dir().join(name)
+    fs::canonicalize(std::env::temp_dir())
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join(name)
 }
 
 fn seed_stale_permission_state(state: &std::path::Path) {
@@ -13902,7 +13904,8 @@ fn write_tar_octal(field: &mut [u8], value: u64) {
 
 fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
     let expected_worker = format!("worker={worker}");
-    let expected_path = format!("path={}", path.display());
+    let expected = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let expected_path = format!("path={}", expected.display());
     assert!(
         stderr.lines().any(|line| {
             line.starts_with("security-worker-admission\t")

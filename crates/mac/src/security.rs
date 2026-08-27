@@ -1,7 +1,8 @@
 use gfm_types::{GfmError, Result};
+use std::ffi::OsString;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 mod bookmark;
 
@@ -185,7 +186,7 @@ pub struct SecurityWorkerAdmissionReport {
 
 impl SecurityScopedAccessReport {
     pub fn evaluate(path: impl AsRef<Path>, intent: AccessIntent) -> Self {
-        let path = path.as_ref().to_path_buf();
+        let path = absolute_access_path(path.as_ref());
         let scope = protected_scope(&path);
         let probe = probe_path(&path, intent);
         let can_read = matches!(probe, AccessProbeState::Granted) && read_intent(intent);
@@ -400,7 +401,73 @@ fn protected_scope_for_home(path: &Path, home: &Path) -> ProtectedScope {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|path| absolute_canonical_access_path(&path))
+}
+
+fn absolute_access_path(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    absolute_canonical_access_path(&absolute)
+}
+
+fn absolute_canonical_access_path(path: &Path) -> PathBuf {
+    let normalized = normalize_access_path(path);
+    canonicalize_existing_prefix(&normalized)
+}
+
+fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return normalize_access_path(&canonical);
+    }
+
+    let mut existing = path.to_path_buf();
+    let mut tail = Vec::<OsString>::new();
+    while !existing.as_os_str().is_empty() {
+        if let Ok(canonical) = fs::canonicalize(&existing) {
+            let mut rebuilt = normalize_access_path(&canonical);
+            for component in tail.iter().rev() {
+                rebuilt.push(component);
+            }
+            return normalize_access_path(&rebuilt);
+        }
+        let Some(name) = existing.file_name().map(OsString::from) else {
+            break;
+        };
+        tail.push(name);
+        if !existing.pop() {
+            break;
+        }
+    }
+
+    path.to_path_buf()
+}
+
+fn normalize_access_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir | Component::Normal(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
 }
 
 fn within(path: &Path, root: &Path) -> bool {
@@ -525,8 +592,10 @@ fn escape_field(value: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn plain_access_allows_unprotected_read() {
@@ -577,6 +646,40 @@ mod tests {
     }
 
     #[test]
+    fn relative_access_paths_are_absolutized_and_normalized_before_scope_checks() {
+        let _cwd = CWD_LOCK.lock().unwrap();
+        let root = temp_root("security-relative-access");
+        let home = root.join("home");
+        let documents = home.join("Documents");
+        let logical_path = documents.join("Plan.md");
+        fs::create_dir_all(&documents).unwrap();
+        fs::write(&logical_path, "plan").unwrap();
+        let home = fs::canonicalize(&home).unwrap();
+        let path = fs::canonicalize(&logical_path).unwrap();
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&home).unwrap();
+
+        let absolute = absolute_access_path(Path::new("./Documents/../Documents/Plan.md"));
+        let report = SecurityScopedAccessReport::evaluate(
+            "./Documents/../Documents/Plan.md",
+            AccessIntent::Read,
+        );
+        let canonical_path = fs::canonicalize(&path).unwrap();
+        let canonical_home = fs::canonicalize(&home).unwrap();
+
+        assert_eq!(absolute, canonical_path);
+        assert_eq!(
+            protected_scope_for_home(&absolute, &canonical_home),
+            ProtectedScope::Documents
+        );
+        assert_eq!(report.path, canonical_path);
+        assert_eq!(report.probe, AccessProbeState::Granted);
+
+        std::env::set_current_dir(previous).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn protected_preview_and_index_require_retained_bookmarks_when_accessible() {
         let home = temp_root("security-protected-preview-home");
         let documents = home.join("Documents");
@@ -610,6 +713,41 @@ mod tests {
         assert_eq!(report.action, SecurityDecisionAction::Deny);
         assert!(report.least_privilege);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_relative_access_paths_keep_protected_canonical_parent_scope() {
+        let _cwd = CWD_LOCK.lock().unwrap();
+        let root = temp_root("security-missing-relative-access");
+        let home = root.join("home");
+        let documents = home.join("Documents");
+        let path = documents.join("Project").join("Plan.md");
+        fs::create_dir_all(&documents).unwrap();
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&home).unwrap();
+
+        let absolute = absolute_access_path(Path::new("Documents/Project/Plan.md"));
+        let canonical_home = fs::canonicalize(&home).unwrap();
+
+        assert_eq!(
+            protected_scope_for_home(&absolute, &canonical_home),
+            ProtectedScope::Documents
+        );
+        assert_eq!(
+            absolute,
+            canonical_home
+                .join("Documents")
+                .join("Project")
+                .join("Plan.md")
+        );
+        assert_eq!(
+            probe_path(&absolute, AccessIntent::Read),
+            AccessProbeState::Missing
+        );
+        assert!(!path.exists());
+
+        std::env::set_current_dir(previous).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 
