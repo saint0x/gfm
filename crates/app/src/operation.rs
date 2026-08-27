@@ -419,20 +419,29 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     let _ = refresh_permission_state(PermissionRefreshAudience::Operations, label)?;
     let volume_report = operation_volume_report(&operation);
     let access_gate = operation_access_gate(&operation, &volume_report);
-    access_gate.check(&operation)?;
     let _journal_access = preflight_operation_journal_write(&journal)?;
     let _trash_metadata_access =
         retain_operation_trash_metadata_access(&operation, &trash_metadata)?;
-    let conflict_report = OperationConflictReport::evaluate(&operation, conflict);
-    if conflict_report.blocks_operation {
-        if let Some(store) = runtime_operation_conflict_store() {
-            store.append(&conflict_report)?;
-        }
-    }
     let volume_copy_policy = operation_volume_copy_policy_from_report(&operation, &volume_report);
     let volume = operation_volume(&operation);
     let entry = run_volume_task(volume, Priority::Interactive, label, move || {
-        let _security_scope = operation_security_accesses(&operation)?;
+        if access_gate.check(&operation).is_ok() {
+            let _security_scope = operation_security_accesses(&operation)?;
+            let conflict_report = OperationConflictReport::evaluate(&operation, conflict);
+            if conflict_report.blocks_operation {
+                if let Some(store) = runtime_operation_conflict_store() {
+                    store.append(&conflict_report)?;
+                }
+            }
+            let operator = Operator::new(
+                OperationContext::new(journal)
+                    .with_conflict(conflict)
+                    .with_trash_metadata_path(trash_metadata)
+                    .with_access_gate(access_gate)
+                    .with_volume_copy_policy(volume_copy_policy),
+            );
+            return operator.execute(operation);
+        }
         let operator = Operator::new(
             OperationContext::new(journal)
                 .with_conflict(conflict)
