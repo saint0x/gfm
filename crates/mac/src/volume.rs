@@ -1535,13 +1535,17 @@ fn topology_change_reason(
 }
 
 fn apfs_container_uuid(
-    _native: Option<&NativeVolumeDescription>,
+    native: Option<&NativeVolumeDescription>,
     _mount_table: Option<&NativeVolumeMountTableEntry>,
 ) -> Option<String> {
-    // DiskArbitration exposes volume and media UUIDs separately; neither is a
-    // proven APFS container UUID. Keep this field unknown until a native APFS
-    // container source is wired through the platform bridge.
-    None
+    let native = native.filter(|native| native.status == NativeVolumeStatus::Available)?;
+    if !native_has_apfs_evidence(native) {
+        return None;
+    }
+    native
+        .whole_disk_media_uuid
+        .clone()
+        .filter(|uuid| native.volume_uuid.as_ref() != Some(uuid))
 }
 
 fn apfs_volume_role(native: Option<&NativeVolumeDescription>) -> Option<ApfsVolumeRole> {
@@ -1555,6 +1559,19 @@ fn apfs_volume_role(native: Option<&NativeVolumeDescription>) -> Option<ApfsVolu
     .into_iter()
     .flatten()
     .find_map(parse_apfs_role)
+}
+
+fn native_has_apfs_evidence(native: &NativeVolumeDescription) -> bool {
+    [
+        native.volume_type.as_deref(),
+        native.volume_kind.as_deref(),
+        native.media_content.as_deref(),
+        native.media_type.as_deref(),
+        native.media_kind.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.to_ascii_lowercase().contains("apfs"))
 }
 
 fn parse_apfs_role(value: &str) -> Option<ApfsVolumeRole> {
@@ -2268,19 +2285,37 @@ mod tests {
     }
 
     #[test]
-    fn leaves_apfs_container_uuid_unknown_without_explicit_container_source() {
+    fn promotes_native_apfs_whole_disk_uuid_to_container_identity() {
         let native = native_description(|description| {
             description.status = NativeVolumeStatus::Available;
             description.volume_type = Some("apfs".to_string());
             description.media_content = Some("Apple_APFS_Role_Data".to_string());
-            description.media_uuid = Some("MEDIA-UUID".to_string());
+            description.volume_uuid = Some("APFS-VOLUME-UUID".to_string());
+            description.media_uuid = Some("APFS-MEDIA-UUID".to_string());
+            description.whole_disk_media_uuid = Some("APFS-CONTAINER-UUID".to_string());
         });
         let mount_table = mount_table_entry(|entry| {
             entry.filesystem_type = Some("apfs".to_string());
         });
 
-        assert_eq!(apfs_container_uuid(Some(&native), Some(&mount_table)), None);
+        assert_eq!(
+            apfs_container_uuid(Some(&native), Some(&mount_table)).as_deref(),
+            Some("APFS-CONTAINER-UUID")
+        );
         assert_eq!(apfs_volume_role(Some(&native)), Some(ApfsVolumeRole::Data));
+    }
+
+    #[test]
+    fn leaves_apfs_container_uuid_unknown_without_native_container_source() {
+        let native = native_description(|description| {
+            description.status = NativeVolumeStatus::Available;
+            description.volume_type = Some("apfs".to_string());
+            description.media_content = Some("Apple_APFS_Role_Data".to_string());
+            description.volume_uuid = Some("APFS-VOLUME-UUID".to_string());
+            description.media_uuid = Some("APFS-MEDIA-UUID".to_string());
+        });
+
+        assert_eq!(apfs_container_uuid(Some(&native), None), None);
     }
 
     #[test]
@@ -2289,6 +2324,7 @@ mod tests {
             description.status = NativeVolumeStatus::Unavailable;
             description.media_content = Some("Apple_APFS_Role_System".to_string());
             description.media_uuid = Some("APFS-CONTAINER-UUID".to_string());
+            description.whole_disk_media_uuid = Some("APFS-CONTAINER-UUID".to_string());
             description.reason = Some("DiskArbitration unavailable".to_string());
         });
 
@@ -3106,6 +3142,7 @@ mod tests {
             media_writable: None,
             media_type: None,
             media_uuid: None,
+            whole_disk_media_uuid: None,
             media_whole: None,
             media_encrypted: None,
             media_block_size_bytes: None,

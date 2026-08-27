@@ -67,6 +67,7 @@ extern "C" {
         name: *const libc::c_char,
     ) -> DADiskRef;
     fn DADiskCopyDescription(disk: DADiskRef) -> CFDictionaryRef;
+    fn DADiskCopyWholeDisk(disk: DADiskRef) -> DADiskRef;
     fn DADiskEject(
         disk: DADiskRef,
         options: u32,
@@ -206,6 +207,7 @@ pub struct NativeVolumeDescription {
     pub media_writable: Option<bool>,
     pub media_type: Option<String>,
     pub media_uuid: Option<String>,
+    pub whole_disk_media_uuid: Option<String>,
     pub media_whole: Option<bool>,
     pub media_encrypted: Option<bool>,
     pub media_block_size_bytes: Option<u64>,
@@ -553,6 +555,7 @@ fn volume_description_from_disk(disk: DADiskRef) -> NativeVolumeDescription {
         media_writable: bool_value(&description, unsafe { kDADiskDescriptionMediaWritableKey }),
         media_type: string_value(&description, unsafe { kDADiskDescriptionMediaTypeKey }),
         media_uuid: uuid_value(&description, unsafe { kDADiskDescriptionMediaUUIDKey }),
+        whole_disk_media_uuid: whole_disk_media_uuid(disk),
         media_whole: bool_value(&description, unsafe { kDADiskDescriptionMediaWholeKey }),
         media_encrypted: bool_value(&description, unsafe { kDADiskDescriptionMediaEncryptedKey }),
         media_block_size_bytes: u64_value(&description, unsafe {
@@ -1006,6 +1009,24 @@ fn uuid_value(
         .filter(|value| !value.is_empty())
 }
 
+fn whole_disk_media_uuid(disk: DADiskRef) -> Option<String> {
+    let whole_disk = unsafe { DADiskCopyWholeDisk(disk) };
+    if whole_disk.is_null() {
+        return None;
+    }
+    let description = unsafe { DADiskCopyDescription(whole_disk) };
+    unsafe {
+        CFRelease(whole_disk as CFTypeRef);
+    }
+    if description.is_null() {
+        return None;
+    }
+    let description = unsafe {
+        CFDictionary::<*const c_void, *const c_void>::wrap_under_create_rule(description)
+    };
+    uuid_value(&description, unsafe { kDADiskDescriptionMediaUUIDKey })
+}
+
 fn url_value(
     description: &CFDictionary<*const c_void, *const c_void>,
     key: CFStringRef,
@@ -1134,6 +1155,7 @@ fn unavailable_with_status(
         media_writable: None,
         media_type: None,
         media_uuid: None,
+        whole_disk_media_uuid: None,
         media_whole: None,
         media_encrypted: None,
         media_block_size_bytes: None,
