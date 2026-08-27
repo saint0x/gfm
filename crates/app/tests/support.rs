@@ -1130,6 +1130,14 @@ fn reports_progress_dialog_from_job_progress_store() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=ui progress store\tpath={}",
+            progress.display()
+        )),
+        "{stderr}"
+    );
 
     assert!(stdout.starts_with("dialog\tsurface=progress\tpresentation=progress-sheet"));
     assert!(stdout.contains("button\tpause\tPause\talternate\tenabled=false"));

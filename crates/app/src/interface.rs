@@ -148,8 +148,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "ui-progress-job-contract requires a job id",
             )?);
-            let _access = preflight_ui_progress_read(&path)?;
-            let snapshots = JobProgressStore::new(&path).read()?;
+            let snapshots = read_ui_progress_snapshots(&path)?;
             let snapshot = snapshots
                 .iter()
                 .find(|snapshot| snapshot.id == job_id)
@@ -964,8 +963,24 @@ fn read_directory_with_access(path: &Path, worker: &'static str) -> Result<Direc
     )
 }
 
-fn preflight_ui_progress_read(path: &Path) -> Result<crate::access::ScopedAccessGuard> {
-    crate::access::preflight_access_scope(path, AccessIntent::Read, "ui progress store")
+fn read_ui_progress_snapshots(path: &Path) -> Result<Vec<JobProgressSnapshot>> {
+    const WORKER: &str = "ui progress store";
+    crate::access::preflight_volume_access_scope(path, AccessIntent::Read, WORKER)?;
+    let volume = crate::detect_volume_id(path)
+        .ok()
+        .or_else(|| crate::parent_volume(path));
+    let path = path.to_path_buf();
+    crate::runtime::run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        WORKER,
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
+            cancellation.check()?;
+            JobProgressStore::new(&path).read()
+        },
+    )
 }
 
 fn preflight_ui_fileprovider_read(
@@ -981,9 +996,7 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
         .unwrap_or_default()
         .with_sidebar_volumes(native_sidebar_volumes());
     if let Some(store) = crate::runtime::runtime_progress_store() {
-        let _access = preflight_ui_progress_read(store.path())?;
-        let progress_surfaces = store
-            .restorable()?
+        let progress_surfaces = read_ui_progress_snapshots(store.path())?
             .iter()
             .map(operation_progress_contract)
             .collect();

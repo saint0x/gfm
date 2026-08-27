@@ -10117,6 +10117,13 @@ fn ui_progress_surfaces_refuse_unreachable_store_before_reading_from_binary() {
             stderr.contains("ui progress store volume access blocked: unreachable volume network"),
             "{stderr}"
         );
+        assert!(
+            !stderr.contains(&format!(
+                "security-worker-admission\tworker=ui progress store\tpath={}",
+                progress.display()
+            )),
+            "{stderr}"
+        );
     }
 
     fs::remove_dir_all(root).unwrap();
