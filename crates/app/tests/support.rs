@@ -1457,6 +1457,7 @@ fn reports_ui_icon_view_contract_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(stdout.starts_with("icon-view\tsort=finder-name\ticon=64px"));
     assert!(stdout.contains("\ttotal=2\t"));
@@ -1464,6 +1465,13 @@ fn reports_ui_icon_view_contract_from_binary() {
     assert!(stdout.contains("cell\t0\t"));
     assert!(stdout.contains("\tdir\t0x0\tFolder\t"));
     assert!(stdout.contains("\tfile\t112x0\tNote.txt\t"));
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=ui icon view\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -1534,6 +1542,14 @@ fn reports_ui_list_view_contract_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=ui list view\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
 
     assert!(stdout.starts_with("list-view\tsort=finder-name\trow-height=22px"));
     assert!(stdout.contains("\ttotal=2\t"));
@@ -1574,6 +1590,13 @@ fn ui_list_view_refuses_unreachable_network_volume_before_reading_from_binary() 
         stderr.contains("ui list view volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=ui list view\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -1600,6 +1623,21 @@ fn reports_ui_column_view_contract_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=ui column view\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=ui column child view\tpath={}",
+            root.join("Folder").display()
+        )),
+        "{stderr}"
+    );
 
     assert!(stdout.starts_with("column-view\tsort=finder-name\tcolumn-width=220px"));
     assert!(stdout.contains("\tcolumns=2\tpreview=true\t"));
@@ -1640,6 +1678,14 @@ fn reports_ui_gallery_view_contract_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=ui gallery view\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
 
     assert!(stdout.starts_with("gallery-view\tsort=finder-name\tpreview=720x420"));
     assert!(stdout.contains("\ttotal=3\t"));
@@ -1764,6 +1810,14 @@ fn reports_ui_trash_view_contract_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=ui trash view\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
 
     assert!(stdout.starts_with("trash-view\tsort=deleted-newest\trow-height=24px"));
     assert!(stdout.contains("\ttotal=3\t"));

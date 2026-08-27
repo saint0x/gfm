@@ -927,9 +927,23 @@ fn write_probe_existing_ancestor(path: &Path) -> PathBuf {
     candidate
 }
 
-fn read_directory_with_access(path: &PathBuf, worker: &str) -> Result<DirectoryPage> {
-    let _access = crate::access::preflight_access_scope(path, AccessIntent::Read, worker)?;
-    read_directory(path)
+fn read_directory_with_access(path: &Path, worker: &'static str) -> Result<DirectoryPage> {
+    crate::access::preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
+    let volume = crate::detect_volume_id(path)
+        .ok()
+        .or_else(|| crate::parent_volume(path));
+    let path = path.to_path_buf();
+    crate::runtime::run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        worker,
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, worker)?;
+            cancellation.check()?;
+            read_directory(&path)
+        },
+    )
 }
 
 fn preflight_ui_progress_read(path: &Path) -> Result<crate::access::ScopedAccessGuard> {
