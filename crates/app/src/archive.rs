@@ -371,15 +371,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let pressure = parse_required_scheduling_pressure(args, "sidecar repair")?;
             let sidecars = parse_sidecar_paths(args, "sidecar-recover-adaptive")?;
             let volume_records = records.clone();
+            let volume_quarantine = quarantine.clone();
+            let volume_sidecars = sidecars.clone();
             let outcome = run_scheduled_volume_task_cancellable_with_volume(
                 Priority::Background,
                 "sidecar repair",
                 pressure,
                 move || {
-                    preflight_volume_access_scope(
+                    preflight_sidecar_recovery_volumes(
                         &volume_records,
-                        AccessIntent::Read,
-                        "sidecar repair",
+                        &volume_sidecars,
+                        &volume_quarantine,
                     )?;
                     Ok(detect_volume_id(&volume_records)
                         .ok()
@@ -619,6 +621,27 @@ fn retain_sidecar_recovery_access(
         )?);
     }
     Ok(guards)
+}
+
+fn preflight_sidecar_recovery_volumes(
+    records: &Path,
+    sidecars: &SidecarPaths,
+    quarantine: &Path,
+) -> Result<()> {
+    preflight_volume_access_scope(records, AccessIntent::Read, "sidecar repair records")?;
+    preflight_volume_access_scope(
+        write_probe_path(quarantine),
+        AccessIntent::Write,
+        "sidecar repair quarantine",
+    )?;
+    for path in sidecar_paths(sidecars) {
+        preflight_volume_access_scope(
+            write_probe_path(path),
+            AccessIntent::Write,
+            "sidecar repair output",
+        )?;
+    }
+    Ok(())
 }
 
 fn sidecar_paths(sidecars: &SidecarPaths) -> impl Iterator<Item = &Path> {

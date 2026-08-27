@@ -4247,6 +4247,137 @@ fn deferred_sidecar_recover_adaptive_does_not_touch_unreachable_records_from_bin
 }
 
 #[test]
+fn adaptive_sidecar_recover_refuses_unreachable_outputs_before_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-recovery-output-root");
+    let offline = unique_temp_dir("gfm-cli-sidecar-recovery-output-unreachable");
+    let records = root.join("records.gfmidx");
+    let prefixes = offline.join("prefixes.gfmprefix");
+    let dictionary = root.join("dictionary.gfmdict");
+    let quarantine = root.join("quarantine");
+    fs::create_dir_all(&quarantine).unwrap();
+    fs::write(root.join("ProjectPlan.md"), "sidecar output").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&dictionary, "not-a-dictionary").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "sidecar-recover-adaptive",
+            records.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            "-",
+            dictionary.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("sidecar-recovery\t"), "{stdout}");
+    assert!(
+        stderr.contains("sidecar repair output volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "\tworker=sidecar repair records\tpath={}",
+            records.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!prefixes.exists());
+    assert_eq!(fs::read_to_string(&dictionary).unwrap(), "not-a-dictionary");
+    assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn adaptive_sidecar_recover_refuses_unreachable_quarantine_before_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-recovery-quarantine-root");
+    let offline = unique_temp_dir("gfm-cli-sidecar-recovery-quarantine-unreachable");
+    let records = root.join("records.gfmidx");
+    let prefixes = root.join("prefixes.gfmprefix");
+    let dictionary = root.join("dictionary.gfmdict");
+    let quarantine = offline.join("quarantine");
+    fs::write(root.join("ProjectPlan.md"), "sidecar quarantine").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&dictionary, "not-a-dictionary").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "sidecar-recover-adaptive",
+            records.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            "-",
+            dictionary.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("sidecar-recovery\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "sidecar repair quarantine volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "\tworker=sidecar repair records\tpath={}",
+            records.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!prefixes.exists());
+    assert_eq!(fs::read_to_string(&dictionary).unwrap(), "not-a-dictionary");
+    assert!(!quarantine.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn searches_with_scope_prefixes_from_binary() {
     let root = unique_temp_dir("gfm-cli-scope-root");
     fs::create_dir_all(root.join("Desktop")).unwrap();

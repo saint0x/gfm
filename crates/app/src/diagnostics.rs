@@ -75,11 +75,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         "index rebuild",
                         pressure,
                         move || {
-                            preflight_volume_access_scope(
-                                &volume_spec.root,
-                                AccessIntent::Index,
-                                "index rebuild",
-                            )?;
+                            preflight_rebuild_volumes(&volume_spec)?;
                             Ok(detect_volume_id(&volume_spec.root)
                                 .ok()
                                 .or_else(|| parent_volume(&volume_spec.records_path)))
@@ -189,11 +185,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         "persistent index repair",
                         pressure,
                         move || {
-                            preflight_volume_access_scope(
-                                &volume_spec.root,
-                                AccessIntent::Index,
-                                "persistent index repair",
-                            )?;
+                            preflight_recovery_volumes(&volume_spec)?;
                             Ok(detect_volume_id(&volume_spec.root)
                                 .ok()
                                 .or_else(|| parent_volume(&volume_spec.records_path)))
@@ -310,6 +302,23 @@ fn retain_rebuild_access(spec: &RebuildSpec) -> Result<Vec<ScopedAccessGuard>> {
     Ok(guards)
 }
 
+fn preflight_rebuild_volumes(spec: &RebuildSpec) -> Result<()> {
+    preflight_volume_access_scope(&spec.root, AccessIntent::Index, "index rebuild root")?;
+    preflight_volume_access_scope(
+        write_probe_path(&spec.records_path),
+        AccessIntent::Write,
+        "index rebuild records",
+    )?;
+    if let Some(content_path) = &spec.content_path {
+        preflight_volume_access_scope(
+            write_probe_path(content_path),
+            AccessIntent::Write,
+            "index rebuild content",
+        )?;
+    }
+    Ok(())
+}
+
 fn retain_recovery_plan_access(
     spec: &PersistentIndexRecoverySpec,
 ) -> Result<Vec<ScopedAccessGuard>> {
@@ -344,6 +353,30 @@ fn retain_recovery_access(spec: &PersistentIndexRecoverySpec) -> Result<Vec<Scop
         )?,
     ];
     Ok(guards)
+}
+
+fn preflight_recovery_volumes(spec: &PersistentIndexRecoverySpec) -> Result<()> {
+    preflight_volume_access_scope(
+        &spec.root,
+        AccessIntent::Index,
+        "persistent index repair root",
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(&spec.records_path),
+        AccessIntent::Write,
+        "persistent index repair records",
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(&spec.state_path),
+        AccessIntent::Write,
+        "persistent index repair state",
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(&spec.quarantine_dir),
+        AccessIntent::Write,
+        "persistent index repair quarantine",
+    )?;
+    Ok(())
 }
 
 fn write_probe_path(path: &Path) -> &Path {
