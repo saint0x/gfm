@@ -168,7 +168,10 @@ impl PreviewSchedulingPolicy {
             self.cancel_offscreen = true;
         } else if matches!(pressure.io, JobIoPressure::Elevated)
             || matches!(pressure.thermal, JobThermalState::Serious)
-            || matches!(pressure.battery, JobBatteryState::LowPower)
+            || matches!(
+                pressure.battery,
+                JobBatteryState::Battery | JobBatteryState::LowPower
+            )
             || matches!(pressure.user_activity, JobUserActivity::Active)
         {
             self.max_prefetch = throttle_limit(self.max_prefetch);
@@ -571,6 +574,38 @@ mod tests {
                 ..
             }
         ));
+        assert!(policy.cancel_offscreen);
+    }
+
+    #[test]
+    fn pressure_adaptation_throttles_prefetch_on_battery_power() {
+        let policy = PreviewSchedulingPolicy {
+            max_visible: 4,
+            max_prefetch: 4,
+            cancel_offscreen: false,
+        }
+        .adapted_for_pressure(SchedulingPressure {
+            battery: JobBatteryState::Battery,
+            ..SchedulingPressure::default()
+        });
+        let mut scheduler = PreviewScheduler::new(policy).unwrap();
+        let decisions = scheduler.schedule(
+            Viewport::new(Rect::new(0, 0, 100, 100), 100),
+            vec![
+                task(1, Rect::new(0, 150, 20, 20)),
+                task(2, Rect::new(20, 150, 20, 20)),
+                task(3, Rect::new(40, 150, 20, 20)),
+            ],
+        );
+
+        assert_eq!(decisions.len(), 2);
+        assert!(decisions.iter().all(|decision| matches!(
+            decision,
+            PreviewTaskDecision::Scheduled {
+                priority: PreviewPriority::Prefetch,
+                ..
+            }
+        )));
         assert!(policy.cancel_offscreen);
     }
 

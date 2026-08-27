@@ -1515,6 +1515,45 @@ fn adaptive_thumbnail_generation_defers_under_saturated_pressure_from_binary() {
 }
 
 #[test]
+fn adaptive_thumbnail_generation_throttles_prefetch_on_battery_from_binary() {
+    let path = std::env::temp_dir().join(format!(
+        "gfm-thumbnail-battery-adaptive-{}.png",
+        std::process::id()
+    ));
+    std::fs::write(&path, b"png").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "thumbnail-generation-adaptive",
+            path.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "battery",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("thumbnail-generation\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tschedule=scheduled:visible\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\taction=Throttle\tdeferred=false\n"),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn cancelled_thumbnail_generation_stops_before_planning_from_binary() {
     let path =
         std::env::temp_dir().join(format!("gfm-thumbnail-cancel-{}.png", std::process::id()));

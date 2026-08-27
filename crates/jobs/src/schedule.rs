@@ -109,7 +109,10 @@ impl SchedulingPressure {
         }
         if matches!(self.io, JobIoPressure::Elevated)
             || matches!(self.thermal, JobThermalState::Serious)
-            || matches!(self.battery, JobBatteryState::LowPower)
+            || matches!(
+                self.battery,
+                JobBatteryState::Battery | JobBatteryState::LowPower
+            )
             || matches!(self.user_activity, JobUserActivity::Active)
         {
             return SchedulingAction::Throttle;

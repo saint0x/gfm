@@ -395,6 +395,20 @@ fn scheduling_pressure_throttles_background_under_active_user_load() {
 }
 
 #[test]
+fn scheduling_pressure_throttles_background_on_battery_power() {
+    let pressure = SchedulingPressure {
+        battery: JobBatteryState::Battery,
+        ..SchedulingPressure::default()
+    };
+
+    let decision = pressure.decide(Priority::Background, 8, 4);
+
+    assert_eq!(decision.action, SchedulingAction::Throttle);
+    assert_eq!(decision.worker_threads, 4);
+    assert_eq!(decision.volume_policy.default_limit(), 2);
+}
+
+#[test]
 fn scheduling_pressure_preserves_visible_work_under_host_pressure() {
     let pressure = SchedulingPressure {
         io: JobIoPressure::Saturated,

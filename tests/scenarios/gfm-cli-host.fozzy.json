@@ -2972,6 +2972,20 @@
     {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "thumbnail-generation-adaptive",
+        "tmp/gfm-fozzy-runtime-thumbnail.png",
+        "nominal",
+        "nominal",
+        "battery",
+        "idle"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "env": {
         "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-offline-volume/runtime.gfmprogress",
         "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-offline-volume/runtime.gfmjobs"
