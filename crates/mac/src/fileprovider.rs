@@ -1689,7 +1689,7 @@ fn materialization_source_for_state(
         CloudMaterializationSource::NativeFileProviderIdentityUnsupported
     } else if !hints.xattrs.is_empty() {
         CloudMaterializationSource::XattrFallback
-    } else if hints.source.contains("fixture-name") || hints.source.contains("icloud-extension") {
+    } else if path_only_provider_hint(&hints.source) {
         CloudMaterializationSource::PathFallback
     } else if hints.source == "filesystem" {
         CloudMaterializationSource::Filesystem
@@ -2182,6 +2182,35 @@ mod tests {
         );
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reports_icloud_path_only_hint_as_path_fallback_without_native_evidence() {
+        let path =
+            PathBuf::from("/Users/test/Library/Mobile Documents/com~apple~CloudDocs/Report.md");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "icloud-path".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::PathFallback
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("unknown-provider-state")
+        );
+        assert_eq!(report.commands.download, CloudCommandState::Disabled);
+        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
     }
 
     #[test]
