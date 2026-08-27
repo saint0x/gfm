@@ -432,6 +432,21 @@ pub struct OperationConflictContract {
     pub available_policies: Vec<String>,
     pub blocks_operation: bool,
     pub reason: String,
+    pub initial_focus: String,
+    pub default_action: String,
+    pub cancel_action: String,
+    pub keyboard_model: String,
+    pub review_rows: Vec<OperationConflictReviewRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationConflictReviewRow {
+    pub ordinal: usize,
+    pub operation: String,
+    pub target: String,
+    pub target_kind: String,
+    pub selected_policy: String,
+    pub reason: String,
 }
 
 impl OperationConflictContract {
@@ -455,6 +470,40 @@ impl OperationConflictContract {
         if !input.blocks_operation {
             dialog.blocks_parent_window = false;
         }
+        let default_action = dialog
+            .buttons
+            .iter()
+            .find(|button| button.role == DialogButtonRole::Default && button.enabled)
+            .map(|button| button.id)
+            .or_else(|| {
+                dialog
+                    .buttons
+                    .iter()
+                    .find(|button| button.enabled)
+                    .map(|button| button.id)
+            })
+            .unwrap_or("-")
+            .to_string();
+        let cancel_action = dialog
+            .buttons
+            .iter()
+            .find(|button| button.role == DialogButtonRole::Cancel && button.enabled)
+            .map(|button| button.id)
+            .unwrap_or("-")
+            .to_string();
+        let initial_focus = if input.blocks_operation {
+            default_action.clone()
+        } else {
+            "-".to_string()
+        };
+        let review_row = OperationConflictReviewRow {
+            ordinal: 0,
+            operation: input.operation.clone(),
+            target: input.target.clone(),
+            target_kind: input.target_kind.clone(),
+            selected_policy: input.selected_policy.clone(),
+            reason: input.reason.clone(),
+        };
 
         Self {
             dialog,
@@ -465,12 +514,18 @@ impl OperationConflictContract {
             available_policies: input.available_policies,
             blocks_operation: input.blocks_operation,
             reason: input.reason,
+            initial_focus,
+            default_action,
+            cancel_action,
+            keyboard_model: "finder-conflict-sheet-return-default-escape-cancel-tab-cycle"
+                .to_string(),
+            review_rows: vec![review_row],
         }
     }
 
     pub fn as_tsv(&self) -> String {
-        format!(
-            "{}\noperation-conflict-ui\toperation={}\ttarget={}\tkind={}\tpolicy={}\tavailable={}\tblocks-operation={}\treason={}",
+        let mut lines = vec![format!(
+            "{}\noperation-conflict-ui\toperation={}\ttarget={}\tkind={}\tpolicy={}\tavailable={}\tblocks-operation={}\tfocus={}\tdefault-action={}\tcancel-action={}\tkeyboard={}\treason={}",
             self.dialog.as_tsv(),
             escape_tsv(&self.operation),
             escape_tsv(&self.target),
@@ -478,8 +533,24 @@ impl OperationConflictContract {
             escape_tsv(&self.selected_policy),
             self.available_policies.join(","),
             self.blocks_operation,
+            escape_tsv(&self.initial_focus),
+            escape_tsv(&self.default_action),
+            escape_tsv(&self.cancel_action),
+            escape_tsv(&self.keyboard_model),
             escape_tsv(&self.reason)
-        )
+        )];
+        lines.extend(self.review_rows.iter().map(|row| {
+            format!(
+                "operation-conflict-row\t{}\toperation={}\ttarget={}\tkind={}\tpolicy={}\treason={}",
+                row.ordinal,
+                escape_tsv(&row.operation),
+                escape_tsv(&row.target),
+                escape_tsv(&row.target_kind),
+                escape_tsv(&row.selected_policy),
+                escape_tsv(&row.reason)
+            )
+        }));
+        lines.join("\n")
     }
 }
 
@@ -1088,9 +1159,38 @@ mod tests {
             .buttons
             .iter()
             .any(|button| button.id == "stop" && button.enabled));
+        assert_eq!(contract.initial_focus, "keep-both");
+        assert_eq!(contract.default_action, "keep-both");
+        assert_eq!(contract.cancel_action, "stop");
+        assert_eq!(contract.review_rows.len(), 1);
         assert!(contract
             .as_tsv()
             .contains("\noperation-conflict-ui\toperation=copy\ttarget=/tmp/target\tkind=file\t"));
+        assert!(contract.as_tsv().contains(
+            "\noperation-conflict-row\t0\toperation=copy\ttarget=/tmp/target\tkind=file\t"
+        ));
+    }
+
+    #[test]
+    fn operation_conflict_contract_reports_no_focus_when_not_blocking() {
+        let contract = OperationConflictContract::from_input(OperationConflictInput::new(
+            "copy",
+            "/tmp/new-target",
+            "none",
+            "fail",
+            Vec::new(),
+            false,
+            "target-available",
+        ));
+
+        assert!(!contract.dialog.blocks_parent_window);
+        assert!(contract.dialog.buttons.iter().all(|button| !button.enabled));
+        assert_eq!(contract.initial_focus, "-");
+        assert_eq!(contract.default_action, "-");
+        assert_eq!(contract.cancel_action, "-");
+        assert!(contract
+            .as_tsv()
+            .contains("\tfocus=-\tdefault-action=-\tcancel-action=-\t"));
     }
 
     #[test]

@@ -352,6 +352,16 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
     );
     assert!(
         stdout.contains(
+            "\tfocus=keep-both\tdefault-action=keep-both\tcancel-action=stop\tkeyboard=finder-conflict-sheet-return-default-escape-cancel-tab-cycle\t"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\noperation-conflict-row\t0\toperation=copy\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
             "\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\t"
         ),
         "{stdout}"
@@ -900,6 +910,8 @@ fn reports_operation_conflict_sheet_from_existing_destination() {
     assert!(stdout.contains("button\tkeep-both\tKeep Both\tdefault\tenabled=true"));
     assert!(stdout.contains("button\tmerge\tMerge\talternate\tenabled=false"));
     assert!(stdout.contains("\noperation-conflict-ui\toperation=copy\t"));
+    assert!(stdout.contains("\tfocus=keep-both\tdefault-action=keep-both\tcancel-action=stop\t"));
+    assert!(stdout.contains("\noperation-conflict-row\t0\toperation=copy\t"));
     assert!(!stdout.contains("\texists=true"));
     assert!(stdout.contains(
         "\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\t"
@@ -935,6 +947,8 @@ fn reports_directory_operation_conflict_with_merge_resolution() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.contains("button\tmerge\tMerge\talternate\tenabled=true"));
+    assert!(stdout.contains("\tfocus=keep-both\tdefault-action=keep-both\tcancel-action=stop\t"));
+    assert!(stdout.contains("\noperation-conflict-row\t0\toperation=move\t"));
     assert!(stdout.contains("\tkind=directory\tpolicy=fail\tavailable=replace,keep-both,merge,skip\tblocks-operation=true\t"));
 
     let _ = std::fs::remove_dir_all(root);

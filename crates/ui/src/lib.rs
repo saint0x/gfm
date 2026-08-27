@@ -619,6 +619,9 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("button\tmerge\tMerge\talternate\tenabled=false"));
+        assert!(contract.as_tsv().contains(
+            "\noperation-conflict-row\t0\toperation=copy\ttarget=/tmp/target\tkind=file\t"
+        ));
     }
 
     #[test]
