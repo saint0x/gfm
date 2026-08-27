@@ -28,7 +28,7 @@ use gfm_ui::{
 };
 use std::collections::BTreeMap;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
@@ -127,6 +127,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "ui-progress-job-contract requires a job id",
             )?);
+            let _access = preflight_ui_progress_read(&path)?;
             let snapshots = JobProgressStore::new(&path).read()?;
             let snapshot = snapshots
                 .iter()
@@ -685,12 +686,17 @@ fn read_directory_with_access(path: &PathBuf, worker: &str) -> Result<DirectoryP
     read_directory(path)
 }
 
+fn preflight_ui_progress_read(path: &Path) -> Result<crate::access::ScopedAccessGuard> {
+    crate::access::preflight_access_scope(path, AccessIntent::Read, "ui progress store")
+}
+
 fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
     let mut spec = path
         .map(AppLaunchSpec::new)
         .unwrap_or_default()
         .with_sidebar_volumes(native_sidebar_volumes());
     if let Some(store) = crate::runtime::runtime_progress_store() {
+        let _access = preflight_ui_progress_read(store.path())?;
         let progress_surfaces = store
             .restorable()?
             .iter()

@@ -3092,6 +3092,11 @@
       "data": "operation-conflict\toperation=copy\tsource=tmp/gfm-fozzy-operation-conflict-offline-source.txt\ttarget=tmp/gfm-fozzy-operation-conflict-offline-target.txt\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/ui-progress.gfmprogress",
+      "data": "gfm-job-progress-v1\nprogress\t2\tvisible\tvisible\tcopy file\t-\trunning\t42\t100\tcopying\t123\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -3099,6 +3104,29 @@
         "tmp/gfm-fozzy-offline-volume/apply-operation-conflicts.tsv",
         "tmp/gfm-fozzy-operation-conflict-offline-target.txt",
         "keep-both"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-progress-job-contract",
+        "tmp/gfm-fozzy-offline-volume/ui-progress.gfmprogress",
+        "2"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-offline-volume/ui-progress.gfmprogress"
+      },
+      "args": [
+        "ui-contract"
       ],
       "exit_code": 1,
       "times": 1
