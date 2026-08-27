@@ -115,6 +115,7 @@ pub struct PermissionAccessContract {
     pub bookmark_access: bool,
     pub refresh_on_permission_change: bool,
     pub prompt_kind: PermissionPromptKind,
+    pub prompt_action: String,
     pub reason: String,
 }
 
@@ -132,7 +133,7 @@ impl PermissionAccessContract {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "permission-access\tpath={}\tintent={}\tscope={}\tprobe={}\tmode={}\taccess-action={}\tworker-action={}\tcan-touch-filesystem={}\tbookmark-required={}\tbookmark-access={}\trefresh-on-permission-change={}\tprompt-kind={}\treason={}",
+            "permission-access\tpath={}\tintent={}\tscope={}\tprobe={}\tmode={}\taccess-action={}\tworker-action={}\tcan-touch-filesystem={}\tbookmark-required={}\tbookmark-access={}\trefresh-on-permission-change={}\tprompt-kind={}\tprompt-action={}\treason={}",
             escape_contract_field(&self.path),
             escape_contract_field(&self.intent),
             escape_contract_field(&self.scope),
@@ -145,6 +146,7 @@ impl PermissionAccessContract {
             self.bookmark_access,
             self.refresh_on_permission_change,
             self.prompt_kind.as_str(),
+            escape_contract_field(&self.prompt_action),
             escape_contract_field(&self.reason)
         )
     }
@@ -682,6 +684,7 @@ mod tests {
             bookmark_access: false,
             refresh_on_permission_change: false,
             prompt_kind: PermissionPromptKind::BookmarkAcquisition,
+            prompt_action: "choose-location".to_string(),
             reason: "window initial path may start after retained security-scoped bookmark access"
                 .to_string(),
         }
@@ -703,6 +706,9 @@ mod tests {
         assert!(contract.as_tsv().contains(
             "\tcan-touch-filesystem=true\tbookmark-required=true\tbookmark-access=true\t"
         ));
+        assert!(contract
+            .as_tsv()
+            .contains("\tprompt-kind=bookmark-acquisition\tprompt-action=choose-location\t"));
     }
 
     #[test]
@@ -721,6 +727,7 @@ mod tests {
             bookmark_access: false,
             refresh_on_permission_change: false,
             prompt_kind: PermissionPromptKind::Blocked,
+            prompt_action: "blocked-missing-path".to_string(),
             reason: "path is not present on this host".to_string(),
         });
 

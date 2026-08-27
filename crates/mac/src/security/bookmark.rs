@@ -566,14 +566,20 @@ fn parse_bookmark_record(line: &str) -> std::result::Result<SecurityScopedBookma
 }
 
 fn same_path_identity(
-    requested_identity: &PathBuf,
+    requested_identity: &Path,
     record_path: &Path,
     resolved_path: Option<&Path>,
 ) -> bool {
-    path_identity(record_path) == *requested_identity
-        || resolved_path
-            .map(path_identity)
-            .is_some_and(|resolved_identity| resolved_identity == *requested_identity)
+    bookmark_path_covers_requested(record_path, requested_identity)
+        || resolved_path.is_some_and(|resolved_path| {
+            bookmark_path_covers_requested(resolved_path, requested_identity)
+        })
+}
+
+fn bookmark_path_covers_requested(bookmark_path: &Path, requested_identity: &Path) -> bool {
+    let bookmark_identity = path_identity(bookmark_path);
+    bookmark_identity == requested_identity
+        || bookmark_path.is_dir() && requested_identity.starts_with(&bookmark_identity)
 }
 
 fn path_identity(path: &Path) -> PathBuf {
@@ -832,6 +838,41 @@ mod tests {
                 .and_then(|path| path.canonicalize().ok()),
             Some(path.canonicalize().unwrap())
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn directory_bookmark_covers_descendant_paths_only() {
+        let root = temp_root("security-bookmark-descendant");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        let documents = root.join("Documents");
+        let child = documents.join("Project").join("Plan.md");
+        let sibling = root.join("Downloads").join("Plan.md");
+        fs::create_dir_all(child.parent().unwrap()).unwrap();
+        fs::create_dir_all(sibling.parent().unwrap()).unwrap();
+        fs::write(&child, "plan").unwrap();
+        fs::write(&sibling, "download").unwrap();
+        store
+            .upsert(SecurityScopedBookmark::create(&documents, true).unwrap())
+            .unwrap();
+
+        let child_lookup = store.resolve_for_path(&child, true, false, true).unwrap();
+        let sibling_lookup = store.resolve_for_path(&sibling, true, false, true).unwrap();
+
+        assert!(child_lookup.resolution.is_some());
+        assert_eq!(
+            child_lookup
+                .resolution
+                .as_ref()
+                .unwrap()
+                .report
+                .resolved_path
+                .as_ref()
+                .and_then(|path| path.canonicalize().ok()),
+            Some(documents.canonicalize().unwrap())
+        );
+        assert!(sibling_lookup.resolution.is_none());
 
         fs::remove_dir_all(root).unwrap();
     }

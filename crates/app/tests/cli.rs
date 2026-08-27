@@ -862,6 +862,78 @@ fn quicklook_preflight_retains_security_scoped_bookmark_from_binary() {
 }
 
 #[test]
+fn quicklook_preflight_accepts_retained_parent_folder_bookmark_from_binary() {
+    let root = unique_temp_dir("gfm-cli-quicklook-parent-bookmark");
+    let home = root.join("home");
+    let documents = home.join("Documents");
+    let protected = documents.join("Project").join("Plan.pdf");
+    let bookmarks = root.join("bookmarks.tsv");
+    fs::create_dir_all(protected.parent().unwrap()).unwrap();
+    fs::write(&protected, "%PDF-1.7\nalpha protected preview").unwrap();
+
+    let create = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .args([
+            "security-bookmark-create",
+            documents.to_str().unwrap(),
+            "preview",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let create_stderr = String::from_utf8_lossy(&create.stderr);
+    assert_worker_admitted(&create_stderr, "security bookmark store", &root);
+    let create_stdout = String::from_utf8(create.stdout).unwrap();
+    let canonical_documents = fs::canonicalize(&documents).unwrap();
+    assert!(
+        create_stdout.contains("\tstatus=created\t"),
+        "{create_stdout}"
+    );
+    assert!(
+        create_stdout.contains(&format!(
+            "security-bookmark\t{}",
+            canonical_documents.display()
+        )),
+        "{create_stdout}"
+    );
+
+    let quicklook = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .args(["quicklook-session", protected.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        quicklook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&quicklook.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&quicklook.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert!(stderr.contains("\tscope=documents\t"), "{stderr}");
+    assert!(stderr.contains("\tbookmark-required=true\t"), "{stderr}");
+    assert!(
+        stderr.contains("security-scope-access\t")
+            && stderr.contains("\tstatus=resolved\t")
+            && stderr.contains("\taccess-started=true\t"),
+        "{stderr}"
+    );
+    let stdout = String::from_utf8(quicklook.stdout).unwrap();
+    assert!(
+        stdout.starts_with("quicklook-session\tquick-look\t"),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn thumbnail_preflight_retains_security_scoped_bookmark_from_binary() {
     let root = unique_temp_dir("gfm-cli-thumbnail-bookmark");
     let home = root.join("home");

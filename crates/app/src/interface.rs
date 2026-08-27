@@ -5,11 +5,11 @@ use gfm_fs::{
 use gfm_index::Indexer;
 use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore, Priority};
 use gfm_mac::{
-    current_permission_onboarding, AccessIntent, CloudCommandState, CloudStorageState,
-    FileProviderConflictReport, FileProviderInvalidationReport, FileProviderObservedInvalidation,
-    FileProviderStateReport, FileProviderStateSnapshot, MountState, NativeVolumeStatus,
-    SecurityAccessMode, SecurityDecisionAction, SecurityWorkerAction,
-    SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport,
+    current_permission_onboarding, AccessIntent, AccessProbeState, CloudCommandState,
+    CloudStorageState, FileProviderConflictReport, FileProviderInvalidationReport,
+    FileProviderObservedInvalidation, FileProviderStateReport, FileProviderStateSnapshot,
+    MountState, NativeVolumeStatus, SecurityAccessMode, SecurityDecisionAction,
+    SecurityWorkerAction, SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport,
     VolumeEventInvalidationReport, VolumeEventKind, VolumeKind,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
@@ -622,6 +622,7 @@ fn permission_access_contract(
         bookmark_access: false,
         refresh_on_permission_change: false,
         prompt_kind: permission_prompt_kind_for_admission(admission),
+        prompt_action: permission_prompt_action_for_admission(admission).to_string(),
         reason: admission.reason.clone(),
     }
     .with_bookmark_state(
@@ -1263,6 +1264,42 @@ fn permission_prompt_kind_for_admission(
         return PermissionPromptKind::Blocked;
     }
     PermissionPromptKind::General
+}
+
+fn permission_prompt_action_for_admission(
+    admission: &SecurityWorkerAdmissionReport,
+) -> &'static str {
+    if matches!(admission.access.mode, SecurityAccessMode::FullDiskAccess)
+        || matches!(admission.access.action, SecurityDecisionAction::Prompt)
+            && admission.access.scope == gfm_mac::ProtectedScope::FullDiskAccess
+    {
+        return "open-settings";
+    }
+    if matches!(admission.worker_action, SecurityWorkerAction::MetadataOnly) {
+        return "continue-metadata-only";
+    }
+    if admission.access.bookmark_required
+        && (admission.needs_bookmark_access
+            || matches!(admission.access.action, SecurityDecisionAction::Prompt))
+    {
+        return "choose-location";
+    }
+    if admission.reason.contains("volume access blocked") {
+        return "blocked-volume";
+    }
+    if matches!(admission.access.probe, AccessProbeState::Missing) {
+        return "blocked-missing-path";
+    }
+    if matches!(admission.access.probe, AccessProbeState::Denied) {
+        return "blocked-denied-path";
+    }
+    if matches!(
+        admission.worker_action,
+        SecurityWorkerAction::Prompt | SecurityWorkerAction::Deny
+    ) {
+        return "blocked-unavailable";
+    }
+    "none"
 }
 
 fn permission_access_requires_surface(access: &PermissionAccessContract) -> bool {
