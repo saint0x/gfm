@@ -8,8 +8,8 @@ use core_foundation_sys::array::CFArrayRef;
 use core_foundation_sys::base::{CFAllocatorRef, CFGetTypeID, CFRelease, CFTypeRef};
 use core_foundation_sys::dictionary::{CFDictionaryGetValueIfPresent, CFDictionaryRef};
 use core_foundation_sys::runloop::{
-    kCFRunLoopDefaultMode, CFRunLoopGetCurrent, CFRunLoopRef, CFRunLoopRun, CFRunLoopRunInMode,
-    CFRunLoopStop, CFRunLoopWakeUp,
+    kCFRunLoopDefaultMode, CFRunLoopGetCurrent, CFRunLoopRef, CFRunLoopRunInMode, CFRunLoopStop,
+    CFRunLoopWakeUp,
 };
 use core_foundation_sys::string::CFStringRef;
 use core_foundation_sys::url::CFURLRef;
@@ -20,6 +20,10 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread::{self, JoinHandle};
 
 type DASessionRef = *const c_void;
@@ -251,6 +255,7 @@ pub struct NativeVolumeEvent {
 pub struct NativeVolumeEventStream {
     receiver: Receiver<NativeVolumeEvent>,
     run_loop: Option<usize>,
+    stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -331,6 +336,8 @@ impl NativeVolumeEventStream {
     pub fn start() -> Self {
         let (event_tx, event_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
         let thread = thread::spawn(move || {
             let session = unsafe { DASessionCreate(kCFAllocatorDefault) };
             if session.is_null() {
@@ -371,7 +378,9 @@ impl NativeVolumeEventStream {
             }
             let _ = ready_tx.send(Some(run_loop as usize));
             unsafe {
-                CFRunLoopRun();
+                while !thread_stop.load(Ordering::Acquire) {
+                    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.25, 1);
+                }
                 DASessionUnscheduleFromRunLoop(session, run_loop, kCFRunLoopDefaultMode);
                 CFRelease(session as CFTypeRef);
                 drop(Box::from_raw(context));
@@ -382,6 +391,7 @@ impl NativeVolumeEventStream {
         Self {
             receiver: event_rx,
             run_loop,
+            stop,
             thread: Some(thread),
         }
     }
@@ -397,6 +407,7 @@ impl NativeVolumeEventStream {
 
 impl Drop for NativeVolumeEventStream {
     fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
         if let Some(run_loop) = self.run_loop.take() {
             unsafe {
                 let run_loop = run_loop as CFRunLoopRef;
