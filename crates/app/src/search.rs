@@ -1,4 +1,4 @@
-use crate::access::preflight_access_scope;
+use crate::access::{preflight_access_scope, ScopedAccessGuard};
 use crate::content::run_content_search;
 use crate::extract::extraction_budget_profile;
 use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, required_string};
@@ -561,12 +561,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "content-ids" => {
             let content = required_path(args.next(), "content-ids requires a content path")?;
             let term = required_string(args.next(), "content-ids requires a term")?;
+            let _access = preflight_content_archive_access(&content, "content ids")?;
             let mut archive = ContentArchive::open(content)?;
             print_file_ids(archive.ids_for_term(&term)?);
         }
         "content-ids-mmap" => {
             let content = required_path(args.next(), "content-ids-mmap requires a content path")?;
             let term = required_string(args.next(), "content-ids-mmap requires a term")?;
+            let _access = preflight_content_archive_access(&content, "content ids mmap")?;
             let archive = MmapContentArchive::open(content)?;
             print_file_ids(archive.ids_for_term(&term)?);
         }
@@ -578,6 +580,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-ids-mmap-set requires at least one content archive".to_string(),
                 ));
             }
+            let _access =
+                preflight_content_archives_access(&content_paths, "content ids mmap set")?;
             let archive = MmapContentSet::open(&content_paths)?;
             print_file_ids(archive.ids_for_term(&term)?);
         }
@@ -587,6 +591,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "content-ids-mmap-manifest requires a manifest path",
             )?;
             let term = required_string(args.next(), "content-ids-mmap-manifest requires a term")?;
+            let _access = preflight_content_archive_access(&manifest, "content ids mmap manifest")?;
             let archive = MmapContentSet::open_manifest(manifest)?;
             print_file_ids(archive.ids_for_term(&term)?);
         }
@@ -596,11 +601,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let term = required_string(args.next(), "content-id-block-mmap requires a term")?;
             let block_index =
                 parse_usize_arg(args.next(), "content-id-block-mmap requires a block index")?;
+            let _access = preflight_content_archive_access(&content, "content id block mmap")?;
             let archive = MmapContentArchive::open(content)?;
             print_file_ids(archive.id_block_for_term(&term, block_index)?);
         }
         "content-verify" => {
             let content = required_path(args.next(), "content-verify requires a content path")?;
+            let _access = preflight_content_archive_access(&content, "content verify")?;
             let archive = MmapContentArchive::open(content)?;
             println!(
                 "content-verify\tterms={}\tbytes={}\tchecksum={}",
@@ -755,6 +762,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn preflight_content_archive_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(path, AccessIntent::Read, worker)
+}
+
+fn preflight_content_archives_access(
+    paths: &[PathBuf],
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    paths
+        .iter()
+        .map(|path| preflight_content_archive_access(path, worker))
+        .collect()
 }
 
 fn parse_metadata_field(value: &str, name: &str) -> Result<MetadataField> {

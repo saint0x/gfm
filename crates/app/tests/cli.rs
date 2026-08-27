@@ -5452,6 +5452,31 @@ fn resolves_content_ids_from_archive_directory() {
 }
 
 #[test]
+fn content_ids_mmap_refuses_unreachable_archive_before_mapping_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-ids-unreachable-root");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let content = root.join("content.gfmcontent");
+    fs::write(&content, "not a readable archive").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["content-ids-mmap", content.to_str().unwrap(), "term"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("file\t"), "{stdout}");
+    assert!(
+        stderr.contains("content ids mmap volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("invalid magic"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     let root = unique_temp_dir("gfm-cli-content-set-root");
     let records = unique_temp_path("gfm-cli-content-set-records", "gfmidx");
