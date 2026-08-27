@@ -278,11 +278,35 @@ fn progress_store_round_trips_and_restores_active_snapshots() {
         running
             .clone()
             .with_progress(JobProgressState::Paused, 6, "waiting for volume", 103);
-    store.upsert(paused.clone()).unwrap();
+    assert!(store.upsert(paused.clone()).unwrap());
     let snapshots = store.read().unwrap();
     assert_eq!(snapshots.len(), 2);
     assert_eq!(snapshots[0], paused);
     assert_eq!(store.restorable().unwrap().len(), 1);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn progress_store_upsert_skips_identical_snapshot_write() {
+    let path = temp_path("gfm-job-progress-noop-upsert", "gfmprogress");
+    let store = JobProgressStore::new(&path);
+    let snapshot = JobProgressSnapshot::new(
+        JobId::from_raw(7),
+        JobClass::Foreground,
+        Priority::Interactive,
+        "copy user selection",
+        Some(VolumeId(2)),
+        10,
+    )
+    .with_progress(JobProgressState::Running, 4, "copying", 101);
+    store.write_all(std::slice::from_ref(&snapshot)).unwrap();
+    let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+    assert!(!store.upsert(snapshot).unwrap());
+
+    let after = std::fs::metadata(&path).unwrap().modified().unwrap();
+    assert_eq!(before, after);
 
     std::fs::remove_file(path).unwrap();
 }
@@ -351,6 +375,43 @@ fn progress_store_normalizes_interrupted_jobs_for_restore() {
     let snapshots = store.read().unwrap();
     assert_eq!(snapshots.len(), 4);
     assert_eq!(snapshots[3], completed);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn progress_restore_skips_store_write_when_no_snapshots_are_interrupted() {
+    let path = temp_path("gfm-job-progress-restore-noop", "gfmprogress");
+    let store = JobProgressStore::new(&path);
+    let paused = JobProgressSnapshot::new(
+        JobId::from_raw(3),
+        JobClass::Background,
+        Priority::Background,
+        "index content",
+        Some(VolumeId(7)),
+        20,
+    )
+    .with_progress(JobProgressState::Paused, 8, "pressure:throttled", 12);
+    let completed = JobProgressSnapshot::new(
+        JobId::from_raw(4),
+        JobClass::Repair,
+        Priority::Visible,
+        "repair sidecar",
+        None,
+        1,
+    )
+    .with_progress(JobProgressState::Completed, 1, "completed", 13);
+    store
+        .write_all(&[paused.clone(), completed.clone()])
+        .unwrap();
+    let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+    let restored = store.restore_interrupted(99).unwrap();
+
+    let after = std::fs::metadata(&path).unwrap().modified().unwrap();
+    assert_eq!(restored, vec![paused.clone()]);
+    assert_eq!(store.read().unwrap(), vec![paused, completed]);
+    assert_eq!(before, after);
 
     std::fs::remove_file(path).unwrap();
 }

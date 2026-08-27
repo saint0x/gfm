@@ -184,18 +184,22 @@ impl JobProgressStore {
         fs::rename(&tmp, &self.path).map_err(|err| GfmError::io(&self.path, err))
     }
 
-    pub fn upsert(&self, snapshot: JobProgressSnapshot) -> Result<()> {
+    pub fn upsert(&self, snapshot: JobProgressSnapshot) -> Result<bool> {
         let mut snapshots = self.read()?;
         if let Some(existing) = snapshots
             .iter_mut()
             .find(|existing| existing.id == snapshot.id)
         {
+            if *existing == snapshot {
+                return Ok(false);
+            }
             *existing = snapshot;
         } else {
             snapshots.push(snapshot);
         }
         snapshots.sort_by_key(|snapshot| snapshot.id.value());
-        self.write_all(&snapshots)
+        self.write_all(&snapshots)?;
+        Ok(true)
     }
 
     pub fn read(&self) -> Result<Vec<JobProgressSnapshot>> {
@@ -245,6 +249,7 @@ impl JobProgressStore {
             return Ok(Vec::new());
         }
         let mut snapshots = self.read()?;
+        let mut changed = false;
         for snapshot in &mut snapshots {
             if matches!(
                 snapshot.state,
@@ -258,9 +263,12 @@ impl JobProgressStore {
                     format!("interrupted:{previous_state}:{}", snapshot.detail)
                 };
                 snapshot.updated_ms = updated_ms;
+                changed = true;
             }
         }
-        self.write_all(&snapshots)?;
+        if changed {
+            self.write_all(&snapshots)?;
+        }
         Ok(snapshots
             .into_iter()
             .filter(|snapshot| snapshot.state.restorable())
