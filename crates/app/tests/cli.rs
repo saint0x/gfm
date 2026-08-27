@@ -3491,7 +3491,13 @@ fn searches_persisted_tags_from_binary() {
     );
     let sidecar_budget_stderr = String::from_utf8(sidecar_budget_search.stderr).unwrap();
     assert!(
-        sidecar_budget_stderr.contains("sidecar-budget")
+        sidecar_budget_stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar budget records\tpath={}",
+            index.display()
+        )) && sidecar_budget_stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar budget content\tpath={}",
+            content.display()
+        )) && sidecar_budget_stderr.contains("sidecar-budget")
             && sidecar_budget_stderr.contains("\trecords-loaded=1")
             && sidecar_budget_stderr.contains("\tcandidate-ids=1")
             && sidecar_budget_stderr.contains("\tfull-hydration=false")
@@ -3573,7 +3579,13 @@ fn searches_persisted_tags_from_binary() {
     );
     let sidecar_session_stderr = String::from_utf8(sidecar_session_search.stderr).unwrap();
     assert!(
-        sidecar_session_stderr.contains("sidecar-session-first")
+        sidecar_session_stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar session records\tpath={}",
+            index.display()
+        )) && sidecar_session_stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar session content\tpath={}",
+            content.display()
+        )) && sidecar_session_stderr.contains("sidecar-session-first")
             && sidecar_session_stderr.contains("\tcontent-keys=1")
             && sidecar_session_stderr.contains("\tcontent-cache-hits=0")
             && sidecar_session_stderr.contains("\tcontent-cache-misses=1")
@@ -3614,7 +3626,13 @@ fn searches_persisted_tags_from_binary() {
     assert!(sidecar_scoped_stdout.is_empty(), "{sidecar_scoped_stdout}");
     let sidecar_scoped_stderr = String::from_utf8(sidecar_scoped_search.stderr).unwrap();
     assert!(
-        sidecar_scoped_stderr.contains("sidecar-volume-scope")
+        sidecar_scoped_stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar volume scope records\tpath={}",
+            index.display()
+        )) && sidecar_scoped_stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar volume scope content\tpath={}",
+            content.display()
+        )) && sidecar_scoped_stderr.contains("sidecar-volume-scope")
             && sidecar_scoped_stderr.contains("\trecords-loaded=0")
             && sidecar_scoped_stderr.contains("\tcandidate-ids=0")
             && sidecar_scoped_stderr.contains("\tfull-hydration=false")
@@ -3704,6 +3722,7 @@ fn empty_volume_scope_sidecar_search_skips_archive_access_from_binary() {
     assert!(stdout.is_empty(), "{stdout}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("sidecar-volume-scope"), "{stderr}");
+    assert!(!stderr.contains("security-worker-admission\t"), "{stderr}");
     assert!(stderr.contains("\trecords-indexed=0\t"), "{stderr}");
     assert!(stderr.contains("\tcontent-cache-misses=0\t"), "{stderr}");
     assert!(stderr.contains("\tfuzzy-lookup-requests=0\t"), "{stderr}");
@@ -4267,9 +4286,28 @@ fn search_index_sidecars_refuses_unreachable_content_before_open_from_binary() {
     }
     fs::write(&content, "not opened").unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
-        .args([
-            "search-index-sidecars",
+    let cases: [(&str, &[&str], &str); 4] = [
+        ("search-index-sidecars", &["needle"], "sidecar search"),
+        (
+            "search-index-sidecars-session",
+            &["needle"],
+            "sidecar session",
+        ),
+        (
+            "search-index-sidecars-budget",
+            &["1", "1", "1", "1", "1", "1", "1", "needle"],
+            "sidecar budget",
+        ),
+        (
+            "search-index-sidecars-volume-scope",
+            &["1", "needle"],
+            "sidecar volume scope",
+        ),
+    ];
+
+    for (route, tail_args, worker) in cases {
+        let mut args = vec![
+            route,
             records.to_str().unwrap(),
             columns.to_str().unwrap(),
             metadata.to_str().unwrap(),
@@ -4277,27 +4315,32 @@ fn search_index_sidecars_refuses_unreachable_content_before_open_from_binary() {
             substrings.to_str().unwrap(),
             fuzzy.to_str().unwrap(),
             content.to_str().unwrap(),
-            "needle",
-        ])
-        .output()
-        .unwrap();
+        ];
+        args.extend_from_slice(tail_args);
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(args)
+            .output()
+            .unwrap();
 
-    assert!(!output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stdout.contains("hit\t"), "{stdout}");
-    assert!(
-        stderr.contains("sidecar search content volume access blocked: unreachable volume network"),
-        "{stderr}"
-    );
-    assert!(
-        !stderr.contains(&format!(
-            "security-worker-admission\tworker=sidecar search content\tpath={}",
-            content.display()
-        )),
-        "{stderr}"
-    );
-    assert!(!stderr.contains("invalid magic"), "{stderr}");
+        assert!(!output.status.success(), "{route}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains("hit\t"), "{route}: {stdout}");
+        assert!(
+            stderr.contains(&format!(
+                "{worker} content volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(
+            !stderr.contains(&format!(
+                "security-worker-admission\tworker={worker} content\tpath={}",
+                content.display()
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
+    }
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(offline).unwrap();
@@ -7753,6 +7796,14 @@ fn resolves_content_ids_from_archive_directory() {
         "{}",
         String::from_utf8_lossy(&ids_output.stderr)
     );
+    let ids_stderr = String::from_utf8_lossy(&ids_output.stderr);
+    assert!(
+        ids_stderr.contains(&format!(
+            "security-worker-admission\tworker=content ids\tpath={}",
+            content.display()
+        )),
+        "{ids_stderr}"
+    );
 
     let stdout = String::from_utf8(ids_output.stdout).unwrap();
     assert_eq!(stdout.lines().count(), 1, "{stdout}");
@@ -7770,6 +7821,14 @@ fn resolves_content_ids_from_archive_directory() {
         mmap_output.status.success(),
         "{}",
         String::from_utf8_lossy(&mmap_output.stderr)
+    );
+    let mmap_stderr = String::from_utf8_lossy(&mmap_output.stderr);
+    assert!(
+        mmap_stderr.contains(&format!(
+            "security-worker-admission\tworker=content ids mmap\tpath={}",
+            content.display()
+        )),
+        "{mmap_stderr}"
     );
 
     let mmap_stdout = String::from_utf8(mmap_output.stdout).unwrap();
@@ -7789,6 +7848,14 @@ fn resolves_content_ids_from_archive_directory() {
         "{}",
         String::from_utf8_lossy(&block_output.stderr)
     );
+    let block_stderr = String::from_utf8_lossy(&block_output.stderr);
+    assert!(
+        block_stderr.contains(&format!(
+            "security-worker-admission\tworker=content id block mmap\tpath={}",
+            content.display()
+        )),
+        "{block_stderr}"
+    );
 
     let block_stdout = String::from_utf8(block_output.stdout).unwrap();
     assert_eq!(block_stdout, stdout);
@@ -7801,6 +7868,14 @@ fn resolves_content_ids_from_archive_directory() {
         verify_output.status.success(),
         "{}",
         String::from_utf8_lossy(&verify_output.stderr)
+    );
+    let verify_stderr = String::from_utf8_lossy(&verify_output.stderr);
+    assert!(
+        verify_stderr.contains(&format!(
+            "security-worker-admission\tworker=content verify\tpath={}",
+            content.display()
+        )),
+        "{verify_stderr}"
     );
     let verify_stdout = String::from_utf8(verify_output.stdout).unwrap();
     assert!(
@@ -7831,6 +7906,13 @@ fn content_ids_mmap_refuses_unreachable_archive_before_mapping_from_binary() {
     assert!(!stdout.contains("file\t"), "{stdout}");
     assert!(
         stderr.contains("content ids mmap volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content ids mmap\tpath={}",
+            content.display()
+        )),
         "{stderr}"
     );
     assert!(!stderr.contains("invalid magic"), "{stderr}");

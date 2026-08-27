@@ -417,25 +417,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-index-sidecars-session requires a query string",
             )?;
-            let sidecars = SidecarIndexAccessPaths {
-                records: &records,
-                columns: &columns,
-                metadata: &metadata,
-                prefixes: &prefixes,
-                substrings: &substrings,
-                fuzzy: &fuzzy,
-                content: &content,
+            let sidecars = OwnedSidecarIndexAccessPaths {
+                records,
+                columns,
+                metadata,
+                prefixes,
+                substrings,
+                fuzzy,
+                content,
             };
-            let _access = preflight_sidecar_index_search_access(sidecars, "sidecar session")?;
-            let session = SidecarIndexQuerySession::open(
-                records, columns, metadata, prefixes, substrings, fuzzy, content,
-            )?;
-            let budget = SearchLookupBudget::default();
-            let first = session.search_with_budget(&query, 50, budget)?;
-            print_sidecar_session_report("sidecar-session-first", &session, &first, budget);
-            let second = session.search_with_budget(&query, 50, budget)?;
-            print_sidecar_session_report("sidecar-session-second", &session, &second, budget);
-            for hit in second.search.hits {
+            let output = run_sidecar_index_session(sidecars, query)?;
+            for diagnostic in output.diagnostics {
+                eprintln!("{diagnostic}");
+            }
+            for hit in output.hits {
                 print_hit(&hit);
             }
         }
@@ -500,19 +495,6 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-index-sidecars-budget requires a query string",
             )?;
-            let sidecars = SidecarIndexAccessPaths {
-                records: &records,
-                columns: &columns,
-                metadata: &metadata,
-                prefixes: &prefixes,
-                substrings: &substrings,
-                fuzzy: &fuzzy,
-                content: &content,
-            };
-            let _access = preflight_sidecar_index_search_access(sidecars, "sidecar budget")?;
-            let session = SidecarIndexQuerySession::open(
-                records, columns, metadata, prefixes, substrings, fuzzy, content,
-            )?;
             let budget = SearchLookupBudget {
                 max_prefix_ids_per_term: max_prefix_ids,
                 min_archive_prefix_chars: SearchLookupBudget::default().min_archive_prefix_chars,
@@ -524,56 +506,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 max_metadata_ids_per_term: max_content_ids,
                 max_content_ids_per_term: max_content_ids,
             };
-            let report = session.search_with_budget(&query, 50, budget)?;
-            let hydration = &report.hydration;
-            eprintln!(
-                "sidecar-budget\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tcontent-cache-hits={}\tcontent-cache-misses={}\tmetadata-budget={max_content_ids}\tcontent-budget={max_content_ids}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
-                hydration.columns_applied,
-                hydration.records_loaded,
-                hydration.records_missing,
-                hydration.import.candidate_ids,
-                hydration.import.requires_full_record_hydration,
-                hydration.metadata_keys,
-                hydration.prefix_keys,
-                hydration.substring_keys,
-                hydration.fuzzy_keys,
-                hydration.content_keys,
-                report.content_cache_hits,
-                report.content_cache_misses,
-                session.indexed_prefixes(),
-                session.indexed_substring_grams(),
-                session.indexed_fuzzy_keys(),
-                report.search.lookup.prefix_terms,
-                report.search.lookup.prefix_lookup_requests,
-                report.search.lookup.prefix_lookup_ids,
-                report.search.lookup.prefix_candidate_ids,
-                report.search.lookup.prefix_cache_hits,
-                report.search.lookup.prefix_cache_misses,
-                report.search.lookup.prefix_cutoff_terms,
-                report.search.lookup.prefix_truncated_terms,
-                report.search.lookup.substring_terms,
-                report.search.lookup.substring_grams,
-                report.search.lookup.substring_lookup_requests,
-                report.search.lookup.substring_lookup_ids,
-                report.search.lookup.substring_candidate_ids,
-                report.search.lookup.substring_cache_hits,
-                report.search.lookup.substring_cache_misses,
-                report.search.lookup.substring_cutoff_terms,
-                report.search.lookup.substring_term_truncated_grams,
-                report.search.lookup.substring_truncated_grams,
-                report.search.lookup.fuzzy_terms,
-                report.search.lookup.fuzzy_keys,
-                report.search.lookup.fuzzy_lookup_requests,
-                report.search.lookup.fuzzy_lookup_terms,
-                report.search.lookup.fuzzy_candidate_terms,
-                report.search.lookup.fuzzy_verified_candidates,
-                report.search.lookup.fuzzy_cache_hits,
-                report.search.lookup.fuzzy_cache_misses,
-                report.search.lookup.fuzzy_key_truncated_terms,
-                report.search.lookup.fuzzy_term_truncated_keys,
-                report.search.lookup.fuzzy_candidate_truncated_terms
-            );
-            for hit in report.search.hits {
+            let sidecars = OwnedSidecarIndexAccessPaths {
+                records,
+                columns,
+                metadata,
+                prefixes,
+                substrings,
+                fuzzy,
+                content,
+            };
+            let output = run_sidecar_index_budget(sidecars, query, budget)?;
+            eprintln!("{}", output.diagnostics);
+            for hit in output.hits {
                 print_hit(&hit);
             }
         }
@@ -619,38 +563,38 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_empty_sidecar_session_report("sidecar-volume-scope", budget);
                 return Ok(true);
             }
-            let sidecars = SidecarIndexAccessPaths {
-                records: &records,
-                columns: &columns,
-                metadata: &metadata,
-                prefixes: &prefixes,
-                substrings: &substrings,
-                fuzzy: &fuzzy,
-                content: &content,
+            let sidecars = OwnedSidecarIndexAccessPaths {
+                records,
+                columns,
+                metadata,
+                prefixes,
+                substrings,
+                fuzzy,
+                content,
             };
-            let _access = preflight_sidecar_index_search_access(sidecars, "sidecar volume scope")?;
-            let session = SidecarIndexQuerySession::open(
-                records, columns, metadata, prefixes, substrings, fuzzy, content,
-            )?;
-            let report = session.search_with_volume_scope(&query, 50, &scope)?;
-            print_sidecar_session_report("sidecar-volume-scope", &session, &report, budget);
-            for hit in report.search.hits {
+            let output = run_sidecar_index_volume_scope(sidecars, query, scope, budget)?;
+            eprintln!("{}", output.diagnostics);
+            for hit in output.hits {
                 print_hit(&hit);
             }
         }
         "content-ids" => {
             let content = required_path(args.next(), "content-ids requires a content path")?;
             let term = required_string(args.next(), "content-ids requires a term")?;
-            let _access = preflight_content_archive_access(&content, "content ids")?;
-            let mut archive = ContentArchive::open(content)?;
-            print_file_ids(archive.ids_for_term(&term)?);
+            let ids = run_content_archive_read(content, "content ids", move |content| {
+                let mut archive = ContentArchive::open(content)?;
+                archive.ids_for_term(&term)
+            })?;
+            print_file_ids(ids);
         }
         "content-ids-mmap" => {
             let content = required_path(args.next(), "content-ids-mmap requires a content path")?;
             let term = required_string(args.next(), "content-ids-mmap requires a term")?;
-            let _access = preflight_content_archive_access(&content, "content ids mmap")?;
-            let archive = MmapContentArchive::open(content)?;
-            print_file_ids(archive.ids_for_term(&term)?);
+            let ids = run_content_archive_read(content, "content ids mmap", move |content| {
+                let archive = MmapContentArchive::open(content)?;
+                archive.ids_for_term(&term)
+            })?;
+            print_file_ids(ids);
         }
         "content-ids-mmap-set" => {
             let term = required_string(args.next(), "content-ids-mmap-set requires a term")?;
@@ -682,24 +626,28 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let term = required_string(args.next(), "content-id-block-mmap requires a term")?;
             let block_index =
                 parse_usize_arg(args.next(), "content-id-block-mmap requires a block index")?;
-            let _access = preflight_content_archive_access(&content, "content id block mmap")?;
-            let archive = MmapContentArchive::open(content)?;
-            print_file_ids(archive.id_block_for_term(&term, block_index)?);
+            let ids = run_content_archive_read(content, "content id block mmap", move |content| {
+                let archive = MmapContentArchive::open(content)?;
+                archive.id_block_for_term(&term, block_index)
+            })?;
+            print_file_ids(ids);
         }
         "content-verify" => {
             let content = required_path(args.next(), "content-verify requires a content path")?;
-            let _access = preflight_content_archive_access(&content, "content verify")?;
-            let archive = MmapContentArchive::open(content)?;
-            println!(
-                "content-verify\tterms={}\tbytes={}\tchecksum={}",
-                archive.indexed_terms(),
-                archive.mapped_len(),
-                if archive.is_checksummed() {
-                    "verified"
-                } else {
-                    "legacy"
-                }
-            );
+            let report = run_content_archive_read(content, "content verify", move |content| {
+                let archive = MmapContentArchive::open(content)?;
+                Ok(format!(
+                    "content-verify\tterms={}\tbytes={}\tchecksum={}",
+                    archive.indexed_terms(),
+                    archive.mapped_len(),
+                    if archive.is_checksummed() {
+                        "verified"
+                    } else {
+                        "legacy"
+                    }
+                ))
+            })?;
+            println!("{report}");
         }
         "fuzzy-terms-mmap" => {
             let fuzzy = required_path(args.next(), "fuzzy-terms-mmap requires a fuzzy path")?;
@@ -862,6 +810,24 @@ fn preflight_content_archive_access(path: &Path, worker: &str) -> Result<ScopedA
     preflight_access_scope(path, AccessIntent::Read, worker)
 }
 
+fn run_content_archive_read<T>(
+    path: PathBuf,
+    worker: &'static str,
+    read: impl FnOnce(PathBuf) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    let volume = detect_volume_id(&path).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_content_archive_access(&path, worker)?;
+        cancellation.check()?;
+        read(path)
+    })
+}
+
 fn run_search_archive_read<T>(
     path: PathBuf,
     worker: &'static str,
@@ -996,6 +962,11 @@ struct SidecarSearchOutput {
     hits: Vec<SearchHit>,
 }
 
+struct SidecarSessionOutput {
+    diagnostics: Vec<String>,
+    hits: Vec<SearchHit>,
+}
+
 fn run_sidecar_index_search(
     paths: OwnedSidecarIndexAccessPaths,
     query: String,
@@ -1049,6 +1020,100 @@ fn run_sidecar_index_search(
             hits: report.search.hits,
         })
     })
+}
+
+fn run_sidecar_index_session(
+    paths: OwnedSidecarIndexAccessPaths,
+    query: String,
+) -> Result<SidecarSessionOutput> {
+    const WORKER: &str = "sidecar session";
+    preflight_sidecar_index_volume_access(&paths, WORKER)?;
+    let volume = detect_volume_id(&paths.records).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
+        cancellation.check()?;
+        let session = open_sidecar_index_query_session(paths)?;
+        cancellation.check()?;
+        let budget = SearchLookupBudget::default();
+        let first = session.search_with_budget(&query, 50, budget)?;
+        cancellation.check()?;
+        let second = session.search_with_budget(&query, 50, budget)?;
+        Ok(SidecarSessionOutput {
+            diagnostics: vec![
+                format_sidecar_session_report("sidecar-session-first", &session, &first, budget),
+                format_sidecar_session_report("sidecar-session-second", &session, &second, budget),
+            ],
+            hits: second.search.hits,
+        })
+    })
+}
+
+fn run_sidecar_index_budget(
+    paths: OwnedSidecarIndexAccessPaths,
+    query: String,
+    budget: SearchLookupBudget,
+) -> Result<SidecarSearchOutput> {
+    const WORKER: &str = "sidecar budget";
+    preflight_sidecar_index_volume_access(&paths, WORKER)?;
+    let volume = detect_volume_id(&paths.records).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
+        cancellation.check()?;
+        let session = open_sidecar_index_query_session(paths)?;
+        cancellation.check()?;
+        let report = session.search_with_budget(&query, 50, budget)?;
+        Ok(SidecarSearchOutput {
+            diagnostics: format_sidecar_budget_report(&session, &report, budget),
+            hits: report.search.hits,
+        })
+    })
+}
+
+fn run_sidecar_index_volume_scope(
+    paths: OwnedSidecarIndexAccessPaths,
+    query: String,
+    scope: SearchVolumeScope,
+    budget: SearchLookupBudget,
+) -> Result<SidecarSearchOutput> {
+    const WORKER: &str = "sidecar volume scope";
+    preflight_sidecar_index_volume_access(&paths, WORKER)?;
+    let volume = detect_volume_id(&paths.records).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
+        cancellation.check()?;
+        let session = open_sidecar_index_query_session(paths)?;
+        cancellation.check()?;
+        let report = session.search_with_volume_scope(&query, 50, &scope)?;
+        Ok(SidecarSearchOutput {
+            diagnostics: format_sidecar_session_report(
+                "sidecar-volume-scope",
+                &session,
+                &report,
+                budget,
+            ),
+            hits: report.search.hits,
+        })
+    })
+}
+
+fn open_sidecar_index_query_session(
+    paths: OwnedSidecarIndexAccessPaths,
+) -> Result<SidecarIndexQuerySession> {
+    let OwnedSidecarIndexAccessPaths {
+        records,
+        columns,
+        metadata,
+        prefixes,
+        substrings,
+        fuzzy,
+        content,
+    } = paths;
+    SidecarIndexQuerySession::open(
+        records, columns, metadata, prefixes, substrings, fuzzy, content,
+    )
 }
 
 fn preflight_sidecar_index_volume_access(
@@ -1193,14 +1258,14 @@ fn print_content_session_report(
     );
 }
 
-fn print_sidecar_session_report(
+fn format_sidecar_session_report(
     label: &str,
     session: &SidecarIndexQuerySession,
     report: &SidecarQuerySessionReport,
     budget: SearchLookupBudget,
-) {
+) -> String {
     let hydration = &report.hydration;
-    eprintln!(
+    format!(
         "{label}\trecords-indexed={}\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tcontent-cache-hits={}\tcontent-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}\tresult-cache-hits={}\tresult-cache-misses={}\tmetadata-budget={}\tprefix-budget={}\tsubstring-budget={}\tfuzzy-key-budget={}\tfuzzy-term-budget={}\tfuzzy-candidate-budget={}\tcontent-budget={}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}",
         session.indexed_records(),
         hydration.columns_applied,
@@ -1241,7 +1306,64 @@ fn print_sidecar_session_report(
         report.search.lookup.fuzzy_lookup_terms,
         report.search.lookup.fuzzy_cache_hits,
         report.search.lookup.fuzzy_cache_misses,
-    );
+    )
+}
+
+fn format_sidecar_budget_report(
+    session: &SidecarIndexQuerySession,
+    report: &SidecarQuerySessionReport,
+    budget: SearchLookupBudget,
+) -> String {
+    let hydration = &report.hydration;
+    format!(
+        "sidecar-budget\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tcontent-cache-hits={}\tcontent-cache-misses={}\tmetadata-budget={}\tcontent-budget={}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
+        hydration.columns_applied,
+        hydration.records_loaded,
+        hydration.records_missing,
+        hydration.import.candidate_ids,
+        hydration.import.requires_full_record_hydration,
+        hydration.metadata_keys,
+        hydration.prefix_keys,
+        hydration.substring_keys,
+        hydration.fuzzy_keys,
+        hydration.content_keys,
+        report.content_cache_hits,
+        report.content_cache_misses,
+        budget.max_metadata_ids_per_term,
+        budget.max_content_ids_per_term,
+        session.indexed_prefixes(),
+        session.indexed_substring_grams(),
+        session.indexed_fuzzy_keys(),
+        report.search.lookup.prefix_terms,
+        report.search.lookup.prefix_lookup_requests,
+        report.search.lookup.prefix_lookup_ids,
+        report.search.lookup.prefix_candidate_ids,
+        report.search.lookup.prefix_cache_hits,
+        report.search.lookup.prefix_cache_misses,
+        report.search.lookup.prefix_cutoff_terms,
+        report.search.lookup.prefix_truncated_terms,
+        report.search.lookup.substring_terms,
+        report.search.lookup.substring_grams,
+        report.search.lookup.substring_lookup_requests,
+        report.search.lookup.substring_lookup_ids,
+        report.search.lookup.substring_candidate_ids,
+        report.search.lookup.substring_cache_hits,
+        report.search.lookup.substring_cache_misses,
+        report.search.lookup.substring_cutoff_terms,
+        report.search.lookup.substring_term_truncated_grams,
+        report.search.lookup.substring_truncated_grams,
+        report.search.lookup.fuzzy_terms,
+        report.search.lookup.fuzzy_keys,
+        report.search.lookup.fuzzy_lookup_requests,
+        report.search.lookup.fuzzy_lookup_terms,
+        report.search.lookup.fuzzy_candidate_terms,
+        report.search.lookup.fuzzy_verified_candidates,
+        report.search.lookup.fuzzy_cache_hits,
+        report.search.lookup.fuzzy_cache_misses,
+        report.search.lookup.fuzzy_key_truncated_terms,
+        report.search.lookup.fuzzy_term_truncated_keys,
+        report.search.lookup.fuzzy_candidate_truncated_terms
+    )
 }
 
 fn print_empty_sidecar_session_report(label: &str, budget: SearchLookupBudget) {
