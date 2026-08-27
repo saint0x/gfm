@@ -454,6 +454,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "finder-metadata" => {
             let path = required_path(args.next(), "finder-metadata requires a path")?;
+            let _access = crate::access::preflight_access_scope(
+                &path,
+                AccessIntent::Read,
+                "finder metadata",
+            )?;
             println!("{}", FinderMetadataReport::read_path(path)?.as_tsv());
         }
         "ui-virtualization-contract" => {

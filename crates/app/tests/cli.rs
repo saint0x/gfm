@@ -2180,6 +2180,31 @@ fn reports_finder_metadata_from_binary() {
 }
 
 #[test]
+fn finder_metadata_refuses_unreachable_volume_before_native_read_from_binary() {
+    let root = unique_temp_dir("gfm-cli-finder-metadata-unreachable");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let file = root.join("Report.md");
+    fs::write(&file, "metadata blocked").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("finder-metadata")
+        .arg(&file)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("finder-metadata\t"), "{stdout}");
+    assert!(
+        stderr.contains("finder metadata volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_persisted_tags_from_binary() {
     let index = unique_temp_path("gfm-cli-tags", "gfmidx");
     let metadata = unique_temp_path("gfm-cli-tags", "gfmmeta");

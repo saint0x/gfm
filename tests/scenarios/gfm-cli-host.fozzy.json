@@ -3187,6 +3187,11 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/FinderMetadata.md",
+      "data": "metadata blocked\n"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-offline-volume/ops-recover.journal",
       "data": "991\tstarted\t1\tcopy\ttmp/gfm-fozzy-operation-conflict-offline-source.txt\ttmp/gfm-fozzy-offline-recover-target.txt\t\n"
     },
@@ -3371,6 +3376,16 @@
       "args": [
         "ui-fileprovider-conflict-contract",
         "tmp/gfm-fozzy-offline-volume/Conflict.icloud-conflict.md"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "finder-metadata",
+        "tmp/gfm-fozzy-offline-volume/FinderMetadata.md"
       ],
       "exit_code": 1,
       "times": 1
