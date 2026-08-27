@@ -597,7 +597,8 @@ fn print_permission_access_contract(
     let access = permission_access_contract(admission);
     println!(
         "{}",
-        DialogContract::permission_prompt(access.prompt_kind).as_tsv()
+        DialogContract::permission_prompt_for_action(access.prompt_kind, &access.prompt_action)
+            .as_tsv()
     );
     if let Some(refresh) = refresh {
         println!("{}", refresh.as_tsv());

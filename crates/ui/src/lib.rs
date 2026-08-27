@@ -304,14 +304,14 @@ impl AppLaunchSpec {
 
     pub fn with_permission_access(mut self, access: PermissionAccessContract) -> Self {
         let prompt = access.prompt_kind;
+        let dialog = DialogContract::permission_prompt_for_action(prompt, &access.prompt_action);
         if self.permission_prompt.is_none()
             || self.permission_prompt == Some(PermissionPromptKind::General)
         {
-            self.permission_dialog = Some(DialogContract::permission_prompt(prompt));
+            self.permission_dialog = Some(dialog);
             self.permission_prompt = Some(prompt);
         } else {
-            self.permission_dialog
-                .get_or_insert_with(|| DialogContract::permission_prompt(prompt));
+            self.permission_dialog.get_or_insert(dialog);
         }
         self.permission_access = Some(access);
         self

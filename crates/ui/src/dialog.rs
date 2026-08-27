@@ -856,6 +856,61 @@ impl DialogContract {
         contract
     }
 
+    pub fn permission_prompt_for_action(kind: PermissionPromptKind, action: &str) -> Self {
+        match action {
+            "open-settings" => Self::permission_prompt(PermissionPromptKind::FullDiskAccess),
+            "choose-location" => Self::permission_prompt(PermissionPromptKind::BookmarkAcquisition),
+            "continue-metadata-only" => {
+                let mut contract = Self::permission_prompt(PermissionPromptKind::DegradedSearch);
+                contract.buttons = vec![
+                    button(
+                        "continue-metadata-only",
+                        "Continue",
+                        DialogButtonRole::Default,
+                        true,
+                    ),
+                    button(
+                        "open-settings",
+                        "Open Settings",
+                        DialogButtonRole::Alternate,
+                        true,
+                    ),
+                ];
+                contract
+            }
+            "blocked-volume" => blocked_permission_contract(
+                "Volume Unavailable",
+                "Reconnect the volume or choose another available location before continuing.",
+            ),
+            "blocked-missing-path" => blocked_permission_contract(
+                "Item Not Found",
+                "The item is no longer available at that path.",
+            ),
+            "blocked-denied-path" => {
+                let mut contract = blocked_permission_contract(
+                    "Permission Required",
+                    "Grant access in macOS Privacy settings before continuing.",
+                );
+                contract.buttons = vec![
+                    button(
+                        "open-settings",
+                        "Open Settings",
+                        DialogButtonRole::Default,
+                        true,
+                    ),
+                    button("not-now", "Not Now", DialogButtonRole::Cancel, true),
+                ];
+                contract
+            }
+            "blocked-unavailable" => blocked_permission_contract(
+                "Permission Unavailable",
+                "GFM cannot prove access to this location yet.",
+            ),
+            "none" => Self::permission_prompt(kind),
+            _ => Self::permission_prompt(kind),
+        }
+    }
+
     pub fn as_tsv(&self) -> String {
         let mut lines = Vec::with_capacity(self.buttons.len() + self.fields.len() + 1);
         lines.push(format!(
@@ -892,13 +947,18 @@ impl DialogContract {
 }
 
 pub fn render(contract: &DialogContract) -> impl IntoElement {
-    render_with_state(contract, None)
+    render_with_state(contract.clone(), None)
 }
 
 pub fn render_permission(
     contract: &DialogContract,
     access: Option<&super::PermissionAccessContract>,
 ) -> impl IntoElement {
+    let contract = access
+        .map(|access| {
+            DialogContract::permission_prompt_for_action(access.prompt_kind, &access.prompt_action)
+        })
+        .unwrap_or_else(|| contract.clone());
     render_with_state(contract, access.map(PermissionAccessContractState::from))
 }
 
@@ -911,7 +971,7 @@ impl From<&super::PermissionAccessContract> for PermissionAccessContractState {
 }
 
 fn render_with_state(
-    contract: &DialogContract,
+    contract: DialogContract,
     access_state: Option<PermissionAccessContractState>,
 ) -> impl IntoElement {
     let sheet_id = match contract.surface {
@@ -963,7 +1023,7 @@ fn render_with_state(
                         .text_color(rgb(0xd4d4d4))
                         .child(contract.message),
                 )
-                .child(render_buttons(contract)),
+                .child(render_buttons(&contract)),
         );
     if let Some(state) = access_state {
         sheet_content = sheet_content.child(
@@ -984,6 +1044,14 @@ fn render_with_state(
         .child(sheet_content)
 }
 
+fn blocked_permission_contract(title: &'static str, message: &'static str) -> DialogContract {
+    let mut contract = permission_contract();
+    contract.title = title;
+    contract.message = message;
+    contract.buttons = vec![button("ok", "OK", DialogButtonRole::Default, true)];
+    contract
+}
+
 fn render_buttons(contract: &DialogContract) -> impl IntoElement {
     let mut row = div().flex().justify_end().gap(px(8.0));
     for button in &contract.buttons {
@@ -994,6 +1062,7 @@ fn render_buttons(contract: &DialogContract) -> impl IntoElement {
         };
         row = row.child(
             div()
+                .id(button.id)
                 .px(px(12.0))
                 .h(px(28.0))
                 .rounded(px(6.0))
@@ -1614,5 +1683,53 @@ mod tests {
             DialogContract::permission_prompt(PermissionPromptKind::DegradedSearch).as_tsv();
         assert!(degraded.contains("\ttitle=Search Will Use Metadata Only\t"));
         assert!(degraded.contains("button\tcontinue\tContinue\tdefault"));
+    }
+
+    #[test]
+    fn permission_prompt_actions_choose_specific_visible_controls() {
+        let missing = DialogContract::permission_prompt_for_action(
+            PermissionPromptKind::Blocked,
+            "blocked-missing-path",
+        )
+        .as_tsv();
+        assert!(missing.contains("\ttitle=Item Not Found\t"));
+        assert!(missing.contains("button\tok\tOK\tdefault\tenabled=true"));
+        assert!(!missing.contains("button\tchoose-location\tChoose...\t"));
+
+        let volume = DialogContract::permission_prompt_for_action(
+            PermissionPromptKind::Blocked,
+            "blocked-volume",
+        )
+        .as_tsv();
+        assert!(volume.contains("\ttitle=Volume Unavailable\t"));
+        assert!(volume.contains("button\tok\tOK\tdefault\tenabled=true"));
+        assert!(!volume.contains("button\tchoose-location\tChoose...\t"));
+
+        let degraded = DialogContract::permission_prompt_for_action(
+            PermissionPromptKind::DegradedSearch,
+            "continue-metadata-only",
+        )
+        .as_tsv();
+        assert!(degraded.contains("button\tcontinue-metadata-only\tContinue\tdefault"));
+    }
+
+    #[test]
+    fn dialog_button_ids_are_stable_unique_action_targets() {
+        for contract in [
+            DialogContract::finder_default(DialogSurface::Alert),
+            DialogContract::finder_default(DialogSurface::Conflict),
+            DialogContract::operation_progress(false, true),
+            DialogContract::provider_conflict(true),
+            DialogContract::permission_prompt(PermissionPromptKind::FullDiskAccess),
+            DialogContract::permission_prompt(PermissionPromptKind::BookmarkAcquisition),
+            DialogContract::permission_prompt(PermissionPromptKind::DegradedSearch),
+            DialogContract::permission_prompt(PermissionPromptKind::Blocked),
+        ] {
+            let mut ids = std::collections::BTreeSet::new();
+            for button in contract.buttons {
+                assert!(!button.id.trim().is_empty());
+                assert!(ids.insert(button.id), "duplicate button id {}", button.id);
+            }
+        }
     }
 }

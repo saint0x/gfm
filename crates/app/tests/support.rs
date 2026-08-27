@@ -279,6 +279,11 @@ fn permission_access_contract_refuses_unreachable_volume_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+    assert!(stdout.contains("\ttitle=Volume Unavailable\t"), "{stdout}");
+    assert!(
+        !stdout.contains("button\tchoose-location\tChoose...\t"),
+        "{stdout}"
+    );
     assert!(stdout.contains("\npermission-access\t"), "{stdout}");
     assert!(
         stdout.contains("\tintent=preview\tscope=none\t"),
@@ -346,6 +351,11 @@ fn permission_access_contract_honors_read_only_volume_marker_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+    assert!(stdout.contains("\ttitle=Volume Unavailable\t"), "{stdout}");
+    assert!(
+        !stdout.contains("button\tchoose-location\tChoose...\t"),
+        "{stdout}"
+    );
     assert!(stdout.contains("\npermission-access\t"), "{stdout}");
     assert!(stdout.contains("\tintent=write\tscope=none\t"), "{stdout}");
     assert!(
@@ -404,6 +414,11 @@ fn reports_permission_access_contract_for_protected_missing_path_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+    assert!(stdout.contains("\ttitle=Item Not Found\t"), "{stdout}");
+    assert!(
+        !stdout.contains("button\tchoose-location\tChoose...\t"),
+        "{stdout}"
+    );
     assert!(
         stdout.contains("\npermission-access\tpath=") && stdout.contains("\tintent=index\t"),
         "{stdout}"
@@ -675,7 +690,11 @@ fn permission_access_contract_uses_blocked_prompt_for_missing_paths_from_binary(
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    assert!(stdout.contains("\ttitle=Permission Required\t"), "{stdout}");
+    assert!(stdout.contains("\ttitle=Item Not Found\t"), "{stdout}");
+    assert!(
+        !stdout.contains("button\tchoose-location\tChoose...\t"),
+        "{stdout}"
+    );
     assert!(
         stdout.contains("\tprobe=missing\tmode=denied\t"),
         "{stdout}"
