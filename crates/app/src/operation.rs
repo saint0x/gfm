@@ -338,13 +338,15 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     let _trash_metadata_access =
         retain_operation_trash_metadata_access(&operation, &trash_metadata)?;
     let volume_report = operation_volume_report(&operation);
-    let conflict_report = OperationConflictReport::evaluate(&operation, conflict);
-    if conflict_report.blocks_operation {
-        if let Some(store) = runtime_operation_conflict_store() {
-            store.append(&conflict_report)?;
+    let access_gate = operation_access_gate(&operation, &volume_report);
+    if access_gate.check(&operation).is_ok() {
+        let conflict_report = OperationConflictReport::evaluate(&operation, conflict);
+        if conflict_report.blocks_operation {
+            if let Some(store) = runtime_operation_conflict_store() {
+                store.append(&conflict_report)?;
+            }
         }
     }
-    let access_gate = operation_access_gate(&operation, &volume_report);
     let volume_copy_policy = operation_volume_copy_policy_from_report(&operation, &volume_report);
     let volume = operation_volume(&operation);
     let entry = run_volume_task(volume, Priority::Interactive, label, move || {

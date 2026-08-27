@@ -20,6 +20,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     match command {
         "macrobench" => {
             let options = macrobench_options(args.next(), args.next(), "macrobench")?;
+            let _access =
+                retain_workspace_write_access(&options.workspace, "macrobench workspace")?;
             let report = run_macrobench(&options)?;
             println!(
                 "fixture\t{}\tfiles\t{}\tpassed\t{}",
@@ -44,6 +46,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "macrobench-fixture" => {
             let (root, scale) =
                 macrobench_fixture_options(args.next(), args.next(), "macrobench-fixture")?;
+            let _access = retain_workspace_write_access(&root, "macrobench fixture workspace")?;
             let report = materialize_macrobench_fixture_report(root, scale)?;
             println!(
                 "fixture\t{}\tmanifest\t{}\tfiles\t{}\tdirectories\t{}\tscenarios\t{}",
@@ -65,6 +68,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "parity-fixture" => {
             let options = parity_fixture_options(args.next(), args.next(), "parity-fixture")?;
+            let _access =
+                retain_workspace_write_access(&options.workspace, "parity fixture workspace")?;
             let report = materialize_parity_fixture(&options)?;
             println!(
                 "fixture\t{}\tmanifest\t{}\tfiles\t{}\tscenarios\t{}",
@@ -262,6 +267,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "regression-gate" => {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
+            let _access =
+                retain_workspace_write_access(&options.workspace, "regression gate workspace")?;
             let run = run_regression_gate(&options, RegressionGateOptions::default())?;
             println!(
                 "fixture\t{}\tfiles\t{}\tindex-bytes\t{}\tsidecar-prefix-candidates\t{}\tsidecar-substring-candidates\t{}\tsidecar-fuzzy-verified\t{}\tsidecar-prefix-cache-hits\t{}\tsidecar-substring-cache-hits\t{}\tsidecar-fuzzy-cache-hits\t{}\tsidecar-prefix-cutoffs\t{}\tsidecar-prefix-truncated\t{}\tsidecar-substring-cutoffs\t{}\tsidecar-substring-truncated\t{}\tsidecar-fuzzy-truncated\t{}\tpassed\t{}",
@@ -301,6 +308,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "large-sidecar-gate requires a synthetic record count",
             )?;
+            let _access =
+                retain_workspace_write_access(&workspace, "large sidecar gate workspace")?;
             let report = run_large_sidecar_gate(&LargeSidecarGateOptions::new(workspace, records))?;
             println!(
                 "large-sidecar-gate\tfixture={}\tthresholds={}\thistory={}\tprofile={}\tmin-ci-records={}\trecords={}\tprobe-records={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tsubstring-bytes={}\tfuzzy-bytes={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tsubstring-cutoffs={}\tsubstring-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
@@ -351,6 +360,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-typing-benchmark requires a synthetic record count",
             )?;
+            let _access =
+                retain_workspace_write_access(&workspace, "search typing benchmark workspace")?;
             let mut options = SearchTypingBenchmarkOptions::new(workspace, records);
             if let Some(repetitions) = args.next() {
                 options.repetitions = repetitions.parse().map_err(|_| {
@@ -403,6 +414,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let records = parse_usize_arg(
                 args.next(),
                 "search-typing-session-benchmark requires a synthetic record count",
+            )?;
+            let _access = retain_workspace_write_access(
+                &workspace,
+                "search typing session benchmark workspace",
             )?;
             let mut options = SearchTypingBenchmarkOptions::new(workspace, records);
             if let Some(repetitions) = args.next() {
@@ -493,6 +508,10 @@ fn retain_parity_review_access(
             "parity review output",
         )?,
     ])
+}
+
+fn retain_workspace_write_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(write_probe_path(path), AccessIntent::Write, worker)
 }
 
 fn write_probe_path(path: &Path) -> &Path {

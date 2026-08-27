@@ -31,6 +31,13 @@ impl Operator {
         operation: Operation,
         mut on_progress: impl FnMut(OperationProgressEvent),
     ) -> Result<JournalEntry> {
+        if let Err(err) = self.context.access_gate.check(&operation) {
+            let id = now_nanos();
+            self.append(JournalEntry::started(id, operation.clone()))?;
+            let entry = JournalEntry::from_error(id, operation, &err);
+            let _ = self.append(entry);
+            return Err(err);
+        }
         let operation =
             crate::conflict::resolve_operation_conflicts(operation, self.context.conflict)?;
         let id = now_nanos();

@@ -89,6 +89,88 @@ fn materializes_parity_fixture_from_binary() {
 }
 
 #[test]
+fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_from_binary() {
+    let offline = unique_temp_dir("gfm-cli-gate-workspace-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let cases = [
+        (
+            vec!["macrobench", offline.to_str().unwrap(), "smoke"],
+            "macrobench workspace",
+            "fixture\t",
+        ),
+        (
+            vec!["macrobench-fixture", offline.to_str().unwrap(), "smoke"],
+            "macrobench fixture workspace",
+            "fixture\t",
+        ),
+        (
+            vec!["parity-fixture", offline.to_str().unwrap(), "smoke"],
+            "parity fixture workspace",
+            "fixture\t",
+        ),
+        (
+            vec!["regression-gate", offline.to_str().unwrap(), "smoke"],
+            "regression gate workspace",
+            "fixture\t",
+        ),
+        (
+            vec!["large-sidecar-gate", offline.to_str().unwrap(), "128"],
+            "large sidecar gate workspace",
+            "large-sidecar-gate\t",
+        ),
+        (
+            vec![
+                "search-typing-benchmark",
+                offline.to_str().unwrap(),
+                "128",
+                "1",
+                "needle",
+            ],
+            "search typing benchmark workspace",
+            "search-typing-benchmark\t",
+        ),
+        (
+            vec![
+                "search-typing-session-benchmark",
+                offline.to_str().unwrap(),
+                "128",
+                "1",
+                "needle",
+            ],
+            "search typing session benchmark workspace",
+            "search-typing-session-benchmark\t",
+        ),
+    ];
+
+    for (args, worker, forbidden_stdout) in cases {
+        let route = args[0];
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains(forbidden_stdout), "{route}: {stdout}");
+        assert!(
+            stderr.contains(&format!(
+                "{worker} volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+    }
+
+    assert!(!offline.join("gfm-macrobench-fixture").exists());
+    assert!(!offline.join("gfm-parity-fixture").exists());
+    assert!(!offline.join("gfm-large-sidecar-gate").exists());
+    assert!(!offline.join("gfm-search-typing-benchmark").exists());
+
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn compares_pixel_diff_from_binary() {
     let root = unique_temp_dir("gfm-cli-pixel-diff");
     let expected = root.join("expected.rgba");

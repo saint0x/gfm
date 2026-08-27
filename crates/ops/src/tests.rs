@@ -2350,6 +2350,50 @@ fn access_gate_prompts_before_mutating_destination_parent() {
 }
 
 #[test]
+fn access_gate_denies_before_destination_conflict_probe() {
+    let root = unique_temp_dir("gfm-ops-access-before-conflict");
+    let journal = root.join("journal.log");
+    let source = root.join("source.txt");
+    let protected = root.join("Documents");
+    let destination = protected.join("destination.txt");
+    fs::create_dir_all(&protected).unwrap();
+    fs::write(&source, "source").unwrap();
+    fs::write(&destination, "existing").unwrap();
+    let gate = OperationAccessGate::new().with_decision(
+        &protected,
+        OperationAccessDecision::deny("unreachable volume network"),
+    );
+
+    let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
+        .execute(Operation::Copy {
+            from: source,
+            to: destination.clone(),
+        })
+        .unwrap_err();
+
+    assert!(matches!(err, GfmError::Permission { .. }));
+    assert!(
+        err.to_string().contains("unreachable volume network"),
+        "{err}"
+    );
+    assert!(
+        !err.to_string().contains("destination already exists"),
+        "{err}"
+    );
+    assert_eq!(fs::read_to_string(&destination).unwrap(), "existing");
+    let entries = read_journal(&journal).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].status, OperationStatus::Started);
+    assert_eq!(entries[1].status, OperationStatus::Failed);
+    assert!(entries[1]
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("unreachable volume network"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn recovery_does_not_retry_permission_prompt_failures() {
     let root = unique_temp_dir("gfm-ops-retry-permission");
     let journal = root.join("journal.log");

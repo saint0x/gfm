@@ -94,7 +94,7 @@ impl OperationAccessGate {
         self
     }
 
-    pub(crate) fn check(&self, operation: &Operation) -> Result<()> {
+    pub fn check(&self, operation: &Operation) -> Result<()> {
         for requirement in operation.access_requirements() {
             let Some(decision) = self.decisions.get(&requirement.path) else {
                 continue;
