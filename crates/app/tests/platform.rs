@@ -1591,7 +1591,9 @@ fn reports_fileprovider_invalidation_event_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("fileprovider-observed-invalidation\tevents=1\tpaths=1\n"));
+    assert!(stdout.starts_with(
+        "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\n"
+    ));
     assert!(
         stdout.contains("fileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true")
     );
@@ -1639,7 +1641,9 @@ fn fileprovider_invalidation_event_removes_deleted_tracked_item_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("fileprovider-observed-invalidation\tevents=1\tpaths=1\n"));
+    assert!(stdout.starts_with(
+        "fileprovider-observed-invalidation\tevents=1\tevent-kinds=remove\tpaths=1\n"
+    ));
     assert!(stdout.contains("\tprevious=downloaded\tcurrent=local-only\tchanged=true\t"));
     assert!(stdout.contains("\ticon=true\tpreview-memory=true\tpreview-disk=true\t"));
     assert!(stdout.contains("\tsidebar=true\treindex-metadata=true\t"));
@@ -1687,7 +1691,7 @@ fn fileprovider_invalidation_event_ignores_existing_local_file_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(
         stdout,
-        "fileprovider-observed-invalidation\tevents=1\tpaths=0\nfileprovider-state-invalidation\tinitialized=false\tchanged=0\ticon=false\tpreview-memory=false\tpreview-disk=false\tsidebar=false\treindex-metadata=false\n"
+        "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=0\nfileprovider-state-invalidation\tinitialized=false\tchanged=0\ticon=false\tpreview-memory=false\tpreview-disk=false\tsidebar=false\treindex-metadata=false\n"
     );
     let state_text = std::fs::read_to_string(&state).unwrap();
     assert_eq!(
@@ -1735,6 +1739,7 @@ fn reports_fileprovider_observer_probe_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("fileprovider-observed-invalidation\t"));
+    assert!(stdout.contains("\tevent-kinds="));
     assert!(stdout.contains("\tpaths=1\n"));
     assert!(
         stdout.contains("fileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true")

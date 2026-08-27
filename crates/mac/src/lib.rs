@@ -16,11 +16,11 @@ pub use fileprovider::{
     CloudBadge, CloudCommandPolicy, CloudCommandState, CloudMaterialization,
     CloudMaterializationSource, CloudStorageState, CloudTransferDirection, CloudTransferProgress,
     FileProviderConflictReport, FileProviderDomain, FileProviderDomainEnumerationReport,
-    FileProviderDomainReport, FileProviderInvalidationReport, FileProviderObservedInvalidation,
-    FileProviderOperation, FileProviderOperationDisposition, FileProviderOperationReport,
-    FileProviderProgressReport, FileProviderRegisteredDomain, FileProviderStateInvalidationReport,
-    FileProviderStateObserver, FileProviderStateReport, FileProviderStateSnapshot,
-    FileProviderStateSnapshotEntry,
+    FileProviderDomainReport, FileProviderInvalidationReport, FileProviderObservedEventKind,
+    FileProviderObservedInvalidation, FileProviderOperation, FileProviderOperationDisposition,
+    FileProviderOperationReport, FileProviderProgressReport, FileProviderRegisteredDomain,
+    FileProviderStateInvalidationReport, FileProviderStateObserver, FileProviderStateReport,
+    FileProviderStateSnapshot, FileProviderStateSnapshotEntry,
 };
 pub use finder::{FinderKindSource, NativeFinderKindReport};
 pub use gfm_mac_sys::NativeVolumeStatus;

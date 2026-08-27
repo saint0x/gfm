@@ -2374,7 +2374,7 @@
         "tmp/gfm-fozzy-fileprovider-event.icloud-placeholder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -2393,7 +2393,7 @@
         "tmp/gfm-fozzy-fileprovider-remove.icloud.md"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\tprevious=downloaded\tcurrent=local-only\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=remove\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\tprevious=downloaded\tcurrent=local-only\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -2434,7 +2434,7 @@
         "tmp/gfm-fozzy-fileprovider-remove.icloud.md"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\tprevious=downloaded\tcurrent=local-only\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=remove\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\tprevious=downloaded\tcurrent=local-only\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -2509,7 +2509,7 @@
         "tmp/gfm-fozzy-fileprovider-observer.icloud-placeholder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
       "stderr": "",
       "times": 1
     },

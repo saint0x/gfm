@@ -674,9 +674,35 @@ pub struct FileProviderStateInvalidationReport {
     pub reindex_metadata: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FileProviderObservedEventKind {
+    Create,
+    Metadata,
+    Modify,
+    Remove,
+    Rename,
+    Rescan,
+    Other,
+}
+
+impl FileProviderObservedEventKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Metadata => "metadata",
+            Self::Modify => "modify",
+            Self::Remove => "remove",
+            Self::Rename => "rename",
+            Self::Rescan => "rescan",
+            Self::Other => "other",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileProviderObservedInvalidation {
     pub events: usize,
+    pub event_kinds: Vec<FileProviderObservedEventKind>,
     pub paths: Vec<PathBuf>,
     pub report: FileProviderStateInvalidationReport,
 }
@@ -919,13 +945,16 @@ impl FileProviderObservedInvalidation {
         events: impl IntoIterator<Item = FileEvent>,
     ) -> Result<(Self, FileProviderStateSnapshot)> {
         let mut event_count = 0;
+        let mut event_kinds = BTreeSet::new();
         let mut paths = BTreeSet::new();
         for event in events {
             event_count += 1;
+            event_kinds.insert(fileprovider_observed_event_kind(&event.kind));
             for path in paths_for_fileprovider_event(previous, &event) {
                 paths.insert(path);
             }
         }
+        let event_kinds = event_kinds.into_iter().collect::<Vec<_>>();
         let paths = paths.into_iter().collect::<Vec<_>>();
         let (report, snapshot) = if paths.is_empty() {
             let snapshot = previous
@@ -946,6 +975,7 @@ impl FileProviderObservedInvalidation {
         Ok((
             Self {
                 events: event_count,
+                event_kinds,
                 paths,
                 report,
             },
@@ -955,8 +985,13 @@ impl FileProviderObservedInvalidation {
 
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!(
-            "fileprovider-observed-invalidation\tevents={}\tpaths={}",
+            "fileprovider-observed-invalidation\tevents={}\tevent-kinds={}\tpaths={}",
             self.events,
+            self.event_kinds
+                .iter()
+                .map(|kind| kind.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
             self.paths.len()
         )];
         lines.push(self.report.as_tsv());
@@ -1020,6 +1055,18 @@ impl FileProviderStateObserver {
             FileProviderObservedInvalidation::evaluate(Some(&self.snapshot), events)?;
         self.snapshot = snapshot;
         Ok(observed)
+    }
+}
+
+fn fileprovider_observed_event_kind(kind: &FileEventKind) -> FileProviderObservedEventKind {
+    match kind {
+        FileEventKind::Create => FileProviderObservedEventKind::Create,
+        FileEventKind::Metadata => FileProviderObservedEventKind::Metadata,
+        FileEventKind::Modify => FileProviderObservedEventKind::Modify,
+        FileEventKind::Remove => FileProviderObservedEventKind::Remove,
+        FileEventKind::Rename { .. } => FileProviderObservedEventKind::Rename,
+        FileEventKind::Rescan => FileProviderObservedEventKind::Rescan,
+        FileEventKind::Other => FileProviderObservedEventKind::Other,
     }
 }
 
@@ -2058,6 +2105,10 @@ mod tests {
             FileProviderObservedInvalidation::evaluate(Some(&previous), events).unwrap();
 
         assert_eq!(observed.events, 1);
+        assert_eq!(
+            observed.event_kinds,
+            vec![FileProviderObservedEventKind::Metadata]
+        );
         assert_eq!(observed.paths, vec![evicted.clone()]);
         assert_eq!(observed.report.changes.len(), 1);
         assert!(observed.report.invalidate_icon);
@@ -2067,9 +2118,55 @@ mod tests {
         assert!(observed.report.reindex_metadata);
         assert_eq!(snapshot.entries[0].path, evicted);
         assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
-        assert!(observed
-            .as_tsv()
-            .contains("fileprovider-observed-invalidation\tevents=1\tpaths=1"));
+        assert!(observed.as_tsv().contains(
+            "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1"
+        ));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_reports_sorted_event_kinds() {
+        let root = unique_temp_dir();
+        let old = root.join("Old.icloud-placeholder");
+        let new = root.join("New.icloud-placeholder");
+        fs::write(&old, "placeholder").unwrap();
+        fs::write(&new, "placeholder").unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: old.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+        let events = vec![
+            FileEvent::new(&new, FileEventKind::Metadata),
+            FileEvent::new(
+                &new,
+                FileEventKind::Rename {
+                    from: old.clone(),
+                    to: new.clone(),
+                },
+            ),
+        ];
+
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate(Some(&previous), events).unwrap();
+
+        assert_eq!(
+            observed.event_kinds,
+            vec![
+                FileProviderObservedEventKind::Metadata,
+                FileProviderObservedEventKind::Rename,
+            ]
+        );
+        assert_eq!(observed.paths, vec![new.clone(), old.clone()]);
+        assert!(snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.path == new && entry.state == CloudStorageState::Evicted));
+        assert!(observed.as_tsv().starts_with(
+            "fileprovider-observed-invalidation\tevents=2\tevent-kinds=metadata,rename\tpaths=2\n"
+        ));
 
         fs::remove_dir_all(root).unwrap();
     }
