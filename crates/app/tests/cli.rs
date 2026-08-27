@@ -4054,6 +4054,16 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
         recover_stderr.contains("sidecar-recovery-action"),
         "{recover_stderr}"
     );
+    assert_eq!(
+        recover_stderr
+            .matches(&format!(
+                "security-worker-admission\tworker=sidecar repair records\tpath={}\tintent=read",
+                records.display()
+            ))
+            .count(),
+        1,
+        "{recover_stderr}"
+    );
     let catalog_text = fs::read_to_string(&catalog).unwrap();
     assert!(catalog_text.contains("\trepair\t"), "{catalog_text}");
     assert!(catalog_text.contains("sidecar repair"), "{catalog_text}");
@@ -4205,6 +4215,13 @@ fn deferred_sidecar_recover_adaptive_does_not_touch_unreachable_records_from_bin
     );
     assert!(
         !stderr.contains("volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "\tworker=sidecar repair records\tpath={}",
+            records.display()
+        )),
         "{stderr}"
     );
     assert_eq!(

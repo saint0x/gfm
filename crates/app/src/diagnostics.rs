@@ -1,4 +1,4 @@
-use crate::access::{preflight_access_scope, ScopedAccessGuard};
+use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
 use crate::runtime::{
     run_scheduled_volume_task_cancellable, run_scheduled_volume_task_cancellable_with_volume,
     run_volume_task_cancellable,
@@ -75,10 +75,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         "index rebuild",
                         pressure,
                         move || {
-                            let _access = preflight_access_scope(
+                            preflight_volume_access_scope(
                                 &volume_spec.root,
                                 AccessIntent::Index,
-                                "index rebuild root",
+                                "index rebuild",
                             )?;
                             Ok(detect_volume_id(&volume_spec.root)
                                 .ok()
@@ -189,10 +189,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         "persistent index repair",
                         pressure,
                         move || {
-                            let _access = preflight_access_scope(
+                            preflight_volume_access_scope(
                                 &volume_spec.root,
                                 AccessIntent::Index,
-                                "persistent index repair root",
+                                "persistent index repair",
                             )?;
                             Ok(detect_volume_id(&volume_spec.root)
                                 .ok()

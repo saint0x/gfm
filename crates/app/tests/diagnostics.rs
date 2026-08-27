@@ -34,6 +34,13 @@ fn diagnostics_rebuilds_and_inspects_indexes_from_binary() {
             && deferred_stderr.contains("action=Defer"),
         "{deferred_stderr}"
     );
+    assert!(
+        !deferred_stderr.contains(&format!(
+            "\tworker=index rebuild root\tpath={}",
+            root.display()
+        )),
+        "{deferred_stderr}"
+    );
     assert!(!records.exists());
     assert!(!content.exists());
 
@@ -187,6 +194,13 @@ fn adaptive_diagnostics_rebuild_refuses_unreachable_outputs_before_worker_from_b
         stderr.contains("index rebuild records volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=index rebuild\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
     assert!(!records.exists());
     assert!(!content.exists());
 
@@ -302,6 +316,13 @@ fn diagnostics_plans_and_recovers_persistent_index_from_binary() {
     assert!(
         deferred_stderr.contains("persistent-index-recovery-deferred")
             && deferred_stderr.contains("action=Defer"),
+        "{deferred_stderr}"
+    );
+    assert!(
+        !deferred_stderr.contains(&format!(
+            "\tworker=persistent index repair root\tpath={}",
+            root.display()
+        )),
         "{deferred_stderr}"
     );
     assert!(!state.exists());
@@ -470,6 +491,13 @@ fn adaptive_diagnostics_recover_refuses_unreachable_outputs_before_worker_from_b
         stderr.contains(
             "persistent index repair records volume access blocked: unreachable volume network"
         ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=persistent index repair\tpath={}",
+            root.display()
+        )),
         "{stderr}"
     );
     assert!(!records.exists());
