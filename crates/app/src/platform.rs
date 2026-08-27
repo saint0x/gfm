@@ -6,7 +6,8 @@ use crate::{
 use gfm_fs::record_for_path;
 use gfm_index::{
     parse_volume_indexing_policy, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor,
-    ProviderMetadataInvalidationReport, VolumeIndexPolicy, VolumeInvalidationReport,
+    IndexVolumeEventKind, ProviderMetadataInvalidationReport, VolumeEventIndexInvalidationReport,
+    VolumeIndexPolicy, VolumeInvalidationReport,
 };
 use gfm_jobs::{
     Cancellation, JobClass, JobPayloadKind, JobProgressState, Priority, Scheduler, SchedulingAction,
@@ -310,6 +311,44 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     path,
                     descriptor.as_ref(),
                     None,
+                )
+                .as_tsv()
+            );
+        }
+        "volume-event-index-invalidation" => {
+            let kind = parse_volume_event_kind(&required_string(
+                args.next(),
+                "volume-event-index-invalidation requires an event kind",
+            )?)?;
+            let path = args.next().map(PathBuf::from);
+            let descriptor = path
+                .as_ref()
+                .filter(|path| path.exists())
+                .map(VolumeDescriptor::for_path)
+                .transpose()?;
+            let native_status = if descriptor.is_some() {
+                gfm_mac::NativeVolumeStatus::Available
+            } else if path.is_some() {
+                gfm_mac::NativeVolumeStatus::Missing
+            } else {
+                gfm_mac::NativeVolumeStatus::Unavailable
+            };
+            let event_report = VolumeEventInvalidationReport::from_parts(
+                kind,
+                native_status,
+                path.clone(),
+                descriptor.as_ref(),
+                None,
+            );
+            let current = descriptor.as_ref().map(index_volume_descriptor);
+            println!(
+                "{}",
+                VolumeEventIndexInvalidationReport::from_event(
+                    index_volume_event_kind(kind),
+                    path,
+                    current.as_ref(),
+                    event_report.invalidate_index_admission,
+                    event_report.rescan_index,
                 )
                 .as_tsv()
             );
@@ -850,6 +889,15 @@ fn parse_volume_event_kind(kind: &str) -> Result<VolumeEventKind> {
         other => Err(GfmError::Format(format!(
             "unsupported volume event kind `{other}`"
         ))),
+    }
+}
+
+fn index_volume_event_kind(kind: VolumeEventKind) -> IndexVolumeEventKind {
+    match kind {
+        VolumeEventKind::Appeared => IndexVolumeEventKind::Appeared,
+        VolumeEventKind::DescriptionChanged => IndexVolumeEventKind::DescriptionChanged,
+        VolumeEventKind::Disappeared => IndexVolumeEventKind::Disappeared,
+        VolumeEventKind::Unavailable => IndexVolumeEventKind::Unavailable,
     }
 }
 

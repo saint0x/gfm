@@ -1770,6 +1770,62 @@ fn volume_invalidation_cancels_index_jobs_when_volume_disconnects() {
 }
 
 #[test]
+fn volume_event_index_invalidation_rescans_connected_volume_without_cancelling_jobs() {
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    );
+
+    let report = VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::Appeared,
+        Some(PathBuf::from("/Volumes/Work")),
+        Some(&current),
+        true,
+        true,
+    );
+
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(!report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.current_class, Some(IndexVolumeClass::External));
+    assert_eq!(report.reason, "volume-event-connected");
+    assert!(report
+        .as_tsv()
+        .contains("\tcurrent-class=external\tcurrent-mount=mounted\t"));
+}
+
+#[test]
+fn volume_event_index_invalidation_cancels_jobs_for_disconnect_and_unavailable_events() {
+    let disconnected = VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::Disappeared,
+        Some(PathBuf::from("/Volumes/Work")),
+        None,
+        true,
+        true,
+    );
+    let unavailable = VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::Unavailable,
+        None,
+        None,
+        true,
+        true,
+    );
+
+    for report in [&disconnected, &unavailable] {
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.cancel_index_jobs);
+        assert!(report.clear_fsevents_cursor);
+    }
+    assert_eq!(disconnected.reason, "volume-event-disconnected");
+    assert_eq!(unavailable.reason, "volume-event-native-unavailable");
+    assert!(unavailable.as_tsv().contains("\tpath=-\tcurrent-class=-\t"));
+}
+
+#[test]
 fn volume_invalidation_cancels_index_jobs_when_stable_identity_changes() {
     let previous = IndexVolumeDescriptor::new(
         "Work Drive",

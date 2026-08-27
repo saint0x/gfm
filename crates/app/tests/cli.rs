@@ -149,6 +149,18 @@ fn operation_preflight_refreshes_permission_state_from_binary() {
         stderr.contains("permission-refresh\taudience=operations\tsubject=copy\t"),
         "{stderr}"
     );
+    assert!(
+        stderr.contains("security-worker-admission\tworker=copy source\t")
+            && stderr.contains("\tworker-action=start\t")
+            && stderr.contains("\tcan-touch-filesystem=true\t"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("security-worker-admission\tworker=copy destination-parent\t")
+            && stderr.contains("\tworker-action=start\t")
+            && stderr.contains("\tcan-touch-filesystem=true\t"),
+        "{stderr}"
+    );
     assert!(stderr.contains("\trefresh-operations=true"), "{stderr}");
     assert!(destination.is_file());
 

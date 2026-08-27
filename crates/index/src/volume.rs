@@ -94,6 +94,25 @@ impl VolumeIndexAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexVolumeEventKind {
+    Appeared,
+    DescriptionChanged,
+    Disappeared,
+    Unavailable,
+}
+
+impl IndexVolumeEventKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Appeared => "appeared",
+            Self::DescriptionChanged => "description-changed",
+            Self::Disappeared => "disappeared",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VolumeThrottleClass {
     Local,
     External,
@@ -392,6 +411,19 @@ pub struct VolumeInvalidationReport {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeEventIndexInvalidationReport {
+    pub kind: IndexVolumeEventKind,
+    pub path: Option<PathBuf>,
+    pub current_class: Option<IndexVolumeClass>,
+    pub current_mount_state: Option<IndexMountState>,
+    pub invalidate_index_admission: bool,
+    pub rescan_index: bool,
+    pub cancel_index_jobs: bool,
+    pub clear_fsevents_cursor: bool,
+    pub reason: String,
+}
+
 impl VolumeInvalidationReport {
     pub fn evaluate(
         previous: Option<&IndexVolumeDescriptor>,
@@ -517,6 +549,71 @@ impl VolumeInvalidationReport {
                 .unwrap_or("-"),
             self.invalidate_sidebar,
             self.invalidate_operation_policy,
+            self.invalidate_index_admission,
+            self.rescan_index,
+            self.cancel_index_jobs,
+            self.clear_fsevents_cursor,
+            escape_field(&self.reason)
+        )
+    }
+}
+
+impl VolumeEventIndexInvalidationReport {
+    pub fn from_event(
+        kind: IndexVolumeEventKind,
+        path: Option<PathBuf>,
+        current: Option<&IndexVolumeDescriptor>,
+        source_invalidates_index_admission: bool,
+        source_rescans_index: bool,
+    ) -> Self {
+        let event_visible =
+            path.is_some() || current.is_some() || source_invalidates_index_admission;
+        let invalidate_index_admission = event_visible && source_invalidates_index_admission;
+        let rescan_index = event_visible && source_rescans_index;
+        let cancel_index_jobs = event_visible
+            && matches!(
+                kind,
+                IndexVolumeEventKind::DescriptionChanged
+                    | IndexVolumeEventKind::Disappeared
+                    | IndexVolumeEventKind::Unavailable
+            );
+        let clear_fsevents_cursor = invalidate_index_admission || rescan_index || cancel_index_jobs;
+        let reason = match kind {
+            IndexVolumeEventKind::Appeared if current.is_some() => "volume-event-connected",
+            IndexVolumeEventKind::Appeared => "volume-event-appeared-unclassified",
+            IndexVolumeEventKind::DescriptionChanged if current.is_some() => {
+                "volume-event-descriptor-changed"
+            }
+            IndexVolumeEventKind::DescriptionChanged => "volume-event-description-unavailable",
+            IndexVolumeEventKind::Disappeared => "volume-event-disconnected",
+            IndexVolumeEventKind::Unavailable => "volume-event-native-unavailable",
+        };
+
+        Self {
+            kind,
+            path,
+            current_class: current.map(|volume| volume.class),
+            current_mount_state: current.map(|volume| volume.mount_state),
+            invalidate_index_admission,
+            rescan_index,
+            cancel_index_jobs,
+            clear_fsevents_cursor,
+            reason: reason.to_string(),
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "volume-event-index-invalidation\tkind={}\tpath={}\tcurrent-class={}\tcurrent-mount={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
+            self.kind.as_str(),
+            self.path
+                .as_ref()
+                .map(|path| escape_field(&path.to_string_lossy()))
+                .unwrap_or_else(|| "-".to_string()),
+            self.current_class.map(IndexVolumeClass::as_str).unwrap_or("-"),
+            self.current_mount_state
+                .map(IndexMountState::as_str)
+                .unwrap_or("-"),
             self.invalidate_index_admission,
             self.rescan_index,
             self.cancel_index_jobs,

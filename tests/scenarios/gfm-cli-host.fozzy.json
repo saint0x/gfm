@@ -2361,11 +2361,61 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-event-index-invalidation",
+        "appeared",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-index-invalidation\tkind=appeared\tpath=tmp/gfm-fozzy-dist\tcurrent-class=external\tcurrent-mount=mounted\tindex-admission=true\trescan-index=true\tcancel-index-jobs=false\tclear-fsevents-cursor=true\treason=volume-event-connected\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-event-invalidation",
         "unavailable"
       ],
       "exit_code": 0,
       "stdout": "volume-event-invalidation\tkind=unavailable\tnative-status=unavailable\tpath=-\tcurrent-kind=-\tcurrent-mount=-\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-event-unavailable\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-event-index-invalidation",
+        "unavailable"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-index-invalidation\tkind=unavailable\tpath=-\tcurrent-class=-\tcurrent-mount=-\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-native-unavailable\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-event-index-invalidation",
+        "appeared",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-index-invalidation\tkind=appeared\tpath=tmp/gfm-fozzy-dist\tcurrent-class=external\tcurrent-mount=mounted\tindex-admission=true\trescan-index=true\tcancel-index-jobs=false\tclear-fsevents-cursor=true\treason=volume-event-connected\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-event-index-invalidation",
+        "unavailable"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-index-invalidation\tkind=unavailable\tpath=-\tcurrent-class=-\tcurrent-mount=-\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-native-unavailable\n",
       "stderr": "",
       "times": 1
     },

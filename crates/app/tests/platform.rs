@@ -1393,6 +1393,53 @@ fn reports_unavailable_volume_event_invalidation_from_binary() {
 }
 
 #[test]
+fn reports_volume_event_index_invalidation_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-event-index-invalidation-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let connected = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-index-invalidation")
+        .arg("appeared")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        connected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&connected.stderr)
+    );
+    let connected_stdout = String::from_utf8(connected.stdout).unwrap();
+    assert!(connected_stdout.starts_with("volume-event-index-invalidation\tkind=appeared\t"));
+    assert!(connected_stdout.contains("\tcurrent-class=external\tcurrent-mount=mounted\t"));
+    assert!(connected_stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(connected_stdout.contains("\tcancel-index-jobs=false\t"));
+    assert!(connected_stdout.ends_with("reason=volume-event-connected\n"));
+
+    let unavailable = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-index-invalidation")
+        .arg("unavailable")
+        .output()
+        .unwrap();
+    assert!(
+        unavailable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unavailable.stderr)
+    );
+    let unavailable_stdout = String::from_utf8(unavailable.stdout).unwrap();
+    assert!(unavailable_stdout
+        .starts_with("volume-event-index-invalidation\tkind=unavailable\tpath=-\t"));
+    assert!(unavailable_stdout.contains("\tcancel-index-jobs=true\t"));
+    assert!(unavailable_stdout.contains("\tclear-fsevents-cursor=true\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_operation_refusal_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-volume-operation-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

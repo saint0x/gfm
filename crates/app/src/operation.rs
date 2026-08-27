@@ -8,7 +8,8 @@ use crate::{detect_volume_id, parent_volume, required_path};
 use gfm_jobs::Priority;
 use gfm_mac::{
     AccessIntent, SecurityDecisionAction, SecurityScopedAccessReport, SecurityScopedBookmarkAccess,
-    SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore, VolumeDiscoveryReport, VolumeKind,
+    SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore, SecurityWorkerAction,
+    VolumeDiscoveryReport, VolumeKind,
 };
 use gfm_ops::{
     read_trash_metadata, ConflictPolicy, Operation, OperationAccessDecision, OperationAccessGate,
@@ -364,6 +365,12 @@ fn operation_access_gate(
     for requirement in operation.access_requirements() {
         let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
         let report = SecurityScopedAccessReport::evaluate(&probe_path, AccessIntent::Operate);
+        let admission = report.worker_admission(format!(
+            "{} {}",
+            operation_kind(operation),
+            requirement.role.as_str()
+        ));
+        eprintln!("{}", admission.as_tsv());
         if matches!(report.action, SecurityDecisionAction::Deny)
             && matches!(report.probe, gfm_mac::AccessProbeState::Missing)
             && !matches!(requirement.role, OperationAccessRole::DestinationParent)
@@ -371,22 +378,23 @@ fn operation_access_gate(
             continue;
         }
         let reason = format!(
-            "{}; scope={}; mode={}; role={}; probe={}",
+            "{}; scope={}; mode={}; worker-action={}; role={}; probe={}",
             report.reason,
             report.scope.as_str(),
             report.mode.as_str(),
+            admission.worker_action.as_str(),
             requirement.role.as_str(),
             probe_path.display()
         );
-        let decision = if report.bookmark_required {
+        let decision = if admission.needs_bookmark_access {
             stored_bookmark_decision(&bookmark_store, &probe_path, &reason)
         } else {
             None
         }
-        .unwrap_or_else(|| match report.action {
-            SecurityDecisionAction::Allow => OperationAccessDecision::allow(reason),
-            SecurityDecisionAction::Prompt => OperationAccessDecision::prompt(reason),
-            SecurityDecisionAction::Degrade | SecurityDecisionAction::Deny => {
+        .unwrap_or_else(|| match admission.worker_action {
+            SecurityWorkerAction::Start => OperationAccessDecision::allow(reason),
+            SecurityWorkerAction::Prompt => OperationAccessDecision::prompt(reason),
+            SecurityWorkerAction::MetadataOnly | SecurityWorkerAction::Deny => {
                 OperationAccessDecision::deny(reason)
             }
         });
@@ -455,7 +463,12 @@ fn operation_security_accesses(operation: &Operation) -> Result<Vec<SecurityScop
     for requirement in operation.access_requirements() {
         let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
         let report = SecurityScopedAccessReport::evaluate(&probe_path, AccessIntent::Operate);
-        if !report.bookmark_required {
+        let admission = report.worker_admission(format!(
+            "{} {}",
+            operation_kind(operation),
+            requirement.role.as_str()
+        ));
+        if !admission.needs_bookmark_access {
             continue;
         }
         if matches!(report.action, SecurityDecisionAction::Deny)
