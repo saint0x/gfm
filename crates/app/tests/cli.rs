@@ -5808,6 +5808,54 @@ fn ui_operation_conflict_resolve_persists_on_visible_worker_from_binary() {
 }
 
 #[test]
+fn ui_operation_conflict_resolve_writes_relative_store_on_visible_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ui-operation-conflict-relative-root");
+    let source = root.join("report.md");
+    let destination = root.join("destination.md");
+    fs::write(&source, "new report").unwrap();
+    fs::write(&destination, "old report").unwrap();
+    fs::write(
+        root.join("operation-conflicts.tsv"),
+        format!(
+            "operation-conflict\toperation=copy\tsource={}\ttarget={}\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n",
+            source.display(),
+            destination.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .args([
+            "ui-operation-conflict-resolve",
+            "operation-conflicts.tsv",
+            destination.to_str().unwrap(),
+            "skip",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "ui operation conflict resolve", Path::new("."));
+    assert!(
+        !stderr
+            .contains("security-worker-admission\tworker=ui operation conflict resolve\tpath=\t"),
+        "{stderr}"
+    );
+    let stored = fs::read_to_string(root.join("operation-conflicts.tsv")).unwrap();
+    assert!(stored.contains("\tpolicy=skip\t"), "{stored}");
+    assert!(stored.contains("\tblocks-operation=false\t"), "{stored}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn ui_operation_conflict_resolve_refuses_unreachable_store_before_mutating_from_binary() {
     let root = unique_temp_dir("gfm-cli-ui-operation-conflict-resolve-unreachable");
     let conflicts = root.join("operation-conflicts.tsv");

@@ -601,7 +601,7 @@ impl JobPayloadCatalog {
     }
 
     pub fn write_all(&self, records: &[JobPayloadRecord]) -> Result<()> {
-        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        let parent = real_parent_or_cwd(&self.path);
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         let temporary = self.temp_path();
         {
@@ -794,7 +794,7 @@ impl JobJournal {
     }
 
     pub fn append(&self, entry: &JournalEntry) -> Result<()> {
-        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        let parent = real_parent_or_cwd(&self.path);
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         let file = OpenOptions::new()
             .create(true)
@@ -1313,6 +1313,12 @@ fn unescape(input: &str) -> std::result::Result<String, String> {
         }
     }
     Ok(output)
+}
+
+fn real_parent_or_cwd(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 #[cfg(test)]

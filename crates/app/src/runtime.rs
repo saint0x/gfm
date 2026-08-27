@@ -679,9 +679,8 @@ impl OperationConflictStore {
 
     pub(crate) fn append(&self, report: &OperationConflictReport) -> Result<()> {
         let _access = preflight_operation_conflict_write(&self.path)?;
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
-        }
+        let parent = crate::parent_or_cwd(&self.path);
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -772,9 +771,8 @@ impl OperationConflictStore {
 
     fn write_all(&self, conflicts: &[RuntimeOperationConflict]) -> Result<()> {
         let _access = preflight_operation_conflict_write(&self.path)?;
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
-        }
+        let parent = crate::parent_or_cwd(&self.path);
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         let text = conflicts
             .iter()
             .map(RuntimeOperationConflict::as_tsv)

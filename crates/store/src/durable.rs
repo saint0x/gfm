@@ -64,9 +64,10 @@ pub(crate) fn sync_parent_for_path(path: &Path) -> Result<bool> {
 }
 
 fn sync_parent(path: &Path) -> Result<bool> {
-    let Some(parent) = path.parent() else {
-        return Ok(false);
-    };
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     match File::open(parent) {
         Ok(file) => match file.sync_all() {
             Ok(()) => Ok(true),
@@ -87,4 +88,41 @@ fn temporary_path(path: &Path) -> PathBuf {
         .unwrap_or(0);
     path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()))
         .with_extension(format!("{nonce}.tmp"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn atomic_write_accepts_relative_leaf_path() {
+        let _cwd = CWD_LOCK.lock().unwrap();
+        let root = temp_path("durable-relative-root");
+        let previous = std::env::current_dir().unwrap();
+        fs::create_dir_all(&root).unwrap();
+        std::env::set_current_dir(&root).unwrap();
+        let path = PathBuf::from("records.gfm");
+
+        let commit =
+            atomic_write(&path, |writer| writer.write_all(b"relative durable write")).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "relative durable write");
+        assert_eq!(commit.path, path);
+        assert!(commit.synced_file);
+        assert!(commit.synced_parent);
+        std::env::set_current_dir(previous).unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn temp_path(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("gfm-store-{label}-{}-{nanos}", std::process::id()))
+    }
 }

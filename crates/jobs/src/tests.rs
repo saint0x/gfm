@@ -2,9 +2,11 @@ use crate::*;
 use gfm_types::{GfmError, VolumeId};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static CWD_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn pops_highest_priority_first() {
@@ -721,6 +723,29 @@ fn job_journal_append_creates_parent_directory() {
 }
 
 #[test]
+fn job_journal_append_accepts_relative_leaf_path() {
+    let _cwd = CWD_LOCK.lock().unwrap();
+    let root = temp_path("gfm-job-journal-relative-root", "root");
+    let path = PathBuf::from("jobs.journal");
+    let previous = std::env::current_dir().unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_current_dir(&root).unwrap();
+    let journal = JobJournal::new(&path);
+    let entry = JournalEntry {
+        id: JobId::from_raw(42),
+        label: "relative journal".to_string(),
+        attempt: 1,
+        status: TaskStatus::Started,
+    };
+
+    journal.append(&entry).unwrap();
+
+    assert_eq!(journal.read().unwrap(), vec![entry]);
+    std::env::set_current_dir(previous).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn journal_identifies_interrupted_and_retryable_jobs() {
     let path = temp_path("gfm-job-recovery", "journal");
     let journal = JobJournal::new(&path);
@@ -985,6 +1010,31 @@ fn payload_catalog_write_all_creates_parent_directory() {
 }
 
 #[test]
+fn payload_catalog_write_all_accepts_relative_leaf_path() {
+    let _cwd = CWD_LOCK.lock().unwrap();
+    let root = temp_path("gfm-job-payload-catalog-relative-root", "root");
+    let path = PathBuf::from("payloads.gfmjobs");
+    let previous = std::env::current_dir().unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_current_dir(&root).unwrap();
+    let catalog = JobPayloadCatalog::new(&path);
+    let record = JobPayloadRecord::new(
+        JobId::from_raw(9),
+        JobPayloadKind::Indexing,
+        "relative payload",
+        "payloads/index.gfmjob",
+        Some(VolumeId(3)),
+        "index relative payload",
+    );
+
+    catalog.write_all(std::slice::from_ref(&record)).unwrap();
+
+    assert_eq!(catalog.read().unwrap(), vec![record]);
+    std::env::set_current_dir(previous).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn payload_catalog_append_replaces_existing_job_id() {
     let path = temp_path("gfm-job-payload-catalog-replace", "gfmjobs");
     let catalog = JobPayloadCatalog::new(&path);
@@ -1125,6 +1175,52 @@ fn payload_catalog_filtered_read_uses_latest_legacy_duplicate_record() {
     std::fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn runtime_stores_write_relative_leaf_paths_in_current_directory() {
+    let _cwd = CWD_LOCK.lock().unwrap();
+    let root = temp_dir("gfm-job-relative-stores");
+    let previous = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&root).unwrap();
+
+    let catalog = JobPayloadCatalog::new("payloads.gfmjobs");
+    let payload = JobPayloadRecord::new(
+        JobId::from_raw(7),
+        JobPayloadKind::Preview,
+        "preview",
+        "preview/job.gfmjob",
+        Some(VolumeId(9)),
+        "preview selected file",
+    );
+    catalog.write_all(std::slice::from_ref(&payload)).unwrap();
+    assert_eq!(catalog.read().unwrap(), vec![payload]);
+
+    let journal = JobJournal::new("jobs.gfmjournal");
+    let entry = JournalEntry {
+        id: JobId::from_raw(8),
+        label: "copy selected files".to_string(),
+        attempt: 1,
+        status: TaskStatus::Completed,
+    };
+    journal.append(&entry).unwrap();
+    assert_eq!(journal.read().unwrap(), vec![entry]);
+
+    let progress = JobProgressStore::new("progress.gfmprogress");
+    let snapshot = JobProgressSnapshot::new(
+        JobId::from_raw(9),
+        JobClass::Foreground,
+        Priority::Visible,
+        "thumbnail generation",
+        Some(VolumeId(10)),
+        4,
+    )
+    .with_progress(JobProgressState::Running, 2, "rendering", 3);
+    progress.write_all(std::slice::from_ref(&snapshot)).unwrap();
+    assert_eq!(progress.read().unwrap(), vec![snapshot]);
+
+    std::env::set_current_dir(previous).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn temp_path(prefix: &str, extension: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "{}-{}.{}",
@@ -1135,4 +1231,17 @@ fn temp_path(prefix: &str, extension: &str) -> PathBuf {
             .as_nanos(),
         extension
     ))
+}
+
+fn temp_dir(prefix: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "{}-{}",
+        prefix,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&path).unwrap();
+    path
 }

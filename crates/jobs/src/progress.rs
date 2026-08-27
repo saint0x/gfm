@@ -169,7 +169,7 @@ impl JobProgressStore {
     }
 
     pub fn write_all(&self, snapshots: &[JobProgressSnapshot]) -> Result<()> {
-        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        let parent = real_parent_or_cwd(&self.path);
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         let tmp = self.temp_path();
         {
@@ -425,6 +425,12 @@ fn parse_snapshot(line: &str) -> std::result::Result<JobProgressSnapshot, String
         detail,
         updated_ms,
     })
+}
+
+fn real_parent_or_cwd(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 #[cfg(test)]
