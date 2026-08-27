@@ -842,7 +842,7 @@ fn reports_fileprovider_state_from_binary() {
     );
     let evicted_stdout = String::from_utf8(evicted_output.stdout).unwrap();
     assert!(evicted_stdout.contains("\tstate=evicted\tmaterialization=remote-placeholder\t"));
-    assert!(evicted_stdout.contains("\tmaterialization-source=path-fallback\t"));
+    assert!(evicted_stdout.contains("\tmaterialization-source=xattr-fallback\t"));
     assert!(evicted_stdout.contains("\toffline=true\t"));
     assert!(evicted_stdout.contains("\tbadges=cloud\t"));
     assert!(evicted_stdout.contains("\tdownload=disabled\tevict=disabled\t"));
@@ -1248,6 +1248,7 @@ fn preview_cache_refuses_unreachable_network_volume_before_record_read_from_bina
     let cache = cache_root.join("cache");
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("preview-cache-fileprovider-invalidation")
@@ -1289,6 +1290,7 @@ fn preview_cache_refuses_unreachable_cache_root_before_invalidation_from_binary(
     let cache = offline.join("cache");
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("preview-cache-fileprovider-invalidation")
@@ -1324,6 +1326,7 @@ fn fileprovider_state_routes_refuse_unreachable_volume_before_native_read_from_b
     std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     let item = root.join("Remote.icloud-placeholder");
     std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
 
     for args in [
         vec!["fileprovider-state".to_string(), item.display().to_string()],
@@ -1402,6 +1405,7 @@ fn fileprovider_snapshot_routes_refuse_unreachable_volume_before_state_persisten
     let state = root.join("fileprovider-state.tsv");
     let item = root.join("Remote.icloud-placeholder");
     std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
 
     let scan = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-invalidation-scan")
@@ -1461,6 +1465,7 @@ fn reports_sidebar_fileprovider_invalidation_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("ui-sidebar-fileprovider-invalidation")
@@ -1493,6 +1498,7 @@ fn persists_fileprovider_invalidation_scan_from_binary() {
     let state = root.join("fileprovider-state.tsv");
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
 
     let first = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-invalidation-scan")
@@ -1542,6 +1548,7 @@ fn fileprovider_invalidation_scan_creates_nested_state_parent_from_binary() {
     let state = root.join("runtime").join("fileprovider-state.tsv");
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-invalidation-scan")
@@ -1576,6 +1583,7 @@ fn reports_fileprovider_invalidation_scan_from_binary() {
     let state = root.join("fileprovider-state.tsv");
     let item = root.join("Remote.icloud-placeholder");
     std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
 
     let initial = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-invalidation-scan")
@@ -1613,6 +1621,7 @@ fn reports_fileprovider_invalidation_scan_from_binary() {
 
     let downloaded = root.join("Remote.icloud-downloaded");
     std::fs::rename(&item, &downloaded).unwrap();
+    xattr::remove(&downloaded, "com.apple.icloud.placeholder").unwrap();
     let changed = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-invalidation-scan")
         .arg(&state)
@@ -1645,7 +1654,9 @@ fn reports_fileprovider_invalidation_event_from_binary() {
     let item = root.join("Remote.icloud-placeholder");
     let untouched = root.join("Untouched.icloud-placeholder");
     std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
     std::fs::write(&untouched, "placeholder").unwrap();
+    mark_evicted_fixture(&untouched);
     std::fs::write(
         &state,
         format!(
@@ -1698,6 +1709,7 @@ fn reports_observed_fileprovider_metadata_invalidation_from_binary() {
     let state = root.join("fileprovider-state.tsv");
     let item = root.join("Remote.icloud-placeholder");
     std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
     std::fs::write(
         &state,
         format!(
@@ -1745,6 +1757,7 @@ fn observed_fileprovider_metadata_invalidation_preserves_noop_events_from_binary
     let provider = root.join("Remote.icloud-placeholder");
     let local = root.join("Notes.txt");
     std::fs::write(&provider, "placeholder").unwrap();
+    mark_evicted_fixture(&provider);
     std::fs::write(&local, "local").unwrap();
     std::fs::write(
         &state,
@@ -1789,6 +1802,7 @@ fn fileprovider_invalidation_event_removes_deleted_tracked_item_from_binary() {
     let untouched = root.join("Untouched.icloud-placeholder");
     std::fs::write(&item, "downloaded").unwrap();
     std::fs::write(&untouched, "placeholder").unwrap();
+    mark_evicted_fixture(&untouched);
     std::fs::write(
         &state,
         format!(
@@ -1838,6 +1852,7 @@ fn fileprovider_invalidation_event_ignores_existing_local_file_from_binary() {
     let tracked = root.join("Remote.icloud-placeholder");
     let local = root.join("Notes.txt");
     std::fs::write(&tracked, "placeholder").unwrap();
+    mark_evicted_fixture(&tracked);
     std::fs::write(&local, "ordinary local file").unwrap();
     std::fs::write(
         &state,
@@ -1888,6 +1903,7 @@ fn reports_fileprovider_observer_probe_from_binary() {
     let state = root.join("fileprovider-state.tsv");
     let item = root.join("Remote.icloud-placeholder");
     std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
     std::fs::write(
         &state,
         format!(
@@ -1935,6 +1951,7 @@ fn fileprovider_observer_probe_refuses_unreachable_volume_before_watching_from_b
     let state = root.join("fileprovider-state.tsv");
     let item = root.join("Remote.icloud-placeholder");
     std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-observer-probe")
