@@ -4727,6 +4727,69 @@ fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
 }
 
 #[test]
+fn fileprovider_progress_job_persists_runtime_payload_and_progress_from_binary() {
+    let root = unique_temp_dir("gfm-cli-fileprovider-progress-runtime-root");
+    let item = root.join("Remote.icloud-downloading");
+    fs::write(&item, "downloading").unwrap();
+    let catalog = unique_temp_path("gfm-cli-fileprovider-progress-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-fileprovider-progress-runtime", "gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["fileprovider-progress-job", item.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("fileprovider-progress\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tstate=downloading\tprogress-direction=download\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tprogress-indeterminate=true\t"),
+        "{stdout}"
+    );
+
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains("\toperation\tfileprovider download\t"),
+        "{catalog_text}"
+    );
+    assert!(
+        catalog_text.contains("runtime/operation/fileprovider-download.gfmjob"),
+        "{catalog_text}"
+    );
+    assert!(
+        catalog_text.contains(
+            "fileprovider:icloud-drive:downloading:download:provider-progress-unavailable"
+        ),
+        "{catalog_text}"
+    );
+
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tfileprovider download\t"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains(
+            "\trunning\t0\t1\tfileprovider:icloud-drive:downloading:download:provider-progress-unavailable\t"
+        ),
+        "{progress_text}"
+    );
+
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cancellable_adaptive_extraction_worker_stops_before_launch_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-worker-cancel-root");
     let path = root.join("document.txt");

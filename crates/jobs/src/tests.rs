@@ -1059,6 +1059,44 @@ fn payload_catalog_reads_requested_records_only() {
     std::fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn payload_catalog_filtered_read_uses_latest_legacy_duplicate_record() {
+    let path = temp_path("gfm-job-payload-catalog-filtered-duplicate", "gfmjobs");
+    let stale = JobPayloadRecord::new(
+        JobId::from_raw(3),
+        JobPayloadKind::Repair,
+        "repair",
+        "repair/stale.gfmjob",
+        None,
+        "repair stale",
+    );
+    let current = JobPayloadRecord::new(
+        JobId::from_raw(3),
+        JobPayloadKind::Repair,
+        "repair",
+        "repair/current.gfmjob",
+        Some(VolumeId(11)),
+        "repair current",
+    );
+    std::fs::write(
+        &path,
+        format!(
+            "gfm-job-payload-catalog-v1\n{}\n{}\n",
+            stale.as_tsv(),
+            current.as_tsv()
+        ),
+    )
+    .unwrap();
+    let catalog = JobPayloadCatalog::new(&path);
+
+    assert_eq!(
+        catalog.read_for_ids([JobId::from_raw(3)]).unwrap(),
+        vec![current]
+    );
+
+    std::fs::remove_file(path).unwrap();
+}
+
 fn temp_path(prefix: &str, extension: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "{}-{}.{}",

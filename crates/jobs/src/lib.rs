@@ -674,11 +674,47 @@ impl JobPayloadCatalog {
         if wanted.is_empty() {
             return Ok(Vec::new());
         }
-        Ok(self
-            .read()?
-            .into_iter()
-            .filter(|record| wanted.contains(&record.id))
-            .collect())
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+        let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
+        let mut lines = BufReader::new(file).lines();
+        let header = lines
+            .next()
+            .transpose()
+            .map_err(|err| GfmError::io(&self.path, err))?
+            .ok_or_else(|| {
+                GfmError::Format(format!("empty payload catalog {}", self.path.display()))
+            })?;
+        if header != "gfm-job-payload-catalog-v1" {
+            return Err(GfmError::Format(format!(
+                "unsupported payload catalog header `{header}` in {}",
+                self.path.display()
+            )));
+        }
+        let mut records = Vec::new();
+        for (line_index, line) in lines.enumerate() {
+            let line = line.map_err(|err| GfmError::io(&self.path, err))?;
+            let record = parse_payload_record(&line).map_err(|err| {
+                GfmError::Format(format!(
+                    "{} line {}: {}",
+                    self.path.display(),
+                    line_index + 2,
+                    err
+                ))
+            })?;
+            if wanted.contains(&record.id) {
+                if let Some(index) = records
+                    .iter()
+                    .position(|existing: &JobPayloadRecord| existing.id == record.id)
+                {
+                    records[index] = record;
+                } else {
+                    records.push(record);
+                }
+            }
+        }
+        Ok(records)
     }
 
     fn contains_id(&self, id: JobId) -> Result<bool> {
