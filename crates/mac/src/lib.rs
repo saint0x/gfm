@@ -18,7 +18,8 @@ pub use fileprovider::{
     FileProviderConflictReport, FileProviderDomain, FileProviderDomainEnumerationReport,
     FileProviderDomainReport, FileProviderInvalidationReport, FileProviderOperation,
     FileProviderOperationDisposition, FileProviderOperationReport, FileProviderProgressReport,
-    FileProviderRegisteredDomain, FileProviderStateReport,
+    FileProviderRegisteredDomain, FileProviderStateInvalidationReport, FileProviderStateReport,
+    FileProviderStateSnapshot, FileProviderStateSnapshotEntry,
 };
 pub use finder::{FinderKindSource, NativeFinderKindReport};
 pub use host::{

@@ -536,6 +536,7 @@ fn print_usage() {
   gfm fileprovider-progress-job <path>
   gfm fileprovider-operation <download|evict> <path>
   gfm fileprovider-invalidation <previous-state> <path>
+  gfm fileprovider-invalidation-scan <state.tsv> <paths...>
   gfm volume-discovery [paths...]
   gfm volume-operation <eject|unmount|mount> <path>
   gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]

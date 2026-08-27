@@ -7,6 +7,8 @@ use gfm_mac_sys::{
     NativeUbiquitousDownloadingStatus,
 };
 use gfm_types::{GfmError, Result};
+use std::fs::{self, File};
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 const ICLOUD_DRIVE_COMPONENT: &str = "com~apple~CloudDocs";
@@ -630,6 +632,28 @@ pub struct FileProviderInvalidationReport {
     pub reason: &'static str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderStateSnapshot {
+    pub entries: Vec<FileProviderStateSnapshotEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderStateSnapshotEntry {
+    pub path: PathBuf,
+    pub state: CloudStorageState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderStateInvalidationReport {
+    pub initialized: bool,
+    pub changes: Vec<FileProviderInvalidationReport>,
+    pub invalidate_icon: bool,
+    pub invalidate_preview_memory: bool,
+    pub invalidate_preview_disk: bool,
+    pub invalidate_sidebar: bool,
+    pub reindex_metadata: bool,
+}
+
 impl FileProviderInvalidationReport {
     pub fn evaluate(
         path: impl AsRef<Path>,
@@ -637,6 +661,14 @@ impl FileProviderInvalidationReport {
     ) -> Result<FileProviderInvalidationReport> {
         let path = path.as_ref().to_path_buf();
         let current = FileProviderStateReport::read_path(&path)?;
+        Ok(Self::from_current(path, previous, current))
+    }
+
+    fn from_current(
+        path: PathBuf,
+        previous: CloudStorageState,
+        current: FileProviderStateReport,
+    ) -> FileProviderInvalidationReport {
         let state_changed = previous != current.storage_state;
         let provider_visible = current.domain != FileProviderDomain::Local
             || previous != CloudStorageState::LocalOnly
@@ -661,7 +693,7 @@ impl FileProviderInvalidationReport {
             "fileprovider-state-unchanged"
         };
 
-        Ok(FileProviderInvalidationReport {
+        FileProviderInvalidationReport {
             path,
             previous,
             state_changed,
@@ -672,7 +704,7 @@ impl FileProviderInvalidationReport {
             reindex_metadata: provider_visible && state_changed,
             current,
             reason,
-        })
+        }
     }
 
     pub fn as_tsv(&self) -> String {
@@ -689,6 +721,149 @@ impl FileProviderInvalidationReport {
             self.reindex_metadata,
             self.reason
         )
+    }
+}
+
+impl FileProviderStateSnapshot {
+    pub fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Result<Self> {
+        let mut entries = Vec::new();
+        for path in paths {
+            let state = FileProviderStateReport::read_path(&path)?.storage_state;
+            entries.push(FileProviderStateSnapshotEntry { path, state });
+        }
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        entries.dedup_by(|left, right| left.path == right.path);
+        Ok(Self { entries })
+    }
+
+    pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let text = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+        let mut lines = text.lines();
+        match lines.next() {
+            Some("gfm-fileprovider-state-v1") => {}
+            Some(other) => {
+                return Err(GfmError::Format(format!(
+                    "unsupported FileProvider state header `{other}` in {}",
+                    path.display()
+                )))
+            }
+            None => {
+                return Err(GfmError::Format(format!(
+                    "empty FileProvider state file {}",
+                    path.display()
+                )))
+            }
+        }
+        let mut entries = Vec::new();
+        for (line_index, line) in lines.enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let fields = line.split('\t').collect::<Vec<_>>();
+            if fields.len() != 2 {
+                return Err(GfmError::Format(format!(
+                    "{}:{} expected 2 tab-separated fields: state, path",
+                    path.display(),
+                    line_index + 2
+                )));
+            }
+            entries.push(FileProviderStateSnapshotEntry {
+                state: CloudStorageState::parse(fields[0])?,
+                path: PathBuf::from(unescape_field(fields[1])),
+            });
+        }
+        Ok(Self { entries })
+    }
+
+    pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        let mut snapshot = self.clone();
+        snapshot
+            .entries
+            .sort_by(|left, right| left.path.cmp(&right.path));
+        snapshot
+            .entries
+            .dedup_by(|left, right| left.path == right.path);
+        let mut output = String::from("gfm-fileprovider-state-v1\n");
+        for entry in &snapshot.entries {
+            output.push_str(&format!(
+                "{}\t{}\n",
+                entry.state.as_str(),
+                escape_field(&entry.path.to_string_lossy())
+            ));
+        }
+        atomic_write_text(path.as_ref(), &output)
+    }
+
+    fn previous_state_for(&self, path: &Path) -> Option<CloudStorageState> {
+        self.entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .map(|entry| entry.state)
+    }
+}
+
+impl FileProviderStateInvalidationReport {
+    pub fn evaluate(
+        previous: Option<&FileProviderStateSnapshot>,
+        current_paths: impl IntoIterator<Item = PathBuf>,
+    ) -> Result<(Self, FileProviderStateSnapshot)> {
+        let initialized = previous.is_none();
+        let mut changes = Vec::new();
+        let mut current_entries = Vec::new();
+        for path in current_paths {
+            let current = FileProviderStateReport::read_path(&path)?;
+            let previous_state = previous
+                .and_then(|snapshot| snapshot.previous_state_for(&path))
+                .unwrap_or(CloudStorageState::LocalOnly);
+            let change =
+                FileProviderInvalidationReport::from_current(path.clone(), previous_state, current);
+            current_entries.push(FileProviderStateSnapshotEntry {
+                path,
+                state: change.current.storage_state,
+            });
+            if initialized || change.state_changed {
+                changes.push(change);
+            }
+        }
+        let snapshot = FileProviderStateSnapshot {
+            entries: current_entries,
+        };
+        Ok((
+            Self {
+                initialized,
+                invalidate_icon: changes.iter().any(|change| change.invalidate_icon),
+                invalidate_preview_memory: changes
+                    .iter()
+                    .any(|change| change.invalidate_preview_memory),
+                invalidate_preview_disk: changes
+                    .iter()
+                    .any(|change| change.invalidate_preview_disk),
+                invalidate_sidebar: changes.iter().any(|change| change.invalidate_sidebar),
+                reindex_metadata: changes.iter().any(|change| change.reindex_metadata),
+                changes,
+            },
+            snapshot,
+        ))
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let mut lines = vec![format!(
+            "fileprovider-state-invalidation\tinitialized={}\tchanged={}\ticon={}\tpreview-memory={}\tpreview-disk={}\tsidebar={}\treindex-metadata={}",
+            self.initialized,
+            self.changes.len(),
+            self.invalidate_icon,
+            self.invalidate_preview_memory,
+            self.invalidate_preview_disk,
+            self.invalidate_sidebar,
+            self.reindex_metadata
+        )];
+        lines.extend(
+            self.changes
+                .iter()
+                .map(FileProviderInvalidationReport::as_tsv),
+        );
+        lines.join("\n")
     }
 }
 
@@ -1288,10 +1463,89 @@ fn native_has_offline_error(values: &NativeFileProviderResourceValues) -> bool {
 }
 
 fn escape_field(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('\t', "\\t")
-        .replace('\n', "\\n")
+    let mut output = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\\' => output.push_str("\\\\"),
+            '\t' => output.push_str("\\t"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            other => output.push(other),
+        }
+    }
+    output
+}
+
+fn unescape_field(value: &str) -> String {
+    let mut output = String::new();
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            output.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => output.push('\\'),
+            Some('t') => output.push('\t'),
+            Some('n') => output.push('\n'),
+            Some('r') => output.push('\r'),
+            Some(other) => {
+                output.push('\\');
+                output.push(other);
+            }
+            None => output.push('\\'),
+        }
+    }
+    output
+}
+
+fn atomic_write_text(path: &Path, text: &str) -> Result<()> {
+    let temporary = temporary_path(path);
+    let mut file = File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
+    if let Err(err) = file.write_all(text.as_bytes()) {
+        let _ = fs::remove_file(&temporary);
+        return Err(GfmError::io(&temporary, err));
+    }
+    if let Err(err) = file.sync_all() {
+        let _ = fs::remove_file(&temporary);
+        return Err(GfmError::io(&temporary, err));
+    }
+    drop(file);
+    if let Err(err) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(GfmError::io(path, err));
+    }
+    let _ = sync_parent(path);
+    Ok(())
+}
+
+fn sync_parent(path: &Path) -> Result<bool> {
+    let Some(parent) = path.parent() else {
+        return Ok(false);
+    };
+    match File::open(parent) {
+        Ok(file) => Ok(file.sync_all().is_ok()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(parent, err)),
+    }
+}
+
+fn temporary_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("fileprovider-state");
+    path.with_file_name(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        temp_nonce()
+    ))
+}
+
+fn temp_nonce() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    NONCE.fetch_add(1, Ordering::Relaxed)
 }
 
 fn affected_paths_field(paths: &[PathBuf]) -> String {
@@ -1430,6 +1684,57 @@ mod tests {
         assert_eq!(report.commands.download, CloudCommandState::Hidden);
         assert_eq!(report.commands.evict, CloudCommandState::Hidden);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_state_snapshot_round_trips_escaped_paths() {
+        let root = unique_temp_dir();
+        let path = root.join("fileprovider-state.tsv");
+        let snapshot = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: root.join("Remote\tName\nArchive\\2026.icloud"),
+                state: CloudStorageState::Evicted,
+            }],
+        };
+
+        snapshot.write(&path).unwrap();
+        let encoded = fs::read_to_string(&path).unwrap();
+        assert!(encoded.contains("Remote\\tName\\nArchive\\\\2026.icloud"));
+        let reloaded = FileProviderStateSnapshot::read(&path).unwrap();
+
+        assert_eq!(reloaded, snapshot);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_state_invalidation_persists_current_provider_transitions() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&evicted, "placeholder").unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: evicted.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+
+        let (report, snapshot) =
+            FileProviderStateInvalidationReport::evaluate(Some(&previous), [evicted.clone()])
+                .unwrap();
+
+        assert!(!report.initialized);
+        assert_eq!(report.changes.len(), 1);
+        assert!(report.invalidate_icon);
+        assert!(report.invalidate_preview_memory);
+        assert!(report.invalidate_preview_disk);
+        assert!(report.invalidate_sidebar);
+        assert!(report.reindex_metadata);
+        assert_eq!(snapshot.entries[0].path, evicted);
+        assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
+        assert!(report
+            .as_tsv()
+            .contains("previous=downloaded\tcurrent=evicted"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1745,6 +2050,42 @@ mod tests {
         assert!(report.invalidate_sidebar);
         assert!(!report.reindex_metadata);
         assert_eq!(report.reason, "fileprovider-state-unchanged");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn state_snapshot_round_trips_sorted_provider_states() {
+        let root = unique_temp_dir();
+        let snapshot_path = root.join("state.tsv");
+        let first = root.join("B.icloud-placeholder");
+        let second = root.join("A.icloud-downloaded");
+        let snapshot = FileProviderStateSnapshot {
+            entries: vec![
+                FileProviderStateSnapshotEntry {
+                    path: first.clone(),
+                    state: CloudStorageState::Evicted,
+                },
+                FileProviderStateSnapshotEntry {
+                    path: second.clone(),
+                    state: CloudStorageState::Downloaded,
+                },
+            ],
+        };
+
+        snapshot.write(&snapshot_path).unwrap();
+        let text = fs::read_to_string(&snapshot_path).unwrap();
+        assert!(text.starts_with("gfm-fileprovider-state-v1\n"));
+        assert!(
+            text.find("A.icloud-downloaded").unwrap() < text.find("B.icloud-placeholder").unwrap()
+        );
+        let restored = FileProviderStateSnapshot::read(&snapshot_path).unwrap();
+
+        assert_eq!(restored.entries.len(), 2);
+        assert_eq!(restored.entries[0].path, second);
+        assert_eq!(restored.entries[0].state, CloudStorageState::Downloaded);
+        assert_eq!(restored.entries[1].path, first);
+        assert_eq!(restored.entries[1].state, CloudStorageState::Evicted);
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -15,8 +15,9 @@ use gfm_mac::{
     current_host_profile, parse_spotlight_fixture, AccessIntent, CloudStorageState,
     CloudTransferDirection, FileProviderConflictReport, FileProviderDomainEnumerationReport,
     FileProviderDomainReport, FileProviderInvalidationReport, FileProviderOperation,
-    FileProviderOperationReport, FileProviderProgressReport, FileProviderStateReport,
-    MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
+    FileProviderOperationReport, FileProviderProgressReport, FileProviderStateInvalidationReport,
+    FileProviderStateReport, FileProviderStateSnapshot, MacBridgeContract,
+    NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
     SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore, SpotlightMetadataReader,
     SpotlightReconciliationReport, VolumeDiscoveryReport, VolumeOperation, VolumeOperationReport,
     VolumeTopologyDiff,
@@ -141,6 +142,27 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "{}",
                 FileProviderInvalidationReport::evaluate(path, previous)?.as_tsv()
             );
+        }
+        "fileprovider-invalidation-scan" => {
+            let state_path = required_path(
+                args.next(),
+                "fileprovider-invalidation-scan requires a state path",
+            )?;
+            let paths = args.map(PathBuf::from).collect::<Vec<_>>();
+            if paths.is_empty() {
+                return Err(GfmError::Format(
+                    "fileprovider-invalidation-scan requires at least one path".to_string(),
+                ));
+            }
+            let previous = if state_path.is_file() {
+                Some(FileProviderStateSnapshot::read(&state_path)?)
+            } else {
+                None
+            };
+            let (report, snapshot) =
+                FileProviderStateInvalidationReport::evaluate(previous.as_ref(), paths)?;
+            snapshot.write(&state_path)?;
+            println!("{}", report.as_tsv());
         }
         "volume-discovery" => {
             let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();

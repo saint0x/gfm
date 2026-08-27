@@ -830,6 +830,123 @@ fn reports_fileprovider_invalidation_from_binary() {
 }
 
 #[test]
+fn persists_fileprovider_invalidation_scan_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-invalidation-scan-persist-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let evicted = root.join("Remote.icloud-placeholder");
+    std::fs::write(&evicted, "placeholder").unwrap();
+
+    let first = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&evicted)
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_stdout = String::from_utf8(first.stdout).unwrap();
+    assert!(
+        first_stdout.starts_with("fileprovider-state-invalidation\tinitialized=true\tchanged=1\t")
+    );
+    assert!(first_stdout.contains("\tcurrent=evicted\t"));
+    assert!(state.is_file());
+
+    let second = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&evicted)
+        .output()
+        .unwrap();
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_stdout = String::from_utf8(second.stdout).unwrap();
+    assert!(second_stdout
+        .starts_with("fileprovider-state-invalidation\tinitialized=false\tchanged=0\t"));
+    assert!(!second_stdout.contains("\nfileprovider-invalidation\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn reports_fileprovider_invalidation_scan_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-invalidation-scan-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    std::fs::write(&item, "placeholder").unwrap();
+
+    let initial = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&item)
+        .output()
+        .unwrap();
+    assert!(
+        initial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+    let initial_stdout = String::from_utf8(initial.stdout).unwrap();
+    assert!(initial_stdout
+        .starts_with("fileprovider-state-invalidation\tinitialized=true\tchanged=1\t"));
+    assert!(initial_stdout.contains("\tcurrent=evicted\tchanged=true\t"));
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert!(state_text.starts_with("gfm-fileprovider-state-v1\n"));
+    assert!(state_text.contains("evicted\t"));
+
+    let unchanged = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&item)
+        .output()
+        .unwrap();
+    assert!(
+        unchanged.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unchanged.stderr)
+    );
+    let unchanged_stdout = String::from_utf8(unchanged.stdout).unwrap();
+    assert!(unchanged_stdout
+        .starts_with("fileprovider-state-invalidation\tinitialized=false\tchanged=0\t"));
+
+    let downloaded = root.join("Remote.icloud-downloaded");
+    std::fs::rename(&item, &downloaded).unwrap();
+    let changed = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&downloaded)
+        .output()
+        .unwrap();
+    assert!(
+        changed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&changed.stderr)
+    );
+    let changed_stdout = String::from_utf8(changed.stdout).unwrap();
+    assert!(changed_stdout
+        .starts_with("fileprovider-state-invalidation\tinitialized=false\tchanged=1\t"));
+    assert!(changed_stdout.contains("\tcurrent=downloaded\tchanged=true\t"));
+    assert!(changed_stdout.contains("\ticon=true\tpreview-memory=true\tpreview-disk=true\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_discovery_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-volumes-{}", std::process::id()));
     let external = root.join("Work Drive");
