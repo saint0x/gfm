@@ -507,6 +507,18 @@ pub fn decide_invalidation(event: PreviewInvalidationEvent) -> PreviewInvalidati
     }
 }
 
+pub fn preview_invalidation_for_fileprovider(
+    report: &gfm_mac::FileProviderInvalidationReport,
+) -> PreviewInvalidationEvent {
+    PreviewInvalidationEvent {
+        icloud_state_changed: report.invalidate_preview_memory || report.invalidate_preview_disk,
+        metadata_changed: report.reindex_metadata
+            && !report.invalidate_preview_memory
+            && !report.invalidate_preview_disk,
+        ..PreviewInvalidationEvent::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,12 +666,103 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fileprovider_invalidation_maps_to_preview_icloud_invalidation() {
+        let report = fileprovider_report(
+            gfm_mac::CloudStorageState::Downloaded,
+            gfm_mac::CloudStorageState::Evicted,
+            true,
+        );
+
+        let event = preview_invalidation_for_fileprovider(&report);
+        let decision = decide_invalidation(event);
+
+        assert!(event.icloud_state_changed);
+        assert!(!event.metadata_changed);
+        assert_eq!(
+            decision,
+            PreviewInvalidationDecision {
+                invalidate_memory: true,
+                invalidate_disk: true,
+                reason: "content-or-icloud"
+            }
+        );
+    }
+
+    #[test]
+    fn fileprovider_metadata_only_invalidation_stays_memory_only() {
+        let report = fileprovider_report(
+            gfm_mac::CloudStorageState::Downloaded,
+            gfm_mac::CloudStorageState::Downloaded,
+            false,
+        );
+
+        let event = preview_invalidation_for_fileprovider(&report);
+        let decision = decide_invalidation(event);
+
+        assert!(!event.icloud_state_changed);
+        assert!(event.metadata_changed);
+        assert_eq!(
+            decision,
+            PreviewInvalidationDecision {
+                invalidate_memory: true,
+                invalidate_disk: false,
+                reason: "metadata-or-tags"
+            }
+        );
+    }
+
     fn key(name: &str, kind: PreviewKind) -> PreviewRequestKey {
         PreviewRequestKey::new(
             FileId::new(VolumeId(1), name.len() as u64),
             PathBuf::from(name),
             kind,
         )
+    }
+
+    fn fileprovider_report(
+        previous: gfm_mac::CloudStorageState,
+        current: gfm_mac::CloudStorageState,
+        invalidate_preview: bool,
+    ) -> gfm_mac::FileProviderInvalidationReport {
+        gfm_mac::FileProviderInvalidationReport {
+            path: PathBuf::from("/tmp/Remote.icloud"),
+            previous,
+            current: gfm_mac::FileProviderStateReport {
+                path: PathBuf::from("/tmp/Remote.icloud"),
+                domain: gfm_mac::FileProviderDomain::ICloudDrive,
+                storage_state: current,
+                materialization: cloud_materialization_for_state(current),
+                materialization_source: gfm_mac::CloudMaterializationSource::NativeUrlResource,
+                progress: gfm_mac::CloudTransferProgress {
+                    direction: gfm_mac::CloudTransferDirection::Idle,
+                    percent_milli: None,
+                    requested: false,
+                    complete: false,
+                    indeterminate: false,
+                    source: "state",
+                    reason: Some("test".to_string()),
+                },
+                badges: Vec::new(),
+                commands: gfm_mac::CloudCommandPolicy {
+                    download: gfm_mac::CloudCommandState::Hidden,
+                    evict: gfm_mac::CloudCommandState::Hidden,
+                    reveal_conflict: gfm_mac::CloudCommandState::Hidden,
+                    reason: None,
+                },
+                offline: false,
+                conflict: false,
+                provider_identifier: None,
+                source: "test".to_string(),
+            },
+            state_changed: previous != current,
+            invalidate_icon: invalidate_preview,
+            invalidate_preview_memory: invalidate_preview,
+            invalidate_preview_disk: invalidate_preview,
+            invalidate_sidebar: invalidate_preview,
+            reindex_metadata: true,
+            reason: "test",
+        }
     }
 
     fn temp_root(name: &str) -> PathBuf {

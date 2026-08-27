@@ -1,9 +1,9 @@
 use crate::{
     cloud_materialization_for_state, decide_cloud_preview_for_materialization, decide_invalidation,
-    decide_preview_security, security_input_for_path, CloudPreviewDecision,
-    PreviewInvalidationDecision, PreviewInvalidationEvent, PreviewKind, PreviewRequestKey,
-    PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision, PreviewSecurityPolicy,
-    PreviewTask, PreviewTaskDecision, Rect, Viewport,
+    decide_preview_security, preview_invalidation_for_fileprovider, security_input_for_path,
+    CloudPreviewDecision, PreviewInvalidationDecision, PreviewInvalidationEvent, PreviewKind,
+    PreviewRequestKey, PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision,
+    PreviewSecurityPolicy, PreviewTask, PreviewTaskDecision, Rect, Viewport,
 };
 use gfm_mac::{CloudMaterialization, CloudStorageState};
 use gfm_types::Result;
@@ -57,6 +57,16 @@ impl QuickLookSessionInput {
 
     pub fn with_invalidation(mut self, event: PreviewInvalidationEvent) -> Self {
         self.invalidation_event = event;
+        self
+    }
+
+    pub fn with_fileprovider_invalidation(
+        mut self,
+        report: &gfm_mac::FileProviderInvalidationReport,
+    ) -> Self {
+        self.invalidation_event = preview_invalidation_for_fileprovider(report);
+        self.cloud_state = report.current.storage_state;
+        self.cloud_materialization = report.current.materialization;
         self
     }
 
@@ -337,6 +347,32 @@ mod tests {
     }
 
     #[test]
+    fn fileprovider_invalidation_updates_quicklook_cloud_and_cache_state() {
+        let contract = QuickLookSessionContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Remote.icloud", Rect::new(0, 0, 400, 300)).with_fileprovider_invalidation(
+                &fileprovider_report(
+                    CloudStorageState::Downloaded,
+                    CloudStorageState::Downloading,
+                ),
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(contract.cloud, CloudPreviewDecision::Defer);
+        assert_eq!(contract.invalidation.reason, "content-or-icloud");
+        assert!(contract.invalidation.invalidate_memory);
+        assert!(contract.invalidation.invalidate_disk);
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "fileprovider-in-flight",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn checked_contract_honors_pre_cancelled_work() {
         let err = QuickLookSessionContract::from_input_checked(
             &PreviewSecurityPolicy::default(),
@@ -377,5 +413,49 @@ mod tests {
             rect,
             Viewport::new(Rect::new(0, 0, 1_000, 800), 256),
         )
+    }
+
+    fn fileprovider_report(
+        previous: CloudStorageState,
+        current: CloudStorageState,
+    ) -> gfm_mac::FileProviderInvalidationReport {
+        gfm_mac::FileProviderInvalidationReport {
+            path: PathBuf::from("/tmp/Remote.icloud"),
+            previous,
+            current: gfm_mac::FileProviderStateReport {
+                path: PathBuf::from("/tmp/Remote.icloud"),
+                domain: gfm_mac::FileProviderDomain::ICloudDrive,
+                storage_state: current,
+                materialization: crate::cloud_materialization_for_state(current),
+                materialization_source: gfm_mac::CloudMaterializationSource::NativeUrlResource,
+                progress: gfm_mac::CloudTransferProgress {
+                    direction: gfm_mac::CloudTransferDirection::Idle,
+                    percent_milli: None,
+                    requested: false,
+                    complete: false,
+                    indeterminate: false,
+                    source: "state",
+                    reason: Some("test".to_string()),
+                },
+                badges: Vec::new(),
+                commands: gfm_mac::CloudCommandPolicy {
+                    download: gfm_mac::CloudCommandState::Hidden,
+                    evict: gfm_mac::CloudCommandState::Hidden,
+                    reveal_conflict: gfm_mac::CloudCommandState::Hidden,
+                    reason: None,
+                },
+                offline: false,
+                conflict: false,
+                provider_identifier: None,
+                source: "test".to_string(),
+            },
+            state_changed: previous != current,
+            invalidate_icon: true,
+            invalidate_preview_memory: true,
+            invalidate_preview_disk: true,
+            invalidate_sidebar: true,
+            reindex_metadata: true,
+            reason: "test",
+        }
     }
 }

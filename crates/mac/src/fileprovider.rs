@@ -1,3 +1,4 @@
+use crate::watch::{FileEventStream, WatchRoot};
 use gfm_mac_sys::{
     copy_fileprovider_identity, copy_fileprovider_resource_values, enumerate_fileprovider_domains,
     evict_ubiquitous_item, start_downloading_ubiquitous_item, NativeFileProviderDomain,
@@ -6,7 +7,8 @@ use gfm_mac_sys::{
     NativeFileProviderOperationStatus, NativeFileProviderResourceValues,
     NativeUbiquitousDownloadingStatus,
 };
-use gfm_types::{GfmError, Result};
+use gfm_types::{FileEvent, FileEventKind, GfmError, Result};
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -654,6 +656,18 @@ pub struct FileProviderStateInvalidationReport {
     pub reindex_metadata: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderObservedInvalidation {
+    pub events: usize,
+    pub paths: Vec<PathBuf>,
+    pub report: FileProviderStateInvalidationReport,
+}
+
+pub struct FileProviderStateObserver {
+    stream: FileEventStream,
+    snapshot: FileProviderStateSnapshot,
+}
+
 impl FileProviderInvalidationReport {
     pub fn evaluate(
         path: impl AsRef<Path>,
@@ -829,22 +843,21 @@ impl FileProviderStateInvalidationReport {
         let snapshot = FileProviderStateSnapshot {
             entries: current_entries,
         };
-        Ok((
-            Self {
-                initialized,
-                invalidate_icon: changes.iter().any(|change| change.invalidate_icon),
-                invalidate_preview_memory: changes
-                    .iter()
-                    .any(|change| change.invalidate_preview_memory),
-                invalidate_preview_disk: changes
-                    .iter()
-                    .any(|change| change.invalidate_preview_disk),
-                invalidate_sidebar: changes.iter().any(|change| change.invalidate_sidebar),
-                reindex_metadata: changes.iter().any(|change| change.reindex_metadata),
-                changes,
-            },
-            snapshot,
-        ))
+        Ok((Self::from_changes(initialized, changes), snapshot))
+    }
+
+    fn from_changes(initialized: bool, changes: Vec<FileProviderInvalidationReport>) -> Self {
+        Self {
+            initialized,
+            invalidate_icon: changes.iter().any(|change| change.invalidate_icon),
+            invalidate_preview_memory: changes
+                .iter()
+                .any(|change| change.invalidate_preview_memory),
+            invalidate_preview_disk: changes.iter().any(|change| change.invalidate_preview_disk),
+            invalidate_sidebar: changes.iter().any(|change| change.invalidate_sidebar),
+            reindex_metadata: changes.iter().any(|change| change.reindex_metadata),
+            changes,
+        }
     }
 
     pub fn as_tsv(&self) -> String {
@@ -865,6 +878,130 @@ impl FileProviderStateInvalidationReport {
         );
         lines.join("\n")
     }
+}
+
+impl FileProviderObservedInvalidation {
+    pub fn evaluate(
+        previous: Option<&FileProviderStateSnapshot>,
+        events: impl IntoIterator<Item = FileEvent>,
+    ) -> Result<(Self, FileProviderStateSnapshot)> {
+        let mut event_count = 0;
+        let mut paths = BTreeSet::new();
+        for event in events {
+            event_count += 1;
+            for path in paths_for_fileprovider_event(&event) {
+                paths.insert(path);
+            }
+        }
+        let paths = paths.into_iter().collect::<Vec<_>>();
+        let (report, snapshot) = if paths.is_empty() {
+            let snapshot = previous
+                .cloned()
+                .unwrap_or_else(|| FileProviderStateSnapshot {
+                    entries: Vec::new(),
+                });
+            (
+                FileProviderStateInvalidationReport::from_changes(previous.is_none(), Vec::new()),
+                snapshot,
+            )
+        } else {
+            FileProviderStateInvalidationReport::evaluate(previous, paths.clone())?
+        };
+        Ok((
+            Self {
+                events: event_count,
+                paths,
+                report,
+            },
+            snapshot,
+        ))
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let mut lines = vec![format!(
+            "fileprovider-observed-invalidation\tevents={}\tpaths={}",
+            self.events,
+            self.paths.len()
+        )];
+        lines.push(self.report.as_tsv());
+        lines.join("\n")
+    }
+}
+
+impl FileProviderStateObserver {
+    pub fn watch(roots: &[WatchRoot], snapshot: Option<FileProviderStateSnapshot>) -> Result<Self> {
+        Ok(Self {
+            stream: FileEventStream::watch(roots)?,
+            snapshot: snapshot.unwrap_or_else(|| FileProviderStateSnapshot {
+                entries: Vec::new(),
+            }),
+        })
+    }
+
+    pub fn observe_once(&mut self) -> Result<FileProviderObservedInvalidation> {
+        let event = self.stream.recv()?;
+        self.apply_events([event])
+    }
+
+    pub fn drain_available(
+        &mut self,
+        max_events: usize,
+    ) -> Result<Option<FileProviderObservedInvalidation>> {
+        let mut events = Vec::new();
+        for _ in 0..max_events {
+            match self.stream.try_recv() {
+                Some(Ok(event)) => events.push(event),
+                Some(Err(err)) => return Err(err),
+                None => break,
+            }
+        }
+        if events.is_empty() {
+            return Ok(None);
+        }
+        self.apply_events(events).map(Some)
+    }
+
+    fn apply_events(
+        &mut self,
+        events: impl IntoIterator<Item = FileEvent>,
+    ) -> Result<FileProviderObservedInvalidation> {
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate(Some(&self.snapshot), events)?;
+        self.snapshot = snapshot;
+        Ok(observed)
+    }
+}
+
+fn paths_for_fileprovider_event(event: &FileEvent) -> Vec<PathBuf> {
+    match &event.kind {
+        FileEventKind::Rename { from, to } => [from, to]
+            .into_iter()
+            .filter(|path| is_observable_fileprovider_path(path))
+            .cloned()
+            .collect(),
+        FileEventKind::Remove => {
+            if is_observable_fileprovider_path(&event.path) {
+                vec![event.path.clone()]
+            } else {
+                Vec::new()
+            }
+        }
+        FileEventKind::Create
+        | FileEventKind::Metadata
+        | FileEventKind::Modify
+        | FileEventKind::Rescan
+        | FileEventKind::Other => {
+            if is_observable_fileprovider_path(&event.path) {
+                vec![event.path.clone()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+}
+
+fn is_observable_fileprovider_path(path: &Path) -> bool {
+    path.exists() || is_evicted_placeholder_path(path)
 }
 
 impl FileProviderOperationReport {
@@ -1743,6 +1880,69 @@ mod tests {
         assert!(report
             .as_tsv()
             .contains("previous=downloaded\tcurrent=evicted"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_maps_events_to_provider_paths() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&evicted, "placeholder").unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: evicted.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+        let events = vec![FileEvent::new(&evicted, FileEventKind::Metadata)];
+
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate(Some(&previous), events).unwrap();
+
+        assert_eq!(observed.events, 1);
+        assert_eq!(observed.paths, vec![evicted.clone()]);
+        assert_eq!(observed.report.changes.len(), 1);
+        assert!(observed.report.invalidate_icon);
+        assert!(observed.report.invalidate_preview_memory);
+        assert!(observed.report.invalidate_preview_disk);
+        assert!(observed.report.invalidate_sidebar);
+        assert!(observed.report.reindex_metadata);
+        assert_eq!(snapshot.entries[0].path, evicted);
+        assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
+        assert!(observed
+            .as_tsv()
+            .contains("fileprovider-observed-invalidation\tevents=1\tpaths=1"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_preserves_snapshot_for_irrelevant_events() {
+        let root = unique_temp_dir();
+        let tracked = root.join("Remote.icloud-placeholder");
+        fs::write(&tracked, "placeholder").unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: tracked.clone(),
+                state: CloudStorageState::Evicted,
+            }],
+        };
+        let events = vec![FileEvent::new(
+            root.join("Missing.txt"),
+            FileEventKind::Remove,
+        )];
+
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate(Some(&previous), events).unwrap();
+
+        assert_eq!(observed.events, 1);
+        assert!(observed.paths.is_empty());
+        assert!(observed.report.changes.is_empty());
+        assert!(!observed.report.invalidate_icon);
+        assert!(!observed.report.invalidate_preview_memory);
+        assert!(!observed.report.invalidate_preview_disk);
+        assert_eq!(snapshot, previous);
+
         fs::remove_dir_all(root).unwrap();
     }
 

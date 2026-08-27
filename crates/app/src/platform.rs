@@ -14,10 +14,10 @@ use gfm_jobs::{
 use gfm_mac::{
     current_host_profile, parse_spotlight_fixture, AccessIntent, CloudStorageState,
     CloudTransferDirection, FileProviderConflictReport, FileProviderDomainEnumerationReport,
-    FileProviderDomainReport, FileProviderInvalidationReport, FileProviderOperation,
-    FileProviderOperationReport, FileProviderProgressReport, FileProviderStateInvalidationReport,
-    FileProviderStateReport, FileProviderStateSnapshot, MacBridgeContract,
-    NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
+    FileProviderDomainReport, FileProviderInvalidationReport, FileProviderObservedInvalidation,
+    FileProviderOperation, FileProviderOperationReport, FileProviderProgressReport,
+    FileProviderStateInvalidationReport, FileProviderStateReport, FileProviderStateSnapshot,
+    MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
     SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore, SpotlightMetadataReader,
     SpotlightReconciliationReport, VolumeDiscoveryReport, VolumeOperation, VolumeOperationReport,
     VolumeTopologyDiff,
@@ -28,7 +28,7 @@ use gfm_preview::{
     PreviewSchedulingPolicy, PreviewSecurityPolicy, PreviewTask, QuickLookSessionContract,
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
-use gfm_types::{FileId, GfmError, Result, VolumeId};
+use gfm_types::{FileEvent, FileEventKind, FileId, GfmError, Result, VolumeId};
 use std::path::PathBuf;
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -163,6 +163,31 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 FileProviderStateInvalidationReport::evaluate(previous.as_ref(), paths)?;
             snapshot.write(&state_path)?;
             println!("{}", report.as_tsv());
+        }
+        "fileprovider-invalidation-event" => {
+            let state_path = required_path(
+                args.next(),
+                "fileprovider-invalidation-event requires a state path",
+            )?;
+            let event_kind = required_string(
+                args.next(),
+                "fileprovider-invalidation-event requires an event kind",
+            )?;
+            let path = required_path(
+                args.next(),
+                "fileprovider-invalidation-event requires a path",
+            )?;
+            let event =
+                parse_fileprovider_event(&event_kind, path, args.next().map(PathBuf::from))?;
+            let previous = if state_path.is_file() {
+                Some(FileProviderStateSnapshot::read(&state_path)?)
+            } else {
+                None
+            };
+            let (observed, snapshot) =
+                FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
+            snapshot.write(&state_path)?;
+            println!("{}", observed.as_tsv());
         }
         "volume-discovery" => {
             let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
@@ -668,6 +693,32 @@ fn volume_discovery_report(paths: Vec<PathBuf>) -> VolumeDiscoveryReport {
     } else {
         VolumeDiscoveryReport::from_paths(paths)
     }
+}
+
+fn parse_fileprovider_event(kind: &str, path: PathBuf, to: Option<PathBuf>) -> Result<FileEvent> {
+    let event_kind = match kind {
+        "create" => FileEventKind::Create,
+        "metadata" => FileEventKind::Metadata,
+        "modify" => FileEventKind::Modify,
+        "remove" => FileEventKind::Remove,
+        "rescan" => FileEventKind::Rescan,
+        "other" => FileEventKind::Other,
+        "rename" => FileEventKind::Rename {
+            from: path.clone(),
+            to: to.ok_or_else(|| {
+                GfmError::Format(
+                    "fileprovider-invalidation-event rename requires a destination path"
+                        .to_string(),
+                )
+            })?,
+        },
+        other => {
+            return Err(GfmError::Format(format!(
+                "unsupported FileProvider event kind `{other}`"
+            )))
+        }
+    };
+    Ok(FileEvent::new(path, event_kind))
 }
 
 fn parse_preview_kind(value: Option<String>) -> Result<PreviewKind> {
