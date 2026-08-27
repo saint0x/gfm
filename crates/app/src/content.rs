@@ -1113,7 +1113,8 @@ pub(crate) fn run_content_job(
                     &job_spec_path,
                     "background content index",
                 )?;
-                let snapshot = Indexer::default().build(&job_spec.root)?;
+                let snapshot =
+                    Indexer::default().build_cancellable(&job_spec.root, &cancellation)?;
                 let inaccessible = snapshot.inaccessible.len();
                 runtime.resize(
                     snapshot.records.len().max(1) as u64,
