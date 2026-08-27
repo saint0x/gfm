@@ -2538,6 +2538,9 @@ fn schedules_fsevents_repair_from_binary() {
         "{}",
         String::from_utf8_lossy(&gap.stderr)
     );
+    let gap_stderr = String::from_utf8_lossy(&gap.stderr);
+    assert_worker_admitted(&gap_stderr, "fsevents repair schedule state", &state);
+    assert_worker_admitted(&gap_stderr, "fsevents repair schedule cursor", &cursor);
     let gap_stdout = String::from_utf8(gap.stdout).unwrap();
     assert!(gap_stdout.starts_with("repair-schedule\t"), "{gap_stdout}");
     assert!(gap_stdout.contains("\tjobs=1\t"), "{gap_stdout}");
@@ -2553,8 +2556,8 @@ fn schedules_fsevents_repair_from_binary() {
             cursor.to_str().unwrap(),
             "201",
             "kernel-dropped",
-            "Projects",
-            "Projects/Nested",
+            root.join("Projects").to_str().unwrap(),
+            root.join("Projects").join("Nested").to_str().unwrap(),
         ])
         .output()
         .unwrap();
@@ -2562,6 +2565,19 @@ fn schedules_fsevents_repair_from_binary() {
         explicit.status.success(),
         "{}",
         String::from_utf8_lossy(&explicit.stderr)
+    );
+    let explicit_stderr = String::from_utf8_lossy(&explicit.stderr);
+    assert_worker_admitted(&explicit_stderr, "fsevents repair schedule state", &state);
+    assert_worker_admitted(&explicit_stderr, "fsevents repair schedule cursor", &cursor);
+    assert_worker_admitted(
+        &explicit_stderr,
+        "fsevents repair schedule dropped root",
+        &root.join("Projects"),
+    );
+    assert_worker_admitted(
+        &explicit_stderr,
+        "fsevents repair schedule dropped root",
+        &root.join("Projects").join("Nested"),
     );
     let explicit_stdout = String::from_utf8(explicit.stdout).unwrap();
     assert!(explicit_stdout.contains("\tjobs=1\t"), "{explicit_stdout}");
@@ -2575,6 +2591,65 @@ fn schedules_fsevents_repair_from_binary() {
     fs::remove_file(index).unwrap();
     fs::remove_file(state).unwrap();
     fs::remove_file(cursor).unwrap();
+}
+
+#[test]
+fn fsevents_repair_schedule_refuses_unreachable_dropped_root_before_reading_state_from_binary() {
+    let local = unique_temp_dir("gfm-cli-fsevents-repair-local");
+    let offline = unique_temp_dir("gfm-cli-fsevents-repair-dropped-unreachable");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let state = local.join("state.gfmstate");
+    let cursor = local.join("cursor.gfmcursor");
+    fs::write(
+        &state,
+        "state is not parsed after dropped root access denial\n",
+    )
+    .unwrap();
+    fs::write(
+        &cursor,
+        "cursor is not parsed after dropped root access denial\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-repair-schedule",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "201",
+            "kernel-dropped",
+            offline.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains(
+            "fsevents repair schedule dropped root volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=fsevents repair schedule state\tpath={}",
+            state.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=fsevents repair schedule dropped root\tpath={}",
+            offline.display()
+        )),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(local).unwrap();
+    fs::remove_dir_all(offline).unwrap();
 }
 
 #[test]

@@ -325,24 +325,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .next()
                 .and_then(|value| (value != "-").then_some(value));
             let dropped_roots: Vec<PathBuf> = args.map(PathBuf::from).collect();
-            let _state_access = preflight_index_read(&state, "fsevents repair schedule state")?;
-            let _cursor_access = preflight_index_read(&cursor, "fsevents repair schedule cursor")?;
-            let _dropped_access = dropped_roots
-                .iter()
-                .filter(|root| root.exists())
-                .map(|root| preflight_index_read(root, "fsevents repair schedule dropped root"))
-                .collect::<Result<Vec<_>>>()?;
             println!(
                 "{}",
-                Indexer::default()
-                    .repair_schedule(
-                        state,
-                        cursor,
-                        &observed_event_ids,
-                        &dropped_roots,
-                        reason.as_deref(),
-                    )?
-                    .as_tsv()
+                run_fsevents_repair_schedule(
+                    state,
+                    cursor,
+                    observed_event_ids,
+                    reason,
+                    dropped_roots
+                )?
+                .as_tsv()
             );
         }
         "watch-once" => {
@@ -439,6 +431,71 @@ fn run_fsevents_cursor_resume(
             Indexer::default().fsevents_resume_plan(state, cursor)
         },
     )
+}
+
+fn run_fsevents_repair_schedule(
+    state: PathBuf,
+    cursor: PathBuf,
+    observed_event_ids: Vec<u64>,
+    reason: Option<String>,
+    dropped_roots: Vec<PathBuf>,
+) -> Result<gfm_index::RepairSchedule> {
+    preflight_volume_access_scope(&state, AccessIntent::Read, "fsevents repair schedule state")?;
+    preflight_volume_access_scope(
+        &cursor,
+        AccessIntent::Read,
+        "fsevents repair schedule cursor",
+    )?;
+    let existing_dropped_roots = existing_dropped_roots(&dropped_roots);
+    for root in &existing_dropped_roots {
+        preflight_volume_access_scope(
+            root,
+            AccessIntent::Read,
+            "fsevents repair schedule dropped root",
+        )?;
+    }
+    let volume = detect_volume_id(&state)
+        .ok()
+        .or_else(|| crate::parent_volume(&state))
+        .or_else(|| detect_volume_id(&cursor).ok())
+        .or_else(|| crate::parent_volume(&cursor))
+        .or_else(|| {
+            existing_dropped_roots.iter().find_map(|root| {
+                detect_volume_id(root)
+                    .ok()
+                    .or_else(|| crate::parent_volume(root))
+            })
+        });
+    run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        "fsevents repair schedule",
+        move |cancellation| {
+            cancellation.check()?;
+            let _state_access = preflight_index_read(&state, "fsevents repair schedule state")?;
+            let _cursor_access = preflight_index_read(&cursor, "fsevents repair schedule cursor")?;
+            let _dropped_access = existing_dropped_roots
+                .iter()
+                .map(|root| preflight_index_read(root, "fsevents repair schedule dropped root"))
+                .collect::<Result<Vec<_>>>()?;
+            cancellation.check()?;
+            Indexer::default().repair_schedule(
+                state,
+                cursor,
+                &observed_event_ids,
+                &dropped_roots,
+                reason.as_deref(),
+            )
+        },
+    )
+}
+
+fn existing_dropped_roots(dropped_roots: &[PathBuf]) -> Vec<PathBuf> {
+    dropped_roots
+        .iter()
+        .filter(|root| root.exists())
+        .cloned()
+        .collect()
 }
 
 fn run_index_read_task<T>(
