@@ -21,8 +21,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .next()
                 .map(PathBuf::from)
                 .unwrap_or(std::env::current_dir().unwrap());
-            let _access = preflight_index_read(&path, "directory listing")?;
-            let page = read_directory(path)?;
+            preflight_volume_access_scope(&path, AccessIntent::Read, "directory listing")?;
+            let volume = detect_volume_id(&path).ok();
+            let page = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "directory listing",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access = preflight_index_read(&path, "directory listing")?;
+                    cancellation.check()?;
+                    read_directory(path)
+                },
+            )?;
             for record in page.entries {
                 println!(
                     "{}\t{}\t{}",
