@@ -110,14 +110,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "content-manifest-promotion-recover requires a manifest path",
             )?;
-            let _access = retain_manifest_promotion_recovery_access(&manifest_path)?;
-            let recovery = recover_content_manifest_promotion(manifest_path)?;
-            println!("{}", recovery.before.as_tsv());
-            println!(
-                "content-manifest-promotion-recovery\tcompleted-promotion={}\tremoved-journal={}",
-                recovery.completed_promotion, recovery.removed_journal
-            );
-            println!("{}", recovery.after.as_tsv());
+            for line in run_manifest_promotion_recover(manifest_path)? {
+                println!("{line}");
+            }
         }
         "content-manifest-cleanup" => {
             let manifest_path = required_path(
@@ -491,6 +486,30 @@ fn preflight_manifest_promotion_recovery_plan_volumes(manifest_path: &Path) -> R
     )
 }
 
+fn preflight_manifest_promotion_recovery_volumes(manifest_path: &Path) -> Result<()> {
+    let journal_path = content_manifest_promotion_journal_path(manifest_path);
+    preflight_volume_access_scope(
+        manifest_path,
+        AccessIntent::Read,
+        "content manifest promotion recovery",
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(manifest_path),
+        AccessIntent::Write,
+        "content manifest promotion recovery",
+    )?;
+    preflight_volume_access_scope(
+        existing_read_probe_path(&journal_path),
+        AccessIntent::Read,
+        "content manifest promotion recovery journal",
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(&journal_path),
+        AccessIntent::Write,
+        "content manifest promotion recovery journal",
+    )
+}
+
 fn preflight_manifest_promotion_recovery_archives(paths: &[PathBuf], worker: &str) -> Result<()> {
     for path in paths {
         preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
@@ -533,6 +552,38 @@ fn run_manifest_promotion_recovery_plan(manifest_path: PathBuf) -> Result<String
     })
 }
 
+fn run_manifest_promotion_recover(manifest_path: PathBuf) -> Result<Vec<String>> {
+    const WORKER: &str = "content manifest promotion recovery";
+    const ARCHIVE_WORKER: &str = "content manifest promotion recovery archive";
+    preflight_manifest_promotion_recovery_volumes(&manifest_path)?;
+    let volume = detect_volume_id(&manifest_path).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_manifest_promotion_recovery_access(&manifest_path)?;
+        let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+        let archive_paths = if journal_path.exists() {
+            let journal = ContentManifestPromotionJournal::read(&journal_path)?;
+            promotion_recovery_archive_paths(&manifest_path, &journal)?
+        } else {
+            Vec::new()
+        };
+        preflight_manifest_promotion_recovery_archives(&archive_paths, ARCHIVE_WORKER)?;
+        cancellation.check()?;
+        let _archive_access =
+            retain_manifest_promotion_recovery_archive_access(&archive_paths, ARCHIVE_WORKER)?;
+        cancellation.check()?;
+        let recovery = recover_content_manifest_promotion(manifest_path)?;
+        Ok(vec![
+            recovery.before.as_tsv(),
+            format!(
+                "content-manifest-promotion-recovery\tcompleted-promotion={}\tremoved-journal={}",
+                recovery.completed_promotion, recovery.removed_journal
+            ),
+            recovery.after.as_tsv(),
+        ])
+    })
+}
+
 fn promotion_recovery_archive_paths(
     manifest_path: &Path,
     journal: &ContentManifestPromotionJournal,
@@ -548,6 +599,7 @@ fn promotion_recovery_archive_paths(
 fn retain_manifest_promotion_recovery_access(
     manifest_path: &Path,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    let journal_path = content_manifest_promotion_journal_path(manifest_path);
     Ok(vec![
         preflight_access_scope(
             manifest_path,
@@ -558,6 +610,16 @@ fn retain_manifest_promotion_recovery_access(
             write_probe_path(manifest_path),
             AccessIntent::Write,
             "content manifest promotion recovery",
+        )?,
+        preflight_access_scope(
+            existing_read_probe_path(&journal_path),
+            AccessIntent::Read,
+            "content manifest promotion recovery journal",
+        )?,
+        preflight_access_scope(
+            write_probe_path(&journal_path),
+            AccessIntent::Write,
+            "content manifest promotion recovery journal",
         )?,
     ])
 }

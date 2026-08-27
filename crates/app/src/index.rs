@@ -96,8 +96,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-state-inspect requires an index state path",
             )?;
-            let _state_access = preflight_index_read(&state, "index state inspect")?;
-            println!("{}", IndexVolumeState::read(state)?.as_tsv());
+            println!("{}", run_index_state_inspect(state)?.as_tsv());
         }
         "scan-progress" => {
             let root = required_path(args.next(), "scan-progress requires a root path")?;
@@ -131,9 +130,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "scan-progress-inspect requires a progress checkpoint path",
             )?;
-            let _progress_access =
-                preflight_index_read(&progress, "scan progress checkpoint inspect")?;
-            println!("{}", Indexer::default().scan_progress(progress)?.as_tsv());
+            println!("{}", run_scan_progress_inspect(progress)?.as_tsv());
         }
         "fair-scan" => {
             let root = required_path(args.next(), "fair-scan requires a root path")?;
@@ -290,10 +287,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(|value| FseventsCursorHealth::parse(&value))
                 .transpose()?
                 .unwrap_or(FseventsCursorHealth::Clean);
-            let _state_access = preflight_index_read(&state, "fsevents cursor checkpoint state")?;
-            let _cursor_access = preflight_index_write(&cursor, "fsevents cursor checkpoint")?;
-            let cursor =
-                Indexer::default().checkpoint_fsevents_cursor(state, cursor, event_id, health)?;
+            let cursor = run_fsevents_cursor_checkpoint(state, cursor, event_id, health)?;
             println!("{}", cursor.as_tsv());
         }
         "fsevents-cursor-inspect" => {
@@ -301,8 +295,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "fsevents-cursor-inspect requires a cursor path",
             )?;
-            let _cursor_access = preflight_index_read(&cursor, "fsevents cursor inspect")?;
-            println!("{}", FseventsCursor::read(cursor)?.as_tsv());
+            println!("{}", run_fsevents_cursor_inspect(cursor)?.as_tsv());
         }
         "fsevents-cursor-resume" => {
             let state = required_path(
@@ -311,14 +304,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let cursor =
                 required_path(args.next(), "fsevents-cursor-resume requires a cursor path")?;
-            let _state_access = preflight_index_read(&state, "fsevents cursor resume state")?;
-            let _cursor_access = preflight_index_read(&cursor, "fsevents cursor resume")?;
-            println!(
-                "{}",
-                Indexer::default()
-                    .fsevents_resume_plan(state, cursor)?
-                    .as_tsv()
-            );
+            println!("{}", run_fsevents_cursor_resume(state, cursor)?.as_tsv());
         }
         "fsevents-repair-schedule" => {
             let state = required_path(
@@ -383,6 +369,96 @@ fn parse_event_ids(value: &str) -> Result<Vec<u64>> {
             })
         })
         .collect()
+}
+
+fn run_index_state_inspect(state: PathBuf) -> Result<IndexVolumeState> {
+    run_index_read_task(state, "index state inspect", IndexVolumeState::read)
+}
+
+fn run_scan_progress_inspect(progress: PathBuf) -> Result<gfm_index::ScanProgressCheckpoint> {
+    run_index_read_task(progress, "scan progress checkpoint inspect", |path| {
+        Indexer::default().scan_progress(path)
+    })
+}
+
+fn run_fsevents_cursor_inspect(cursor: PathBuf) -> Result<FseventsCursor> {
+    run_index_read_task(cursor, "fsevents cursor inspect", FseventsCursor::read)
+}
+
+fn run_fsevents_cursor_checkpoint(
+    state: PathBuf,
+    cursor: PathBuf,
+    event_id: u64,
+    health: FseventsCursorHealth,
+) -> Result<FseventsCursor> {
+    preflight_volume_access_scope(
+        &state,
+        AccessIntent::Read,
+        "fsevents cursor checkpoint state",
+    )?;
+    preflight_index_write_volume(&cursor, "fsevents cursor checkpoint")?;
+    let volume = detect_volume_id(&state)
+        .ok()
+        .or_else(|| crate::parent_volume(&state))
+        .or_else(|| detect_volume_id(write_probe_path(&cursor)).ok())
+        .or_else(|| crate::parent_volume(write_probe_path(&cursor)));
+    run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        "fsevents cursor checkpoint",
+        move |cancellation| {
+            cancellation.check()?;
+            let _state_access = preflight_index_read(&state, "fsevents cursor checkpoint state")?;
+            let _cursor_access = preflight_index_write(&cursor, "fsevents cursor checkpoint")?;
+            cancellation.check()?;
+            Indexer::default().checkpoint_fsevents_cursor(state, cursor, event_id, health)
+        },
+    )
+}
+
+fn run_fsevents_cursor_resume(
+    state: PathBuf,
+    cursor: PathBuf,
+) -> Result<gfm_index::FseventsResumePlan> {
+    preflight_volume_access_scope(&state, AccessIntent::Read, "fsevents cursor resume state")?;
+    preflight_volume_access_scope(&cursor, AccessIntent::Read, "fsevents cursor resume")?;
+    let volume = detect_volume_id(&state)
+        .ok()
+        .or_else(|| crate::parent_volume(&state))
+        .or_else(|| detect_volume_id(&cursor).ok())
+        .or_else(|| crate::parent_volume(&cursor));
+    run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        "fsevents cursor resume",
+        move |cancellation| {
+            cancellation.check()?;
+            let _state_access = preflight_index_read(&state, "fsevents cursor resume state")?;
+            let _cursor_access = preflight_index_read(&cursor, "fsevents cursor resume")?;
+            cancellation.check()?;
+            Indexer::default().fsevents_resume_plan(state, cursor)
+        },
+    )
+}
+
+fn run_index_read_task<T>(
+    path: PathBuf,
+    worker: &'static str,
+    read: impl FnOnce(PathBuf) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    let volume = detect_volume_id(&path)
+        .ok()
+        .or_else(|| crate::parent_volume(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_index_read(&path, worker)?;
+        cancellation.check()?;
+        read(path)
+    })
 }
 
 fn enforce_index_access(root: &Path) -> Result<ScopedAccessGuard> {

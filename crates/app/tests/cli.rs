@@ -128,10 +128,11 @@ fn index_preflight_refreshes_permission_state_from_binary() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("permission-refresh\taudience=workers\tsubject=index\t"),
+        stderr.contains("permission-refresh\taudience=workers\tsubject=index records\t"),
         "{stderr}"
     );
-    assert!(stderr.contains("\trefresh-workers=true\t"), "{stderr}");
+    assert!(stderr.contains("refresh-workers=true"), "{stderr}");
+    assert_worker_admitted(&stderr, "index", &root);
     assert!(stderr.contains("security-scope\t"), "{stderr}");
 
     let quiet = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -355,18 +356,24 @@ fn index_routes_refuse_unreachable_state_inputs_before_reading_from_binary() {
         (
             vec!["index-state-inspect", state.to_str().unwrap()],
             "index state inspect volume access blocked: unreachable volume network",
+            "index state inspect",
+            &state,
         ),
         (
             vec!["scan-progress-inspect", progress.to_str().unwrap()],
             "scan progress checkpoint inspect volume access blocked: unreachable volume network",
+            "scan progress checkpoint inspect",
+            &progress,
         ),
         (
             vec!["fsevents-cursor-inspect", cursor.to_str().unwrap()],
             "fsevents cursor inspect volume access blocked: unreachable volume network",
+            "fsevents cursor inspect",
+            &cursor,
         ),
     ];
 
-    for (args, expected) in cases {
+    for (args, expected, worker, path) in cases {
         let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
             .args(args)
             .output()
@@ -376,8 +383,61 @@ fn index_routes_refuse_unreachable_state_inputs_before_reading_from_binary() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stdout.is_empty(), "{stdout}");
         assert!(stderr.contains(expected), "{stderr}");
+        assert!(
+            !stderr.contains(&format!(
+                "security-worker-admission\tworker={worker}\tpath={}",
+                path.display()
+            )),
+            "{stderr}"
+        );
     }
 
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn fsevents_cursor_resume_refuses_unreachable_cursor_before_reading_state_from_binary() {
+    let local = unique_temp_dir("gfm-cli-fsevents-resume-local");
+    let offline = unique_temp_dir("gfm-cli-fsevents-resume-cursor-unreachable");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let state = local.join("state.gfmstate");
+    let cursor = offline.join("cursor.gfmfsevents");
+    fs::write(&state, "state is not parsed after cursor access denial\n").unwrap();
+    fs::write(&cursor, "cursor is not parsed after access denial\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-cursor-resume",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("fsevents cursor resume volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=fsevents cursor resume state\tpath={}",
+            state.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=fsevents cursor resume\tpath={}",
+            cursor.display()
+        )),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(local).unwrap();
     fs::remove_dir_all(offline).unwrap();
 }
 
@@ -1970,6 +2030,8 @@ fn persists_volume_index_state_from_binary() {
         "{}",
         String::from_utf8_lossy(&inspect.stderr)
     );
+    let inspect_stderr = String::from_utf8_lossy(&inspect.stderr);
+    assert_worker_admitted(&inspect_stderr, "index state inspect", &state);
     let inspect_stdout = String::from_utf8(inspect.stdout).unwrap();
     assert_eq!(inspect_stdout, second_stdout);
 
@@ -2028,6 +2090,12 @@ fn reports_scan_progress_from_binary() {
         inspect.status.success(),
         "{}",
         String::from_utf8_lossy(&inspect.stderr)
+    );
+    let inspect_stderr = String::from_utf8_lossy(&inspect.stderr);
+    assert_worker_admitted(
+        &inspect_stderr,
+        "scan progress checkpoint inspect",
+        &progress,
     );
     assert_eq!(String::from_utf8(inspect.stdout).unwrap(), stdout);
 
@@ -2346,6 +2414,8 @@ fn persists_fsevents_cursor_from_binary() {
         "{}",
         String::from_utf8_lossy(&inspect.stderr)
     );
+    let inspect_stderr = String::from_utf8_lossy(&inspect.stderr);
+    assert_worker_admitted(&inspect_stderr, "fsevents cursor inspect", &cursor);
     let inspect_stdout = String::from_utf8(inspect.stdout).unwrap();
     assert_eq!(inspect_stdout, checkpoint_stdout);
 
@@ -2362,6 +2432,9 @@ fn persists_fsevents_cursor_from_binary() {
         "{}",
         String::from_utf8_lossy(&resume.stderr)
     );
+    let resume_stderr = String::from_utf8_lossy(&resume.stderr);
+    assert_worker_admitted(&resume_stderr, "fsevents cursor resume state", &state);
+    assert_worker_admitted(&resume_stderr, "fsevents cursor resume", &cursor);
     let resume_stdout = String::from_utf8(resume.stdout).unwrap();
     assert_eq!(
         resume_stdout.trim(),
@@ -8834,6 +8907,22 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{}",
         String::from_utf8_lossy(&recovery_output.stderr)
     );
+    let recovery_stderr = String::from_utf8_lossy(&recovery_output.stderr);
+    assert_worker_admitted(
+        &recovery_stderr,
+        "content manifest promotion recovery",
+        &crash_manifest,
+    );
+    assert_worker_admitted(
+        &recovery_stderr,
+        "content manifest promotion recovery journal",
+        &promotion_journal_path,
+    );
+    assert_worker_admitted(
+        &recovery_stderr,
+        "content manifest promotion recovery archive",
+        &crash_new,
+    );
     let recovery_stdout = String::from_utf8(recovery_output.stdout).unwrap();
     assert!(
         recovery_stdout.contains("completed-promotion=true\tremoved-journal=true")
@@ -9109,6 +9198,90 @@ fn content_manifest_promotion_recovery_plan_refuses_unreachable_archive_before_m
         !stderr.contains("invalid magic") && !stderr.contains("not readable"),
         "{stderr}"
     );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_manifest_promotion_recover_refuses_unreachable_archive_before_completing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-promotion-recover-unreachable");
+    let local = root.join("local");
+    let offline = root.join("offline");
+    fs::create_dir_all(&local).unwrap();
+    fs::create_dir_all(&offline).unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let manifest = local.join("content.gfmmanifest");
+    let old = local.join("old.gfmcontent");
+    let new_archive = offline.join("new.gfmcontent");
+    write_content_postings(
+        &old,
+        &[ContentPosting {
+            term: "oldneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    fs::write(&new_archive, "not mmap content").unwrap();
+    let previous = ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: old.clone(),
+    }])
+    .unwrap();
+    previous.write(&manifest).unwrap();
+    let original_manifest = fs::read_to_string(&manifest).unwrap();
+    let journal = ContentManifestPromotionJournal::new(
+        previous,
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: new_archive.clone(),
+        },
+        vec![old.clone()],
+    )
+    .unwrap();
+    let journal_path = content_manifest_promotion_journal_path(&manifest);
+    journal.write(&journal_path).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-promotion-recover",
+            manifest.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("content-manifest-promotion-recovery\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(
+            "content manifest promotion recovery archive volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert_worker_admitted(&stderr, "content manifest promotion recovery", &manifest);
+    assert_worker_admitted(
+        &stderr,
+        "content manifest promotion recovery journal",
+        &journal_path,
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content manifest promotion recovery archive\tpath={}",
+            new_archive.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("invalid magic") && !stderr.contains("not readable"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), original_manifest);
+    assert!(journal_path.exists());
 
     fs::remove_dir_all(root).unwrap();
 }
