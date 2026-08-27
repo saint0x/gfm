@@ -3,6 +3,7 @@ use gpui::{
     div, prelude::*, px, rgb, size, App, AppContext, Application, Bounds, Context, IntoElement,
     Render, Styled, Subscription, Window, WindowBounds, WindowOptions,
 };
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
@@ -88,6 +89,7 @@ pub struct AppLaunchSpec {
     pub transparent_titlebar: bool,
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
+    pub sidebar_volumes: Vec<SidebarVolumeSpec>,
     pub permission_dialog: Option<DialogContract>,
     pub permission_refresh: Option<PermissionRefreshContract>,
 }
@@ -160,6 +162,20 @@ impl AppLaunchSpec {
                 "native app tabbing identifier must not be empty".to_string(),
             ));
         }
+        let mut sidebar_volume_ids = BTreeSet::new();
+        for volume in &self.sidebar_volumes {
+            if volume.id.trim().is_empty() {
+                return Err(GfmError::Format(
+                    "native app sidebar volume id must not be empty".to_string(),
+                ));
+            }
+            if !sidebar_volume_ids.insert(volume.id.as_str()) {
+                return Err(GfmError::Format(format!(
+                    "native app sidebar volume id `{}` is duplicated",
+                    volume.id
+                )));
+            }
+        }
         if let Some(dialog) = &self.permission_dialog {
             if dialog.surface != DialogSurface::Permission {
                 return Err(GfmError::Format(
@@ -181,6 +197,11 @@ impl AppLaunchSpec {
         self
     }
 
+    pub fn with_sidebar_volumes(mut self, volumes: Vec<SidebarVolumeSpec>) -> Self {
+        self.sidebar_volumes = volumes;
+        self
+    }
+
     pub fn with_permission_refresh(mut self, refresh: PermissionRefreshContract) -> Self {
         self.permission_refresh = Some(refresh);
         self
@@ -199,6 +220,7 @@ impl Default for AppLaunchSpec {
             transparent_titlebar: true,
             activate_on_launch: true,
             tabbing_identifier: "gfm-main-window".to_string(),
+            sidebar_volumes: Vec::new(),
             permission_dialog: None,
             permission_refresh: None,
         }
@@ -216,6 +238,7 @@ pub struct WindowLifecycleContract {
     pub transparent_titlebar: bool,
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
+    pub sidebar_volumes: Vec<SidebarVolumeSpec>,
     pub permission_dialog: Option<DialogSurface>,
     pub permission_refresh: Option<PermissionRefreshContract>,
 }
@@ -233,6 +256,7 @@ impl WindowLifecycleContract {
             transparent_titlebar: spec.transparent_titlebar,
             activate_on_launch: spec.activate_on_launch,
             tabbing_identifier: spec.tabbing_identifier.clone(),
+            sidebar_volumes: spec.sidebar_volumes.clone(),
             permission_dialog: spec.permission_dialog.as_ref().map(|dialog| dialog.surface),
             permission_refresh: spec.permission_refresh.clone(),
         })
@@ -288,7 +312,10 @@ fn open_main_window(
         cx.new(|_| RootView {
             bounds_subscription: None,
             session_writer: WindowSessionWriter::new(session_store),
-            sidebar: sidebar::SidebarContract::discover(&spec.initial_path),
+            sidebar: sidebar::SidebarContract::discover_with_volumes(
+                &spec.initial_path,
+                spec.sidebar_volumes.clone(),
+            ),
             icon_view: IconViewContract::from_records(&[], IconViewOptions::default()),
             permission_dialog: spec.permission_dialog,
             permission_refresh: spec.permission_refresh,
@@ -413,6 +440,7 @@ mod tests {
         assert_eq!(contract.height, DEFAULT_HEIGHT);
         assert!(contract.transparent_titlebar);
         assert_eq!(contract.tabbing_identifier, "gfm-main-window");
+        assert!(contract.sidebar_volumes.is_empty());
         assert_eq!(contract.permission_dialog, None);
         assert_eq!(contract.permission_refresh, None);
     }
@@ -449,6 +477,32 @@ mod tests {
         assert!(contract
             .as_tsv()
             .ends_with("\tpermission-dialog=permission"));
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_sidebar_volumes_from_launch_spec() {
+        let volume = SidebarVolumeSpec::from_native_seed(
+            "diskarbitration-uuid-media-backup",
+            "Media Backup",
+            "/Volumes/Media Backup",
+            true,
+        );
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_sidebar_volumes(vec![volume.clone()]);
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert_eq!(contract.sidebar_volumes, vec![volume]);
+    }
+
+    #[test]
+    fn rejects_duplicate_sidebar_volume_ids() {
+        let first =
+            SidebarVolumeSpec::from_native_seed("duplicate-volume", "First", "/Volumes/A", true);
+        let second =
+            SidebarVolumeSpec::from_native_seed("duplicate-volume", "Second", "/Volumes/B", false);
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_sidebar_volumes(vec![first, second]);
+
+        let err = WindowLifecycleContract::from_spec(&spec).unwrap_err();
+        assert!(err.to_string().contains("duplicated"));
     }
 
     #[test]

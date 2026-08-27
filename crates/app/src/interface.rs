@@ -427,7 +427,10 @@ fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
 }
 
 fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
-    let mut spec = path.map(AppLaunchSpec::new).unwrap_or_default();
+    let mut spec = path
+        .map(AppLaunchSpec::new)
+        .unwrap_or_default()
+        .with_sidebar_volumes(native_sidebar_volumes());
     let refresh = crate::permission_refresh::refresh_permission_state(
         crate::permission_refresh::PermissionRefreshAudience::Ui,
         "window-lifecycle",
