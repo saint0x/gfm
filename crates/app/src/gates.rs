@@ -1,4 +1,8 @@
-use crate::{parse_u32_arg, parse_usize_arg, required_path};
+use crate::{
+    access::{preflight_access_scope, ScopedAccessGuard},
+    parse_u32_arg, parse_usize_arg, required_path,
+};
+use gfm_mac::AccessIntent;
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_macrobench_fixture_report,
     materialize_parity_fixture, read_governed_mask_file, read_mask_file, run_large_sidecar_gate,
@@ -10,7 +14,7 @@ use gfm_testkit::{
     SearchTypingBenchmarkOptions,
 };
 use gfm_types::{GfmError, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
@@ -86,8 +90,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let width = parse_u32_arg(args.next(), "pixel-diff requires a width")?;
             let height = parse_u32_arg(args.next(), "pixel-diff requires a height")?;
             let size = PixelSize::new(width, height);
-            let masks = args
-                .next()
+            let mask_path = args.next().map(PathBuf::from);
+            let _access = retain_pixel_diff_access(&expected, &actual, mask_path.as_deref())?;
+            let masks = mask_path
+                .as_ref()
                 .map(|path| read_mask_file(path, size))
                 .transpose()?
                 .unwrap_or_default();
@@ -145,8 +151,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let width = parse_u32_arg(args.next(), "pixel-threshold-check requires a width")?;
             let height = parse_u32_arg(args.next(), "pixel-threshold-check requires a height")?;
             let size = PixelSize::new(width, height);
-            let masks = args
-                .next()
+            let mask_path = args.next().map(PathBuf::from);
+            let _access = retain_pixel_diff_access(&expected, &actual, mask_path.as_deref())?;
+            let masks = mask_path
+                .as_ref()
                 .map(|path| read_governed_mask_file(path, size))
                 .transpose()?
                 .unwrap_or_default();
@@ -176,6 +184,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "parity-gate" => {
             let manifest = required_path(args.next(), "parity-gate requires a manifest path")?;
+            let _access = preflight_access_scope(&manifest, AccessIntent::Read, "parity gate")?;
             let report = run_parity_gate_manifest(&manifest)?;
             println!(
                 "parity-gate\tmanifest={}\tentries={}\tviolations={}\tpassed={}",
@@ -211,6 +220,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let manifest = required_path(args.next(), "parity-review requires a manifest path")?;
             let output_dir =
                 required_path(args.next(), "parity-review requires an output directory")?;
+            let _access = retain_parity_review_access(&manifest, &output_dir)?;
             let bundle = write_parity_review_bundle_manifest(&manifest, &output_dir)?;
             println!(
                 "parity-review\tmanifest={}\toutput={}\tentries={}\tviolations={}\tpassed={}",
@@ -450,6 +460,46 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn retain_pixel_diff_access(
+    expected: &Path,
+    actual: &Path,
+    mask: Option<&Path>,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = vec![
+        preflight_access_scope(expected, AccessIntent::Read, "pixel expected")?,
+        preflight_access_scope(actual, AccessIntent::Read, "pixel actual")?,
+    ];
+    if let Some(mask) = mask {
+        guards.push(preflight_access_scope(
+            mask,
+            AccessIntent::Read,
+            "pixel mask",
+        )?);
+    }
+    Ok(guards)
+}
+
+fn retain_parity_review_access(
+    manifest: &Path,
+    output_dir: &Path,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(manifest, AccessIntent::Read, "parity review manifest")?,
+        preflight_access_scope(
+            write_probe_path(output_dir),
+            AccessIntent::Write,
+            "parity review output",
+        )?,
+    ])
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.is_dir() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
 }
 
 fn macrobench_options(

@@ -200,6 +200,71 @@ fn pixel_threshold_rejects_ungoverned_mask_from_binary() {
 }
 
 #[test]
+fn pixel_routes_refuse_unreachable_inputs_before_reading_from_binary() {
+    let root = unique_temp_dir("gfm-cli-pixel-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-pixel-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let expected = root.join("expected.rgba");
+    let actual = offline.join("actual.rgba");
+    let mask = root.join("mask.tsv");
+    fs::write(&expected, [0, 0, 0, 255]).unwrap();
+    fs::write(&actual, "not read").unwrap();
+    fs::write(&mask, "0\t0\t1\t1\tOS-owned repaint\n").unwrap();
+
+    let diff = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "pixel-diff",
+            expected.to_str().unwrap(),
+            actual.to_str().unwrap(),
+            "1",
+            "1",
+            mask.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!diff.status.success());
+    let diff_stdout = String::from_utf8_lossy(&diff.stdout);
+    let diff_stderr = String::from_utf8_lossy(&diff.stderr);
+    assert!(!diff_stdout.contains("pixel-diff\t"), "{diff_stdout}");
+    assert!(
+        diff_stderr.contains("pixel actual volume access blocked: unreachable volume network"),
+        "{diff_stderr}"
+    );
+    assert!(!diff_stderr.contains("RGBA"), "{diff_stderr}");
+
+    let threshold = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "pixel-threshold-check",
+            "toolbar",
+            expected.to_str().unwrap(),
+            actual.to_str().unwrap(),
+            "1",
+            "1",
+            mask.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!threshold.status.success());
+    let threshold_stdout = String::from_utf8_lossy(&threshold.stdout);
+    let threshold_stderr = String::from_utf8_lossy(&threshold.stderr);
+    assert!(
+        !threshold_stdout.contains("threshold\ttoolbar\t"),
+        "{threshold_stdout}"
+    );
+    assert!(
+        threshold_stderr.contains("pixel actual volume access blocked: unreachable volume network"),
+        "{threshold_stderr}"
+    );
+    assert!(
+        !threshold_stderr.contains("must contain x, y, width, height, reason"),
+        "{threshold_stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn runs_parity_gate_from_binary_manifest() {
     let root = unique_temp_dir("gfm-cli-parity-gate");
     fs::write(root.join("expected.rgba"), [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
@@ -237,6 +302,64 @@ fn runs_parity_gate_from_binary_manifest() {
     );
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn parity_routes_refuse_unreachable_paths_before_manifest_or_bundle_io_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-parity-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let manifest = offline.join("gate.tsv");
+    fs::write(&manifest, "not parsed").unwrap();
+
+    let gate = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["parity-gate", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!gate.status.success());
+    let gate_stdout = String::from_utf8_lossy(&gate.stdout);
+    let gate_stderr = String::from_utf8_lossy(&gate.stderr);
+    assert!(!gate_stdout.contains("parity-gate\t"), "{gate_stdout}");
+    assert!(
+        gate_stderr.contains("parity gate volume access blocked: unreachable volume network"),
+        "{gate_stderr}"
+    );
+    assert!(
+        !gate_stderr.contains("missing capture provenance"),
+        "{gate_stderr}"
+    );
+
+    let local_manifest = root.join("gate.tsv");
+    fs::write(&local_manifest, "not parsed").unwrap();
+    let review = offline.join("review");
+    let review_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "parity-review",
+            local_manifest.to_str().unwrap(),
+            review.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!review_output.status.success());
+    let review_stdout = String::from_utf8_lossy(&review_output.stdout);
+    let review_stderr = String::from_utf8_lossy(&review_output.stderr);
+    assert!(
+        !review_stdout.contains("parity-review\t"),
+        "{review_stdout}"
+    );
+    assert!(
+        review_stderr
+            .contains("parity review output volume access blocked: unreachable volume network"),
+        "{review_stderr}"
+    );
+    assert!(
+        !review_stderr.contains("missing capture provenance"),
+        "{review_stderr}"
+    );
+    assert!(!review.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
 }
 
 #[test]
