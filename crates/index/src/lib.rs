@@ -68,7 +68,7 @@ pub use lookup::{
 };
 pub use metadata::{
     diff_metadata, publish_secondary_metadata, MetadataUpdateReport,
-    SecondaryMetadataPublicationReport,
+    ProviderMetadataInvalidationReport, SecondaryMetadataPublicationReport,
 };
 pub use progress::{ScanProgressCheckpoint, SCAN_PROGRESS_SCHEMA_VERSION};
 pub use recovery::{

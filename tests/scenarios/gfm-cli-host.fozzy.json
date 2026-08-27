@@ -2238,6 +2238,19 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-metadata-invalidation",
+        "downloaded",
+        "tmp/gfm-fozzy-fileprovider-scan.icloud-placeholder"
+      ],
+      "exit_code": 0,
+      "stdout": "provider-metadata-invalidation\ttmp/gfm-fozzy-fileprovider-scan.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\treason=provider-metadata-state-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-fileprovider-event.icloud-placeholder",
       "data": "placeholder\n"

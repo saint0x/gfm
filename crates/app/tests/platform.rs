@@ -864,6 +864,38 @@ fn reports_fileprovider_invalidation_from_binary() {
 }
 
 #[test]
+fn reports_fileprovider_metadata_invalidation_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-metadata-invalidation-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let evicted = root.join("Remote.icloud-placeholder");
+    std::fs::write(&evicted, "placeholder").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-metadata-invalidation")
+        .arg("downloaded")
+        .arg(&evicted)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("provider-metadata-invalidation\t"));
+    assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\t"));
+    assert!(stdout.contains("\treindex-metadata=true\tschedule-metadata-update=true\t"));
+    assert!(stdout.contains("\tinvalidate-query-cache=true\t"));
+    assert!(stdout.ends_with("reason=provider-metadata-state-changed\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_sidebar_fileprovider_invalidation_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-sidebar-fileprovider-invalidation-{}",

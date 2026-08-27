@@ -565,6 +565,7 @@ fn print_usage() {
   gfm fileprovider-progress-job <path>
   gfm fileprovider-operation <download|evict> <path>
   gfm fileprovider-invalidation <previous-state> <path>
+  gfm fileprovider-metadata-invalidation <previous-state> <path>
   gfm fileprovider-invalidation-scan <state.tsv> <paths...>
   gfm fileprovider-invalidation-event <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
   gfm volume-discovery [paths...]

@@ -17,6 +17,17 @@ pub struct SecondaryMetadataPublicationReport {
     pub postings: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderMetadataInvalidationReport {
+    pub path: PathBuf,
+    pub previous_state: String,
+    pub current_state: String,
+    pub reindex_metadata: bool,
+    pub schedule_metadata_update: bool,
+    pub invalidate_query_cache: bool,
+    pub reason: String,
+}
+
 impl SecondaryMetadataPublicationReport {
     pub fn as_tsv(&self) -> String {
         format!(
@@ -25,6 +36,55 @@ impl SecondaryMetadataPublicationReport {
             self.primary_records,
             self.secondary_records,
             self.postings,
+        )
+    }
+}
+
+impl ProviderMetadataInvalidationReport {
+    pub fn from_provider_transition(
+        path: impl Into<PathBuf>,
+        previous_state: impl Into<String>,
+        current_state: impl Into<String>,
+        provider_reindex_metadata: bool,
+        state_changed: bool,
+        provider_reason: impl Into<String>,
+    ) -> Self {
+        let previous_state = previous_state.into();
+        let current_state = current_state.into();
+        let provider_reason = provider_reason.into();
+        let schedule_metadata_update = provider_reindex_metadata && state_changed;
+        let invalidate_query_cache = schedule_metadata_update;
+        let reason = if !provider_reindex_metadata {
+            "provider-did-not-reindex-metadata".to_string()
+        } else if !state_changed {
+            "provider-state-unchanged".to_string()
+        } else if previous_state != current_state {
+            "provider-metadata-state-changed".to_string()
+        } else {
+            provider_reason
+        };
+
+        Self {
+            path: path.into(),
+            previous_state,
+            current_state,
+            reindex_metadata: provider_reindex_metadata,
+            schedule_metadata_update,
+            invalidate_query_cache,
+            reason,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "provider-metadata-invalidation\t{}\tprevious={}\tcurrent={}\treindex-metadata={}\tschedule-metadata-update={}\tinvalidate-query-cache={}\treason={}",
+            self.path.display(),
+            self.previous_state,
+            self.current_state,
+            self.reindex_metadata,
+            self.schedule_metadata_update,
+            self.invalidate_query_cache,
+            self.reason
         )
     }
 }

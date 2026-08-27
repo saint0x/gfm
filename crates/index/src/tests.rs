@@ -1365,6 +1365,44 @@ fn live_index_applies_chmod_metadata_updates() {
 }
 
 #[test]
+fn provider_metadata_invalidation_schedules_update_for_state_change() {
+    let report = crate::ProviderMetadataInvalidationReport::from_provider_transition(
+        "/tmp/Remote.icloud-placeholder",
+        "downloaded",
+        "evicted",
+        true,
+        true,
+        "fileprovider-state-changed",
+    );
+
+    assert!(report.reindex_metadata);
+    assert!(report.schedule_metadata_update);
+    assert!(report.invalidate_query_cache);
+    assert_eq!(report.reason, "provider-metadata-state-changed");
+    assert_eq!(
+        report.as_tsv(),
+        "provider-metadata-invalidation\t/tmp/Remote.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\treason=provider-metadata-state-changed"
+    );
+}
+
+#[test]
+fn provider_metadata_invalidation_skips_noop_provider_state() {
+    let report = crate::ProviderMetadataInvalidationReport::from_provider_transition(
+        "/tmp/Downloaded.icloud.md",
+        "downloaded",
+        "downloaded",
+        false,
+        false,
+        "fileprovider-state-unchanged",
+    );
+
+    assert!(!report.reindex_metadata);
+    assert!(!report.schedule_metadata_update);
+    assert!(!report.invalidate_query_cache);
+    assert_eq!(report.reason, "provider-did-not-reindex-metadata");
+}
+
+#[test]
 fn event_backpressure_coalesces_duplicate_background_bursts() {
     let path = PathBuf::from("/tmp/hot.md");
     let mut queue = EventBackpressureQueue::new(8, 3);

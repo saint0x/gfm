@@ -6,7 +6,7 @@ use crate::{
 use gfm_fs::record_for_path;
 use gfm_index::{
     parse_volume_indexing_policy, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor,
-    VolumeIndexPolicy, VolumeInvalidationReport,
+    ProviderMetadataInvalidationReport, VolumeIndexPolicy, VolumeInvalidationReport,
 };
 use gfm_jobs::{
     Cancellation, JobClass, JobPayloadKind, JobProgressState, Priority, Scheduler, SchedulingAction,
@@ -157,6 +157,29 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             println!(
                 "{}",
                 FileProviderInvalidationReport::evaluate(path, previous)?.as_tsv()
+            );
+        }
+        "fileprovider-metadata-invalidation" => {
+            let previous = CloudStorageState::parse(&required_string(
+                args.next(),
+                "fileprovider-metadata-invalidation requires a previous state",
+            )?)?;
+            let path = required_path(
+                args.next(),
+                "fileprovider-metadata-invalidation requires a path",
+            )?;
+            let report = FileProviderInvalidationReport::evaluate(path, previous)?;
+            println!(
+                "{}",
+                ProviderMetadataInvalidationReport::from_provider_transition(
+                    report.path,
+                    report.previous.as_str(),
+                    report.current.storage_state.as_str(),
+                    report.reindex_metadata,
+                    report.state_changed,
+                    report.reason,
+                )
+                .as_tsv()
             );
         }
         "fileprovider-invalidation-scan" => {
