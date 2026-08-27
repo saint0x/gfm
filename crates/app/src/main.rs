@@ -521,6 +521,7 @@ fn print_usage() {
   gfm permission-onboarding
   gfm permission-invalidation [permission-state.tsv]
   gfm security-scope <path> [read|write|index|preview|operate]
+  gfm security-bookmark-create <path> [read|write|index|preview|operate]
   gfm mac-bridges
   gfm native-icon <path>
   gfm native-icon-bridge <path>

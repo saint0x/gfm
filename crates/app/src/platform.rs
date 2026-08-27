@@ -17,8 +17,9 @@ use gfm_mac::{
     FileProviderDomainReport, FileProviderInvalidationReport, FileProviderOperation,
     FileProviderOperationReport, FileProviderProgressReport, FileProviderStateReport,
     MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor, SecurityScopedAccessReport,
-    SpotlightMetadataReader, SpotlightReconciliationReport, VolumeDiscoveryReport, VolumeOperation,
-    VolumeOperationReport, VolumeTopologyDiff,
+    SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore, SpotlightMetadataReader,
+    SpotlightReconciliationReport, VolumeDiscoveryReport, VolumeOperation, VolumeOperationReport,
+    VolumeTopologyDiff,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, security_input_for_path, IconPreviewContract,
@@ -42,6 +43,29 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "{}",
                 SecurityScopedAccessReport::evaluate(path, intent).as_tsv()
             );
+        }
+        "security-bookmark-create" => {
+            let path = required_path(args.next(), "security-bookmark-create requires a path")?;
+            let intent = args
+                .next()
+                .map(|value| AccessIntent::parse(&value))
+                .transpose()?
+                .unwrap_or(AccessIntent::Read);
+            let report = SecurityScopedAccessReport::evaluate(&path, intent).create_bookmark();
+            println!("{}", report.as_tsv());
+            if report.status == SecurityScopedBookmarkStatus::Created {
+                let bookmark = gfm_mac::SecurityScopedBookmark::create(&path, report.read_only)
+                    .map_err(|failure| GfmError::Permission {
+                        path: path.clone(),
+                        message: failure.reason.unwrap_or_else(|| {
+                            "security-scoped bookmark creation failed".to_string()
+                        }),
+                    })?;
+                let store = SecurityScopedBookmarkStore::new(
+                    crate::runtime::default_security_bookmarks_path(),
+                );
+                println!("{}", store.upsert(bookmark)?.as_tsv());
+            }
         }
         "mac-bridges" => {
             println!("{}", MacBridgeContract::finder_required().as_tsv());

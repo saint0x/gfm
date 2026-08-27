@@ -156,6 +156,68 @@ fn operation_preflight_refreshes_permission_state_from_binary() {
 }
 
 #[test]
+fn extraction_preflight_retains_security_scoped_bookmark_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extraction-bookmark");
+    let home = root.join("home");
+    let documents = home.join("Documents");
+    let protected = documents.join("Plan.md");
+    let bookmarks = root.join("bookmarks.tsv");
+    fs::create_dir_all(&documents).unwrap();
+    fs::write(&protected, "alpha protected content").unwrap();
+
+    let create = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .args([
+            "security-bookmark-create",
+            protected.to_str().unwrap(),
+            "read",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let create_stdout = String::from_utf8(create.stdout).unwrap();
+    assert!(
+        create_stdout.contains("security-bookmark\t")
+            && create_stdout.contains("\tstatus=created\t"),
+        "{create_stdout}"
+    );
+    assert!(
+        create_stdout.contains("security-bookmark-store\t")
+            && create_stdout.contains("\trecords=1\t"),
+        "{create_stdout}"
+    );
+
+    let extract = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .args(["extract-report", protected.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        extract.status.success(),
+        "{}",
+        String::from_utf8_lossy(&extract.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&extract.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tscope=documents\t"), "{stderr}");
+    assert!(stderr.contains("\tbookmark-required=true\t"), "{stderr}");
+    assert!(
+        stderr.contains("security-scope-access\t")
+            && stderr.contains("\tstatus=resolved\t")
+            && stderr.contains("\taccess-started=true\t"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn index_refuses_missing_root_before_scan_from_binary() {
     let root = unique_temp_path("gfm-cli-index-missing-root", "missing");
     let index = unique_temp_path("gfm-cli-index-missing-output", "gfmidx");

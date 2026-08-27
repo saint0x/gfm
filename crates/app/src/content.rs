@@ -1,4 +1,4 @@
-use crate::access::preflight_access;
+use crate::access::preflight_access_scope;
 use crate::extract::{
     extraction_budget_profile, read_extraction_quarantine,
     run_adaptive_extraction_worker_cancellable,
@@ -41,7 +41,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "index-content requires a root path")?;
             let records = required_path(args.next(), "index-content requires a records path")?;
             let content = required_path(args.next(), "index-content requires a content path")?;
-            preflight_access(&root, AccessIntent::Index, "content index")?;
+            let _access = preflight_access_scope(&root, AccessIntent::Index, "content index")?;
             let snapshot = Indexer::default().build(root)?;
             let indexed = snapshot.save_with_content(records, content, &Extractor::default())?;
             eprintln!(
@@ -53,7 +53,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "extract-report" => {
             let path = required_path(args.next(), "extract-report requires a path")?;
-            preflight_access(&path, AccessIntent::Read, "content extraction")?;
+            let _access = preflight_access_scope(&path, AccessIntent::Read, "content extraction")?;
             let extractor = Extractor::default();
             let report = extractor.extract_path_report(&path)?;
             let mut quarantine = ExtractionQuarantine::default();
@@ -64,7 +64,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "extract-report-adaptive" => {
             let path = required_path(args.next(), "extract-report-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(args, "extract report")?;
-            preflight_access(&path, AccessIntent::Read, "adaptive content extraction")?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Read, "adaptive content extraction")?;
             let root = path
                 .parent()
                 .map(Path::to_path_buf)
@@ -80,7 +81,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "extract-worker-adaptive" => {
             let path = required_path(args.next(), "extract-worker-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(args, "extract worker")?;
-            preflight_access(&path, AccessIntent::Read, "adaptive extraction worker")?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Read, "adaptive extraction worker")?;
             let volume = detect_volume_id(&path)
                 .ok()
                 .or_else(|| parent_volume(&path));
@@ -141,7 +143,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(|value| parse_u32(&value, "failure threshold"))
                 .transpose()?
                 .unwrap_or(2);
-            preflight_access(&path, AccessIntent::Read, "quarantined adaptive extraction")?;
+            let _access = preflight_access_scope(
+                &path,
+                AccessIntent::Read,
+                "quarantined adaptive extraction",
+            )?;
             let volume = detect_volume_id(&path)
                 .ok()
                 .or_else(|| parent_volume(&path));
@@ -164,7 +170,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "extract-cache" => {
             let path = required_path(args.next(), "extract-cache requires a path")?;
-            preflight_access(&path, AccessIntent::Read, "content extraction cache")?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Read, "content extraction cache")?;
             let record = record_for_path(&path, None, false)?;
             let mut cached = CachedExtractor::default();
             println!("{}", cached.extract_record_report(&record)?.as_tsv());
@@ -176,7 +183,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "extract-quarantine requires a quarantine store path",
             )?;
-            preflight_access(&path, AccessIntent::Read, "extraction quarantine")?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Read, "extraction quarantine")?;
             let kind = parse_quarantine_failure_kind(
                 args.next().as_deref().unwrap_or("timeout"),
                 "failure kind",
@@ -208,7 +216,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-content-segment requires an output segment path",
             )?;
-            preflight_access(&root, AccessIntent::Index, "content segment index")?;
+            let _access =
+                preflight_access_scope(&root, AccessIntent::Index, "content segment index")?;
             let snapshot = Indexer::default().build(root)?;
             let indexed =
                 snapshot.save_content_segment(output, &Extractor::default(), Vec::new())?;
@@ -348,7 +357,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "index-content-background requires a content path",
             )?;
             let pressure = parse_optional_scheduling_pressure(args)?;
-            preflight_access(&root, AccessIntent::Index, "background content index")?;
+            let _access =
+                preflight_access_scope(&root, AccessIntent::Index, "background content index")?;
             let journal = JobJournal::new(default_job_journal_path());
             let spec = ContentIndexJobSpec::new(&root, segment_dir, records, content)
                 .with_volume(detect_volume_id(&root)?);
@@ -628,7 +638,7 @@ pub(crate) fn run_content_search(
     query: String,
     extractor: Extractor,
 ) -> Result<(usize, Vec<SearchHit>)> {
-    preflight_access(&root, AccessIntent::Index, "content search")?;
+    let _access = preflight_access_scope(&root, AccessIntent::Index, "content search")?;
     let volume = detect_volume_id(&root).ok();
     run_volume_task_cancellable(
         volume,
@@ -676,7 +686,8 @@ pub(crate) fn run_content_job(
     pressure: SchedulingPressure,
     spec_path: &Path,
 ) -> Result<ContentJobOutcome> {
-    preflight_access(&spec.root, AccessIntent::Index, "background content index")?;
+    let _access =
+        preflight_access_scope(&spec.root, AccessIntent::Index, "background content index")?;
     let scheduling = pressure.decide(Priority::Background, 1, 1);
     let label = "background content index";
     if scheduling.action == SchedulingAction::Defer {
