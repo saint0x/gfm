@@ -2380,6 +2380,72 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-remove-state.tsv",
+      "data": "gfm-fileprovider-state-v1\ndownloaded\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-invalidation-event",
+        "tmp/gfm-fozzy-fileprovider-remove-state.tsv",
+        "remove",
+        "tmp/gfm-fozzy-fileprovider-remove.icloud.md"
+      ],
+      "exit_code": 0,
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\tprevious=downloaded\tcurrent=local-only\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-remove.icloud.md",
+      "data": "downloaded\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-remove-state.tsv",
+      "data": "gfm-fileprovider-state-v1\ndownloaded\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/bin/rm",
+      "args": [
+        "-f",
+        "tmp/gfm-fozzy-fileprovider-remove.icloud.md"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-invalidation-event",
+        "tmp/gfm-fozzy-fileprovider-remove-state.tsv",
+        "remove",
+        "tmp/gfm-fozzy-fileprovider-remove.icloud.md"
+      ],
+      "exit_code": 0,
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\tprevious=downloaded\tcurrent=local-only\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/bin/cat",
+      "args": [
+        "tmp/gfm-fozzy-fileprovider-remove-state.tsv"
+      ],
+      "exit_code": 0,
+      "stdout": "gfm-fileprovider-state-v1\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-fileprovider-observer.icloud-placeholder",
       "data": "placeholder\n"
     },

@@ -696,17 +696,18 @@ impl FileProviderInvalidationReport {
             || previous != CloudStorageState::LocalOnly
             || !current.badges.is_empty();
         let invalidate_sidebar = provider_visible
-            && matches!(
-                current.storage_state,
-                CloudStorageState::Downloaded
-                    | CloudStorageState::Evicted
-                    | CloudStorageState::Downloading
-                    | CloudStorageState::Uploading
-                    | CloudStorageState::Waiting
-                    | CloudStorageState::Conflict
-                    | CloudStorageState::Offline
-                    | CloudStorageState::Unknown
-            );
+            && (state_changed
+                || matches!(
+                    current.storage_state,
+                    CloudStorageState::Downloaded
+                        | CloudStorageState::Evicted
+                        | CloudStorageState::Downloading
+                        | CloudStorageState::Uploading
+                        | CloudStorageState::Waiting
+                        | CloudStorageState::Conflict
+                        | CloudStorageState::Offline
+                        | CloudStorageState::Unknown
+                ));
         let reason = if !provider_visible {
             "not-provider-visible"
         } else if state_changed {
@@ -823,6 +824,10 @@ impl FileProviderStateSnapshot {
             .find(|entry| entry.path == path)
             .map(|entry| entry.state)
     }
+
+    fn contains_path(&self, path: &Path) -> bool {
+        self.previous_state_for(path).is_some()
+    }
 }
 
 impl FileProviderStateInvalidationReport {
@@ -834,16 +839,26 @@ impl FileProviderStateInvalidationReport {
         let mut changes = Vec::new();
         let mut current_entries = Vec::new();
         for path in current_paths {
-            let current = FileProviderStateReport::read_path(&path)?;
+            let previous_state = previous.and_then(|snapshot| snapshot.previous_state_for(&path));
+            let current = if path.exists() || is_evicted_placeholder_path(&path) {
+                Some(FileProviderStateReport::read_path(&path)?)
+            } else if previous_state.is_some() {
+                Some(FileProviderStateReport::removed(path.clone()))
+            } else {
+                None
+            };
+            let current = current.ok_or_else(|| GfmError::io(&path, "path does not exist"))?;
             let previous_state = previous
                 .and_then(|snapshot| snapshot.previous_state_for(&path))
                 .unwrap_or(CloudStorageState::LocalOnly);
             let change =
                 FileProviderInvalidationReport::from_current(path.clone(), previous_state, current);
-            current_entries.push(FileProviderStateSnapshotEntry {
-                path,
-                state: change.current.storage_state,
-            });
+            if change.current.source != "removed" {
+                current_entries.push(FileProviderStateSnapshotEntry {
+                    path,
+                    state: change.current.storage_state,
+                });
+            }
             if initialized || change.state_changed {
                 changes.push(change);
             }
@@ -897,7 +912,7 @@ impl FileProviderObservedInvalidation {
         let mut paths = BTreeSet::new();
         for event in events {
             event_count += 1;
-            for path in paths_for_fileprovider_event(&event) {
+            for path in paths_for_fileprovider_event(previous, &event) {
                 paths.insert(path);
             }
         }
@@ -980,15 +995,18 @@ impl FileProviderStateObserver {
     }
 }
 
-fn paths_for_fileprovider_event(event: &FileEvent) -> Vec<PathBuf> {
+fn paths_for_fileprovider_event(
+    previous: Option<&FileProviderStateSnapshot>,
+    event: &FileEvent,
+) -> Vec<PathBuf> {
     match &event.kind {
         FileEventKind::Rename { from, to } => [from, to]
             .into_iter()
-            .filter(|path| is_observable_fileprovider_path(path))
+            .filter(|path| is_observable_fileprovider_path(previous, path))
             .cloned()
             .collect(),
         FileEventKind::Remove => {
-            if is_observable_fileprovider_path(&event.path) {
+            if is_observable_fileprovider_path(previous, &event.path) {
                 vec![event.path.clone()]
             } else {
                 Vec::new()
@@ -999,7 +1017,7 @@ fn paths_for_fileprovider_event(event: &FileEvent) -> Vec<PathBuf> {
         | FileEventKind::Modify
         | FileEventKind::Rescan
         | FileEventKind::Other => {
-            if is_observable_fileprovider_path(&event.path) {
+            if is_observable_fileprovider_path(previous, &event.path) {
                 vec![event.path.clone()]
             } else {
                 Vec::new()
@@ -1008,8 +1026,13 @@ fn paths_for_fileprovider_event(event: &FileEvent) -> Vec<PathBuf> {
     }
 }
 
-fn is_observable_fileprovider_path(path: &Path) -> bool {
-    path.exists() || is_evicted_placeholder_path(path)
+fn is_observable_fileprovider_path(
+    previous: Option<&FileProviderStateSnapshot>,
+    path: &Path,
+) -> bool {
+    path.exists()
+        || is_evicted_placeholder_path(path)
+        || previous.is_some_and(|snapshot| snapshot.contains_path(path))
 }
 
 impl FileProviderOperationReport {
@@ -1155,6 +1178,25 @@ impl FileProviderStateReport {
             conflict: storage_state == CloudStorageState::Conflict,
             provider_identifier: hints.provider_identifier,
             source: hints.source,
+        }
+    }
+
+    fn removed(path: PathBuf) -> Self {
+        let storage_state = CloudStorageState::LocalOnly;
+        let commands = CloudCommandPolicy::local();
+        Self {
+            path,
+            domain: FileProviderDomain::Local,
+            storage_state,
+            materialization: CloudMaterialization::NotProviderBacked,
+            materialization_source: CloudMaterializationSource::Filesystem,
+            progress: CloudTransferProgress::idle("fileprovider-item-removed"),
+            badges: Vec::new(),
+            commands,
+            offline: false,
+            conflict: false,
+            provider_identifier: None,
+            source: "removed".to_string(),
         }
     }
 
@@ -1973,6 +2015,44 @@ mod tests {
         assert!(!observed.report.invalidate_preview_memory);
         assert!(!observed.report.invalidate_preview_disk);
         assert_eq!(snapshot, previous);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_removes_deleted_tracked_provider_item() {
+        let root = unique_temp_dir();
+        let tracked = root.join("Downloaded.icloud.md");
+        fs::write(&tracked, "downloaded").unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: tracked.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+        fs::remove_file(&tracked).unwrap();
+        let events = vec![FileEvent::new(&tracked, FileEventKind::Remove)];
+
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate(Some(&previous), events).unwrap();
+
+        assert_eq!(observed.events, 1);
+        assert_eq!(observed.paths, vec![tracked.clone()]);
+        assert!(snapshot.entries.is_empty());
+        assert_eq!(observed.report.changes.len(), 1);
+        assert!(observed.report.invalidate_icon);
+        assert!(observed.report.invalidate_preview_memory);
+        assert!(observed.report.invalidate_preview_disk);
+        assert!(observed.report.invalidate_sidebar);
+        assert!(observed.report.reindex_metadata);
+        let change = &observed.report.changes[0];
+        assert_eq!(change.previous, CloudStorageState::Downloaded);
+        assert_eq!(change.current.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(change.current.source, "removed");
+        assert_eq!(
+            change.current.progress.reason.as_deref(),
+            Some("fileprovider-item-removed")
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

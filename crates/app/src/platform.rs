@@ -304,16 +304,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let event =
                 parse_fileprovider_event(&event_kind, path, args.next().map(PathBuf::from))?;
-            let _access = retain_fileprovider_snapshot_access(
-                &state_path,
-                std::slice::from_ref(&event.path),
+            let mut access = vec![preflight_access_scope(
+                write_probe_path(&state_path),
+                AccessIntent::Write,
                 "fileprovider invalidation event",
-            )?;
+            )?];
             let previous = if state_path.is_file() {
                 Some(FileProviderStateSnapshot::read(&state_path)?)
             } else {
                 None
             };
+            access.extend(retain_fileprovider_event_access(
+                &event,
+                previous.as_ref(),
+                "fileprovider invalidation event",
+            )?);
             let (observed, snapshot) =
                 FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
             snapshot.write(&state_path)?;
@@ -1086,6 +1091,53 @@ fn retain_fileprovider_snapshot_access(
         guards.push(preflight_access_scope(path, AccessIntent::Read, worker)?);
     }
     Ok(guards)
+}
+
+fn retain_fileprovider_event_access(
+    event: &FileEvent,
+    previous: Option<&FileProviderStateSnapshot>,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = Vec::new();
+    for path in fileprovider_event_access_paths(event, previous) {
+        guards.push(preflight_access_scope(&path, AccessIntent::Read, worker)?);
+    }
+    Ok(guards)
+}
+
+fn fileprovider_event_access_paths(
+    event: &FileEvent,
+    previous: Option<&FileProviderStateSnapshot>,
+) -> Vec<PathBuf> {
+    match &event.kind {
+        FileEventKind::Rename { from, to } => [from, to]
+            .into_iter()
+            .map(|path| fileprovider_event_access_path(path, previous))
+            .collect(),
+        FileEventKind::Remove => vec![fileprovider_event_access_path(&event.path, previous)],
+        FileEventKind::Create
+        | FileEventKind::Metadata
+        | FileEventKind::Modify
+        | FileEventKind::Rescan
+        | FileEventKind::Other => vec![event.path.clone()],
+    }
+}
+
+fn fileprovider_event_access_path(
+    path: &Path,
+    previous: Option<&FileProviderStateSnapshot>,
+) -> PathBuf {
+    if path.exists() || !snapshot_contains_path(previous, path) {
+        return path.to_path_buf();
+    }
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(path)
+        .to_path_buf()
+}
+
+fn snapshot_contains_path(previous: Option<&FileProviderStateSnapshot>, path: &Path) -> bool {
+    previous.is_some_and(|snapshot| snapshot.entries.iter().any(|entry| entry.path == path))
 }
 
 fn write_probe_path(path: &Path) -> &Path {
