@@ -736,11 +736,12 @@ fn reports_fileprovider_state_from_binary() {
     );
     let downloaded_stdout = String::from_utf8(downloaded_output.stdout).unwrap();
     assert!(downloaded_stdout.starts_with("fileprovider-state\t"));
-    assert!(downloaded_stdout.contains("\tdomain=icloud-drive\tstate=downloaded\t"));
-    assert!(downloaded_stdout.contains("\tmaterialization=materialized\t"));
+    assert!(downloaded_stdout.contains("\tdomain=icloud-drive\tstate=unknown\t"));
+    assert!(downloaded_stdout.contains("\tmaterialization=unknown\t"));
     assert!(downloaded_stdout.contains("\tmaterialization-source=path-fallback\t"));
-    assert!(downloaded_stdout.contains("\tbadges=available-offline\t"));
-    assert!(downloaded_stdout.contains("\tdownload=disabled\tevict=enabled\t"));
+    assert!(downloaded_stdout.contains("\tbadges=waiting\t"));
+    assert!(downloaded_stdout.contains("\tdownload=disabled\tevict=disabled\t"));
+    assert!(downloaded_stdout.contains("\treason=unknown-provider-state"));
     assert!(!downloaded_stdout.contains("nsfileprovidermanager"));
 
     let identity_state_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -755,8 +756,8 @@ fn reports_fileprovider_state_from_binary() {
     );
     let identity_state_stdout = String::from_utf8(identity_state_output.stdout).unwrap();
     assert!(identity_state_stdout.starts_with("fileprovider-state\t"));
-    assert!(identity_state_stdout.contains("\tdomain=icloud-drive\tstate=downloaded\t"));
-    assert!(identity_state_stdout.contains("\tmaterialization=materialized\t"));
+    assert!(identity_state_stdout.contains("\tdomain=icloud-drive\tstate=unknown\t"));
+    assert!(identity_state_stdout.contains("\tmaterialization=unknown\t"));
     assert!(identity_state_stdout.contains("\tsource="));
 
     let domain_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -1057,8 +1058,8 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     );
     let evict_stdout = String::from_utf8(evict_output.stdout).unwrap();
     assert!(evict_stdout.contains("\toperation=evict\tdisposition=refused\t"));
-    assert!(evict_stdout.contains("\tbefore-state=downloaded\tafter-state=-\t"));
-    assert!(evict_stdout.ends_with("reason=not-native-provider-backed\n"));
+    assert!(evict_stdout.contains("\tbefore-state=unknown\tafter-state=-\t"));
+    assert!(evict_stdout.ends_with("reason=operation-disabled-for-current-state\n"));
 
     let conflict = root.join("Conflict.icloud-conflict.md");
     std::fs::write(&conflict, "conflict").unwrap();
@@ -1551,7 +1552,7 @@ fn reports_fileprovider_invalidation_scan_from_binary() {
     let changed_stdout = String::from_utf8(changed.stdout).unwrap();
     assert!(changed_stdout
         .starts_with("fileprovider-state-invalidation\tinitialized=false\tchanged=1\t"));
-    assert!(changed_stdout.contains("\tcurrent=downloaded\tchanged=true\t"));
+    assert!(changed_stdout.contains("\tcurrent=unknown\tchanged=true\t"));
     assert!(changed_stdout.contains("\ticon=true\tpreview-memory=true\tpreview-disk=true\t"));
 
     let _ = std::fs::remove_dir_all(root);

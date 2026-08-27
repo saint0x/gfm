@@ -1453,8 +1453,9 @@ fn storage_state_for_path(
         CloudStorageState::Uploading
     } else if name.contains("waiting") || attr_blob.contains("waiting") {
         CloudStorageState::Waiting
-    } else if domain == FileProviderDomain::FileProvider
-        && !native_has_fileprovider_values(&hints.native)
+    } else if (domain == FileProviderDomain::FileProvider
+        && !native_has_fileprovider_values(&hints.native))
+        || (path_only_provider_hint(&hints.source) && hints.xattrs.is_empty())
     {
         CloudStorageState::Unknown
     } else if path.exists() {
@@ -1462,6 +1463,18 @@ fn storage_state_for_path(
     } else {
         CloudStorageState::Unknown
     }
+}
+
+fn path_only_provider_hint(source: &str) -> bool {
+    let mut saw_path_hint = false;
+    for source in source.split('+') {
+        match source {
+            "fixture-name" | "icloud-extension" | "icloud-path" => saw_path_hint = true,
+            "filesystem" => {}
+            _ => return false,
+        }
+    }
+    saw_path_hint
 }
 
 fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<CloudStorageState> {
@@ -1847,7 +1860,7 @@ mod tests {
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
-    fn reports_downloaded_icloud_file_with_evict_command() {
+    fn reports_path_only_icloud_file_as_unknown_without_native_evidence() {
         let root = unique_temp_dir();
         let path = root.join("Downloaded.icloud.md");
         fs::write(&path, "downloaded").unwrap();
@@ -1855,13 +1868,26 @@ mod tests {
         let report = FileProviderStateReport::read_path(&path).unwrap();
 
         assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
-        assert_eq!(report.storage_state, CloudStorageState::Downloaded);
-        assert_eq!(report.progress.direction, CloudTransferDirection::Download);
-        assert_eq!(report.progress.percent_milli, Some(100_000));
-        assert!(report.progress.complete);
-        assert_eq!(report.badges, vec![CloudBadge::AvailableOffline]);
-        assert_eq!(report.commands.evict, CloudCommandState::Enabled);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::PathFallback
+        );
+        assert_eq!(report.progress.direction, CloudTransferDirection::Idle);
+        assert_eq!(report.progress.percent_milli, None);
+        assert!(!report.progress.complete);
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("unknown-provider-state")
+        );
+        assert_eq!(report.badges, vec![CloudBadge::Waiting]);
+        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
         assert_eq!(report.commands.download, CloudCommandState::Disabled);
+        assert_eq!(
+            report.commands.reason.as_deref(),
+            Some("unknown-provider-state")
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -2234,6 +2260,7 @@ mod tests {
             .split('+')
             .any(|source| source == "nsfileprovidermanager"));
         assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -2450,8 +2477,11 @@ mod tests {
         let evict = FileProviderOperationReport::execute(&downloaded, FileProviderOperation::Evict)
             .unwrap();
         assert_eq!(evict.disposition, FileProviderOperationDisposition::Refused);
-        assert_eq!(evict.reason.as_deref(), Some("not-native-provider-backed"));
-        assert_eq!(evict.before.storage_state, CloudStorageState::Downloaded);
+        assert_eq!(
+            evict.reason.as_deref(),
+            Some("operation-disabled-for-current-state")
+        );
+        assert_eq!(evict.before.storage_state, CloudStorageState::Unknown);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -2557,7 +2587,7 @@ mod tests {
         fs::write(&downloaded, "downloaded").unwrap();
 
         let report =
-            FileProviderInvalidationReport::evaluate(&downloaded, CloudStorageState::Downloaded)
+            FileProviderInvalidationReport::evaluate(&downloaded, CloudStorageState::Unknown)
                 .unwrap();
 
         assert!(!report.state_changed);
@@ -3000,6 +3030,33 @@ mod tests {
         assert_eq!(
             report.materialization_source,
             CloudMaterializationSource::NativeUrlResource
+        );
+    }
+
+    #[test]
+    fn path_only_icloud_name_does_not_claim_materialized_without_native_evidence() {
+        let path = PathBuf::from("/tmp/Downloaded.icloud.md");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::PathFallback
         );
     }
 

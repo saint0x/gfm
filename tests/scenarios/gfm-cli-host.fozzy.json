@@ -2099,7 +2099,7 @@
         "tmp/gfm-fozzy-downloaded.icloud.md"
       ],
       "exit_code": 0,
-      "stdout": "native-icon-invalidation\ttmp/gfm-fozzy-downloaded.icloud.md\tprevious=evicted\tcurrent=downloaded\tprevious-badges=cloud\tcurrent-badges=cloud-available-offline\tprevious-cache=fileprovider:evicted:cloud\tcurrent-cache=fileprovider:downloaded:cloud-available-offline\tinvalidate-cache=true\treason=native-icon-badges-changed\n",
+      "stdout": "native-icon-invalidation\ttmp/gfm-fozzy-downloaded.icloud.md\tprevious=evicted\tcurrent=unknown\tprevious-badges=cloud\tcurrent-badges=cloud-waiting\tprevious-cache=fileprovider:evicted:cloud\tcurrent-cache=fileprovider:unknown:cloud-waiting\tinvalidate-cache=true\treason=native-icon-badges-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -2531,7 +2531,7 @@
         "tmp/gfm-fozzy-fileprovider-state.tsv"
       ],
       "exit_code": 0,
-      "stdout": "gfm-fileprovider-state-v1\ndownloaded\ttmp/gfm-fozzy-downloaded.icloud.md\n",
+      "stdout": "gfm-fileprovider-state-v1\nunknown\ttmp/gfm-fozzy-downloaded.icloud.md\n",
       "stderr": "",
       "times": 1
     },
@@ -4390,7 +4390,7 @@
         "tmp/gfm-fozzy-downloaded.icloud.md"
       ],
       "exit_code": 0,
-      "stdout": "sidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-downloaded.icloud.md\tprevious=cloud-only\tcurrent=available-offline\tprogress=100000\tinvalidate-row=true\treason=sidebar-cloud-state-changed\n",
+      "stdout": "sidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-downloaded.icloud.md\tprevious=cloud-only\tcurrent=waiting\tprogress=-\tinvalidate-row=true\treason=sidebar-cloud-state-changed\n",
       "stderr": "",
       "times": 1
     },
