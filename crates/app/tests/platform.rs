@@ -654,8 +654,9 @@ fn publishes_fileprovider_progress_to_runtime_job_store_from_binary() {
     let ui_stdout = String::from_utf8(ui_output.stdout).unwrap();
     assert!(ui_stdout.starts_with("dialog\tsurface=progress\tpresentation=progress-sheet"));
     assert!(ui_stdout.contains(
-        "operation-progress\tlabel=fileprovider download\tstate=running\tcompleted=0\ttotal=1"
+        "operation-progress\tjob=1\tlabel=fileprovider download\tstate=running\tcompleted=0\ttotal=1"
     ));
+    assert!(ui_stdout.contains("operation-progress-command\tstop\tjob=1\tenabled=true"));
 
     let _ = std::fs::remove_dir_all(root);
 }

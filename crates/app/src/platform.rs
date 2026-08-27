@@ -1,4 +1,4 @@
-use crate::access::preflight_access;
+use crate::access::preflight_access_scope;
 use crate::{
     detect_volume_id, index_volume_descriptor, parse_required_scheduling_pressure,
     run_preview_contract_adaptive, run_preview_contract_cancellable, runtime::RuntimeJobHandle,
@@ -274,7 +274,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "quicklook-session" => {
             let path = required_path(args.next(), "quicklook-session requires a path")?;
-            preflight_access(&path, AccessIntent::Preview, "quicklook preview")?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Preview, "quicklook preview")?;
             let record = record_for_path(&path, None, false)?;
             let rect = Rect::new(0, 0, 640, 480);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
@@ -307,7 +308,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "quicklook-session-adaptive" => {
             let path = required_path(args.next(), "quicklook-session-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(args, "quicklook preview")?;
-            preflight_access(&path, AccessIntent::Preview, "adaptive quicklook preview")?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Preview, "adaptive quicklook preview")?;
             let record = record_for_path(&path, None, false)?;
             let rect = Rect::new(0, 0, 640, 480);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
@@ -391,7 +393,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "thumbnail-generation" => {
             let path = required_path(args.next(), "thumbnail-generation requires a path")?;
-            preflight_access(&path, AccessIntent::Preview, "thumbnail generation")?;
+            let _access =
+                preflight_access_scope(&path, AccessIntent::Preview, "thumbnail generation")?;
             let record = record_for_path(&path, None, false)?;
             let rect = Rect::new(0, 0, 160, 160);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
@@ -425,7 +428,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "thumbnail-generation-adaptive" => {
             let path = required_path(args.next(), "thumbnail-generation-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(args, "thumbnail generation")?;
-            preflight_access(
+            let _access = preflight_access_scope(
                 &path,
                 AccessIntent::Preview,
                 "adaptive thumbnail generation",

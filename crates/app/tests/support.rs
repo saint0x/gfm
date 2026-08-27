@@ -268,14 +268,22 @@ fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
     assert!(stdout.starts_with("window\tGFM\t/tmp/gfm\t"), "{stdout}");
     assert!(
         stdout.contains(
-            "\noperation-progress\tlabel=copy selected files\tstate=running\tcompleted=42\ttotal=100\tpercent=42\t"
+            "\noperation-progress\tjob=1\tlabel=copy selected files\tstate=running\tcompleted=42\ttotal=100\tpercent=42\t"
         ),
         "{stdout}"
     );
     assert!(
         stdout.contains(
-            "\noperation-progress\tlabel=index content\tstate=paused\tcompleted=128\ttotal=250\tpercent=51\t"
+            "\noperation-progress\tjob=2\tlabel=index content\tstate=paused\tcompleted=128\ttotal=250\tpercent=51\t"
         ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\noperation-progress-command\tpause\tjob=1\tenabled=true"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\noperation-progress-command\tresume\tjob=2\tenabled=true"),
         "{stdout}"
     );
     assert!(!stdout.contains("compact content segments"), "{stdout}");
@@ -340,8 +348,9 @@ fn reports_progress_dialog_from_job_progress_store() {
     assert!(stdout.contains("button\tresume\tResume\tdefault\tenabled=true"));
     assert!(stdout.contains("button\tstop\tStop\tcancel\tenabled=true"));
     assert!(stdout.contains(
-        "operation-progress\tlabel=index content\tstate=paused\tcompleted=128\ttotal=250\tpercent=51\tdetail=pressure:throttled"
+        "operation-progress\tjob=2\tlabel=index content\tstate=paused\tcompleted=128\ttotal=250\tpercent=51\tdetail=pressure:throttled"
     ));
+    assert!(stdout.contains("operation-progress-command\tresume\tjob=2\tenabled=true"));
 
     let _ = std::fs::remove_file(progress);
 }

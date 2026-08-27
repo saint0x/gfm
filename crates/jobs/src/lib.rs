@@ -18,7 +18,7 @@ mod schedule;
 pub use cancel::Cancellation;
 pub use fair::{BlockedJob, JobFairnessPlan, JobFairnessPlanner, JobFairnessPolicy};
 use isolated::{IsolatedRetriableTaskQueue, IsolatedTaskQueue};
-pub use progress::{JobProgressSnapshot, JobProgressState, JobProgressStore};
+pub use progress::{JobProgressCommand, JobProgressSnapshot, JobProgressState, JobProgressStore};
 pub use retry::{FailureClass, RetryDecision, RetryPolicy};
 pub use schedule::{
     JobBatteryState, JobIoPressure, JobThermalState, JobUserActivity, SchedulingAction,

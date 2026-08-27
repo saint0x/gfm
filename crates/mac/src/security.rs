@@ -353,7 +353,11 @@ fn requires_bookmark(scope: ProtectedScope, intent: AccessIntent) -> bool {
             | ProtectedScope::NetworkVolume
     ) && matches!(
         intent,
-        AccessIntent::Read | AccessIntent::Write | AccessIntent::Operate
+        AccessIntent::Read
+            | AccessIntent::Write
+            | AccessIntent::Index
+            | AccessIntent::Preview
+            | AccessIntent::Operate
     )
 }
 
@@ -363,7 +367,11 @@ fn least_privilege(mode: SecurityAccessMode, intent: AccessIntent) -> bool {
         SecurityAccessMode::SecurityScopedBookmark => {
             matches!(
                 intent,
-                AccessIntent::Read | AccessIntent::Write | AccessIntent::Operate
+                AccessIntent::Read
+                    | AccessIntent::Write
+                    | AccessIntent::Index
+                    | AccessIntent::Preview
+                    | AccessIntent::Operate
             )
         }
         SecurityAccessMode::DegradedMetadataOnly => {
@@ -448,6 +456,28 @@ mod tests {
     }
 
     #[test]
+    fn protected_preview_and_index_require_retained_bookmarks_when_accessible() {
+        let home = temp_root("security-protected-preview-home");
+        let documents = home.join("Documents");
+        let path = documents.join("Plan.pdf");
+        fs::create_dir_all(&documents).unwrap();
+        fs::write(&path, "%PDF-1.7\n").unwrap();
+
+        let preview = evaluate_for_home(&path, AccessIntent::Preview, &home);
+        let index = evaluate_for_home(&path, AccessIntent::Index, &home);
+
+        assert_eq!(preview.scope, ProtectedScope::Documents);
+        assert_eq!(preview.action, SecurityDecisionAction::Allow);
+        assert!(preview.bookmark_required);
+        assert_eq!(preview.mode, SecurityAccessMode::SecurityScopedBookmark);
+        assert!(preview.least_privilege);
+        assert!(index.bookmark_required);
+        assert_eq!(index.mode, SecurityAccessMode::SecurityScopedBookmark);
+
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
     fn missing_path_denies_without_prompting_for_more_privilege() {
         let root = temp_root("security-missing");
         let path = root.join("Missing.md");
@@ -491,5 +521,32 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn evaluate_for_home(
+        path: &Path,
+        intent: AccessIntent,
+        home: &Path,
+    ) -> SecurityScopedAccessReport {
+        let scope = protected_scope_for_home(path, home);
+        let probe = probe_path(path, intent);
+        let can_read = matches!(probe, AccessProbeState::Granted) && read_intent(intent);
+        let can_write = matches!(probe, AccessProbeState::Granted) && write_intent(intent);
+        let bookmark_required = requires_bookmark(scope, intent);
+        let (mode, action, reason) = decide(scope, probe, intent, bookmark_required);
+        let least_privilege = least_privilege(mode, intent);
+        SecurityScopedAccessReport {
+            path: path.to_path_buf(),
+            intent,
+            scope,
+            probe,
+            mode,
+            action,
+            bookmark_required,
+            can_read,
+            can_write,
+            least_privilege,
+            reason,
+        }
     }
 }

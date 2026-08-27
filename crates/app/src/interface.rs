@@ -645,13 +645,16 @@ fn search_results_stage(stage: gfm_index::SearchStreamStage) -> SearchResultsSta
 }
 
 fn operation_progress_contract(snapshot: &JobProgressSnapshot) -> OperationProgressContract {
-    OperationProgressContract::from_input(OperationProgressInput::new(
-        snapshot.label.clone(),
-        operation_progress_state(snapshot.state),
-        snapshot.completed_units,
-        snapshot.total_units,
-        snapshot.detail.clone(),
-    ))
+    OperationProgressContract::from_input(
+        OperationProgressInput::new(
+            snapshot.label.clone(),
+            operation_progress_state(snapshot.state),
+            snapshot.completed_units,
+            snapshot.total_units,
+            snapshot.detail.clone(),
+        )
+        .with_job_id(snapshot.id.value()),
+    )
 }
 
 fn operation_progress_state(state: JobProgressState) -> OperationProgressState {

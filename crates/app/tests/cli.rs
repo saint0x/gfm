@@ -218,6 +218,69 @@ fn extraction_preflight_retains_security_scoped_bookmark_from_binary() {
 }
 
 #[test]
+fn quicklook_preflight_retains_security_scoped_bookmark_from_binary() {
+    let root = unique_temp_dir("gfm-cli-quicklook-bookmark");
+    let home = root.join("home");
+    let documents = home.join("Documents");
+    let protected = documents.join("Plan.pdf");
+    let bookmarks = root.join("bookmarks.tsv");
+    fs::create_dir_all(&documents).unwrap();
+    fs::write(&protected, "%PDF-1.7\nalpha protected preview").unwrap();
+
+    let create = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .args([
+            "security-bookmark-create",
+            protected.to_str().unwrap(),
+            "preview",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let create_stdout = String::from_utf8(create.stdout).unwrap();
+    assert!(
+        create_stdout.contains("\tstatus=created\t"),
+        "{create_stdout}"
+    );
+    assert!(create_stdout.contains("\trecords=1\t"), "{create_stdout}");
+
+    let quicklook = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .args(["quicklook-session", protected.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        quicklook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&quicklook.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&quicklook.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert!(stderr.contains("\tscope=documents\t"), "{stderr}");
+    assert!(stderr.contains("\tbookmark-required=true\t"), "{stderr}");
+    assert!(
+        stderr.contains("security-scope-access\t")
+            && stderr.contains("\tstatus=resolved\t")
+            && stderr.contains("\taccess-started=true\t"),
+        "{stderr}"
+    );
+    let stdout = String::from_utf8(quicklook.stdout).unwrap();
+    assert!(
+        stdout.starts_with("quicklook-session\tquick-look\t"),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn index_refuses_missing_root_before_scan_from_binary() {
     let root = unique_temp_path("gfm-cli-index-missing-root", "missing");
     let index = unique_temp_path("gfm-cli-index-missing-output", "gfmidx");
@@ -5568,6 +5631,93 @@ fn normalizes_interrupted_job_progress_for_restore_from_binary() {
     );
     assert!(
         progress_text.contains("compact content segments"),
+        "{progress_text}"
+    );
+
+    fs::remove_file(progress).unwrap();
+}
+
+#[test]
+fn progress_control_pause_resume_and_stop_persist_from_binary() {
+    let progress = unique_temp_path("gfm-cli-job-progress-control", "gfmprogress");
+    let seed = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["jobs-progress-snapshot", progress.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        seed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&seed.stderr)
+    );
+
+    let pause = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "jobs-progress-control",
+            progress.to_str().unwrap(),
+            "1",
+            "pause",
+            "3000",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        pause.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pause.stderr)
+    );
+    let pause_stdout = String::from_utf8(pause.stdout).unwrap();
+    assert!(
+        pause_stdout.contains(
+            "progress-control\tpause\tjob=1\tstate=paused\tdetail=paused-by-user:copy:/source->/target"
+        ),
+        "{pause_stdout}"
+    );
+
+    let resume = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "jobs-progress-control",
+            progress.to_str().unwrap(),
+            "1",
+            "resume",
+            "3001",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        resume.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resume.stderr)
+    );
+    let resume_stdout = String::from_utf8(resume.stdout).unwrap();
+    assert!(
+        resume_stdout.contains("progress-control\tresume\tjob=1\tstate=running\t"),
+        "{resume_stdout}"
+    );
+
+    let stop = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "jobs-progress-control",
+            progress.to_str().unwrap(),
+            "1",
+            "stop",
+            "3002",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        stop.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stop.stderr)
+    );
+    let stop_stdout = String::from_utf8(stop.stdout).unwrap();
+    assert!(
+        stop_stdout.contains("progress-control\tstop\tjob=1\tstate=cancelled\t"),
+        "{stop_stdout}"
+    );
+
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("\tcancelled\t42\t100\tcancelled-by-user:"),
         "{progress_text}"
     );
 

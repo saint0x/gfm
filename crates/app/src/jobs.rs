@@ -1,9 +1,12 @@
 use crate::runtime::{default_job_journal_path, run_scheduled_volume_task};
-use crate::{parent_volume, parse_optional_scheduling_pressure, parse_usize_arg, required_path};
+use crate::{
+    parent_volume, parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg,
+    required_path,
+};
 use gfm_jobs::{
     Cancellation, JobClass, JobFairnessPolicy, JobJournal, JobPayloadCatalog, JobPayloadKind,
-    JobPayloadRecord, JobProgressSnapshot, JobProgressState, JobProgressStore, Priority,
-    RecoveryReason, RetryPolicy, Scheduler,
+    JobPayloadRecord, JobProgressCommand, JobProgressSnapshot, JobProgressState, JobProgressStore,
+    Priority, RecoveryReason, RetryPolicy, Scheduler,
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::HashMap;
@@ -110,6 +113,26 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 println!("{}", snapshot.as_tsv());
             }
         }
+        "jobs-progress-control" => {
+            let path = required_path(
+                args.next(),
+                "jobs-progress-control requires a progress path",
+            )?;
+            let job_id = parse_u64_arg(args.next(), "jobs-progress-control requires a job id")?;
+            let command = parse_progress_command(args.next())?;
+            let updated_ms = parse_optional_timestamp_ms("jobs-progress-control", args.next())?;
+            let store = JobProgressStore::new(&path);
+            let snapshot =
+                store.apply_command(gfm_jobs::JobId::from_raw(job_id), command, updated_ms)?;
+            println!(
+                "progress-control\t{}\tjob={}\tstate={}\tdetail={}",
+                command.as_str(),
+                snapshot.id.value(),
+                snapshot.state.as_str(),
+                snapshot.detail
+            );
+            println!("{}", snapshot.as_tsv());
+        }
         "jobs-payload-restore-plan" => {
             let catalog_path = required_path(
                 args.next(),
@@ -174,6 +197,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn parse_progress_command(value: Option<String>) -> Result<JobProgressCommand> {
+    let value = value.ok_or_else(|| {
+        GfmError::Format("jobs-progress-control requires pause, resume, or stop".to_string())
+    })?;
+    JobProgressCommand::parse(&value).ok_or_else(|| {
+        GfmError::Format(format!(
+            "invalid progress command `{value}`; expected pause, resume, or stop"
+        ))
+    })
 }
 
 fn recovery_reason(reason: RecoveryReason) -> &'static str {

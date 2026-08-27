@@ -45,6 +45,32 @@ impl JobProgressState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobProgressCommand {
+    Pause,
+    Resume,
+    Stop,
+}
+
+impl JobProgressCommand {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::Stop => "stop",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pause" => Some(Self::Pause),
+            "resume" => Some(Self::Resume),
+            "stop" => Some(Self::Stop),
+            _ => None,
+        }
+    }
+}
+
 impl From<&TaskStatus> for JobProgressState {
     fn from(status: &TaskStatus) -> Self {
         match status {
@@ -239,6 +265,26 @@ impl JobProgressStore {
             .collect())
     }
 
+    pub fn apply_command(
+        &self,
+        id: JobId,
+        command: JobProgressCommand,
+        updated_ms: u64,
+    ) -> Result<JobProgressSnapshot> {
+        let mut snapshots = self.read()?;
+        let Some(snapshot) = snapshots.iter_mut().find(|snapshot| snapshot.id == id) else {
+            return Err(GfmError::Format(format!(
+                "job progress store {} does not contain job {}",
+                self.path.display(),
+                id.value()
+            )));
+        };
+        apply_progress_command(snapshot, command, updated_ms)?;
+        let updated = snapshot.clone();
+        self.write_all(&snapshots)?;
+        Ok(updated)
+    }
+
     fn temp_path(&self) -> PathBuf {
         let mut name = self
             .path
@@ -248,6 +294,64 @@ impl JobProgressStore {
         name.push(format!(".{}.tmp", std::process::id()));
         self.path.with_file_name(name)
     }
+}
+
+fn apply_progress_command(
+    snapshot: &mut JobProgressSnapshot,
+    command: JobProgressCommand,
+    updated_ms: u64,
+) -> Result<()> {
+    match command {
+        JobProgressCommand::Pause => {
+            if matches!(
+                snapshot.state,
+                JobProgressState::Completed
+                    | JobProgressState::Cancelled
+                    | JobProgressState::Failed
+            ) {
+                return Err(terminal_command_error(snapshot, command));
+            }
+            snapshot.state = JobProgressState::Paused;
+            snapshot.detail = command_detail("paused-by-user", &snapshot.detail);
+        }
+        JobProgressCommand::Resume => {
+            if snapshot.state != JobProgressState::Paused {
+                return Err(GfmError::Format(format!(
+                    "cannot resume job {} from {} progress state",
+                    snapshot.id.value(),
+                    snapshot.state.as_str()
+                )));
+            }
+            snapshot.state = JobProgressState::Running;
+            snapshot.detail = command_detail("resumed-by-user", &snapshot.detail);
+        }
+        JobProgressCommand::Stop => {
+            if !snapshot.state.restorable() {
+                return Err(terminal_command_error(snapshot, command));
+            }
+            snapshot.state = JobProgressState::Cancelled;
+            snapshot.detail = command_detail("cancelled-by-user", &snapshot.detail);
+        }
+    }
+    snapshot.updated_ms = updated_ms;
+    Ok(())
+}
+
+fn command_detail(prefix: &str, previous: &str) -> String {
+    if previous.is_empty() {
+        prefix.to_string()
+    } else {
+        format!("{prefix}:{previous}")
+    }
+}
+
+fn terminal_command_error(snapshot: &JobProgressSnapshot, command: JobProgressCommand) -> GfmError {
+    GfmError::Format(format!(
+        "cannot {} job {} from {} progress state",
+        command.as_str(),
+        snapshot.id.value(),
+        snapshot.state.as_str()
+    ))
 }
 
 fn parse_snapshot(line: &str) -> std::result::Result<JobProgressSnapshot, String> {
@@ -297,4 +401,84 @@ fn parse_snapshot(line: &str) -> std::result::Result<JobProgressSnapshot, String
         detail,
         updated_ms,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn progress_commands_pause_resume_and_stop_persist_atomically() {
+        let path = temp_path("progress-commands");
+        let store = JobProgressStore::new(&path);
+        let snapshot = JobProgressSnapshot::new(
+            JobId::from_raw(7),
+            JobClass::Foreground,
+            Priority::Interactive,
+            "copy selected files",
+            Some(VolumeId(2)),
+            100,
+        )
+        .with_progress(JobProgressState::Running, 12, "copying", 1);
+        store.write_all(&[snapshot]).unwrap();
+
+        let paused = store
+            .apply_command(JobId::from_raw(7), JobProgressCommand::Pause, 2)
+            .unwrap();
+        assert_eq!(paused.state, JobProgressState::Paused);
+        assert_eq!(paused.detail, "paused-by-user:copying");
+
+        let resumed = store
+            .apply_command(JobId::from_raw(7), JobProgressCommand::Resume, 3)
+            .unwrap();
+        assert_eq!(resumed.state, JobProgressState::Running);
+        assert_eq!(resumed.detail, "resumed-by-user:paused-by-user:copying");
+
+        let stopped = store
+            .apply_command(JobId::from_raw(7), JobProgressCommand::Stop, 4)
+            .unwrap();
+        assert_eq!(stopped.state, JobProgressState::Cancelled);
+        assert_eq!(
+            stopped.detail,
+            "cancelled-by-user:resumed-by-user:paused-by-user:copying"
+        );
+        assert_eq!(store.restorable().unwrap(), Vec::new());
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn progress_commands_reject_invalid_state_transitions() {
+        let path = temp_path("progress-command-invalid");
+        let store = JobProgressStore::new(&path);
+        let completed = JobProgressSnapshot::new(
+            JobId::from_raw(9),
+            JobClass::Maintenance,
+            Priority::Background,
+            "compact content",
+            None,
+            1,
+        )
+        .with_progress(JobProgressState::Completed, 1, "done", 1);
+        store.write_all(&[completed]).unwrap();
+
+        let err = store
+            .apply_command(JobId::from_raw(9), JobProgressCommand::Pause, 2)
+            .unwrap_err();
+        assert!(err.to_string().contains("cannot pause job 9"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    fn temp_path(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "gfm-job-progress-{label}-{}-{nanos}.gfmprogress",
+            std::process::id()
+        ))
+    }
 }

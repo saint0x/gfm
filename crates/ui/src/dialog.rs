@@ -189,6 +189,7 @@ impl OperationProgressState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationProgressInput {
+    pub job_id: Option<u64>,
     pub label: String,
     pub state: OperationProgressState,
     pub completed_units: u64,
@@ -205,6 +206,7 @@ impl OperationProgressInput {
         detail: impl Into<String>,
     ) -> Self {
         Self {
+            job_id: None,
             label: label.into(),
             state,
             completed_units: completed_units.min(total_units),
@@ -220,17 +222,48 @@ impl OperationProgressInput {
             self.completed_units.saturating_mul(100) / self.total_units
         }
     }
+
+    pub fn with_job_id(mut self, job_id: u64) -> Self {
+        self.job_id = Some(job_id);
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationProgressContract {
     pub dialog: DialogContract,
+    pub job_id: Option<u64>,
     pub label: String,
     pub state: OperationProgressState,
     pub completed_units: u64,
     pub total_units: u64,
     pub detail: String,
     pub percent_complete: u64,
+    pub commands: Vec<OperationProgressCommandSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationProgressCommand {
+    Pause,
+    Resume,
+    Stop,
+}
+
+impl OperationProgressCommand {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::Stop => "stop",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationProgressCommandSpec {
+    pub command: OperationProgressCommand,
+    pub job_id: Option<u64>,
+    pub enabled: bool,
 }
 
 impl OperationProgressContract {
@@ -243,27 +276,72 @@ impl OperationProgressContract {
 
         Self {
             dialog,
+            job_id: input.job_id,
             label: input.label,
             state: input.state,
             completed_units: input.completed_units,
             total_units: input.total_units,
             detail: input.detail,
             percent_complete,
+            commands: operation_progress_commands(input.job_id, input.state),
         }
     }
 
     pub fn as_tsv(&self) -> String {
-        format!(
-            "{}\noperation-progress\tlabel={}\tstate={}\tcompleted={}\ttotal={}\tpercent={}\tdetail={}",
+        let mut lines = vec![format!(
+            "{}\noperation-progress\tjob={}\tlabel={}\tstate={}\tcompleted={}\ttotal={}\tpercent={}\tdetail={}",
             self.dialog.as_tsv(),
+            self.job_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             escape_tsv(&self.label),
             self.state.as_str(),
             self.completed_units,
             self.total_units,
             self.percent_complete,
             escape_tsv(&self.detail),
-        )
+        )];
+        lines.extend(self.commands.iter().map(|command| {
+            format!(
+                "operation-progress-command\t{}\tjob={}\tenabled={}",
+                command.command.as_str(),
+                command
+                    .job_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                command.enabled
+            )
+        }));
+        lines.join("\n")
     }
+}
+
+fn operation_progress_commands(
+    job_id: Option<u64>,
+    state: OperationProgressState,
+) -> Vec<OperationProgressCommandSpec> {
+    let addressable = job_id.is_some();
+    vec![
+        OperationProgressCommandSpec {
+            command: OperationProgressCommand::Pause,
+            job_id,
+            enabled: addressable
+                && matches!(
+                    state,
+                    OperationProgressState::Planned | OperationProgressState::Running
+                ),
+        },
+        OperationProgressCommandSpec {
+            command: OperationProgressCommand::Resume,
+            job_id,
+            enabled: addressable && state == OperationProgressState::Paused,
+        },
+        OperationProgressCommandSpec {
+            command: OperationProgressCommand::Stop,
+            job_id,
+            enabled: addressable && state.is_cancellable(),
+        },
+    ]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -945,6 +1023,9 @@ mod tests {
         ));
 
         assert_eq!(contract.percent_complete, 42);
+        assert!(contract.commands.iter().any(|command| {
+            command.command == OperationProgressCommand::Resume && !command.enabled
+        }));
         assert!(contract
             .dialog
             .buttons
@@ -956,7 +1037,7 @@ mod tests {
             .iter()
             .any(|button| button.id == "resume" && button.enabled));
         assert!(contract.as_tsv().contains(
-            "operation-progress\tlabel=copy selected files\tstate=paused\tcompleted=42\ttotal=100\tpercent=42\tdetail=pressure:throttled"
+            "operation-progress\tjob=-\tlabel=copy selected files\tstate=paused\tcompleted=42\ttotal=100\tpercent=42\tdetail=pressure:throttled"
         ));
     }
 

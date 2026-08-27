@@ -34,9 +34,9 @@ pub use context::{
 };
 pub use dialog::{
     render as render_dialog, DialogButtonRole, DialogButtonSpec, DialogContract, DialogFieldKind,
-    DialogFieldSpec, DialogPresentation, DialogSurface, OperationProgressContract,
-    OperationProgressInput, OperationProgressState, PermissionPromptKind, ProviderConflictContract,
-    ProviderConflictInput,
+    DialogFieldSpec, DialogPresentation, DialogSurface, OperationProgressCommand,
+    OperationProgressCommandSpec, OperationProgressContract, OperationProgressInput,
+    OperationProgressState, PermissionPromptKind, ProviderConflictContract, ProviderConflictInput,
 };
 pub use gallery::{
     render as render_gallery_view, GalleryFilmstripItemSpec, GalleryKeyboardFlow,
@@ -537,20 +537,26 @@ mod tests {
 
     #[test]
     fn lifecycle_contract_tracks_restorable_progress_surfaces() {
-        let progress = OperationProgressContract::from_input(OperationProgressInput::new(
-            "copy selected files",
-            OperationProgressState::Running,
-            42,
-            100,
-            "copy:/source->/target",
-        ));
+        let progress = OperationProgressContract::from_input(
+            OperationProgressInput::new(
+                "copy selected files",
+                OperationProgressState::Running,
+                42,
+                100,
+                "copy:/source->/target",
+            )
+            .with_job_id(7),
+        );
         let spec = AppLaunchSpec::new("/tmp/gfm").with_progress_surfaces(vec![progress.clone()]);
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
 
         assert_eq!(contract.progress_surfaces, vec![progress]);
         assert!(contract
             .as_tsv()
-            .contains("\noperation-progress\tlabel=copy selected files\tstate=running\t"));
+            .contains("\noperation-progress\tjob=7\tlabel=copy selected files\tstate=running\t"));
+        assert!(contract
+            .as_tsv()
+            .contains("\noperation-progress-command\tpause\tjob=7\tenabled=true"));
     }
 
     #[test]
