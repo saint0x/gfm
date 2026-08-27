@@ -1929,11 +1929,24 @@ fn drain_fileprovider_observer_probe(
                 return Ok(observed);
             }
         }
-        thread::sleep(Duration::from_millis(25));
+        fileprovider_observer_poll_pause(Duration::from_millis(25), cancellation)?;
     }
     Err(GfmError::Format(
         "fileprovider observer probe timed out waiting for a provider event".to_string(),
     ))
+}
+
+fn fileprovider_observer_poll_pause(delay: Duration, cancellation: &Cancellation) -> Result<()> {
+    const CANCEL_GRANULARITY: Duration = Duration::from_millis(1);
+    let deadline = Instant::now() + delay;
+    loop {
+        cancellation.check()?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        thread::sleep(remaining.min(CANCEL_GRANULARITY));
+    }
 }
 
 fn parse_volume_event_kind(kind: &str) -> Result<VolumeEventKind> {
@@ -2137,5 +2150,32 @@ fn parse_platform_bool(value: &str, name: &str) -> Result<bool> {
         _ => Err(GfmError::Format(format!(
             "{name} must be true or false; got `{value}`"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fileprovider_observer_poll_pause_returns_promptly_after_cancellation() {
+        let cancellation = Cancellation::default();
+        let canceller = cancellation.clone();
+        let started = Instant::now();
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(5));
+            canceller.cancel();
+        });
+
+        let err = fileprovider_observer_poll_pause(Duration::from_millis(250), &cancellation)
+            .expect_err("observer poll pause should observe cancellation");
+
+        handle.join().unwrap();
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "cancelled observer poll pause waited {:?}",
+            started.elapsed()
+        );
     }
 }
