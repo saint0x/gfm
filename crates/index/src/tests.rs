@@ -1732,6 +1732,92 @@ fn volume_invalidation_cancels_index_jobs_when_volume_disconnects() {
 }
 
 #[test]
+fn volume_invalidation_cancels_index_jobs_when_stable_identity_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:OLD");
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:NEW");
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+    assert!(report.invalidate_sidebar);
+    assert!(report.invalidate_operation_policy);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-identity-changed");
+}
+
+#[test]
+fn volume_invalidation_rescans_when_filesystem_signature_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:WORK")
+    .with_filesystem_signature("fs=apfs|case-sensitive=false");
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:WORK")
+    .with_filesystem_signature("fs=apfs|case-sensitive=true");
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+    assert!(report.invalidate_sidebar);
+    assert!(report.invalidate_operation_policy);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-filesystem-changed");
+}
+
+#[test]
+fn volume_invalidation_does_not_churn_on_newly_observed_identity() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    );
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:WORK")
+    .with_filesystem_signature("fs=apfs|case-sensitive=true");
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+    assert!(!report.invalidate_sidebar);
+    assert!(!report.invalidate_operation_policy);
+    assert!(!report.invalidate_index_admission);
+    assert!(!report.rescan_index);
+    assert!(!report.cancel_index_jobs);
+    assert!(!report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "unchanged");
+}
+
+#[test]
 fn live_index_correlates_file_renames_without_identity_churn() {
     let root = unique_temp_dir("gfm-rename-file-root");
     let from = root.join("NeedleOld.txt");

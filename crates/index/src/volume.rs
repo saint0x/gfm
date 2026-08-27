@@ -177,6 +177,8 @@ pub struct IndexVolumeDescriptor {
     pub path: PathBuf,
     pub class: IndexVolumeClass,
     pub mount_state: IndexMountState,
+    pub stable_identity: Option<String>,
+    pub filesystem_signature: Option<String>,
 }
 
 impl IndexVolumeDescriptor {
@@ -192,11 +194,23 @@ impl IndexVolumeDescriptor {
             path: path.into(),
             class,
             mount_state,
+            stable_identity: None,
+            filesystem_signature: None,
         }
     }
 
     pub fn with_volume_id(mut self, id: VolumeId) -> Self {
         self.id = Some(id);
+        self
+    }
+
+    pub fn with_stable_identity(mut self, stable_identity: impl Into<String>) -> Self {
+        self.stable_identity = Some(stable_identity.into());
+        self
+    }
+
+    pub fn with_filesystem_signature(mut self, filesystem_signature: impl Into<String>) -> Self {
+        self.filesystem_signature = Some(filesystem_signature.into());
         self
     }
 }
@@ -427,6 +441,38 @@ impl VolumeInvalidationReport {
             (Some(previous), Some(current)) if previous.class != current.class => {
                 (true, true, true, true, true, true, "volume-class-changed")
             }
+            (Some(previous), Some(current))
+                if known_optional_value_changed(
+                    &previous.stable_identity,
+                    &current.stable_identity,
+                ) =>
+            {
+                (
+                    true,
+                    true,
+                    true,
+                    true,
+                    previous.mount_state == IndexMountState::Mounted,
+                    true,
+                    "volume-identity-changed",
+                )
+            }
+            (Some(previous), Some(current))
+                if known_optional_value_changed(
+                    &previous.filesystem_signature,
+                    &current.filesystem_signature,
+                ) =>
+            {
+                (
+                    true,
+                    true,
+                    true,
+                    true,
+                    previous.mount_state == IndexMountState::Mounted,
+                    true,
+                    "volume-filesystem-changed",
+                )
+            }
             (Some(previous), Some(current)) if previous.label != current.label => (
                 true,
                 false,
@@ -478,6 +524,10 @@ impl VolumeInvalidationReport {
             escape_field(&self.reason)
         )
     }
+}
+
+fn known_optional_value_changed<T: Eq>(previous: &Option<T>, current: &Option<T>) -> bool {
+    matches!((previous, current), (Some(previous), Some(current)) if previous != current)
 }
 
 impl VolumeIndexPlan {

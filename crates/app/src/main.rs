@@ -256,6 +256,33 @@ pub(crate) fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeD
         index_mount_state(volume.mount_state),
     )
     .with_volume_id(volume.id)
+    .with_stable_identity(volume.stable_identity.clone())
+    .with_filesystem_signature(index_volume_filesystem_signature(volume))
+}
+
+fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
+    [
+        volume.filesystem.as_deref(),
+        volume.mount_filesystem.as_deref(),
+        volume
+            .case_sensitive
+            .map(|value| if value { "1" } else { "0" }),
+        volume
+            .case_preserving
+            .map(|value| if value { "1" } else { "0" }),
+        volume
+            .resource_automounted
+            .map(|value| if value { "1" } else { "0" }),
+        volume
+            .resource_browsable
+            .map(|value| if value { "1" } else { "0" }),
+        volume.resource_remount_url.as_deref(),
+        volume.device_protocol.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("|")
 }
 
 fn index_volume_class(kind: VolumeKind) -> IndexVolumeClass {
