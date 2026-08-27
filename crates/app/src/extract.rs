@@ -76,6 +76,9 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
     cancellation: &Cancellation,
 ) -> Result<String> {
     cancellation.check()?;
+    let _input_access =
+        preflight_access_scope(path, AccessIntent::Read, "adaptive extraction worker")?;
+    cancellation.check()?;
     let exe = env::current_exe().map_err(|err| {
         GfmError::Format(format!(
             "could not resolve current executable for extraction worker: {err}"
@@ -646,6 +649,31 @@ mod tests {
         assert!(!store.exists());
 
         fs::remove_dir_all(source).unwrap();
+        fs::remove_dir_all(offline).unwrap();
+    }
+
+    #[test]
+    fn adaptive_worker_refuses_unreachable_input_before_scratch_setup() {
+        let offline = unique_temp_dir("gfm-extract-worker-input-offline");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let input = offline.join("document.txt");
+        fs::write(&input, "worker should not launch").unwrap();
+        let cancellation = Cancellation::default();
+
+        let err = run_adaptive_extraction_worker_cancellable(
+            &input,
+            SchedulingPressure::default(),
+            Duration::from_millis(0),
+            &cancellation,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err
+            .to_string()
+            .contains("adaptive extraction worker volume access blocked"));
+        assert!(err.to_string().contains("unreachable volume network"));
+
         fs::remove_dir_all(offline).unwrap();
     }
 
