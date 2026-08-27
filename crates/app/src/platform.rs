@@ -271,6 +271,54 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     .as_tsv()
             );
         }
+        "preview-cache-fileprovider-observed-invalidation" => {
+            let cache_root = required_path(
+                args.next(),
+                "preview-cache-fileprovider-observed-invalidation requires a cache root",
+            )?;
+            let state_path = required_path(
+                args.next(),
+                "preview-cache-fileprovider-observed-invalidation requires a state path",
+            )?;
+            let kind = parse_preview_kind(args.next())?;
+            let event_kind = required_string(
+                args.next(),
+                "preview-cache-fileprovider-observed-invalidation requires an event kind",
+            )?;
+            let path = required_path(
+                args.next(),
+                "preview-cache-fileprovider-observed-invalidation requires a path",
+            )?;
+            let event =
+                parse_fileprovider_event(&event_kind, path, args.next().map(PathBuf::from))?;
+            let _cache_access = preflight_access_scope(
+                write_probe_path(&cache_root),
+                AccessIntent::Write,
+                "preview cache root",
+            )?;
+            let mut access = vec![preflight_access_scope(
+                &write_probe_existing_ancestor(&state_path),
+                AccessIntent::Write,
+                "preview cache fileprovider observed invalidation",
+            )?];
+            let previous = if state_path.is_file() {
+                Some(FileProviderStateSnapshot::read(&state_path)?)
+            } else {
+                None
+            };
+            access.extend(retain_fileprovider_event_access(
+                &event,
+                previous.as_ref(),
+                "preview cache fileprovider observed invalidation",
+            )?);
+            let (observed, snapshot) =
+                FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
+            snapshot.write(&state_path)?;
+            println!(
+                "{}",
+                observed_preview_cache_invalidation_tsv(&observed, &cache_root, kind)?
+            );
+        }
         "fileprovider-invalidation-scan" => {
             let state_path = required_path(
                 args.next(),
@@ -1278,6 +1326,46 @@ fn observed_metadata_invalidation_tsv(observed: &FileProviderObservedInvalidatio
         .as_tsv()
     }));
     lines.join("\n")
+}
+
+fn observed_preview_cache_invalidation_tsv(
+    observed: &FileProviderObservedInvalidation,
+    cache_root: &Path,
+    kind: PreviewKind,
+) -> Result<String> {
+    let mut cache = PreviewCache::new(PreviewCacheConfig::new(cache_root))?;
+    let mut lines = vec![observed.as_tsv()];
+    for report in &observed.report.changes {
+        let key = preview_cache_key_for_path_kind(&cache, &report.path, kind)?;
+        let invalidation_key = cache
+            .disk_key_for_path_kind(&key.path, key.kind)
+            .unwrap_or_else(|| key.clone());
+        lines.push(
+            cache
+                .apply_invalidation(
+                    &invalidation_key,
+                    preview_invalidation_for_fileprovider(report),
+                )?
+                .as_tsv(),
+        );
+    }
+    Ok(lines.join("\n"))
+}
+
+fn preview_cache_key_for_path_kind(
+    cache: &PreviewCache,
+    path: &Path,
+    kind: PreviewKind,
+) -> Result<PreviewRequestKey> {
+    if let Some(key) = cache.disk_key_for_path_kind(path, kind) {
+        return Ok(key);
+    }
+    let file_id = if path.exists() {
+        record_for_path(path, None, false)?.id
+    } else {
+        FileId::new(VolumeId(0), 0)
+    };
+    Ok(PreviewRequestKey::new(file_id, path.to_path_buf(), kind))
 }
 
 fn drain_fileprovider_observer_probe(

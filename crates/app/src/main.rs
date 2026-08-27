@@ -679,6 +679,7 @@ fn print_usage() {
   gfm fileprovider-invalidation <previous-state> <path>
   gfm fileprovider-metadata-invalidation <previous-state> <path>
   gfm preview-cache-fileprovider-invalidation <cache-root> <previous-state> <path> [icon|thumbnail|quick-look|text]
+  gfm preview-cache-fileprovider-observed-invalidation <cache-root> <state.tsv> [icon|thumbnail|quick-look|text] <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
   gfm fileprovider-invalidation-scan <state.tsv> <paths...>
   gfm fileprovider-invalidation-event <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
   gfm fileprovider-observed-metadata-invalidation <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
