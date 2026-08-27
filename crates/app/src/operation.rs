@@ -669,7 +669,7 @@ fn operation_volume_copy_policy_from_report(
         if operation_touches_volume(operation, &volume.path) {
             policy = policy.with_root(
                 volume.path.clone(),
-                operation_volume_class_for_kind(volume.kind),
+                operation_volume_class_for_descriptor(volume),
             );
         }
     }
@@ -709,6 +709,49 @@ fn operation_volume_class_for_kind(kind: VolumeKind) -> OperationVolumeClass {
         }
         VolumeKind::Network => OperationVolumeClass::Network,
     }
+}
+
+fn operation_volume_class_for_descriptor(
+    volume: &gfm_mac::VolumeDescriptor,
+) -> OperationVolumeClass {
+    match operation_volume_class_for_kind(volume.kind) {
+        OperationVolumeClass::External if slow_operation_volume(volume) => {
+            OperationVolumeClass::Slow
+        }
+        class => class,
+    }
+}
+
+fn slow_operation_volume(volume: &gfm_mac::VolumeDescriptor) -> bool {
+    if volume.network || volume.reachable == Some(false) {
+        return false;
+    }
+    if !matches!(
+        volume.kind,
+        VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage
+    ) {
+        return false;
+    }
+    let protocol = volume
+        .device_protocol
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let media_kind = volume
+        .media_kind
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let media_type = volume
+        .media_type
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    volume.removable
+        && (protocol.contains("usb")
+            || protocol.contains("firewire")
+            || media_kind.contains("removable")
+            || media_type.contains("removable"))
 }
 
 fn operation_volume(operation: &Operation) -> Option<VolumeId> {
@@ -787,6 +830,73 @@ mod tests {
             OperationVolumeClass::External
         );
         assert!(policy.copy_buffer_bytes_for_paths(&source, &destination) < 256 * 1024);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_policy_uses_slow_class_for_removable_usb_descriptor() {
+        let root = unique_temp_dir("gfm-app-op-volume-policy-slow-usb");
+        let removable = root.join("CameraCard");
+        let local = root.join("LocalWork");
+        fs::create_dir_all(&removable).unwrap();
+        fs::create_dir_all(&local).unwrap();
+        fs::write(removable.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+        let source = removable.join("source.bin");
+        let destination = local.join("destination.bin");
+        let mut report = VolumeDiscoveryReport::from_paths(vec![removable.clone()]);
+        report.volumes[0].device_protocol = Some("USB".to_string());
+        report.volumes[0].media_kind = Some("Removable Media".to_string());
+        report.volumes[0].media_type = Some("Generic".to_string());
+        report.volumes[0].removable = true;
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert_eq!(policy.class_for_path(&source), OperationVolumeClass::Slow);
+        assert_eq!(
+            policy.class_for_path(&destination),
+            OperationVolumeClass::Local
+        );
+        assert_eq!(
+            policy.copy_buffer_bytes_for_paths(&source, &destination),
+            64 * 1024
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_policy_keeps_network_descriptor_network_not_slow() {
+        let root = unique_temp_dir("gfm-app-op-volume-policy-network");
+        let network = root.join("TeamShare");
+        let local = root.join("LocalWork");
+        fs::create_dir_all(&network).unwrap();
+        fs::create_dir_all(&local).unwrap();
+        fs::write(network.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+        let source = network.join("source.bin");
+        let destination = local.join("destination.bin");
+        let mut report = VolumeDiscoveryReport::from_paths(vec![network.clone()]);
+        report.volumes[0].device_protocol = Some("USB".to_string());
+        report.volumes[0].removable = true;
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert_eq!(
+            policy.class_for_path(&source),
+            OperationVolumeClass::Network
+        );
+        assert_eq!(
+            policy.copy_buffer_bytes_for_paths(&source, &destination),
+            64 * 1024
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
