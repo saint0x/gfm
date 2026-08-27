@@ -724,6 +724,9 @@ fn reports_spotlight_reconciliation_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "spotlight reconcile", &path);
+    assert_worker_admitted(&stderr, "spotlight fixture", &fixture);
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.starts_with("spotlight-reconciliation\t"));
@@ -768,6 +771,7 @@ fn spotlight_reconcile_refuses_unreachable_network_volume_before_record_read_fro
         stderr.contains("spotlight reconcile volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    assert!(!stderr.contains("security-worker-admission\t"), "{stderr}");
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -863,6 +867,11 @@ fn spotlight_reconcile_refuses_unreachable_fixture_before_fixture_read_from_bina
     assert!(!stdout.contains("spotlight-reconciliation\t"), "{stdout}");
     assert!(
         stderr.contains("spotlight fixture volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=spotlight reconcile\t")
+            && !stderr.contains("security-worker-admission\tworker=spotlight fixture\t"),
         "{stderr}"
     );
 

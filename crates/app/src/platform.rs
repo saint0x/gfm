@@ -641,25 +641,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "spotlight-reconcile" => {
             let path = required_path(args.next(), "spotlight-reconcile requires a path")?;
             let fixture_path = args.next().map(PathBuf::from);
-            let record =
-                record_for_path_with_access(&path, AccessIntent::Index, "spotlight reconcile")?;
-            let snapshot = match fixture_path {
-                Some(fixture_path) => {
-                    let _fixture_access = preflight_access_scope(
-                        &fixture_path,
-                        AccessIntent::Read,
-                        "spotlight fixture",
-                    )?;
-                    let text = std::fs::read_to_string(&fixture_path)
-                        .map_err(|err| GfmError::io(&fixture_path, err))?;
-                    parse_spotlight_fixture(&path, &text)?
-                }
-                None => SpotlightMetadataReader.read_path(&path)?,
-            };
-            println!(
-                "{}",
-                SpotlightReconciliationReport::reconcile(record, snapshot).as_tsv()
-            );
+            println!("{}", run_spotlight_reconcile(path, fixture_path)?.as_tsv());
         }
         "preview-check" => {
             let path = required_path(args.next(), "preview-check requires a path")?;
@@ -1433,6 +1415,45 @@ fn run_fileprovider_operation(
         let _access = preflight_access_scope(&path, AccessIntent::Operate, WORKER)?;
         cancellation.check()?;
         FileProviderOperationReport::execute(path, operation)
+    })
+}
+
+fn run_spotlight_reconcile(
+    path: PathBuf,
+    fixture_path: Option<PathBuf>,
+) -> Result<SpotlightReconciliationReport> {
+    const WORKER: &str = "spotlight reconcile";
+    const FIXTURE_WORKER: &str = "spotlight fixture";
+    preflight_volume_access_scope(&path, AccessIntent::Index, WORKER)?;
+    if let Some(fixture_path) = fixture_path.as_ref() {
+        preflight_volume_access_scope(fixture_path, AccessIntent::Read, FIXTURE_WORKER)?;
+    }
+    let volume = detect_volume_id(&path)
+        .ok()
+        .or_else(|| parent_volume(&path))
+        .or_else(|| {
+            fixture_path
+                .as_ref()
+                .and_then(|path| detect_volume_id(path).ok().or_else(|| parent_volume(path)))
+        });
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let record = record_for_path_with_access(&path, AccessIntent::Index, WORKER)?;
+        cancellation.check()?;
+        let snapshot = match fixture_path {
+            Some(fixture_path) => {
+                let _fixture_access =
+                    preflight_access_scope(&fixture_path, AccessIntent::Read, FIXTURE_WORKER)?;
+                cancellation.check()?;
+                let text = std::fs::read_to_string(&fixture_path)
+                    .map_err(|err| GfmError::io(&fixture_path, err))?;
+                cancellation.check()?;
+                parse_spotlight_fixture(&path, &text)?
+            }
+            None => SpotlightMetadataReader.read_path(&path)?,
+        };
+        cancellation.check()?;
+        Ok(SpotlightReconciliationReport::reconcile(record, snapshot))
     })
 }
 
