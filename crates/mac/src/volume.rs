@@ -652,6 +652,12 @@ pub struct VolumeTopologyChange {
     pub current_mount_state: Option<MountState>,
     pub previous_case_sensitive: Option<bool>,
     pub current_case_sensitive: Option<bool>,
+    pub previous_native_status: Option<NativeVolumeStatus>,
+    pub current_native_status: Option<NativeVolumeStatus>,
+    pub previous_resource_status: Option<NativeVolumeStatus>,
+    pub current_resource_status: Option<NativeVolumeStatus>,
+    pub previous_mount_table_status: Option<NativeVolumeStatus>,
+    pub current_mount_table_status: Option<NativeVolumeStatus>,
     pub invalidate_sidebar: bool,
     pub invalidate_operation_policy: bool,
     pub invalidate_index_admission: bool,
@@ -672,6 +678,12 @@ impl VolumeTopologyChange {
             current_mount_state: Some(volume.mount_state),
             previous_case_sensitive: None,
             current_case_sensitive: volume.case_sensitive,
+            previous_native_status: None,
+            current_native_status: volume.native_status,
+            previous_resource_status: None,
+            current_resource_status: volume.resource_status,
+            previous_mount_table_status: None,
+            current_mount_table_status: volume.mount_table_status,
             invalidate_sidebar: true,
             invalidate_operation_policy: true,
             invalidate_index_admission: true,
@@ -692,6 +704,12 @@ impl VolumeTopologyChange {
             current_mount_state: None,
             previous_case_sensitive: volume.case_sensitive,
             current_case_sensitive: None,
+            previous_native_status: volume.native_status,
+            current_native_status: None,
+            previous_resource_status: volume.resource_status,
+            current_resource_status: None,
+            previous_mount_table_status: volume.mount_table_status,
+            current_mount_table_status: None,
             invalidate_sidebar: true,
             invalidate_operation_policy: true,
             invalidate_index_admission: true,
@@ -712,6 +730,7 @@ impl VolumeTopologyChange {
                 | "volume-ejectability-changed"
                 | "volume-identity-changed"
                 | "volume-case-sensitivity-changed"
+                | "volume-api-status-changed"
                 | "volume-filesystem-changed"
         );
         let rescan_index = matches!(
@@ -723,6 +742,7 @@ impl VolumeTopologyChange {
                 | "volume-locality-changed"
                 | "volume-identity-changed"
                 | "volume-case-sensitivity-changed"
+                | "volume-api-status-changed"
                 | "volume-filesystem-changed"
         );
         Some(Self {
@@ -736,6 +756,12 @@ impl VolumeTopologyChange {
             current_mount_state: Some(current.mount_state),
             previous_case_sensitive: previous.case_sensitive,
             current_case_sensitive: current.case_sensitive,
+            previous_native_status: previous.native_status,
+            current_native_status: current.native_status,
+            previous_resource_status: previous.resource_status,
+            current_resource_status: current.resource_status,
+            previous_mount_table_status: previous.mount_table_status,
+            current_mount_table_status: current.mount_table_status,
             invalidate_sidebar: true,
             invalidate_operation_policy: invalidates_policy,
             invalidate_index_admission: invalidates_policy,
@@ -746,7 +772,7 @@ impl VolumeTopologyChange {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-topology\t{}\tstable-id={}\tlabel={}\tpath={}\tprevious-kind={}\tcurrent-kind={}\tprevious-mount={}\tcurrent-mount={}\tprevious-case-sensitive={}\tcurrent-case-sensitive={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
+            "volume-topology\t{}\tstable-id={}\tlabel={}\tpath={}\tprevious-kind={}\tcurrent-kind={}\tprevious-mount={}\tcurrent-mount={}\tprevious-case-sensitive={}\tcurrent-case-sensitive={}\tprevious-native-status={}\tcurrent-native-status={}\tprevious-resource-status={}\tcurrent-resource-status={}\tprevious-mount-status={}\tcurrent-mount-status={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
             self.kind.as_str(),
             escape_field(&self.stable_identity),
             escape_field(&self.label),
@@ -763,6 +789,24 @@ impl VolumeTopologyChange {
             self.current_case_sensitive
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            self.previous_native_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            self.current_native_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            self.previous_resource_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            self.current_resource_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            self.previous_mount_table_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            self.current_mount_table_status
+                .map(NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
             self.invalidate_sidebar,
             self.invalidate_operation_policy,
             self.invalidate_index_admission,
@@ -1357,6 +1401,11 @@ fn topology_change_reason(
         Some("volume-identity-changed")
     } else if previous.case_sensitive != current.case_sensitive {
         Some("volume-case-sensitivity-changed")
+    } else if previous.native_status != current.native_status
+        || previous.resource_status != current.resource_status
+        || previous.mount_table_status != current.mount_table_status
+    {
+        Some("volume-api-status-changed")
     } else if previous.filesystem != current.filesystem
         || previous.apfs_role != current.apfs_role
         || previous.volume_type != current.volume_type
@@ -2447,6 +2496,54 @@ mod tests {
         assert!(diff
             .as_tsv()
             .contains("\tprevious-case-sensitive=false\tcurrent-case-sensitive=true\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_reports_native_api_status_as_policy_change() {
+        let root = unique_temp_dir("gfm-volume-topology-api-status");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        previous_volume.native_status = Some(NativeVolumeStatus::Unavailable);
+        previous_volume.resource_status = Some(NativeVolumeStatus::Unavailable);
+        previous_volume.mount_table_status = Some(NativeVolumeStatus::Unavailable);
+        let mut current_volume = previous_volume.clone();
+        current_volume.native_status = Some(NativeVolumeStatus::Available);
+        current_volume.resource_status = Some(NativeVolumeStatus::Available);
+        current_volume.mount_table_status = Some(NativeVolumeStatus::Available);
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].reason, "volume-api-status-changed");
+        assert_eq!(
+            diff.changes[0].previous_native_status,
+            Some(NativeVolumeStatus::Unavailable)
+        );
+        assert_eq!(
+            diff.changes[0].current_native_status,
+            Some(NativeVolumeStatus::Available)
+        );
+        assert!(diff.changes[0].invalidate_sidebar);
+        assert!(diff.changes[0].invalidate_operation_policy);
+        assert!(diff.changes[0].invalidate_index_admission);
+        assert!(diff.changes[0].rescan_index);
+        assert!(diff
+            .as_tsv()
+            .contains("\tprevious-native-status=unavailable\tcurrent-native-status=available\t"));
+        assert!(diff.as_tsv().contains(
+            "\tprevious-resource-status=unavailable\tcurrent-resource-status=available\t"
+        ));
+        assert!(diff
+            .as_tsv()
+            .contains("\tprevious-mount-status=unavailable\tcurrent-mount-status=available\t"));
 
         fs::remove_dir_all(root).unwrap();
     }

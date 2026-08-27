@@ -601,6 +601,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     .as_tsv()
             );
         }
+        "volume-topology-api-status" => {
+            println!("{}", topology_api_status_diff()?.as_tsv());
+        }
         "spotlight-reconcile" => {
             let path = required_path(args.next(), "spotlight-reconcile requires a path")?;
             let fixture_path = args.next().map(PathBuf::from);
@@ -977,6 +980,29 @@ fn topology_case_sensitivity_diff(
     previous.case_sensitive = Some(previous_case_sensitive);
     let mut current = previous.clone();
     current.case_sensitive = Some(current_case_sensitive);
+    Ok(VolumeTopologyDiff::evaluate(
+        &VolumeDiscoveryReport {
+            volumes: vec![previous],
+        },
+        &VolumeDiscoveryReport {
+            volumes: vec![current],
+        },
+    ))
+}
+
+fn topology_api_status_diff() -> Result<VolumeTopologyDiff> {
+    let mut previous = VolumeDescriptor::for_path("/")?;
+    previous.stable_identity = "diskarbitration:uuid:API-STATUS".to_string();
+    previous.label = "API Status".to_string();
+    previous.path = PathBuf::from("/Volumes/API Status");
+    previous.kind = gfm_mac::VolumeKind::External;
+    previous.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    previous.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    previous.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    let mut current = previous.clone();
+    current.native_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    current.resource_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    current.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
     Ok(VolumeTopologyDiff::evaluate(
         &VolumeDiscoveryReport {
             volumes: vec![previous],

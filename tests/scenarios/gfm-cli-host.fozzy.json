@@ -3940,7 +3940,18 @@
         "true"
       ],
       "exit_code": 0,
-      "stdout": "volume-topology-diff\tcount=1\nvolume-topology\tchanged\tstable-id=diskarbitration:uuid:CASE-TOPOLOGY\tlabel=Case Topology\tpath=/Volumes/Case Topology\tprevious-kind=external\tcurrent-kind=external\tprevious-mount=mounted\tcurrent-mount=mounted\tprevious-case-sensitive=false\tcurrent-case-sensitive=true\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-case-sensitivity-changed\n",
+      "stdout": "volume-topology-diff\tcount=1\nvolume-topology\tchanged\tstable-id=diskarbitration:uuid:CASE-TOPOLOGY\tlabel=Case Topology\tpath=/Volumes/Case Topology\tprevious-kind=external\tcurrent-kind=external\tprevious-mount=mounted\tcurrent-mount=mounted\tprevious-case-sensitive=false\tcurrent-case-sensitive=true\tprevious-native-status=available\tcurrent-native-status=available\tprevious-resource-status=available\tcurrent-resource-status=available\tprevious-mount-status=available\tcurrent-mount-status=available\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-case-sensitivity-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-topology-api-status"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-topology-diff\tcount=1\nvolume-topology\tchanged\tstable-id=diskarbitration:uuid:API-STATUS\tlabel=API Status\tpath=/Volumes/API Status\tprevious-kind=external\tcurrent-kind=external\tprevious-mount=mounted\tcurrent-mount=mounted\tprevious-case-sensitive=false\tcurrent-case-sensitive=false\tprevious-native-status=unavailable\tcurrent-native-status=available\tprevious-resource-status=unavailable\tcurrent-resource-status=available\tprevious-mount-status=unavailable\tcurrent-mount-status=available\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-api-status-changed\n",
       "stderr": "",
       "times": 1
     },
