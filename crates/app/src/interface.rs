@@ -1235,6 +1235,7 @@ fn sidebar_cloud_state(state: CloudStorageState) -> SidebarCloudState {
         CloudStorageState::Conflict => SidebarCloudState::Conflict,
         CloudStorageState::Offline => SidebarCloudState::Unavailable,
         CloudStorageState::Unknown => SidebarCloudState::Waiting,
+        CloudStorageState::Removed => SidebarCloudState::Unavailable,
     }
 }
 

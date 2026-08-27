@@ -363,6 +363,7 @@ fn native_cloud_badges_for_state(state: CloudStorageState) -> Vec<NativeIconBadg
         }
         CloudStorageState::Conflict => vec![NativeIconBadge::CloudConflict],
         CloudStorageState::Offline => vec![NativeIconBadge::CloudOffline],
+        CloudStorageState::Removed => Vec::new(),
     }
 }
 

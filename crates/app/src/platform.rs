@@ -1391,7 +1391,8 @@ fn fileprovider_progress_job_state(report: &FileProviderProgressReport) -> JobPr
             | CloudStorageState::Evicted
             | CloudStorageState::Conflict
             | CloudStorageState::Offline
-            | CloudStorageState::Unknown => JobProgressState::Paused,
+            | CloudStorageState::Unknown
+            | CloudStorageState::Removed => JobProgressState::Paused,
         }
     }
 }

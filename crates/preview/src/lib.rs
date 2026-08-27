@@ -611,7 +611,9 @@ pub fn cloud_materialization_for_state(
         | gfm_mac::CloudStorageState::Waiting => gfm_mac::CloudMaterialization::InFlight,
         gfm_mac::CloudStorageState::Conflict => gfm_mac::CloudMaterialization::Conflict,
         gfm_mac::CloudStorageState::Offline => gfm_mac::CloudMaterialization::Offline,
-        gfm_mac::CloudStorageState::Unknown => gfm_mac::CloudMaterialization::Unknown,
+        gfm_mac::CloudStorageState::Unknown | gfm_mac::CloudStorageState::Removed => {
+            gfm_mac::CloudMaterialization::Unknown
+        }
     }
 }
 

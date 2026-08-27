@@ -44,6 +44,7 @@ pub enum CloudStorageState {
     Conflict,
     Offline,
     Unknown,
+    Removed,
 }
 
 impl CloudStorageState {
@@ -58,6 +59,7 @@ impl CloudStorageState {
             Self::Conflict => "conflict",
             Self::Offline => "offline",
             Self::Unknown => "unknown",
+            Self::Removed => "removed",
         }
     }
 
@@ -72,6 +74,7 @@ impl CloudStorageState {
             "conflict" => Ok(Self::Conflict),
             "offline" => Ok(Self::Offline),
             "unknown" => Ok(Self::Unknown),
+            "removed" => Ok(Self::Removed),
             other => Err(GfmError::Format(format!(
                 "unsupported FileProvider storage state `{other}`"
             ))),
@@ -745,6 +748,7 @@ impl FileProviderInvalidationReport {
                         | CloudStorageState::Conflict
                         | CloudStorageState::Offline
                         | CloudStorageState::Unknown
+                        | CloudStorageState::Removed
                 ));
         let reason = if !provider_visible {
             "not-provider-visible"
@@ -878,7 +882,9 @@ impl FileProviderStateInvalidationReport {
         let mut current_entries = Vec::new();
         for path in current_paths {
             let previous_state = previous.and_then(|snapshot| snapshot.previous_state_for(&path));
-            let current = if path.exists() || is_evicted_placeholder_path(&path) {
+            let current = if path.exists()
+                || (previous_state.is_none() && is_evicted_placeholder_path(&path))
+            {
                 Some(FileProviderStateReport::read_path(&path)?)
             } else if previous_state.is_some() {
                 Some(FileProviderStateReport::removed(path.clone()))
@@ -891,7 +897,7 @@ impl FileProviderStateInvalidationReport {
                 .unwrap_or(CloudStorageState::LocalOnly);
             let change =
                 FileProviderInvalidationReport::from_current(path.clone(), previous_state, current);
-            if change.current.source != "removed" {
+            if change.current.storage_state != CloudStorageState::Removed {
                 current_entries.push(FileProviderStateSnapshotEntry {
                     path,
                     state: change.current.storage_state,
@@ -1301,19 +1307,19 @@ impl FileProviderStateReport {
     }
 
     fn removed(path: PathBuf) -> Self {
-        let storage_state = CloudStorageState::LocalOnly;
+        let storage_state = CloudStorageState::Removed;
         let commands = CloudCommandPolicy::local();
         Self {
+            domain: removed_provider_domain_for_path(&path),
             path,
-            domain: FileProviderDomain::Local,
             storage_state,
-            materialization: CloudMaterialization::NotProviderBacked,
-            materialization_source: CloudMaterializationSource::Filesystem,
+            materialization: CloudMaterialization::Unknown,
+            materialization_source: CloudMaterializationSource::StateFallback,
             materialization_reason: Some("fileprovider-item-removed".to_string()),
             progress: CloudTransferProgress::idle("fileprovider-item-removed"),
             badges: Vec::new(),
             commands,
-            offline: false,
+            offline: true,
             conflict: false,
             provider_identifier: None,
             source: "removed".to_string(),
@@ -1649,7 +1655,7 @@ fn materialization_for_state(state: CloudStorageState) -> CloudMaterialization {
         | CloudStorageState::Waiting => CloudMaterialization::InFlight,
         CloudStorageState::Conflict => CloudMaterialization::Conflict,
         CloudStorageState::Offline => CloudMaterialization::Offline,
-        CloudStorageState::Unknown => CloudMaterialization::Unknown,
+        CloudStorageState::Unknown | CloudStorageState::Removed => CloudMaterialization::Unknown,
     }
 }
 
@@ -1725,6 +1731,7 @@ fn materialization_reason_for_state(
             CloudStorageState::LocalOnly | CloudStorageState::Unknown => {
                 "native-url-resource-unknown".to_string()
             }
+            CloudStorageState::Removed => "fileprovider-item-removed".to_string(),
         });
     }
     if state == CloudStorageState::Unknown {
@@ -1756,6 +1763,7 @@ fn materialization_reason_for_state(
         CloudStorageState::Conflict => Some("conflict-requires-resolution".to_string()),
         CloudStorageState::Offline => Some("provider-offline".to_string()),
         CloudStorageState::Unknown => Some("unknown-provider-state".to_string()),
+        CloudStorageState::Removed => Some("fileprovider-item-removed".to_string()),
     }
 }
 
@@ -1796,6 +1804,7 @@ fn progress_for_state(state: CloudStorageState, hints: &CloudHints) -> CloudTran
         CloudStorageState::Conflict => CloudTransferProgress::idle("conflict-requires-resolution"),
         CloudStorageState::Offline => CloudTransferProgress::idle("provider-offline"),
         CloudStorageState::Unknown => CloudTransferProgress::idle("unknown-provider-state"),
+        CloudStorageState::Removed => CloudTransferProgress::idle("fileprovider-item-removed"),
     }
 }
 
@@ -1810,6 +1819,7 @@ fn badges_for_state(state: CloudStorageState) -> Vec<CloudBadge> {
         CloudStorageState::Conflict => vec![CloudBadge::Conflict],
         CloudStorageState::Offline => vec![CloudBadge::Offline],
         CloudStorageState::Unknown => vec![CloudBadge::Waiting],
+        CloudStorageState::Removed => Vec::new(),
     }
 }
 
@@ -1867,7 +1877,20 @@ fn command_policy(
             reveal_conflict: CloudCommandState::Hidden,
             reason: Some("unknown-provider-state".to_string()),
         },
-        CloudStorageState::LocalOnly => CloudCommandPolicy::local(),
+        CloudStorageState::LocalOnly | CloudStorageState::Removed => CloudCommandPolicy::local(),
+    }
+}
+
+fn removed_provider_domain_for_path(path: &Path) -> FileProviderDomain {
+    if path_components(path)
+        .iter()
+        .any(|component| component == ICLOUD_DRIVE_COMPONENT)
+        || file_name_lower(path).contains("icloud")
+        || is_evicted_placeholder_path(path)
+    {
+        FileProviderDomain::ICloudDrive
+    } else {
+        FileProviderDomain::FileProvider
     }
 }
 
@@ -2680,7 +2703,18 @@ mod tests {
         assert!(observed.report.reindex_metadata);
         let change = &observed.report.changes[0];
         assert_eq!(change.previous, CloudStorageState::Downloaded);
-        assert_eq!(change.current.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(change.current.storage_state, CloudStorageState::Removed);
+        assert_eq!(change.current.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(
+            change.current.materialization,
+            CloudMaterialization::Unknown
+        );
+        assert_eq!(
+            change.current.materialization_source,
+            CloudMaterializationSource::StateFallback
+        );
+        assert!(change.current.offline);
+        assert!(change.current.badges.is_empty());
         assert_eq!(change.current.source, "removed");
         assert_eq!(
             change.current.progress.reason.as_deref(),
@@ -2758,6 +2792,14 @@ mod tests {
 
         assert_eq!(observed.paths, vec![removed.clone()]);
         assert_eq!(observed.report.changes.len(), 1);
+        let change = &observed.report.changes[0];
+        assert_eq!(change.previous, CloudStorageState::Downloaded);
+        assert_eq!(change.current.storage_state, CloudStorageState::Removed);
+        assert_eq!(change.current.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(
+            change.current.materialization_reason.as_deref(),
+            Some("fileprovider-item-removed")
+        );
         assert_eq!(snapshot.entries.len(), 1);
         assert_eq!(snapshot.entries[0].path, untouched);
         assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
@@ -3243,6 +3285,10 @@ mod tests {
         assert_eq!(
             CloudStorageState::parse("downloading").unwrap(),
             CloudStorageState::Downloading
+        );
+        assert_eq!(
+            CloudStorageState::parse("removed").unwrap(),
+            CloudStorageState::Removed
         );
         assert!(CloudStorageState::parse("not-real").is_err());
     }

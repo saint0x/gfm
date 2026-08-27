@@ -2119,7 +2119,7 @@ fn fileprovider_invalidation_event_removes_deleted_tracked_item_from_binary() {
     assert!(stdout.starts_with(
         "fileprovider-observed-invalidation\tevents=1\tevent-kinds=remove\tpaths=1\n"
     ));
-    assert!(stdout.contains("\tprevious=downloaded\tcurrent=local-only\tchanged=true\t"));
+    assert!(stdout.contains("\tprevious=downloaded\tcurrent=removed\tchanged=true\t"));
     assert!(stdout.contains("\ticon=true\tpreview-memory=true\tpreview-disk=true\t"));
     assert!(stdout.contains("\tsidebar=true\treindex-metadata=true\t"));
     let state_text = std::fs::read_to_string(&state).unwrap();
@@ -2316,7 +2316,7 @@ fn fileprovider_sidebar_observed_rename_updates_snapshot_from_binary() {
         "{stdout}"
     );
     assert!(stdout.contains(&format!(
-        "fileprovider-invalidation\t{}\tprevious=downloaded\tcurrent=local-only\tchanged=true\t",
+        "fileprovider-invalidation\t{}\tprevious=downloaded\tcurrent=removed\tchanged=true\t",
         old.display()
     )));
     assert!(stdout.contains(&format!(
@@ -2324,7 +2324,7 @@ fn fileprovider_sidebar_observed_rename_updates_snapshot_from_binary() {
         new.display()
     )));
     assert!(stdout.contains(&format!(
-        "sidebar-cloud-invalidation\ticloud-drive\tpath={}\tprevious=available-offline\tcurrent=none\tprogress=-\tinvalidate-row=true\t",
+        "sidebar-cloud-invalidation\ticloud-drive\tpath={}\tprevious=available-offline\tcurrent=unavailable\tprogress=-\tinvalidate-row=true\t",
         old.display()
     )));
     assert!(stdout.contains(&format!(
