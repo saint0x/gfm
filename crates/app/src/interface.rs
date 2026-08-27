@@ -6,13 +6,14 @@ use gfm_index::Indexer;
 use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore};
 use gfm_mac::{
     current_permission_onboarding, AccessIntent, CloudCommandState, CloudStorageState,
-    FileProviderConflictReport, FileProviderInvalidationReport, FileProviderStateReport,
-    MountState, NativeVolumeStatus, SecurityAccessMode, SecurityDecisionAction,
-    SecurityWorkerAction, SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport,
+    FileProviderConflictReport, FileProviderInvalidationReport, FileProviderObservedInvalidation,
+    FileProviderStateReport, FileProviderStateSnapshot, MountState, NativeVolumeStatus,
+    SecurityAccessMode, SecurityDecisionAction, SecurityWorkerAction,
+    SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport,
     VolumeEventInvalidationReport, VolumeEventKind, VolumeKind,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
-use gfm_types::{DirectoryPage, FileKind, GfmError, Result};
+use gfm_types::{DirectoryPage, FileEvent, FileEventKind, FileKind, GfmError, Result};
 use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
@@ -277,6 +278,41 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 )
                 .as_tsv()
             );
+        }
+        "ui-sidebar-fileprovider-observed-invalidation" => {
+            let state_path = required_path(
+                args.next(),
+                "ui-sidebar-fileprovider-observed-invalidation requires a state path",
+            )?;
+            let event_kind = required_string(
+                args.next(),
+                "ui-sidebar-fileprovider-observed-invalidation requires an event kind",
+            )?;
+            let path = required_path(
+                args.next(),
+                "ui-sidebar-fileprovider-observed-invalidation requires a path",
+            )?;
+            let event =
+                parse_fileprovider_event(&event_kind, path, args.next().map(PathBuf::from))?;
+            let mut access = vec![crate::access::preflight_access_scope(
+                &write_probe_existing_ancestor(&state_path),
+                AccessIntent::Write,
+                "ui fileprovider sidebar observed invalidation",
+            )?];
+            let previous = if state_path.is_file() {
+                Some(FileProviderStateSnapshot::read(&state_path)?)
+            } else {
+                None
+            };
+            access.extend(retain_fileprovider_event_access(
+                &event,
+                previous.as_ref(),
+                "ui fileprovider sidebar observed invalidation",
+            )?);
+            let (observed, snapshot) =
+                FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
+            snapshot.write(&state_path)?;
+            println!("{}", observed_sidebar_invalidation_tsv(&observed));
         }
         "ui-sidebar-volume-invalidation" => {
             let kind = parse_volume_event_kind(&required_string(
@@ -744,6 +780,120 @@ fn sidebar_volume_event_kind(kind: VolumeEventKind) -> SidebarVolumeEventKind {
         VolumeEventKind::Disappeared => SidebarVolumeEventKind::Disappeared,
         VolumeEventKind::Unavailable => SidebarVolumeEventKind::Unavailable,
     }
+}
+
+fn parse_fileprovider_event(kind: &str, path: PathBuf, to: Option<PathBuf>) -> Result<FileEvent> {
+    let event_kind = match kind {
+        "create" => FileEventKind::Create,
+        "metadata" => FileEventKind::Metadata,
+        "modify" => FileEventKind::Modify,
+        "remove" => FileEventKind::Remove,
+        "rescan" => FileEventKind::Rescan,
+        "other" => FileEventKind::Other,
+        "rename" => FileEventKind::Rename {
+            from: path.clone(),
+            to: to.ok_or_else(|| {
+                GfmError::Format(
+                    "ui-sidebar-fileprovider-observed-invalidation rename requires a destination path"
+                        .to_string(),
+                )
+            })?,
+        },
+        other => {
+            return Err(GfmError::Format(format!(
+                "unsupported FileProvider event kind `{other}`"
+            )))
+        }
+    };
+    Ok(FileEvent::new(path, event_kind))
+}
+
+fn observed_sidebar_invalidation_tsv(observed: &FileProviderObservedInvalidation) -> String {
+    let mut lines = vec![observed.as_tsv()];
+    lines.extend(observed.report.changes.iter().map(|report| {
+        SidebarCloudInvalidation::new(
+            report.path.clone(),
+            sidebar_cloud_state(report.previous),
+            sidebar_cloud_state(report.current.storage_state),
+            report.current.progress.percent_milli,
+            report.invalidate_sidebar,
+            report.reason,
+        )
+        .as_tsv()
+    }));
+    lines.join("\n")
+}
+
+fn retain_fileprovider_event_access(
+    event: &FileEvent,
+    previous: Option<&FileProviderStateSnapshot>,
+    worker: &'static str,
+) -> Result<Vec<crate::access::ScopedAccessGuard>> {
+    let mut guards = Vec::new();
+    for path in fileprovider_event_access_paths(event, previous) {
+        guards.push(crate::access::preflight_access_scope(
+            &path,
+            AccessIntent::Read,
+            worker,
+        )?);
+    }
+    Ok(guards)
+}
+
+fn fileprovider_event_access_paths(
+    event: &FileEvent,
+    previous: Option<&FileProviderStateSnapshot>,
+) -> Vec<PathBuf> {
+    match &event.kind {
+        FileEventKind::Rename { from, to } => [from, to]
+            .into_iter()
+            .map(|path| fileprovider_event_access_path(path, previous))
+            .collect(),
+        FileEventKind::Remove => vec![fileprovider_event_access_path(&event.path, previous)],
+        FileEventKind::Create
+        | FileEventKind::Metadata
+        | FileEventKind::Modify
+        | FileEventKind::Rescan
+        | FileEventKind::Other => vec![event.path.clone()],
+    }
+}
+
+fn fileprovider_event_access_path(
+    path: &Path,
+    previous: Option<&FileProviderStateSnapshot>,
+) -> PathBuf {
+    if path.exists() || !snapshot_contains_path(previous, path) {
+        return path.to_path_buf();
+    }
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(path)
+        .to_path_buf()
+}
+
+fn snapshot_contains_path(previous: Option<&FileProviderStateSnapshot>, path: &Path) -> bool {
+    previous.is_some_and(|snapshot| snapshot.entries.iter().any(|entry| entry.path == path))
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.is_dir() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
+}
+
+fn write_probe_existing_ancestor(path: &Path) -> PathBuf {
+    let mut candidate = write_probe_path(path).to_path_buf();
+    while !candidate.exists() {
+        let Some(parent) = candidate.parent() else {
+            break;
+        };
+        if parent == candidate {
+            break;
+        }
+        candidate = parent.to_path_buf();
+    }
+    candidate
 }
 
 fn read_directory_with_access(path: &PathBuf, worker: &str) -> Result<DirectoryPage> {

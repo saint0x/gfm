@@ -1166,6 +1166,7 @@ fn ui_fileprovider_contracts_refuse_unreachable_volume_before_native_read_from_b
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     let provider = root.join("Conflict.icloud-conflict.md");
+    let state = root.join("fileprovider-state.tsv");
     std::fs::write(&provider, "conflict").unwrap();
 
     for (args, expected, forbidden) in [
@@ -1185,6 +1186,16 @@ fn ui_fileprovider_contracts_refuse_unreachable_volume_before_native_read_from_b
                 provider.to_str().unwrap(),
             ],
             "ui fileprovider sidebar invalidation volume access blocked: unreachable volume network",
+            "sidebar-cloud-invalidation\t",
+        ),
+        (
+            vec![
+                "ui-sidebar-fileprovider-observed-invalidation",
+                state.to_str().unwrap(),
+                "metadata",
+                provider.to_str().unwrap(),
+            ],
+            "ui fileprovider sidebar observed invalidation volume access blocked: unreachable volume network",
             "sidebar-cloud-invalidation\t",
         ),
         (

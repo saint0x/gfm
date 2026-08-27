@@ -540,6 +540,7 @@ fn print_usage() {
   gfm ui-sidebar-contract [path]
   gfm ui-sidebar-fileprovider-contract [current-path] <fileprovider-path>
   gfm ui-sidebar-fileprovider-invalidation <previous-state> <fileprovider-path>
+  gfm ui-sidebar-fileprovider-observed-invalidation <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
   gfm ui-sidebar-volume-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm ui-icon-view-contract <path> [columns] [viewport-rows] [scroll-row]
   gfm ui-virtualization-contract <icon-grid|list-rows|column-rows|gallery-filmstrip|search-results|trash-rows> <total> <viewport> <scroll> [columns]
