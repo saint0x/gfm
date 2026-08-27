@@ -228,7 +228,6 @@ fn drain_single_runtime_job(scheduler: &mut Scheduler, job: Job, label: &str) ->
 #[derive(Clone)]
 pub(crate) struct RuntimeJobHandle {
     progress_store: Option<JobProgressStore>,
-    snapshot: JobProgressSnapshot,
     last_progress: Arc<Mutex<JobProgressSnapshot>>,
 }
 
@@ -286,13 +285,18 @@ impl RuntimeJobHandle {
         }
         Ok(Self {
             progress_store,
-            snapshot: snapshot.clone(),
             last_progress: Arc::new(Mutex::new(snapshot)),
         })
     }
 
     pub(crate) fn running(&self) -> Result<()> {
-        self.persist_progress(JobProgressState::Running, 0, self.snapshot.detail.clone())
+        let detail = self
+            .last_progress
+            .lock()
+            .expect("runtime job progress lock poisoned")
+            .detail
+            .clone();
+        self.persist_progress(JobProgressState::Running, 0, detail)
     }
 
     pub(crate) fn deferred(&self, action: SchedulingAction) -> Result<()> {
@@ -312,10 +316,38 @@ impl RuntimeJobHandle {
         self.persist_progress(state, completed_units, detail)
     }
 
+    pub(crate) fn resize(&self, total_units: u64, detail: impl Into<String>) -> Result<()> {
+        let detail = detail.into();
+        let mut last = self
+            .last_progress
+            .lock()
+            .expect("runtime job progress lock poisoned");
+        let mut snapshot = last.clone();
+        snapshot.total_units = total_units.max(1);
+        snapshot.completed_units = snapshot.completed_units.min(snapshot.total_units);
+        snapshot.detail = detail;
+        snapshot.updated_ms = job_timestamp_ms();
+        if progress_semantics_equal(&last, &snapshot) {
+            return Ok(());
+        }
+
+        if let Some(store) = &self.progress_store {
+            let _access = preflight_runtime_write(store.path(), &snapshot.label)?;
+            store.upsert(snapshot.clone())?;
+        }
+        *last = snapshot;
+        Ok(())
+    }
+
     pub(crate) fn finish(&self, status: &TaskStatus) -> Result<()> {
+        let total_units = self
+            .last_progress
+            .lock()
+            .expect("runtime job progress lock poisoned")
+            .total_units;
         let (completed_units, detail) = match status {
             TaskStatus::Started => (0, "still-running".to_string()),
-            TaskStatus::Completed => (self.snapshot.total_units, "completed".to_string()),
+            TaskStatus::Completed => (total_units, "completed".to_string()),
             TaskStatus::Cancelled => (0, "cancelled".to_string()),
             TaskStatus::Failed(message) => (0, message.clone()),
         };
@@ -331,19 +363,18 @@ impl RuntimeJobHandle {
         let Some(store) = &self.progress_store else {
             return Ok(());
         };
-        let snapshot =
-            self.snapshot
-                .clone()
-                .with_progress(state, completed_units, detail, job_timestamp_ms());
         let mut last = self
             .last_progress
             .lock()
             .expect("runtime job progress lock poisoned");
+        let snapshot =
+            last.clone()
+                .with_progress(state, completed_units, detail, job_timestamp_ms());
         if progress_semantics_equal(&last, &snapshot) {
             return Ok(());
         }
 
-        let _access = preflight_runtime_write(store.path(), &self.snapshot.label)?;
+        let _access = preflight_runtime_write(store.path(), &snapshot.label)?;
         store.upsert(snapshot.clone())?;
         *last = snapshot;
         Ok(())
@@ -401,7 +432,6 @@ mod tests {
         store.write_all(std::slice::from_ref(&initial)).unwrap();
         let handle = RuntimeJobHandle {
             progress_store: Some(store.clone()),
-            snapshot: initial.clone(),
             last_progress: Arc::new(Mutex::new(initial)),
         };
         let cloned = handle.clone();
@@ -416,6 +446,34 @@ mod tests {
         assert_eq!(before_noop, after_noop);
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].state, JobProgressState::Running);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn runtime_progress_resize_updates_finish_total_units() {
+        let path = temp_path("gfm-runtime-progress-resize", "gfmprogress");
+        let store = JobProgressStore::new(&path);
+        let initial = sample_progress_snapshot(JobId::from_raw(12)).with_progress(
+            JobProgressState::Planned,
+            0,
+            "index:/workspace",
+            10,
+        );
+        store.write_all(std::slice::from_ref(&initial)).unwrap();
+        let handle = RuntimeJobHandle {
+            progress_store: Some(store.clone()),
+            last_progress: Arc::new(Mutex::new(initial)),
+        };
+
+        handle.resize(42, "index:/workspace").unwrap();
+        handle.finish(&TaskStatus::Completed).unwrap();
+
+        let snapshots = store.read().unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].state, JobProgressState::Completed);
+        assert_eq!(snapshots[0].completed_units, 42);
+        assert_eq!(snapshots[0].total_units, 42);
 
         std::fs::remove_file(path).unwrap();
     }

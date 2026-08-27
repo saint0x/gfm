@@ -6887,6 +6887,17 @@ fn searches_persisted_text_content_from_binary() {
         "{}",
         String::from_utf8_lossy(&index_output.stderr)
     );
+    let index_stderr = String::from_utf8_lossy(&index_output.stderr);
+    assert_eq!(
+        index_stderr
+            .matches(&format!(
+                "security-worker-admission\tworker=background content index\tpath={}\tintent=index",
+                root.display()
+            ))
+            .count(),
+        1,
+        "{index_stderr}"
+    );
 
     let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -8845,6 +8856,13 @@ fn background_content_indexer_refuses_unreachable_outputs_before_job_state_from_
             .contains("background content index volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=background content index\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
     assert!(!segments.exists());
     assert!(!records.exists());
     assert!(!content.exists());
@@ -9504,6 +9522,13 @@ fn resume_content_index_job_refuses_unreachable_outputs_before_worker_from_binar
     assert!(
         stderr
             .contains("background content index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=background content index\tpath={}",
+            root.display()
+        )),
         "{stderr}"
     );
     assert!(!segments.exists());

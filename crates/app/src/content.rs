@@ -453,11 +453,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "background content index",
                 )?;
             } else {
-                let _access = retain_content_job_launch_access(
+                preflight_content_job_volumes(
                     &spec,
                     &spec_path,
-                    &journal,
-                    pressure,
+                    Some(journal.path()),
                     "background content index",
                 )?;
                 spec = spec.with_volume(detect_volume_id(&root)?);
@@ -908,6 +907,7 @@ fn retain_content_job_access(
     spec_path: &Path,
     worker: &str,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    preflight_content_job_volumes(spec, spec_path, None, worker)?;
     Ok(vec![
         preflight_access_scope(&spec.root, AccessIntent::Index, worker)?,
         preflight_access_scope(
@@ -934,22 +934,38 @@ fn retain_content_job_access(
     ])
 }
 
-fn retain_content_job_launch_access(
+fn preflight_content_job_volumes(
     spec: &ContentIndexJobSpec,
     spec_path: &Path,
-    journal: &JobJournal,
-    pressure: SchedulingPressure,
+    journal_path: Option<&Path>,
     worker: &str,
-) -> Result<Vec<ScopedAccessGuard>> {
-    let mut guards = retain_content_job_access(spec, spec_path, worker)?;
-    if pressure.decide(Priority::Background, 1, 1).action != SchedulingAction::Defer {
-        guards.push(preflight_access_scope(
-            write_probe_path(journal.path()),
-            AccessIntent::Write,
-            worker,
-        )?);
+) -> Result<()> {
+    preflight_volume_access_scope(&spec.root, AccessIntent::Index, worker)?;
+    preflight_volume_access_scope(
+        write_probe_path(&spec.segment_dir),
+        AccessIntent::Write,
+        worker,
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(&spec.records_path),
+        AccessIntent::Write,
+        worker,
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(&spec.content_path),
+        AccessIntent::Write,
+        worker,
+    )?;
+    preflight_volume_access_scope(write_probe_path(spec_path), AccessIntent::Write, worker)?;
+    preflight_volume_access_scope(
+        write_probe_path(&default_extraction_quarantine_path()),
+        AccessIntent::Write,
+        worker,
+    )?;
+    if let Some(journal_path) = journal_path {
+        preflight_volume_access_scope(write_probe_path(journal_path), AccessIntent::Write, worker)?;
     }
-    Ok(guards)
+    Ok(())
 }
 
 fn write_probe_path(path: &Path) -> &Path {
@@ -999,33 +1015,21 @@ pub(crate) fn run_content_job(
             deferred: true,
         });
     }
-    let _access = retain_content_job_access(spec, spec_path, "background content index")?;
-    let _journal_access =
-        preflight_access_scope(write_probe_path(journal.path()), AccessIntent::Write, label)?;
-    let snapshot = Indexer::default().build(&spec.root)?;
-    let inaccessible = snapshot.inaccessible.len();
-    let previous_records = if spec.records_path.is_file() && spec.content_path.is_file() {
-        read_records(&spec.records_path)?
-    } else {
-        Vec::new()
-    };
+    preflight_content_job_volumes(spec, spec_path, Some(journal.path()), label)?;
     let volume = spec
         .volume
-        .or_else(|| snapshot.records.first().map(|record| record.id.volume))
         .or_else(|| detect_volume_id(&spec.root).ok())
+        .or_else(|| parent_volume(&spec.records_path))
         .ok_or_else(|| {
             GfmError::Format(format!(
                 "could not determine content index volume for {}",
                 spec.root.display()
             ))
         })?;
-    snapshot.save(&spec.records_path)?;
-    let extractor = Extractor::with_budget_profile(extraction_budget_profile(&spec.root, pressure));
-    let worker = BackgroundContentIndexer::new(extractor, spec.options());
-    let quarantine_store = default_extraction_quarantine_path();
-    let extraction_quarantine = read_extraction_quarantine(&quarantine_store, 2)?;
-    let content_report = Arc::new(Mutex::new(None));
-    let content_report_task = Arc::clone(&content_report);
+    let job_spec = spec.clone();
+    let job_spec_path = spec_path.to_path_buf();
+    let job_result = Arc::new(Mutex::new(None));
+    let job_result_task = Arc::clone(&job_result);
     let mut scheduler = Scheduler::new();
     let job = scheduler.schedule_on_volume(Priority::Background, label, volume);
     let runtime = RuntimeJobHandle::begin_with_payload_path(
@@ -1033,7 +1037,7 @@ pub(crate) fn run_content_job(
         JobPayloadKind::Indexing,
         label,
         spec_path,
-        snapshot.records.len().max(1) as u64,
+        1,
         format!("index:{}", spec.root.display()),
     )?;
     let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
@@ -1047,24 +1051,43 @@ pub(crate) fn run_content_job(
         .ready
         .into_iter()
         .map(|scheduled| {
-            let snapshot = snapshot.clone();
-            let previous_records = previous_records.clone();
-            let segment_dir = spec.segment_dir.clone();
-            let content = spec.content_path.clone();
-            let quarantine_store = quarantine_store.clone();
-            let extraction_quarantine = extraction_quarantine.clone();
-            let worker = worker.clone();
-            let content_report_task = Arc::clone(&content_report_task);
+            let job_spec = job_spec.clone();
+            let job_spec_path = job_spec_path.clone();
+            let job_result_task = Arc::clone(&job_result_task);
             let runtime = runtime.clone();
             RetriableTask::new(scheduled, move |cancellation| {
                 runtime.running()?;
-                let mut extraction_quarantine = extraction_quarantine.clone();
+                let _access = retain_content_job_access(
+                    &job_spec,
+                    &job_spec_path,
+                    "background content index",
+                )?;
+                let snapshot = Indexer::default().build(&job_spec.root)?;
+                let inaccessible = snapshot.inaccessible.len();
+                runtime.resize(
+                    snapshot.records.len().max(1) as u64,
+                    format!("index:{}", job_spec.root.display()),
+                )?;
+                let previous_records =
+                    if job_spec.records_path.is_file() && job_spec.content_path.is_file() {
+                        read_records(&job_spec.records_path)?
+                    } else {
+                        Vec::new()
+                    };
+                snapshot.save(&job_spec.records_path)?;
+                let extractor = Extractor::with_budget_profile(extraction_budget_profile(
+                    &job_spec.root,
+                    pressure,
+                ));
+                let worker = BackgroundContentIndexer::new(extractor, job_spec.options());
+                let quarantine_store = default_extraction_quarantine_path();
+                let mut extraction_quarantine = read_extraction_quarantine(&quarantine_store, 2)?;
                 let request = QuarantineContentIndexRequest {
                     snapshot: &snapshot,
                     previous_records: &previous_records,
-                    previous_content_path: Some(&content),
-                    segment_dir: &segment_dir,
-                    content_path: &content,
+                    previous_content_path: Some(&job_spec.content_path),
+                    segment_dir: &job_spec.segment_dir,
+                    content_path: &job_spec.content_path,
                     cancellation: &cancellation,
                 };
                 let report = worker.run_incremental_and_compact_with_quarantine(
@@ -1072,9 +1095,9 @@ pub(crate) fn run_content_job(
                     &mut extraction_quarantine,
                 )?;
                 extraction_quarantine.write(&quarantine_store)?;
-                *content_report_task
+                *job_result_task
                     .lock()
-                    .expect("content index report lock poisoned") = Some(report);
+                    .expect("content index result lock poisoned") = Some((report, inaccessible));
                 Ok(())
             })
         })
@@ -1105,9 +1128,9 @@ pub(crate) fn run_content_job(
             )))
         }
     }
-    let report = content_report
+    let (report, inaccessible) = job_result
         .lock()
-        .expect("content index report lock poisoned")
+        .expect("content index result lock poisoned")
         .clone()
         .ok_or_else(|| {
             GfmError::Format("background content index completed without a report".to_string())
