@@ -15,11 +15,11 @@ use gfm_ui::{
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
     MenuContract, OperationProgressContract, OperationProgressInput, OperationProgressState,
-    ProviderConflictContract, ProviderConflictInput, SearchResultsBatch, SearchResultsContract,
-    SearchResultsOptions, SearchResultsStage, SidebarCloudState, SidebarContract,
-    SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
-    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
-    WindowSessionContract, WindowSessionStore,
+    PermissionRefreshContract, ProviderConflictContract, ProviderConflictInput, SearchResultsBatch,
+    SearchResultsContract, SearchResultsOptions, SearchResultsStage, SidebarCloudState,
+    SidebarContract, SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata,
+    TrashViewContract, TrashViewOptions, VirtualSurface, VirtualizationContract,
+    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -104,7 +104,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "ui-permission-onboarding-contract" => {
             let plan = current_permission_onboarding()?;
-            print_permission_onboarding_contract(plan);
+            let refresh = crate::permission_refresh::refresh_permission_state(
+                crate::permission_refresh::PermissionRefreshAudience::Ui,
+                "permission-onboarding",
+            )?;
+            print_permission_onboarding_contract(
+                plan,
+                refresh.as_ref().map(permission_refresh_contract),
+            );
         }
         "ui-progress-job-contract" => {
             let path = required_path(
@@ -372,7 +379,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     Ok(true)
 }
 
-fn print_permission_onboarding_contract(plan: gfm_mac::PermissionOnboardingPlan) {
+fn print_permission_onboarding_contract(
+    plan: gfm_mac::PermissionOnboardingPlan,
+    refresh: Option<PermissionRefreshContract>,
+) {
     println!(
         "{}",
         DialogContract::finder_default(DialogSurface::Permission).as_tsv()
@@ -392,6 +402,9 @@ fn print_permission_onboarding_contract(plan: gfm_mac::PermissionOnboardingPlan)
             item.path.display(),
             escape_interface_field(&item.reason)
         );
+    }
+    if let Some(refresh) = refresh {
+        println!("{}", refresh.as_tsv());
     }
 }
 
@@ -414,13 +427,32 @@ fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
 }
 
 fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
-    let spec = path.map(AppLaunchSpec::new).unwrap_or_default();
+    let mut spec = path.map(AppLaunchSpec::new).unwrap_or_default();
+    let refresh = crate::permission_refresh::refresh_permission_state(
+        crate::permission_refresh::PermissionRefreshAudience::Ui,
+        "window-lifecycle",
+    )?;
+    if let Some(refresh) = refresh {
+        spec = spec.with_permission_refresh(permission_refresh_contract(&refresh));
+    }
     let plan = current_permission_onboarding()?;
     if plan.finder_parity_default || plan.action != gfm_mac::PermissionAction::ContinueNormally {
         Ok(spec.with_permission_dialog(DialogContract::finder_default(DialogSurface::Permission)))
     } else {
         Ok(spec)
     }
+}
+
+fn permission_refresh_contract(
+    report: &gfm_mac::PermissionStateInvalidationReport,
+) -> PermissionRefreshContract {
+    PermissionRefreshContract::new(
+        report.initialized,
+        report.changed.len(),
+        report.refresh_ui,
+        report.refresh_workers,
+        report.refresh_operations,
+    )
 }
 
 fn default_current_path(path: Option<String>) -> PathBuf {

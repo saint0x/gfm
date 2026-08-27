@@ -89,6 +89,45 @@ pub struct AppLaunchSpec {
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
     pub permission_dialog: Option<DialogContract>,
+    pub permission_refresh: Option<PermissionRefreshContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionRefreshContract {
+    pub initialized: bool,
+    pub changed: usize,
+    pub refresh_ui: bool,
+    pub refresh_workers: bool,
+    pub refresh_operations: bool,
+}
+
+impl PermissionRefreshContract {
+    pub fn new(
+        initialized: bool,
+        changed: usize,
+        refresh_ui: bool,
+        refresh_workers: bool,
+        refresh_operations: bool,
+    ) -> Self {
+        Self {
+            initialized,
+            changed,
+            refresh_ui,
+            refresh_workers,
+            refresh_operations,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "permission-refresh\taudience=ui\tinitialized={}\tchanged={}\trefresh-ui={}\trefresh-workers={}\trefresh-operations={}",
+            self.initialized,
+            self.changed,
+            self.refresh_ui,
+            self.refresh_workers,
+            self.refresh_operations
+        )
+    }
 }
 
 impl AppLaunchSpec {
@@ -141,6 +180,11 @@ impl AppLaunchSpec {
         self.permission_dialog = Some(dialog);
         self
     }
+
+    pub fn with_permission_refresh(mut self, refresh: PermissionRefreshContract) -> Self {
+        self.permission_refresh = Some(refresh);
+        self
+    }
 }
 
 impl Default for AppLaunchSpec {
@@ -156,6 +200,7 @@ impl Default for AppLaunchSpec {
             activate_on_launch: true,
             tabbing_identifier: "gfm-main-window".to_string(),
             permission_dialog: None,
+            permission_refresh: None,
         }
     }
 }
@@ -172,6 +217,7 @@ pub struct WindowLifecycleContract {
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
     pub permission_dialog: Option<DialogSurface>,
+    pub permission_refresh: Option<PermissionRefreshContract>,
 }
 
 impl WindowLifecycleContract {
@@ -188,11 +234,12 @@ impl WindowLifecycleContract {
             activate_on_launch: spec.activate_on_launch,
             tabbing_identifier: spec.tabbing_identifier.clone(),
             permission_dialog: spec.permission_dialog.as_ref().map(|dialog| dialog.surface),
+            permission_refresh: spec.permission_refresh.clone(),
         })
     }
 
     pub fn as_tsv(&self) -> String {
-        format!(
+        let mut lines = vec![format!(
             "window\t{}\t{}\t{}x{}\tmin={}x{}\ttransparent-titlebar={}\tactivate={}\ttabs={}\tpermission-dialog={}",
             self.title,
             self.initial_path.display(),
@@ -206,7 +253,11 @@ impl WindowLifecycleContract {
             self.permission_dialog
                 .map(DialogSurface::as_str)
                 .unwrap_or("none")
-        )
+        )];
+        if let Some(refresh) = &self.permission_refresh {
+            lines.push(refresh.as_tsv());
+        }
+        lines.join("\n")
     }
 }
 
@@ -240,6 +291,7 @@ fn open_main_window(
             sidebar: sidebar::SidebarContract::discover(&spec.initial_path),
             icon_view: IconViewContract::from_records(&[], IconViewOptions::default()),
             permission_dialog: spec.permission_dialog,
+            permission_refresh: spec.permission_refresh,
             initial_path: spec.initial_path,
         })
     })?;
@@ -305,6 +357,7 @@ struct RootView {
     sidebar: SidebarContract,
     icon_view: IconViewContract,
     permission_dialog: Option<DialogContract>,
+    permission_refresh: Option<PermissionRefreshContract>,
     initial_path: PathBuf,
 }
 
@@ -334,6 +387,14 @@ impl Render for RootView {
         if let Some(dialog) = &self.permission_dialog {
             root = root.child(dialog::render(dialog));
         }
+        if let Some(refresh) = &self.permission_refresh {
+            root = root.child(
+                div()
+                    .id("permission-refresh-state")
+                    .invisible()
+                    .child(refresh.as_tsv()),
+            );
+        }
         root
     }
 }
@@ -353,6 +414,7 @@ mod tests {
         assert!(contract.transparent_titlebar);
         assert_eq!(contract.tabbing_identifier, "gfm-main-window");
         assert_eq!(contract.permission_dialog, None);
+        assert_eq!(contract.permission_refresh, None);
     }
 
     #[test]
@@ -387,5 +449,20 @@ mod tests {
         assert!(contract
             .as_tsv()
             .ends_with("\tpermission-dialog=permission"));
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_permission_refresh_state() {
+        let spec = AppLaunchSpec::new("/tmp/gfm")
+            .with_permission_refresh(PermissionRefreshContract::new(false, 1, true, true, true));
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert_eq!(
+            contract.permission_refresh,
+            Some(PermissionRefreshContract::new(false, 1, true, true, true))
+        );
+        assert!(contract
+            .as_tsv()
+            .contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"));
     }
 }

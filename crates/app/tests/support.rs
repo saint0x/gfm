@@ -129,6 +129,75 @@ fn reports_permission_onboarding_dialog_contract_from_binary() {
 }
 
 #[test]
+fn reports_permission_ui_refresh_in_onboarding_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-refresh-onboarding-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("permission-state.tsv");
+    seed_stale_permission_state(&state);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_PERMISSION_STATE", &state)
+        .arg("ui-permission-onboarding-contract")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+    assert!(
+        stdout.contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\trefresh-ui=true\t"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn reports_permission_ui_refresh_in_lifecycle_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-refresh-lifecycle-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("permission-state.tsv");
+    seed_stale_permission_state(&state);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_PERMISSION_STATE", &state)
+        .args(["ui-contract", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("window\tGFM\t"));
+    assert!(
+        stdout.contains("\tpermission-dialog=permission"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_progress_dialog_pause_resume_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["ui-dialog-contract", "progress", "paused", "true"])
@@ -839,4 +908,36 @@ fn reports_preview_scheduling_from_binary() {
     assert_eq!(lines.len(), 2, "{stdout}");
     assert_eq!(lines[0], "scheduled\tvisible", "{stdout}");
     assert_eq!(lines[1], "scheduled\tprefetch", "{stdout}");
+}
+
+fn seed_stale_permission_state(state: &std::path::Path) {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation")
+        .arg(state)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = std::fs::read_to_string(state).unwrap();
+    let mut lines = text.lines().map(str::to_string).collect::<Vec<_>>();
+    let first_scope = lines
+        .iter_mut()
+        .skip(1)
+        .find(|line| !line.trim().is_empty())
+        .expect("permission snapshot should include at least one scope");
+    let mut fields = first_scope
+        .split('\t')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 4, "{first_scope}");
+    fields[1] = if fields[1] == "unknown" {
+        "granted".to_string()
+    } else {
+        "unknown".to_string()
+    };
+    *first_scope = fields.join("\t");
+    std::fs::write(state, format!("{}\n", lines.join("\n"))).unwrap();
 }

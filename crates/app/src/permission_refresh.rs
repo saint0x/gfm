@@ -7,6 +7,7 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PermissionRefreshAudience {
+    Ui,
     Workers,
     Operations,
 }
@@ -14,6 +15,7 @@ pub(crate) enum PermissionRefreshAudience {
 impl PermissionRefreshAudience {
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Ui => "ui",
             Self::Workers => "workers",
             Self::Operations => "operations",
         }
@@ -21,6 +23,7 @@ impl PermissionRefreshAudience {
 
     const fn selected(self, report: &PermissionStateInvalidationReport) -> bool {
         match self {
+            Self::Ui => report.refresh_ui,
             Self::Workers => report.refresh_workers,
             Self::Operations => report.refresh_operations,
         }
