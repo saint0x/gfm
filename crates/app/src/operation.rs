@@ -337,7 +337,7 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     let _journal_access = preflight_operation_journal_write(&journal)?;
     let _trash_metadata_access =
         retain_operation_trash_metadata_access(&operation, &trash_metadata)?;
-    let volume_report = VolumeDiscoveryReport::discover();
+    let volume_report = operation_volume_report(&operation);
     let conflict_report = OperationConflictReport::evaluate(&operation, conflict);
     if conflict_report.blocks_operation {
         if let Some(store) = runtime_operation_conflict_store() {
@@ -702,6 +702,25 @@ fn operation_volume_copy_policy_from_report(
         }
     }
     policy
+}
+
+fn operation_volume_report(operation: &Operation) -> VolumeDiscoveryReport {
+    let mut report = VolumeDiscoveryReport::discover();
+    for path in operation_paths(operation) {
+        report
+            .volumes
+            .extend(VolumeDiscoveryReport::for_containing_path(path).volumes);
+    }
+    report.volumes.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.label.cmp(&right.label))
+            .then(left.id.cmp(&right.id))
+    });
+    report
+        .volumes
+        .dedup_by(|left, right| left.id == right.id && left.path == right.path);
+    report
 }
 
 fn operation_touches_volume(operation: &Operation, root: &Path) -> bool {

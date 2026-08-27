@@ -3280,6 +3280,120 @@ fn operation_refuses_unreachable_journal_before_mutating_from_binary() {
 }
 
 #[test]
+fn operation_refuses_unreachable_destination_volume_before_copying_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ops-unreachable-destination-root");
+    let journal = root.join("ops.journal");
+    let source_root = root.join("Source");
+    let destination_volume = root.join("Team Share");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&destination_volume).unwrap();
+    fs::write(
+        destination_volume.join(".gfm-volume-kind"),
+        "network-unreachable\n",
+    )
+    .unwrap();
+    let source = source_root.join("source.txt");
+    let destination = destination_volume.join("copy.txt");
+    fs::write(&source, "do not copy onto unreachable storage").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("\tcompleted"), "{stdout}");
+    assert!(
+        stderr.contains("destination-parent is not accessible for mutation"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("unreachable volume network") && stderr.contains("role=destination-parent"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&source).unwrap(),
+        "do not copy onto unreachable storage"
+    );
+    assert!(!destination.exists());
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(journal_text.contains("\tstarted\t"), "{journal_text}");
+    assert!(journal_text.contains("\tfailed\t"), "{journal_text}");
+    assert!(journal_text.contains("\tcopy\t"), "{journal_text}");
+    assert!(
+        journal_text.contains("unreachable volume network"),
+        "{journal_text}"
+    );
+    assert!(!journal_text.contains("\tcompleted\t"), "{journal_text}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn operation_refuses_read_only_destination_volume_before_copying_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ops-readonly-destination-root");
+    let journal = root.join("ops.journal");
+    let source_root = root.join("Source");
+    let destination_volume = root.join("Camera Card");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&destination_volume).unwrap();
+    fs::write(
+        destination_volume.join(".gfm-volume-kind"),
+        "external-removable-read-only\n",
+    )
+    .unwrap();
+    let source = source_root.join("source.txt");
+    let destination = destination_volume.join("copy.txt");
+    fs::write(&source, "do not copy onto read-only storage").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("\tcompleted"), "{stdout}");
+    assert!(
+        stderr.contains("destination-parent is not accessible for mutation"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("read-only volume external") && stderr.contains("role=destination-parent"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&source).unwrap(),
+        "do not copy onto read-only storage"
+    );
+    assert!(!destination.exists());
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(journal_text.contains("\tstarted\t"), "{journal_text}");
+    assert!(journal_text.contains("\tfailed\t"), "{journal_text}");
+    assert!(journal_text.contains("\tcopy\t"), "{journal_text}");
+    assert!(
+        journal_text.contains("read-only volume external"),
+        "{journal_text}"
+    );
+    assert!(!journal_text.contains("\tcompleted\t"), "{journal_text}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn copy_skip_from_binary_journals_skipped_without_overwrite() {
     let root = unique_temp_dir("gfm-cli-ops-skip-root");
     let journal = root.join("ops.journal");

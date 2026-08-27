@@ -203,6 +203,17 @@ impl JobProgressStore {
     }
 
     pub fn read(&self) -> Result<Vec<JobProgressSnapshot>> {
+        self.read_filtered(|_| true)
+    }
+
+    pub fn restorable(&self) -> Result<Vec<JobProgressSnapshot>> {
+        self.read_filtered(|snapshot| snapshot.state.restorable())
+    }
+
+    fn read_filtered(
+        &self,
+        mut keep: impl FnMut(&JobProgressSnapshot) -> bool,
+    ) -> Result<Vec<JobProgressSnapshot>> {
         if !self.path.exists() {
             return Ok(Vec::new());
         }
@@ -224,24 +235,19 @@ impl JobProgressStore {
         let mut snapshots = Vec::new();
         for (line_index, line) in lines.enumerate() {
             let line = line.map_err(|err| GfmError::io(&self.path, err))?;
-            snapshots.push(parse_snapshot(&line).map_err(|err| {
+            let snapshot = parse_snapshot(&line).map_err(|err| {
                 GfmError::Format(format!(
                     "{} line {}: {}",
                     self.path.display(),
                     line_index + 2,
                     err
                 ))
-            })?);
+            })?;
+            if keep(&snapshot) {
+                snapshots.push(snapshot);
+            }
         }
         Ok(snapshots)
-    }
-
-    pub fn restorable(&self) -> Result<Vec<JobProgressSnapshot>> {
-        Ok(self
-            .read()?
-            .into_iter()
-            .filter(|snapshot| snapshot.state.restorable())
-            .collect())
     }
 
     pub fn restore_interrupted(&self, updated_ms: u64) -> Result<Vec<JobProgressSnapshot>> {
@@ -438,6 +444,50 @@ mod tests {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.ends_with(".tmp")));
+    }
+
+    #[test]
+    fn restorable_streams_only_active_snapshots_but_validates_terminal_rows() {
+        let path = temp_path("restorable-filtered");
+        let store = JobProgressStore::new(&path);
+        let running = JobProgressSnapshot::new(
+            JobId::from_raw(1),
+            JobClass::Foreground,
+            Priority::Interactive,
+            "copy selected files",
+            Some(VolumeId(2)),
+            10,
+        )
+        .with_progress(JobProgressState::Running, 4, "copying", 10);
+        let completed = JobProgressSnapshot::new(
+            JobId::from_raw(2),
+            JobClass::Maintenance,
+            Priority::Background,
+            "compact content",
+            None,
+            1,
+        )
+        .with_progress(JobProgressState::Completed, 1, "done", 11);
+        store
+            .write_all(&[running.clone(), completed.clone()])
+            .unwrap();
+
+        assert_eq!(store.restorable().unwrap(), vec![running]);
+        fs::write(
+            &path,
+            format!(
+                "{MAGIC}\n{}\nprogress\tbad-id\tmaintenance\tbackground\tcompact content\t-\tcompleted\t1\t1\tdone\t11\n",
+                completed.as_tsv()
+            ),
+        )
+        .unwrap();
+        let err = store.restorable().unwrap_err();
+        assert!(
+            err.to_string().contains("invalid progress job id `bad-id`"),
+            "{err}"
+        );
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]

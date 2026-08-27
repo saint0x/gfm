@@ -209,9 +209,14 @@ impl VolumeDescriptor {
             .or_else(|| resource.as_ref().and_then(|resource| resource.is_ejectable))
             .or_else(|| native.as_ref().and_then(|native| native.media_ejectable))
             .unwrap_or(removable || network);
-        let writable = mount_table
-            .as_ref()
-            .and_then(|mount_table| mount_table.is_read_only.map(|read_only| !read_only))
+        let marker_read_only = marker_read_only(marker_value);
+        let writable = marker_read_only
+            .map(|read_only| !read_only)
+            .or_else(|| {
+                mount_table
+                    .as_ref()
+                    .and_then(|mount_table| mount_table.is_read_only.map(|read_only| !read_only))
+            })
             .or_else(|| {
                 resource
                     .as_ref()
@@ -219,9 +224,12 @@ impl VolumeDescriptor {
             })
             .or_else(|| native.as_ref().and_then(|native| native.media_writable))
             .unwrap_or_else(|| !metadata.permissions().readonly());
-        let read_only = mount_table
-            .as_ref()
-            .and_then(|mount_table| mount_table.is_read_only)
+        let read_only = marker_read_only
+            .or_else(|| {
+                mount_table
+                    .as_ref()
+                    .and_then(|mount_table| mount_table.is_read_only)
+            })
             .or_else(|| resource.as_ref().and_then(|resource| resource.is_read_only))
             .unwrap_or(!writable);
         let case_sensitive = resource
@@ -1357,7 +1365,9 @@ fn classify_volume(
         | Some("network-nfs")
         | Some("network-unreachable")
         | Some("network-offline") => return VolumeKind::Network,
-        Some("external") | Some("external-removable") => return VolumeKind::External,
+        Some("external") | Some("external-removable") | Some("external-removable-read-only") => {
+            return VolumeKind::External;
+        }
         Some("removable") => return VolumeKind::Removable,
         Some("disk-image") => return VolumeKind::DiskImage,
         Some("system") => return VolumeKind::System,
@@ -1652,7 +1662,10 @@ fn marker_kind(path: &Path) -> Option<String> {
 
 fn marker_removable(marker: Option<&str>) -> Option<bool> {
     match marker {
-        Some("external-removable") | Some("removable") | Some("disk-image") => Some(true),
+        Some("external-removable")
+        | Some("external-removable-read-only")
+        | Some("removable")
+        | Some("disk-image") => Some(true),
         Some("network")
         | Some("network-smb")
         | Some("network-afp")
@@ -1675,6 +1688,7 @@ fn marker_network(marker: Option<&str>) -> Option<bool> {
         | Some("network-offline") => Some(true),
         Some("external")
         | Some("external-removable")
+        | Some("external-removable-read-only")
         | Some("removable")
         | Some("disk-image")
         | Some("system")
@@ -1687,6 +1701,7 @@ fn marker_ejectable(marker: Option<&str>) -> Option<bool> {
     match marker {
         Some("external")
         | Some("external-removable")
+        | Some("external-removable-read-only")
         | Some("removable")
         | Some("disk-image")
         | Some("network")
@@ -1696,6 +1711,13 @@ fn marker_ejectable(marker: Option<&str>) -> Option<bool> {
         | Some("network-unreachable")
         | Some("network-offline") => Some(true),
         Some("system") | Some("internal") => Some(false),
+        _ => None,
+    }
+}
+
+fn marker_read_only(marker: Option<&str>) -> Option<bool> {
+    match marker {
+        Some("external-removable-read-only") => Some(true),
         _ => None,
     }
 }
