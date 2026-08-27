@@ -31,11 +31,12 @@ pub(crate) fn worker_admission_with_volume_report(
     volume_report: &VolumeDiscoveryReport,
 ) -> SecurityWorkerAdmissionReport {
     let worker = worker.into();
-    let access = SecurityScopedAccessReport::evaluate(path, intent);
     let volume_path = absolute_volume_probe_path(path);
     if let Some(reason) =
         volume_access_block_reason_in_report(&volume_path, intent, &worker, volume_report)
     {
+        let access =
+            SecurityScopedAccessReport::blocked_before_filesystem_probe(path, intent, &reason);
         return SecurityWorkerAdmissionReport {
             worker,
             access,
@@ -46,6 +47,7 @@ pub(crate) fn worker_admission_with_volume_report(
             reason,
         };
     }
+    let access = SecurityScopedAccessReport::evaluate(path, intent);
     access.worker_admission(worker)
 }
 
@@ -316,7 +318,8 @@ mod tests {
         assert!(!admission.can_touch_filesystem);
         assert!(!admission.needs_bookmark_access);
         assert!(admission.refresh_on_permission_change);
-        assert_eq!(admission.access.action, SecurityDecisionAction::Allow);
+        assert_eq!(admission.access.probe, gfm_mac::AccessProbeState::Unknown);
+        assert_eq!(admission.access.action, SecurityDecisionAction::Deny);
         assert!(admission
             .reason
             .contains("preview worker volume access blocked"));
@@ -325,6 +328,29 @@ mod tests {
         assert!(admission
             .as_tsv()
             .contains("\tcan-touch-filesystem=false\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_gate_does_not_probe_missing_path_on_blocked_volume() {
+        let root = unique_temp_dir("gfm-access-admission-no-probe-volume");
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let path = root.join("Missing.pdf");
+
+        let admission =
+            worker_admission_with_volume_gate(&path, AccessIntent::Preview, "preview worker");
+
+        assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
+        assert!(!admission.can_touch_filesystem);
+        assert_eq!(admission.access.probe, gfm_mac::AccessProbeState::Unknown);
+        assert_eq!(admission.access.action, SecurityDecisionAction::Deny);
+        assert!(admission
+            .access
+            .reason
+            .contains("preview worker volume access blocked"));
+        assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
+        assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
 
         fs::remove_dir_all(root).unwrap();
     }

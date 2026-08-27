@@ -210,6 +210,28 @@ impl SecurityScopedAccessReport {
         }
     }
 
+    pub fn blocked_before_filesystem_probe(
+        path: impl AsRef<Path>,
+        intent: AccessIntent,
+        reason: impl Into<String>,
+    ) -> Self {
+        let path = absolute_access_path_without_filesystem_probe(path.as_ref());
+        let scope = protected_scope_without_filesystem_probe(&path);
+        Self {
+            path,
+            intent,
+            scope,
+            probe: AccessProbeState::Unknown,
+            mode: SecurityAccessMode::Denied,
+            action: SecurityDecisionAction::Deny,
+            bookmark_required: false,
+            can_read: false,
+            can_write: false,
+            least_privilege: true,
+            reason: reason.into(),
+        }
+    }
+
     pub fn as_tsv(&self) -> String {
         format!(
             "security-scope\t{}\tintent={}\tscope={}\tprobe={}\tmode={}\taction={}\tbookmark-required={}\tcan-read={}\tcan-write={}\tleast-privilege={}\treason={}",
@@ -375,6 +397,22 @@ fn protected_scope(path: &Path) -> ProtectedScope {
     protected_scope_for_home(path, &home)
 }
 
+fn protected_scope_without_filesystem_probe(path: &Path) -> ProtectedScope {
+    if path.starts_with("/Volumes") {
+        return ProtectedScope::ExternalVolume;
+    }
+    if path.starts_with("/Network") {
+        return ProtectedScope::NetworkVolume;
+    }
+    let Some(home) = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|path| normalize_access_path(&path))
+    else {
+        return ProtectedScope::None;
+    };
+    protected_scope_for_home(path, &home)
+}
+
 fn protected_scope_for_home(path: &Path, home: &Path) -> ProtectedScope {
     if within(path, &home.join("Library/Mail")) {
         return ProtectedScope::FullDiskAccess;
@@ -415,6 +453,17 @@ fn absolute_access_path(path: &Path) -> PathBuf {
             .unwrap_or_else(|_| path.to_path_buf())
     };
     absolute_canonical_access_path(&absolute)
+}
+
+fn absolute_access_path_without_filesystem_probe(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    normalize_access_path(&absolute)
 }
 
 fn absolute_canonical_access_path(path: &Path) -> PathBuf {
@@ -714,6 +763,29 @@ mod tests {
         assert!(report.least_privilege);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn blocked_before_probe_report_does_not_claim_missing_path_probe() {
+        let path = PathBuf::from("/Volumes/Remote/Missing.pdf");
+
+        let report = SecurityScopedAccessReport::blocked_before_filesystem_probe(
+            &path,
+            AccessIntent::Preview,
+            "preview worker volume access blocked: unreachable volume network",
+        );
+
+        assert_eq!(report.path, path);
+        assert_eq!(report.scope, ProtectedScope::ExternalVolume);
+        assert_eq!(report.probe, AccessProbeState::Unknown);
+        assert_eq!(report.mode, SecurityAccessMode::Denied);
+        assert_eq!(report.action, SecurityDecisionAction::Deny);
+        assert!(!report.bookmark_required);
+        assert!(!report.can_read);
+        assert!(!report.can_write);
+        assert!(report.least_privilege);
+        assert!(report.as_tsv().contains("\tprobe=unknown\t"));
+        assert!(!report.as_tsv().contains("\tprobe=missing\t"));
     }
 
     #[test]

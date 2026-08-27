@@ -376,8 +376,8 @@ fn security_worker_admission_refuses_unreachable_volume_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("security-worker-admission\t"));
-    assert!(stdout.contains("\tintent=preview\tscope=none\tprobe=granted\t"));
-    assert!(stdout.contains("\taccess-action=allow\tworker-action=deny\t"));
+    assert!(stdout.contains("\tintent=preview\tscope=none\tprobe=unknown\t"));
+    assert!(stdout.contains("\taccess-action=deny\tworker-action=deny\t"));
     assert!(stdout.contains("\tcan-touch-filesystem=false\t"));
     assert!(stdout.contains("\tbookmark-access=false\t"));
     assert!(stdout.contains("\trefresh-on-permission-change=true\t"));
