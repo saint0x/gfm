@@ -325,25 +325,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 required_path(args.next(), "search-index-columns requires a columns path")?;
             let query =
                 required_string(args.next(), "search-index-columns requires a query string")?;
-            let _access = preflight_search_index_columns_access(&records, &columns)?;
-            let records = MmapRecordArchive::open(records)?;
-            let columns = MmapRecordColumns::open(columns)?;
-            let mut search_columns = Vec::with_capacity(columns.len());
-            for index in 0..columns.len() {
-                let column = columns.column(index)?;
-                search_columns.push(SearchRecordColumns {
-                    id: column.id,
-                    name: column.name,
-                    path: column.path,
-                    extension: column.extension,
-                    tags: column.tags,
-                    comment: column.comment,
-                });
-            }
-            let (live, applied) =
-                LiveIndex::from_records_with_columns(records.records()?, search_columns);
-            eprintln!("columns-indexed {applied}");
-            for hit in live.search(&query, 50) {
+            let output = run_search_index_columns(records, columns, query)?;
+            eprintln!("columns-indexed {}", output.columns_applied);
+            for hit in output.hits {
                 print_hit(&hit);
             }
         }
@@ -879,6 +863,55 @@ where
         cancellation.check()?;
         read(path)
     })
+}
+
+struct SearchIndexColumnsOutput {
+    columns_applied: usize,
+    hits: Vec<SearchHit>,
+}
+
+fn run_search_index_columns(
+    records: PathBuf,
+    columns: PathBuf,
+    query: String,
+) -> Result<SearchIndexColumnsOutput> {
+    preflight_volume_access_scope(&records, AccessIntent::Read, "search index columns records")?;
+    preflight_volume_access_scope(&columns, AccessIntent::Read, "search index columns columns")?;
+    let volume = detect_volume_id(&records)
+        .ok()
+        .or_else(|| detect_volume_id(&columns).ok());
+    run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        "search index columns",
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = preflight_search_index_columns_access(&records, &columns)?;
+            cancellation.check()?;
+            let records = MmapRecordArchive::open(records)?;
+            let columns = MmapRecordColumns::open(columns)?;
+            let mut search_columns = Vec::with_capacity(columns.len());
+            for index in 0..columns.len() {
+                cancellation.check()?;
+                let column = columns.column(index)?;
+                search_columns.push(SearchRecordColumns {
+                    id: column.id,
+                    name: column.name,
+                    path: column.path,
+                    extension: column.extension,
+                    tags: column.tags,
+                    comment: column.comment,
+                });
+            }
+            let (live, columns_applied) =
+                LiveIndex::from_records_with_columns(records.records()?, search_columns);
+            cancellation.check()?;
+            Ok(SearchIndexColumnsOutput {
+                columns_applied,
+                hits: live.search(&query, 50),
+            })
+        },
+    )
 }
 
 fn preflight_search_archive_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {

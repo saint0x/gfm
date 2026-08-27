@@ -3404,6 +3404,17 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&column_search.stderr)
     );
+    let column_search_stderr = String::from_utf8_lossy(&column_search.stderr);
+    assert!(
+        column_search_stderr.contains(&format!(
+            "security-worker-admission\tworker=search index columns records\tpath={}",
+            index.display()
+        )) && column_search_stderr.contains(&format!(
+            "security-worker-admission\tworker=search index columns columns\tpath={}",
+            columns.display()
+        )),
+        "{column_search_stderr}"
+    );
     let column_search_stdout = String::from_utf8(column_search.stdout).unwrap();
     assert!(
         column_search_stdout.contains("tagged.md"),
@@ -3938,6 +3949,13 @@ fn search_index_columns_refuses_unreachable_columns_before_open_from_binary() {
         stderr.contains(
             "search index columns columns volume access blocked: unreachable volume network"
         ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=search index columns columns\tpath={}",
+            columns.display()
+        )),
         "{stderr}"
     );
     assert!(!stderr.contains("invalid magic"), "{stderr}");
