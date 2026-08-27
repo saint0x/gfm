@@ -20,6 +20,7 @@ use std::time::Duration;
 extern "C" {
     static NSURLIsUbiquitousItemKey: CFStringRef;
     static NSURLUbiquitousItemHasUnresolvedConflictsKey: CFStringRef;
+    static NSURLUbiquitousItemIsDownloadedKey: CFStringRef;
     static NSURLUbiquitousItemIsDownloadingKey: CFStringRef;
     static NSURLUbiquitousItemIsUploadingKey: CFStringRef;
     static NSURLUbiquitousItemIsUploadedKey: CFStringRef;
@@ -58,6 +59,7 @@ extern "C" {
 pub struct NativeFileProviderResourceValues {
     pub is_ubiquitous: Option<bool>,
     pub has_unresolved_conflicts: Option<bool>,
+    pub is_downloaded: Option<bool>,
     pub is_downloading: Option<bool>,
     pub is_uploading: Option<bool>,
     pub is_uploaded: Option<bool>,
@@ -377,6 +379,9 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
     let has_unresolved_conflicts = copy_bool(url.as_concrete_TypeRef(), unsafe {
         NSURLUbiquitousItemHasUnresolvedConflictsKey
     });
+    let is_downloaded = copy_bool(url.as_concrete_TypeRef(), unsafe {
+        NSURLUbiquitousItemIsDownloadedKey
+    });
     let is_downloading = copy_bool(url.as_concrete_TypeRef(), unsafe {
         NSURLUbiquitousItemIsDownloadingKey
     });
@@ -406,6 +411,7 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
     NativeFileProviderResourceValues {
         is_ubiquitous,
         has_unresolved_conflicts,
+        is_downloaded,
         is_downloading,
         is_uploading,
         is_uploaded,
@@ -807,6 +813,7 @@ fn missing_values(reason: String) -> NativeFileProviderResourceValues {
     NativeFileProviderResourceValues {
         is_ubiquitous: None,
         has_unresolved_conflicts: None,
+        is_downloaded: None,
         is_downloading: None,
         is_uploading: None,
         is_uploaded: None,
@@ -825,6 +832,7 @@ fn unsupported(reason: String) -> NativeFileProviderResourceValues {
     NativeFileProviderResourceValues {
         is_ubiquitous: None,
         has_unresolved_conflicts: None,
+        is_downloaded: None,
         is_downloading: None,
         is_uploading: None,
         is_uploaded: None,
