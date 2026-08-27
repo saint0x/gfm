@@ -503,6 +503,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 record_for_path_with_access(&path, AccessIntent::Index, "spotlight reconcile")?;
             let snapshot = match fixture_path {
                 Some(fixture_path) => {
+                    let _fixture_access = preflight_access_scope(
+                        &fixture_path,
+                        AccessIntent::Read,
+                        "spotlight fixture",
+                    )?;
                     let text = std::fs::read_to_string(&fixture_path)
                         .map_err(|err| GfmError::io(&fixture_path, err))?;
                     parse_spotlight_fixture(&path, &text)?

@@ -2708,6 +2708,11 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-spotlight-fixture-target.md",
+      "data": "visible spotlight target\n"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-runtime-thumbnail.png",
       "data": "png"
     },
@@ -2824,6 +2829,25 @@
       "args": [
         "jobs-runtime-retry-probe",
         "tmp/gfm-fozzy-scheduled-journal.state"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-offline-volume/background-launch.journal",
+        "GFM_CONTENT_JOB": "tmp/gfm-fozzy-background-launch.job",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-background-launch.gfmprogress",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-background-launch.gfmjobs"
+      },
+      "args": [
+        "index-content-background",
+        ".",
+        "tmp/gfm-fozzy-background-launch-segments",
+        "tmp/gfm-fozzy-background-launch-records.gfmidx",
+        "tmp/gfm-fozzy-background-launch-content.gfmcontent"
       ],
       "exit_code": 1,
       "times": 1
@@ -3445,6 +3469,17 @@
       "args": [
         "spotlight-reconcile",
         "tmp/gfm-fozzy-offline-volume/Visible.txt",
+        "tmp/gfm-fozzy-offline-volume/spotlight.tsv"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "spotlight-reconcile",
+        "tmp/gfm-fozzy-spotlight-fixture-target.md",
         "tmp/gfm-fozzy-offline-volume/spotlight.tsv"
       ],
       "exit_code": 1,

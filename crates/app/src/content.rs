@@ -381,7 +381,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let spec = ContentIndexJobSpec::new(&root, segment_dir, records, content)
                 .with_volume(detect_volume_id(&root)?);
             let spec_path = default_content_job_path();
-            let _access = retain_content_job_access(&spec, &spec_path, "background content index")?;
+            let _access = retain_content_job_launch_access(
+                &spec,
+                &spec_path,
+                &journal,
+                pressure,
+                "background content index",
+            )?;
             spec.write(&spec_path)?;
             let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
             if outcome.deferred {
@@ -789,6 +795,24 @@ fn retain_content_job_access(
     ])
 }
 
+fn retain_content_job_launch_access(
+    spec: &ContentIndexJobSpec,
+    spec_path: &Path,
+    journal: &JobJournal,
+    pressure: SchedulingPressure,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = retain_content_job_access(spec, spec_path, worker)?;
+    if pressure.decide(Priority::Background, 1, 1).action != SchedulingAction::Defer {
+        guards.push(preflight_access_scope(
+            write_probe_path(journal.path()),
+            AccessIntent::Write,
+            worker,
+        )?);
+    }
+    Ok(guards)
+}
+
 fn write_probe_path(path: &Path) -> &Path {
     if path.is_dir() {
         return path;
@@ -837,6 +861,8 @@ pub(crate) fn run_content_job(
             deferred: true,
         });
     }
+    let _journal_access =
+        preflight_access_scope(write_probe_path(journal.path()), AccessIntent::Write, label)?;
     let snapshot = Indexer::default().build(&spec.root)?;
     let inaccessible = snapshot.inaccessible.len();
     let previous_records = if spec.records_path.is_file() && spec.content_path.is_file() {

@@ -603,6 +603,46 @@ fn icon_preview_refuses_unreachable_network_volume_before_record_read_from_binar
 }
 
 #[test]
+fn spotlight_reconcile_refuses_unreachable_fixture_before_fixture_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-spotlight-fixture-unreachable-{}",
+        std::process::id()
+    ));
+    let offline = std::env::temp_dir().join(format!(
+        "gfm-spotlight-fixture-offline-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&offline);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&offline).unwrap();
+    std::fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Primary.md");
+    let fixture = offline.join("spotlight.tsv");
+    std::fs::write(&path, "spotlight body").unwrap();
+    std::fs::write(&fixture, "kMDItemDisplayName\tPrimary.md\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("spotlight-reconcile")
+        .arg(&path)
+        .arg(&fixture)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("spotlight-reconciliation\t"), "{stdout}");
+    assert!(
+        stderr.contains("spotlight fixture volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(offline);
+}
+
+#[test]
 fn reports_fileprovider_state_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-fileprovider-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

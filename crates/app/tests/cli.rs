@@ -6482,6 +6482,55 @@ fn background_content_indexer_refuses_unreachable_outputs_before_job_state_from_
 }
 
 #[test]
+fn background_content_indexer_refuses_unreachable_journal_before_job_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-background-content-journal-root");
+    let segments = unique_temp_dir("gfm-cli-background-content-journal-segments");
+    let records = unique_temp_path("gfm-cli-background-content-journal-records", "gfmidx");
+    let content = unique_temp_path("gfm-cli-background-content-journal-content", "gfmcontent");
+    let offline = unique_temp_dir("gfm-cli-background-content-journal-unreachable");
+    let journal = offline.join("jobs.journal");
+    let spec = unique_temp_path("gfm-cli-background-content-journal", "job");
+    let catalog = unique_temp_path("gfm-cli-background-content-journal", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-background-content-journal", "gfmprogress");
+    fs::write(root.join("worker.md"), "blocked journal worker marker").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_CONTENT_JOB", &spec)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "index-content-background",
+            root.to_str().unwrap(),
+            segments.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr
+            .contains("background content index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(fs::read_dir(&segments).unwrap().next().is_none());
+    assert!(!records.exists());
+    assert!(!content.exists());
+    assert!(!journal.exists());
+    assert!(!spec.exists());
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn background_content_indexer_incrementally_updates_archive_from_binary() {
     let root = unique_temp_dir("gfm-cli-background-content-incremental-root");
     let segments = unique_temp_dir("gfm-cli-background-content-incremental-segments");
