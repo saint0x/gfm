@@ -49,6 +49,11 @@ impl ParityGateInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParityCaptureProvenance {
     pub macos_build: String,
+    pub app_version: String,
+    pub captured_at: String,
+    pub capture_command: String,
+    pub reviewer: String,
+    pub approved_mask_set: String,
     pub appearance: ParityAppearance,
     pub scale: DisplayScale,
     pub color_profile: ColorProfile,
@@ -63,6 +68,31 @@ impl ParityCaptureProvenance {
         if self.macos_build.trim().is_empty() {
             return Err(GfmError::Format(
                 "parity manifest macOS build cannot be empty".to_string(),
+            ));
+        }
+        if self.app_version.trim().is_empty() {
+            return Err(GfmError::Format(
+                "parity manifest app version cannot be empty".to_string(),
+            ));
+        }
+        if self.captured_at.trim().is_empty() {
+            return Err(GfmError::Format(
+                "parity manifest capture timestamp cannot be empty".to_string(),
+            ));
+        }
+        if self.capture_command.trim().is_empty() {
+            return Err(GfmError::Format(
+                "parity manifest capture command cannot be empty".to_string(),
+            ));
+        }
+        if self.reviewer.trim().is_empty() {
+            return Err(GfmError::Format(
+                "parity manifest reviewer cannot be empty".to_string(),
+            ));
+        }
+        if self.approved_mask_set.trim().is_empty() {
+            return Err(GfmError::Format(
+                "parity manifest approved mask set cannot be empty".to_string(),
             ));
         }
         if self.fixture_root.as_os_str().is_empty() {
@@ -382,6 +412,11 @@ fn parse_versioned_entry(
     let fixture_root = resolve_manifest_path(base, fields[10]);
     let provenance = ParityCaptureProvenance {
         macos_build: profile.macos_build.clone(),
+        app_version: profile.app_version.clone(),
+        captured_at: profile.captured_at.clone(),
+        capture_command: profile.capture_command.clone(),
+        reviewer: profile.reviewer.clone(),
+        approved_mask_set: profile.approved_mask_set.clone(),
         appearance: profile.appearance,
         scale: profile.scale,
         color_profile: profile.color_profile,
@@ -407,6 +442,11 @@ fn parse_versioned_entry(
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ManifestProfile {
     macos_build: String,
+    app_version: String,
+    captured_at: String,
+    capture_command: String,
+    reviewer: String,
+    approved_mask_set: String,
     appearance: ParityAppearance,
     scale: DisplayScale,
     color_profile: ColorProfile,
@@ -414,6 +454,11 @@ struct ManifestProfile {
 
 fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<ManifestProfile> {
     let mut macos_build = None;
+    let mut app_version = None;
+    let mut captured_at = None;
+    let mut capture_command = None;
+    let mut reviewer = None;
+    let mut approved_mask_set = None;
     let mut appearance = None;
     let mut scale = None;
     let mut color_profile = None;
@@ -426,6 +471,11 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
         };
         match key {
             "macos-build" => macos_build = Some(value.to_string()),
+            "app-version" => app_version = Some(value.to_string()),
+            "captured-at" => captured_at = Some(value.to_string()),
+            "capture-command" => capture_command = Some(value.to_string()),
+            "reviewer" => reviewer = Some(value.to_string()),
+            "approved-mask-set" => approved_mask_set = Some(value.to_string()),
             "appearance" => {
                 appearance = Some(
                     value
@@ -452,6 +502,36 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
                 line_index + 1
             ))
         })?,
+        app_version: app_version.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing app-version",
+                line_index + 1
+            ))
+        })?,
+        captured_at: captured_at.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing captured-at",
+                line_index + 1
+            ))
+        })?,
+        capture_command: capture_command.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing capture-command",
+                line_index + 1
+            ))
+        })?,
+        reviewer: reviewer.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing reviewer",
+                line_index + 1
+            ))
+        })?,
+        approved_mask_set: approved_mask_set.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing approved-mask-set",
+                line_index + 1
+            ))
+        })?,
         appearance: appearance.ok_or_else(|| {
             GfmError::Format(format!(
                 "parity gate manifest line {} missing appearance",
@@ -474,6 +554,36 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
     if profile.macos_build.trim().is_empty() {
         return Err(GfmError::Format(format!(
             "parity gate manifest line {} has empty macos-build",
+            line_index + 1
+        )));
+    }
+    if profile.app_version.trim().is_empty() {
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} has empty app-version",
+            line_index + 1
+        )));
+    }
+    if profile.captured_at.trim().is_empty() {
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} has empty captured-at",
+            line_index + 1
+        )));
+    }
+    if profile.capture_command.trim().is_empty() {
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} has empty capture-command",
+            line_index + 1
+        )));
+    }
+    if profile.reviewer.trim().is_empty() {
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} has empty reviewer",
+            line_index + 1
+        )));
+    }
+    if profile.approved_mask_set.trim().is_empty() {
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} has empty approved-mask-set",
             line_index + 1
         )));
     }
@@ -519,12 +629,12 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
 
 fn render_entries_tsv(report: &ParityGateReport) -> String {
     let mut text =
-        "surface\twidth\theight\texpected\tactual\tmask\tmacos-build\tappearance\tscale\tcolor-profile\twindow-width\twindow-height\tfocus\tview-mode\tfixture-root\tmismatched\tunmasked\tmasked\tmax-channel-delta\tpassed\n"
+        "surface\twidth\theight\texpected\tactual\tmask\tmacos-build\tapp-version\tcaptured-at\tcapture-command\treviewer\tapproved-mask-set\tappearance\tscale\tcolor-profile\twindow-width\twindow-height\tfocus\tview-mode\tfixture-root\tmismatched\tunmasked\tmasked\tmax-channel-delta\tpassed\n"
             .to_string();
     for entry in &report.entries {
         let provenance = entry.input.provenance.as_ref();
         text.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             entry.input.surface.as_str(),
             entry.diff.size.width,
             entry.diff.size.height,
@@ -538,6 +648,21 @@ fn render_entries_tsv(report: &ParityGateReport) -> String {
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.macos_build.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.app_version.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.captured_at.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.capture_command.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.reviewer.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.approved_mask_set.as_str())
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.appearance.as_str())
@@ -812,7 +937,7 @@ mod tests {
         fs::write(root.join("actual.rgba"), [1, 2, 3, 255]).unwrap();
         fs::write(
             root.join("gate.tsv"),
-            "manifest-version\t1\nprofile\tmacos-build=25A354\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ticon\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\tapp-version=0.1.0\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ticon\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
         )
         .unwrap();
 
@@ -847,7 +972,7 @@ mod tests {
         fs::write(root.join("gfm.png"), [1, 2, 3, 255]).unwrap();
         fs::write(
             root.join("gate.tsv"),
-            "manifest-version\t1\nprofile\tmacos-build=25A354\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\tapp-version=0.1.0\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
         )
         .unwrap();
 
@@ -857,6 +982,11 @@ mod tests {
         let provenance = inputs[0].provenance.as_ref().unwrap();
 
         assert_eq!(provenance.macos_build, "25A354");
+        assert_eq!(provenance.app_version, "0.1.0");
+        assert_eq!(provenance.captured_at, "2026-08-27T00:00:00Z");
+        assert_eq!(provenance.capture_command, "screencapture:-x");
+        assert_eq!(provenance.reviewer, "codex");
+        assert_eq!(provenance.approved_mask_set, "macos-25A354-default");
         assert_eq!(provenance.appearance, ParityAppearance::Dark);
         assert_eq!(provenance.scale, DisplayScale::Two);
         assert_eq!(provenance.color_profile, ColorProfile::DisplayP3);
@@ -921,7 +1051,7 @@ mod tests {
         fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
         fs::write(
             root.join("gate.tsv"),
-            "manifest-version\t1\nprofile\tmacos-build=25A354\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\texpected.rgba\tactual.rgba\t2\t1\t\t1040\t720\tactive\tlist\tfixtures/text\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\tapp-version=0.1.0\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\texpected.rgba\tactual.rgba\t2\t1\t\t1040\t720\tactive\tlist\tfixtures/text\n",
         )
         .unwrap();
 

@@ -358,7 +358,7 @@ fn runs_parity_gate_from_binary_manifest() {
     .unwrap();
     fs::write(
         root.join("gate.tsv"),
-        "manifest-version\t1\nprofile\tmacos-build=25A354\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\texpected.rgba\tactual.rgba\t2\t1\tmask.tsv\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
+        "manifest-version\t1\nprofile\tmacos-build=25A354\tapp-version=0.1.0\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\texpected.rgba\tactual.rgba\t2\t1\tmask.tsv\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
     )
     .unwrap();
 
@@ -452,7 +452,7 @@ fn writes_parity_review_bundle_from_binary_manifest() {
     fs::write(root.join("actual.rgba"), [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
     fs::write(
         root.join("gate.tsv"),
-        "manifest-version\t1\nprofile\tmacos-build=25A354\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\texpected.rgba\tactual.rgba\t2\t1\t\t1040\t720\tactive\tlist\tfixtures/text\n",
+        "manifest-version\t1\nprofile\tmacos-build=25A354\tapp-version=0.1.0\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\texpected.rgba\tactual.rgba\t2\t1\t\t1040\t720\tactive\tlist\tfixtures/text\n",
     )
     .unwrap();
 

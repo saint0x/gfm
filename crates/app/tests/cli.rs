@@ -650,7 +650,7 @@ fn parity_gate_and_review_use_governed_masks_from_binary() {
     fs::write(
         &manifest,
         format!(
-            "manifest-version\t1\nprofile\tmacos-build=25A354\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\t{}\t{}\t2\t1\t{}\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\tapp-version=0.1.0\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\t{}\t{}\t2\t1\t{}\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
             expected.display(),
             actual.display(),
             mask.display()
