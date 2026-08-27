@@ -430,6 +430,7 @@ fn print_usage() {
   gfm ui-sidebar-contract [path]
   gfm ui-sidebar-fileprovider-contract [current-path] <fileprovider-path>
   gfm ui-sidebar-fileprovider-invalidation <previous-state> <fileprovider-path>
+  gfm ui-sidebar-volume-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm ui-icon-view-contract <path> [columns] [viewport-rows] [scroll-row]
   gfm ui-virtualization-contract <icon-grid|list-rows|column-rows|gallery-filmstrip|search-results|trash-rows> <total> <viewport> <scroll> [columns]
   gfm package-traversal <root> [opaque|traverse]
@@ -570,6 +571,7 @@ fn print_usage() {
   gfm preview-cache-fileprovider-invalidation <cache-root> <previous-state> <path> [icon|thumbnail|quick-look|text]
   gfm fileprovider-invalidation-scan <state.tsv> <paths...>
   gfm fileprovider-invalidation-event <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
+  gfm fileprovider-observer-probe <state.tsv> <root> <target>
   gfm volume-discovery [paths...]
   gfm volume-events-probe
   gfm volume-event-invalidation <appeared|description-changed|disappeared|unavailable> [path]

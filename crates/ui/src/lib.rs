@@ -63,7 +63,8 @@ pub use session::{
 };
 pub use sidebar::{
     SidebarCloudInvalidation, SidebarCloudState, SidebarContract, SidebarItemKind, SidebarItemSpec,
-    SidebarVolumeKind, SidebarVolumeMountState, SidebarVolumeSpec,
+    SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind, SidebarVolumeMountState,
+    SidebarVolumeSpec,
 };
 pub use titlebar::{
     FullScreenPolicy, TitlebarContract, TitlebarFocusPolicy, TitlebarMaterialPolicy,

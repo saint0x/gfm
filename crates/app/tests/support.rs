@@ -741,6 +741,57 @@ fn reports_fileprovider_state_in_ui_sidebar_contract_from_binary() {
 }
 
 #[test]
+fn reports_volume_invalidation_in_ui_sidebar_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-ui-sidebar-volume-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+
+    let changed = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-sidebar-volume-invalidation")
+        .arg("description-changed")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        changed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&changed.stderr)
+    );
+    let changed_stdout = String::from_utf8(changed.stdout).unwrap();
+    assert!(changed_stdout.starts_with("sidebar-volume-invalidation\trow=volume-"));
+    assert!(changed_stdout.contains(&format!("\tpath={}\t", root.display())));
+    assert!(changed_stdout.contains("\tkind=description-changed\tcurrent-kind=network\t"));
+    assert!(changed_stdout.contains("\tcurrent-mount=mounted\tread-only=false\tnetwork=true\t"));
+    assert!(changed_stdout.contains(
+        "\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=false\t"
+    ));
+
+    let missing = root.join("gone");
+    let disappeared = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-sidebar-volume-invalidation")
+        .arg("disappeared")
+        .arg(&missing)
+        .output()
+        .unwrap();
+    assert!(
+        disappeared.status.success(),
+        "{}",
+        String::from_utf8_lossy(&disappeared.stderr)
+    );
+    let disappeared_stdout = String::from_utf8(disappeared.stdout).unwrap();
+    assert_eq!(
+        disappeared_stdout,
+        format!(
+            "sidebar-volume-invalidation\trow=-\tpath={}\tkind=disappeared\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared\n",
+            missing.display()
+        )
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_fileprovider_conflict_in_ui_dialog_contract_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-fileprovider-conflict-{}",

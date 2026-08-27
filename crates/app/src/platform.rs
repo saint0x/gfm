@@ -17,13 +17,13 @@ use gfm_mac::{
     CloudTransferDirection, FileProviderConflictReport, FileProviderDomainEnumerationReport,
     FileProviderDomainReport, FileProviderInvalidationReport, FileProviderObservedInvalidation,
     FileProviderOperation, FileProviderOperationReport, FileProviderProgressReport,
-    FileProviderStateInvalidationReport, FileProviderStateReport, FileProviderStateSnapshot,
-    MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor,
+    FileProviderStateInvalidationReport, FileProviderStateObserver, FileProviderStateReport,
+    FileProviderStateSnapshot, MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor,
     NativeIconInvalidationReport, SecurityScopedAccessReport, SecurityScopedBookmarkStatus,
     SecurityScopedBookmarkStore, SecurityWorkerAdmissionReport, SpotlightMetadataReader,
     SpotlightReconciliationReport, VolumeDescriptor, VolumeDiscoveryReport,
     VolumeEventInvalidationReport, VolumeEventKind, VolumeEventStream, VolumeMountIdentityReport,
-    VolumeOperation, VolumeOperationReport, VolumeTopologyDiff,
+    VolumeOperation, VolumeOperationReport, VolumeTopologyDiff, WatchRoot,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
@@ -34,6 +34,8 @@ use gfm_preview::{
 };
 use gfm_types::{FileEvent, FileEventKind, FileId, GfmError, Result, VolumeId};
 use std::path::PathBuf;
+use std::thread;
+use std::time::{Duration, Instant};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
@@ -269,6 +271,29 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             };
             let (observed, snapshot) =
                 FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
+            snapshot.write(&state_path)?;
+            println!("{}", observed.as_tsv());
+        }
+        "fileprovider-observer-probe" => {
+            let state_path = required_path(
+                args.next(),
+                "fileprovider-observer-probe requires a state path",
+            )?;
+            let root = required_path(args.next(), "fileprovider-observer-probe requires a root")?;
+            let target = required_path(
+                args.next(),
+                "fileprovider-observer-probe requires a FileProvider target path",
+            )?;
+            let previous = if state_path.is_file() {
+                Some(FileProviderStateSnapshot::read(&state_path)?)
+            } else {
+                None
+            };
+            let mut observer =
+                FileProviderStateObserver::watch(&[WatchRoot::tree(root)], previous)?;
+            std::fs::write(&target, b"observer-probe").map_err(|err| GfmError::io(&target, err))?;
+            let observed = drain_fileprovider_observer_probe(&mut observer)?;
+            let snapshot = FileProviderStateSnapshot::from_paths(observed.paths.clone())?;
             snapshot.write(&state_path)?;
             println!("{}", observed.as_tsv());
         }
@@ -935,6 +960,23 @@ fn parse_fileprovider_event(kind: &str, path: PathBuf, to: Option<PathBuf>) -> R
         }
     };
     Ok(FileEvent::new(path, event_kind))
+}
+
+fn drain_fileprovider_observer_probe(
+    observer: &mut FileProviderStateObserver,
+) -> Result<FileProviderObservedInvalidation> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if let Some(observed) = observer.drain_available(64)? {
+            if !observed.paths.is_empty() {
+                return Ok(observed);
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    Err(GfmError::Format(
+        "fileprovider observer probe timed out waiting for a provider event".to_string(),
+    ))
 }
 
 fn parse_volume_event_kind(kind: &str) -> Result<VolumeEventKind> {

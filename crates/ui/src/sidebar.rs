@@ -137,6 +137,121 @@ impl SidebarCloudInvalidation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarVolumeEventKind {
+    Appeared,
+    DescriptionChanged,
+    Disappeared,
+    Unavailable,
+}
+
+impl SidebarVolumeEventKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Appeared => "appeared",
+            Self::DescriptionChanged => "description-changed",
+            Self::Disappeared => "disappeared",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarVolumeInvalidation {
+    pub row_id: Option<String>,
+    pub path: Option<PathBuf>,
+    pub kind: SidebarVolumeEventKind,
+    pub current_kind: Option<SidebarVolumeKind>,
+    pub current_mount_state: Option<SidebarVolumeMountState>,
+    pub current_read_only: Option<bool>,
+    pub current_network: Option<bool>,
+    pub invalidate_row: bool,
+    pub invalidate_section: bool,
+    pub remove_row: bool,
+    pub disable_row: bool,
+    pub reason: String,
+}
+
+impl SidebarVolumeInvalidation {
+    pub fn from_event(
+        kind: SidebarVolumeEventKind,
+        path: Option<PathBuf>,
+        current: Option<&SidebarVolumeSpec>,
+        platform_invalidated_sidebar: bool,
+        platform_reason: impl Into<String>,
+    ) -> Self {
+        let row_id = current.map(|volume| volume.id.clone());
+        let current_kind = current.map(|volume| volume.kind);
+        let current_mount_state = current.map(|volume| volume.mount_state);
+        let current_read_only = current.map(|volume| volume.read_only);
+        let current_network = current.map(|volume| volume.network);
+        let remove_row = matches!(kind, SidebarVolumeEventKind::Disappeared);
+        let disable_row = current_mount_state.is_some_and(|state| {
+            matches!(
+                state,
+                SidebarVolumeMountState::Unmounted | SidebarVolumeMountState::Stale
+            )
+        });
+        let visible =
+            row_id.is_some() || path.is_some() || kind == SidebarVolumeEventKind::Unavailable;
+        let invalidate_section = visible && platform_invalidated_sidebar;
+        let invalidate_row = invalidate_section && (row_id.is_some() || remove_row || disable_row);
+        let reason = if !visible {
+            "sidebar-volume-not-visible".to_string()
+        } else if !platform_invalidated_sidebar {
+            "platform-did-not-invalidate-sidebar".to_string()
+        } else if remove_row {
+            "sidebar-volume-disappeared".to_string()
+        } else if disable_row {
+            "sidebar-volume-disabled".to_string()
+        } else {
+            platform_reason.into()
+        };
+
+        Self {
+            row_id,
+            path,
+            kind,
+            current_kind,
+            current_mount_state,
+            current_read_only,
+            current_network,
+            invalidate_row,
+            invalidate_section,
+            remove_row,
+            disable_row,
+            reason,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "sidebar-volume-invalidation\trow={}\tpath={}\tkind={}\tcurrent-kind={}\tcurrent-mount={}\tread-only={}\tnetwork={}\tinvalidate-row={}\tinvalidate-section={}\tremove-row={}\tdisable-row={}\treason={}",
+            self.row_id.as_deref().unwrap_or("-"),
+            self.path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.kind.as_str(),
+            self.current_kind.map(SidebarVolumeKind::as_str).unwrap_or("-"),
+            self.current_mount_state
+                .map(SidebarVolumeMountState::as_str)
+                .unwrap_or("-"),
+            self.current_read_only
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.current_network
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.invalidate_row,
+            self.invalidate_section,
+            self.remove_row,
+            self.disable_row,
+            self.reason
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidebarVolumeSpec {
     pub id: String,
@@ -958,6 +1073,71 @@ mod tests {
         assert!(contract.as_tsv().contains(
             "\tvolume-kind=network\tvolume-mount=stale\tvolume-read-only=true\tvolume-network=true"
         ));
+    }
+
+    #[test]
+    fn volume_invalidation_repaints_and_disables_stale_location_row() {
+        let volume = SidebarVolumeSpec::from_native_seed(
+            "diskarbitration:uuid:Team",
+            "Team",
+            "/Volumes/Team",
+            true,
+        )
+        .with_volume_state(
+            SidebarVolumeKind::Network,
+            SidebarVolumeMountState::Stale,
+            true,
+            true,
+        );
+
+        let invalidation = SidebarVolumeInvalidation::from_event(
+            SidebarVolumeEventKind::DescriptionChanged,
+            Some(PathBuf::from("/Volumes/Team")),
+            Some(&volume),
+            true,
+            "volume-event-description-changed",
+        );
+
+        assert_eq!(
+            invalidation.row_id.as_deref(),
+            Some("volume-diskarbitration-uuid-team")
+        );
+        assert_eq!(invalidation.current_kind, Some(SidebarVolumeKind::Network));
+        assert_eq!(
+            invalidation.current_mount_state,
+            Some(SidebarVolumeMountState::Stale)
+        );
+        assert!(invalidation.invalidate_row);
+        assert!(invalidation.invalidate_section);
+        assert!(!invalidation.remove_row);
+        assert!(invalidation.disable_row);
+        assert_eq!(invalidation.reason, "sidebar-volume-disabled");
+        assert_eq!(
+            invalidation.as_tsv(),
+            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tcurrent-kind=network\tcurrent-mount=stale\tread-only=true\tnetwork=true\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
+        );
+    }
+
+    #[test]
+    fn volume_invalidation_marks_disappeared_location_for_removal() {
+        let invalidation = SidebarVolumeInvalidation::from_event(
+            SidebarVolumeEventKind::Disappeared,
+            Some(PathBuf::from("/Volumes/Team")),
+            None,
+            true,
+            "volume-event-disappeared",
+        );
+
+        assert_eq!(invalidation.row_id, None);
+        assert!(invalidation.invalidate_row);
+        assert!(invalidation.invalidate_section);
+        assert!(invalidation.remove_row);
+        assert!(!invalidation.disable_row);
+        assert_eq!(invalidation.reason, "sidebar-volume-disappeared");
+        assert_eq!(
+            invalidation.as_tsv(),
+            "sidebar-volume-invalidation\trow=-\tpath=/Volumes/Team\tkind=disappeared\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared"
+        );
     }
 
     #[test]

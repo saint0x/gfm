@@ -7,7 +7,8 @@ use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore};
 use gfm_mac::{
     current_permission_onboarding, CloudCommandState, CloudStorageState,
     FileProviderConflictReport, FileProviderInvalidationReport, FileProviderStateReport,
-    MountState, VolumeDescriptor, VolumeDiscoveryReport, VolumeKind,
+    MountState, NativeVolumeStatus, VolumeDescriptor, VolumeDiscoveryReport,
+    VolumeEventInvalidationReport, VolumeEventKind, VolumeKind,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
 use gfm_types::{FileKind, GfmError, Result};
@@ -20,9 +21,10 @@ use gfm_ui::{
     PermissionPromptKind, PermissionRefreshContract, ProviderConflictContract,
     ProviderConflictInput, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
     SearchResultsStage, SidebarCloudInvalidation, SidebarCloudState, SidebarContract,
-    SidebarVolumeKind, SidebarVolumeMountState, SidebarVolumeSpec, TitlebarContract,
-    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
-    VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind, SidebarVolumeMountState,
+    SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
+    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
+    WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -251,6 +253,44 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     report.current.progress.percent_milli,
                     report.invalidate_sidebar,
                     report.reason,
+                )
+                .as_tsv()
+            );
+        }
+        "ui-sidebar-volume-invalidation" => {
+            let kind = parse_volume_event_kind(&required_string(
+                args.next(),
+                "ui-sidebar-volume-invalidation requires a volume event kind",
+            )?)?;
+            let path = args.next().map(PathBuf::from);
+            let descriptor = path
+                .as_ref()
+                .filter(|path| path.exists())
+                .map(VolumeDescriptor::for_path)
+                .transpose()?;
+            let native_status = if descriptor.is_some() {
+                NativeVolumeStatus::Available
+            } else if path.is_some() {
+                NativeVolumeStatus::Missing
+            } else {
+                NativeVolumeStatus::Unavailable
+            };
+            let platform = VolumeEventInvalidationReport::from_parts(
+                kind,
+                native_status,
+                path.clone(),
+                descriptor.as_ref(),
+                None,
+            );
+            let current = descriptor.as_ref().map(sidebar_volume_spec);
+            println!(
+                "{}",
+                SidebarVolumeInvalidation::from_event(
+                    sidebar_volume_event_kind(kind),
+                    path,
+                    current.as_ref(),
+                    platform.invalidate_sidebar,
+                    platform.reason,
                 )
                 .as_tsv()
             );
@@ -608,6 +648,27 @@ fn sidebar_volume_mount_state(state: MountState) -> SidebarVolumeMountState {
         MountState::Mounted => SidebarVolumeMountState::Mounted,
         MountState::Unmounted => SidebarVolumeMountState::Unmounted,
         MountState::Stale => SidebarVolumeMountState::Stale,
+    }
+}
+
+fn parse_volume_event_kind(kind: &str) -> Result<VolumeEventKind> {
+    match kind {
+        "appeared" => Ok(VolumeEventKind::Appeared),
+        "description-changed" => Ok(VolumeEventKind::DescriptionChanged),
+        "disappeared" => Ok(VolumeEventKind::Disappeared),
+        "unavailable" => Ok(VolumeEventKind::Unavailable),
+        other => Err(GfmError::Format(format!(
+            "unknown volume event kind `{other}`"
+        ))),
+    }
+}
+
+fn sidebar_volume_event_kind(kind: VolumeEventKind) -> SidebarVolumeEventKind {
+    match kind {
+        VolumeEventKind::Appeared => SidebarVolumeEventKind::Appeared,
+        VolumeEventKind::DescriptionChanged => SidebarVolumeEventKind::DescriptionChanged,
+        VolumeEventKind::Disappeared => SidebarVolumeEventKind::Disappeared,
+        VolumeEventKind::Unavailable => SidebarVolumeEventKind::Unavailable,
     }
 }
 
