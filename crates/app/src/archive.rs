@@ -47,8 +47,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     GfmError::Format(
                         "archive-schema requires records, columns, metadata, prefixes, substrings, fuzzy, dictionary, content, or content-manifest".to_string(),
                     )
-                })?;
+            })?;
             let path = required_path(args.next(), "archive-schema requires an archive path")?;
+            let _access = retain_archive_read_access(&path, "archive schema")?;
             println!("{}", inspect_archive_schema(kind, path).as_tsv());
         }
         "archive-rebuild-plan" => {
@@ -90,6 +91,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 manifest_path: manifest,
                 discovered_content_archives: discovered_archives,
             };
+            let _access = retain_archive_rebuild_plan_access(&inputs)?;
             for line in plan_archive_rebuilds(&inputs).as_tsv_lines() {
                 println!("{line}");
             }
@@ -99,12 +101,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "records-migration-plan requires a records path",
             )?;
+            let _access = retain_archive_read_access(&records, "records migration plan")?;
             println!("{}", plan_record_archive_migration(records).as_tsv());
         }
         "records-migrate" => {
             let records = required_path(args.next(), "records-migrate requires a records path")?;
             let backup_dir =
                 required_path(args.next(), "records-migrate requires a backup directory")?;
+            let _access =
+                retain_archive_migration_access(&records, &backup_dir, "records migrate")?;
             let migration = migrate_record_archive(records, backup_dir)?;
             println!("{}", migration.as_tsv());
         }
@@ -113,12 +118,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "content-migration-plan requires a content path",
             )?;
+            let _access = retain_archive_read_access(&content, "content migration plan")?;
             println!("{}", plan_content_archive_migration(content).as_tsv());
         }
         "content-migrate" => {
             let content = required_path(args.next(), "content-migrate requires a content path")?;
             let backup_dir =
                 required_path(args.next(), "content-migrate requires a backup directory")?;
+            let _access =
+                retain_archive_migration_access(&content, &backup_dir, "content migrate")?;
             let migration = migrate_content_archive(content, backup_dir)?;
             println!("{}", migration.as_tsv());
         }
@@ -127,12 +135,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "metadata-migration-plan requires a metadata path",
             )?;
+            let _access = retain_archive_read_access(&metadata, "metadata migration plan")?;
             println!("{}", plan_metadata_archive_migration(metadata).as_tsv());
         }
         "metadata-migrate" => {
             let metadata = required_path(args.next(), "metadata-migrate requires a metadata path")?;
             let backup_dir =
                 required_path(args.next(), "metadata-migrate requires a backup directory")?;
+            let _access =
+                retain_archive_migration_access(&metadata, &backup_dir, "metadata migrate")?;
             let migration = migrate_metadata_archive(metadata, backup_dir)?;
             println!("{}", migration.as_tsv());
         }
@@ -141,6 +152,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 required_path(args.next(), "columns-rebuild-plan requires a records path")?;
             let columns =
                 required_path(args.next(), "columns-rebuild-plan requires a columns path")?;
+            let _access = retain_columns_rebuild_plan_access(&records, &columns)?;
             println!(
                 "{}",
                 plan_columns_archive_rebuild(records, columns).as_tsv()
@@ -151,6 +163,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let columns = required_path(args.next(), "columns-rebuild requires a columns path")?;
             let backup_dir =
                 required_path(args.next(), "columns-rebuild requires a backup directory")?;
+            let _access = retain_columns_rebuild_access(&records, &columns, &backup_dir)?;
             let rebuild = rebuild_columns_archive(records, columns, backup_dir)?;
             println!("{}", rebuild.as_tsv());
         }
@@ -164,6 +177,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "derived-sidecar-rebuild-plan requires a sidecar path",
             )?;
+            let _access = retain_derived_sidecar_rebuild_plan_access(&records, &sidecar)?;
             println!(
                 "{}",
                 plan_derived_sidecar_rebuild(records, kind, sidecar).as_tsv()
@@ -406,6 +420,143 @@ fn retain_record_sidecar_build_access(
     ])
 }
 
+fn retain_archive_migration_access(
+    archive: &Path,
+    backup_dir: &Path,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(archive, AccessIntent::Read, &format!("{worker} archive"))?,
+        preflight_access_scope(
+            write_probe_path(archive),
+            AccessIntent::Write,
+            &format!("{worker} archive"),
+        )?,
+        preflight_access_scope(
+            write_probe_path(backup_dir),
+            AccessIntent::Write,
+            &format!("{worker} backup"),
+        )?,
+    ])
+}
+
+fn retain_columns_rebuild_plan_access(
+    records: &Path,
+    columns: &Path,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(records, AccessIntent::Read, "columns rebuild plan records")?,
+        preflight_access_scope(
+            archive_probe_path(columns),
+            AccessIntent::Read,
+            "columns rebuild plan columns",
+        )?,
+    ])
+}
+
+fn retain_columns_rebuild_access(
+    records: &Path,
+    columns: &Path,
+    backup_dir: &Path,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(records, AccessIntent::Read, "columns rebuild records")?,
+        preflight_access_scope(
+            archive_probe_path(columns),
+            AccessIntent::Read,
+            "columns rebuild columns",
+        )?,
+        preflight_access_scope(
+            write_probe_path(columns),
+            AccessIntent::Write,
+            "columns rebuild output",
+        )?,
+        preflight_access_scope(
+            write_probe_path(backup_dir),
+            AccessIntent::Write,
+            "columns rebuild backup",
+        )?,
+    ])
+}
+
+fn retain_derived_sidecar_rebuild_plan_access(
+    records: &Path,
+    sidecar: &Path,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(
+            records,
+            AccessIntent::Read,
+            "derived sidecar rebuild plan records",
+        )?,
+        preflight_access_scope(
+            archive_probe_path(sidecar),
+            AccessIntent::Read,
+            "derived sidecar rebuild plan sidecar",
+        )?,
+    ])
+}
+
+fn retain_archive_rebuild_plan_access(
+    inputs: &ArchiveRebuildInputs,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = vec![
+        preflight_access_scope(
+            archive_probe_path(&inputs.records_path),
+            AccessIntent::Read,
+            "archive rebuild plan records",
+        )?,
+        preflight_access_scope(
+            archive_probe_path(&inputs.columns_path),
+            AccessIntent::Read,
+            "archive rebuild plan columns",
+        )?,
+        preflight_access_scope(
+            archive_probe_path(&inputs.metadata_path),
+            AccessIntent::Read,
+            "archive rebuild plan metadata",
+        )?,
+        preflight_access_scope(
+            archive_probe_path(&inputs.prefixes_path),
+            AccessIntent::Read,
+            "archive rebuild plan prefixes",
+        )?,
+        preflight_access_scope(
+            archive_probe_path(&inputs.substrings_path),
+            AccessIntent::Read,
+            "archive rebuild plan substrings",
+        )?,
+        preflight_access_scope(
+            archive_probe_path(&inputs.fuzzy_path),
+            AccessIntent::Read,
+            "archive rebuild plan fuzzy",
+        )?,
+        preflight_access_scope(
+            archive_probe_path(&inputs.dictionary_path),
+            AccessIntent::Read,
+            "archive rebuild plan dictionary",
+        )?,
+        preflight_access_scope(
+            archive_probe_path(&inputs.content_path),
+            AccessIntent::Read,
+            "archive rebuild plan content",
+        )?,
+        preflight_access_scope(
+            archive_probe_path(&inputs.manifest_path),
+            AccessIntent::Read,
+            "archive rebuild plan manifest",
+        )?,
+    ];
+    for archive in &inputs.discovered_content_archives {
+        guards.push(preflight_access_scope(
+            archive_probe_path(&archive.path),
+            AccessIntent::Read,
+            "archive rebuild plan discovered content",
+        )?);
+    }
+    Ok(guards)
+}
+
 fn retain_derived_sidecar_rebuild_access(
     records: &Path,
     sidecar: &Path,
@@ -478,6 +629,10 @@ fn write_probe_path(path: &Path) -> &Path {
     if path.is_dir() {
         return path;
     }
+    path.parent().unwrap_or(path)
+}
+
+fn archive_probe_path(path: &Path) -> &Path {
     path.parent().unwrap_or(path)
 }
 

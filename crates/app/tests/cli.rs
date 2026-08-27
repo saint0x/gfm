@@ -1085,6 +1085,137 @@ fn migrates_legacy_metadata_archive_from_binary() {
 }
 
 #[test]
+fn archive_schema_refuses_unreachable_archive_before_inspection_from_binary() {
+    let offline = unique_temp_dir("gfm-cli-archive-schema-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = offline.join("records.gfmidx");
+    fs::write(&records, "not inspected").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["archive-schema", "records", records.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("archive-schema\t"), "{stdout}");
+    assert!(
+        stderr.contains("archive schema volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("invalid magic"), "{stderr}");
+
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn archive_migration_routes_refuse_unreachable_backup_before_mutating_from_binary() {
+    let root = unique_temp_dir("gfm-cli-archive-migrate-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-archive-migrate-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let cases = [
+        ("records-migrate", "records.gfmidx", "records migrate"),
+        ("content-migrate", "content.gfmcontent", "content migrate"),
+        ("metadata-migrate", "metadata.gfmmeta", "metadata migrate"),
+    ];
+
+    for (route, archive_name, worker) in cases {
+        let archive = root.join(archive_name);
+        fs::write(&archive, "not parsed").unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args([route, archive.to_str().unwrap(), offline.to_str().unwrap()])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stdout.is_empty(), "{route}: {stdout}");
+        assert!(
+            stderr.contains(&format!(
+                "{worker} backup volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
+    }
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn archive_rebuild_plans_refuse_unreachable_inputs_before_classifying_from_binary() {
+    let root = unique_temp_dir("gfm-cli-archive-rebuild-plan-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-archive-rebuild-plan-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = root.join("records.gfmidx");
+    let columns = offline.join("columns.gfmcols");
+    fs::write(&records, "not parsed").unwrap();
+    fs::write(&columns, "not classified").unwrap();
+
+    let columns_plan = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "columns-rebuild-plan",
+            records.to_str().unwrap(),
+            columns.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!columns_plan.status.success());
+    let columns_stdout = String::from_utf8_lossy(&columns_plan.stdout);
+    let columns_stderr = String::from_utf8_lossy(&columns_plan.stderr);
+    assert!(
+        !columns_stdout.contains("columns-archive-rebuild-plan"),
+        "{columns_stdout}"
+    );
+    assert!(
+        columns_stderr.contains(
+            "columns rebuild plan columns volume access blocked: unreachable volume network"
+        ),
+        "{columns_stderr}"
+    );
+    assert!(
+        !columns_stderr.contains("invalid magic"),
+        "{columns_stderr}"
+    );
+
+    let derived_plan = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "derived-sidecar-rebuild-plan",
+            records.to_str().unwrap(),
+            "metadata",
+            columns.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!derived_plan.status.success());
+    let derived_stdout = String::from_utf8_lossy(&derived_plan.stdout);
+    let derived_stderr = String::from_utf8_lossy(&derived_plan.stderr);
+    assert!(
+        !derived_stdout.contains("derived-sidecar-rebuild-plan"),
+        "{derived_stdout}"
+    );
+    assert!(
+        derived_stderr.contains(
+            "derived sidecar rebuild plan sidecar volume access blocked: unreachable volume network"
+        ),
+        "{derived_stderr}"
+    );
+    assert!(
+        !derived_stderr.contains("invalid magic"),
+        "{derived_stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn rebuilds_columns_archive_from_binary() {
     let root = unique_temp_dir("gfm-cli-columns-rebuild-root");
     let records = unique_temp_path("gfm-cli-columns-rebuild-records", "gfmidx");
@@ -3218,6 +3349,209 @@ fn archive_read_helpers_refuse_unreachable_volume_before_mapping_from_binary() {
         assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
     }
 
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn archive_plan_routes_refuse_unreachable_inputs_before_inspection_from_binary() {
+    let root = unique_temp_dir("gfm-cli-archive-plan-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-archive-plan-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let local_records = root.join("records.gfmidx");
+    let local_columns = root.join("columns.gfmcols");
+    let local_metadata = root.join("metadata.gfmmeta");
+    let local_prefixes = root.join("prefixes.gfmprefix");
+    let local_substrings = root.join("substrings.gfmsubstr");
+    let local_fuzzy = root.join("fuzzy.gfmfuzzy");
+    let local_dictionary = root.join("dictionary.gfmdict");
+    let local_manifest = root.join("content.gfmmanifest");
+    for path in [
+        &local_records,
+        &local_columns,
+        &local_metadata,
+        &local_prefixes,
+        &local_substrings,
+        &local_fuzzy,
+        &local_dictionary,
+        &local_manifest,
+    ] {
+        fs::write(path, "not opened").unwrap();
+    }
+    let offline_archive = offline.join("archive.gfmidx");
+    let offline_content = offline.join("content.gfmcontent");
+    fs::write(&offline_archive, "not opened").unwrap();
+    fs::write(&offline_content, "not opened").unwrap();
+
+    let cases = [
+        (
+            vec![
+                "archive-schema".to_string(),
+                "records".to_string(),
+                offline_archive.to_string_lossy().into_owned(),
+            ],
+            "archive schema",
+            "archive-schema\t",
+        ),
+        (
+            vec![
+                "records-migration-plan".to_string(),
+                offline_archive.to_string_lossy().into_owned(),
+            ],
+            "records migration plan",
+            "record-archive-migration-plan\t",
+        ),
+        (
+            vec![
+                "content-migration-plan".to_string(),
+                offline_archive.to_string_lossy().into_owned(),
+            ],
+            "content migration plan",
+            "content-archive-migration-plan\t",
+        ),
+        (
+            vec![
+                "metadata-migration-plan".to_string(),
+                offline_archive.to_string_lossy().into_owned(),
+            ],
+            "metadata migration plan",
+            "metadata-archive-migration-plan\t",
+        ),
+        (
+            vec![
+                "columns-rebuild-plan".to_string(),
+                local_records.to_string_lossy().into_owned(),
+                offline_archive.to_string_lossy().into_owned(),
+            ],
+            "columns rebuild plan columns",
+            "columns-archive-rebuild-plan\t",
+        ),
+        (
+            vec![
+                "derived-sidecar-rebuild-plan".to_string(),
+                local_records.to_string_lossy().into_owned(),
+                "prefixes".to_string(),
+                offline_archive.to_string_lossy().into_owned(),
+            ],
+            "derived sidecar rebuild plan sidecar",
+            "derived-sidecar-rebuild-plan\t",
+        ),
+        (
+            vec![
+                "archive-rebuild-plan".to_string(),
+                local_records.to_string_lossy().into_owned(),
+                local_columns.to_string_lossy().into_owned(),
+                local_metadata.to_string_lossy().into_owned(),
+                local_prefixes.to_string_lossy().into_owned(),
+                local_substrings.to_string_lossy().into_owned(),
+                local_fuzzy.to_string_lossy().into_owned(),
+                local_dictionary.to_string_lossy().into_owned(),
+                offline_content.to_string_lossy().into_owned(),
+                local_manifest.to_string_lossy().into_owned(),
+            ],
+            "archive rebuild plan content",
+            "archive-rebuild-plan\t",
+        ),
+    ];
+
+    for (args, worker, forbidden_stdout) in cases {
+        let route = args[0].clone();
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains(forbidden_stdout), "{route}: {stdout}");
+        assert!(
+            stderr.contains(&format!(
+                "{worker} volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
+    }
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn archive_mutation_routes_refuse_unreachable_backup_before_parsing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-archive-mutation-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-archive-mutation-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = root.join("records.gfmidx");
+    let content = root.join("content.gfmcontent");
+    let metadata = root.join("metadata.gfmmeta");
+    let columns = root.join("columns.gfmcols");
+    for path in [&records, &content, &metadata, &columns] {
+        fs::write(path, "not opened").unwrap();
+    }
+    let backup = offline.join("backup");
+    let cases = [
+        (
+            vec![
+                "records-migrate".to_string(),
+                records.to_string_lossy().into_owned(),
+                backup.to_string_lossy().into_owned(),
+            ],
+            "records migrate backup",
+            "record-archive-migration\t",
+        ),
+        (
+            vec![
+                "content-migrate".to_string(),
+                content.to_string_lossy().into_owned(),
+                backup.to_string_lossy().into_owned(),
+            ],
+            "content migrate backup",
+            "content-archive-migration\t",
+        ),
+        (
+            vec![
+                "metadata-migrate".to_string(),
+                metadata.to_string_lossy().into_owned(),
+                backup.to_string_lossy().into_owned(),
+            ],
+            "metadata migrate backup",
+            "metadata-archive-migration\t",
+        ),
+        (
+            vec![
+                "columns-rebuild".to_string(),
+                records.to_string_lossy().into_owned(),
+                columns.to_string_lossy().into_owned(),
+                backup.to_string_lossy().into_owned(),
+            ],
+            "columns rebuild backup",
+            "columns-archive-rebuild\t",
+        ),
+    ];
+
+    for (args, worker, forbidden_stdout) in cases {
+        let route = args[0].clone();
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains(forbidden_stdout), "{route}: {stdout}");
+        assert!(
+            stderr.contains(&format!(
+                "{worker} volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
+        assert!(!backup.exists(), "{route}");
+    }
+
+    fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(offline).unwrap();
 }
 
