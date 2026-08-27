@@ -51,6 +51,7 @@ impl OperationConflictKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationConflictReport {
     pub operation: &'static str,
+    pub source: Option<PathBuf>,
     pub target: Option<PathBuf>,
     pub target_exists: bool,
     pub target_kind: OperationConflictKind,
@@ -62,10 +63,12 @@ pub struct OperationConflictReport {
 
 impl OperationConflictReport {
     pub fn evaluate(operation: &Operation, selected_policy: ConflictPolicy) -> Self {
+        let source = operation.source_path().map(Path::to_path_buf);
         let target = operation.target_path().map(Path::to_path_buf);
         let Some(target_path) = &target else {
             return Self {
                 operation: operation_kind(operation),
+                source,
                 target,
                 target_exists: false,
                 target_kind: OperationConflictKind::None,
@@ -104,6 +107,7 @@ impl OperationConflictReport {
 
         Self {
             operation: operation_kind(operation),
+            source,
             target,
             target_exists,
             target_kind,
@@ -116,8 +120,12 @@ impl OperationConflictReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "operation-conflict\toperation={}\ttarget={}\texists={}\tkind={}\tpolicy={}\tavailable={}\tblocks-operation={}\treason={}",
+            "operation-conflict\toperation={}\tsource={}\ttarget={}\texists={}\tkind={}\tpolicy={}\tavailable={}\tblocks-operation={}\treason={}",
             self.operation,
+            self.source
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "-".to_string()),
             self.target
                 .as_ref()
                 .map(|path| path.display().to_string())
@@ -307,13 +315,14 @@ mod tests {
 
         let report = OperationConflictReport::evaluate(
             &Operation::Copy {
-                from: source,
+                from: source.clone(),
                 to: target.clone(),
             },
             ConflictPolicy::Fail,
         );
 
         assert_eq!(report.operation, "copy");
+        assert_eq!(report.source, Some(source));
         assert_eq!(report.target, Some(target));
         assert_eq!(report.target_kind, OperationConflictKind::File);
         assert!(report.blocks_operation);

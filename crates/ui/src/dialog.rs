@@ -390,8 +390,24 @@ pub struct ProviderConflictContract {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationConflictPaths {
+    pub source: String,
+    pub target: String,
+}
+
+impl OperationConflictPaths {
+    pub fn new(source: impl Into<String>, target: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            target: target.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationConflictInput {
     pub operation: String,
+    pub source: String,
     pub target: String,
     pub target_kind: String,
     pub selected_policy: String,
@@ -403,7 +419,7 @@ pub struct OperationConflictInput {
 impl OperationConflictInput {
     pub fn new(
         operation: impl Into<String>,
-        target: impl Into<String>,
+        paths: OperationConflictPaths,
         target_kind: impl Into<String>,
         selected_policy: impl Into<String>,
         available_policies: Vec<String>,
@@ -412,7 +428,8 @@ impl OperationConflictInput {
     ) -> Self {
         Self {
             operation: operation.into(),
-            target: target.into(),
+            source: paths.source,
+            target: paths.target,
             target_kind: target_kind.into(),
             selected_policy: selected_policy.into(),
             available_policies,
@@ -443,6 +460,7 @@ pub struct OperationConflictContract {
 pub struct OperationConflictReviewRow {
     pub ordinal: usize,
     pub operation: String,
+    pub source: String,
     pub target: String,
     pub target_kind: String,
     pub selected_policy: String,
@@ -534,6 +552,7 @@ impl OperationConflictContract {
             .map(|(ordinal, input)| OperationConflictReviewRow {
                 ordinal,
                 operation: input.operation.clone(),
+                source: input.source.clone(),
                 target: input.target.clone(),
                 target_kind: input.target_kind.clone(),
                 selected_policy: input.selected_policy.clone(),
@@ -577,9 +596,10 @@ impl OperationConflictContract {
         )];
         lines.extend(self.review_rows.iter().map(|row| {
             format!(
-                "operation-conflict-row\t{}\toperation={}\ttarget={}\tkind={}\tpolicy={}\treason={}",
+                "operation-conflict-row\t{}\toperation={}\tsource={}\ttarget={}\tkind={}\tpolicy={}\treason={}",
                 row.ordinal,
                 escape_tsv(&row.operation),
+                escape_tsv(&row.source),
                 escape_tsv(&row.target),
                 escape_tsv(&row.target_kind),
                 escape_tsv(&row.selected_policy),
@@ -1184,7 +1204,7 @@ mod tests {
     fn operation_conflict_contract_enables_only_available_resolutions() {
         let contract = OperationConflictContract::from_input(OperationConflictInput::new(
             "copy",
-            "/tmp/target",
+            OperationConflictPaths::new("/tmp/source", "/tmp/target"),
             "file",
             "fail",
             vec![
@@ -1219,7 +1239,7 @@ mod tests {
             .as_tsv()
             .contains("\noperation-conflict-ui\toperation=copy\ttarget=/tmp/target\tkind=file\t"));
         assert!(contract.as_tsv().contains(
-            "\noperation-conflict-row\t0\toperation=copy\ttarget=/tmp/target\tkind=file\t"
+            "\noperation-conflict-row\t0\toperation=copy\tsource=/tmp/source\ttarget=/tmp/target\tkind=file\t"
         ));
     }
 
@@ -1227,7 +1247,7 @@ mod tests {
     fn operation_conflict_contract_reports_no_focus_when_not_blocking() {
         let contract = OperationConflictContract::from_input(OperationConflictInput::new(
             "copy",
-            "/tmp/new-target",
+            OperationConflictPaths::new("/tmp/source", "/tmp/new-target"),
             "none",
             "fail",
             Vec::new(),
@@ -1250,7 +1270,7 @@ mod tests {
         let contract = OperationConflictContract::from_inputs(vec![
             OperationConflictInput::new(
                 "copy",
-                "/tmp/file-target",
+                OperationConflictPaths::new("/tmp/file-source", "/tmp/file-target"),
                 "file",
                 "fail",
                 vec![
@@ -1263,7 +1283,7 @@ mod tests {
             ),
             OperationConflictInput::new(
                 "move",
-                "/tmp/directory-target",
+                OperationConflictPaths::new("/tmp/directory-source", "/tmp/directory-target"),
                 "directory",
                 "fail",
                 vec![
@@ -1296,7 +1316,7 @@ mod tests {
             .any(|button| button.id == "merge" && !button.enabled));
         assert!(contract
             .as_tsv()
-            .contains("\noperation-conflict-row\t1\toperation=move\ttarget=/tmp/directory-target\tkind=directory\t"));
+            .contains("\noperation-conflict-row\t1\toperation=move\tsource=/tmp/directory-source\ttarget=/tmp/directory-target\tkind=directory\t"));
     }
 
     #[test]

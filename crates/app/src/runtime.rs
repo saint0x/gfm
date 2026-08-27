@@ -364,6 +364,7 @@ pub(crate) fn default_permission_state_path() -> PathBuf {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeOperationConflict {
     pub(crate) operation: String,
+    pub(crate) source: String,
     pub(crate) target: String,
     pub(crate) target_kind: String,
     pub(crate) selected_policy: String,
@@ -467,8 +468,9 @@ impl OperationConflictStore {
 impl RuntimeOperationConflict {
     pub(crate) fn as_tsv(&self) -> String {
         format!(
-            "operation-conflict\toperation={}\ttarget={}\texists={}\tkind={}\tpolicy={}\tavailable={}\tblocks-operation={}\treason={}",
+            "operation-conflict\toperation={}\tsource={}\ttarget={}\texists={}\tkind={}\tpolicy={}\tavailable={}\tblocks-operation={}\treason={}",
             self.operation,
+            self.source,
             self.target,
             self.target_kind != "none",
             self.target_kind,
@@ -560,6 +562,10 @@ fn parse_operation_conflict_line(
     };
     Ok(RuntimeOperationConflict {
         operation: value("operation")?,
+        source: pairs
+            .get("source")
+            .map(|value| (*value).to_string())
+            .unwrap_or_else(|| "-".to_string()),
         target: value("target")?,
         target_kind: value("kind")?,
         selected_policy: value("policy")?,

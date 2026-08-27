@@ -14,6 +14,16 @@ pub enum Operation {
 }
 
 impl Operation {
+    pub fn source_path(&self) -> Option<&Path> {
+        match self {
+            Self::Copy { from, .. }
+            | Self::Move { from, .. }
+            | Self::Rename { from, .. }
+            | Self::Restore { from, .. } => Some(from),
+            Self::Delete { path } | Self::Trash { path } | Self::EmptyTrash { path } => Some(path),
+        }
+    }
+
     pub fn target_path(&self) -> Option<&Path> {
         match self {
             Self::Copy { to, .. }

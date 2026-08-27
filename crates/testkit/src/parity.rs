@@ -23,10 +23,11 @@ pub enum ParityFixtureScenario {
     ExternalVolume,
     NetworkVolume,
     Trash,
+    ConflictSheet,
 }
 
 impl ParityFixtureScenario {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Icon,
         Self::List,
         Self::Column,
@@ -43,6 +44,7 @@ impl ParityFixtureScenario {
         Self::ExternalVolume,
         Self::NetworkVolume,
         Self::Trash,
+        Self::ConflictSheet,
     ];
 
     pub const fn directory(self) -> &'static str {
@@ -63,6 +65,7 @@ impl ParityFixtureScenario {
             Self::ExternalVolume => "external-volume",
             Self::NetworkVolume => "network-volume",
             Self::Trash => "trash",
+            Self::ConflictSheet => "conflict-sheet",
         }
     }
 
@@ -77,7 +80,8 @@ impl ParityFixtureScenario {
             | Self::ICloud
             | Self::ExternalVolume
             | Self::NetworkVolume
-            | Self::Trash => "icon",
+            | Self::Trash
+            | Self::ConflictSheet => "icon",
             Self::List | Self::Huge => "list",
             Self::Column | Self::Sidebar => "column",
             Self::Gallery | Self::Search => "gallery",
@@ -212,6 +216,7 @@ fn materialize_scenario(
         ParityFixtureScenario::ExternalVolume => external_volume_fixture(&mut writer)?,
         ParityFixtureScenario::NetworkVolume => network_volume_fixture(&mut writer)?,
         ParityFixtureScenario::Trash => trash_fixture(&mut writer)?,
+        ParityFixtureScenario::ConflictSheet => conflict_sheet_fixture(&mut writer)?,
     }
 
     Ok(ParityFixtureScenarioReport {
@@ -369,6 +374,21 @@ fn trash_fixture(writer: &mut ScenarioWriter) -> Result<()> {
     writer.file("Folder In Trash/Nested.txt", "nested trash item\n")
 }
 
+fn conflict_sheet_fixture(writer: &mut ScenarioWriter) -> Result<()> {
+    writer.file("Sources/New File.txt", "new file contents\n")?;
+    writer.file("Targets/New File.txt", "existing file contents\n")?;
+    writer.file("Sources/Project/README.md", "incoming project readme\n")?;
+    writer.file("Targets/Project/README.md", "existing project readme\n")?;
+    writer.file(
+        ".gfm-operation-conflicts.tsv",
+        "operation-conflict\toperation=copy\tsource=Sources/New File.txt\ttarget=Targets/New File.txt\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\noperation-conflict\toperation=move\tsource=Sources/Project\ttarget=Targets/Project\texists=true\tkind=directory\tpolicy=fail\tavailable=replace,keep-both,merge,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n",
+    )?;
+    writer.file(
+        ".gfm-conflict-review.tsv",
+        "operation\tsource\ttarget\tkind\tdefault-action\tcancel-action\tkeyboard\ncopy\tSources/New File.txt\tTargets/New File.txt\tfile\tkeep-both\tstop\tfinder-conflict-sheet-return-default-escape-cancel-tab-cycle\nmove\tSources/Project\tTargets/Project\tdirectory\tkeep-both\tstop\tfinder-conflict-sheet-return-default-escape-cancel-tab-cycle\n",
+    )
+}
+
 fn write_manifest(path: &Path, scenarios: &[ParityFixtureScenarioReport]) -> Result<()> {
     let mut file = fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
     writeln!(file, "scenario\troot\tfinder-view\tfiles\tdirectories")
@@ -463,6 +483,11 @@ mod tests {
             .join("trash")
             .join(".gfm-trash-origin.tsv")
             .exists());
+        assert!(report
+            .fixture_root
+            .join("conflict-sheet")
+            .join(".gfm-operation-conflicts.tsv")
+            .exists());
         assert!(report.files_materialized() > ParityFixtureScenario::ALL.len());
 
         fs::remove_dir_all(root).unwrap();
@@ -480,6 +505,7 @@ mod tests {
         assert!(manifest.contains("\ticon\t"));
         assert!(manifest.contains("network-volume\t"));
         assert!(manifest.contains("trash\t"));
+        assert!(manifest.contains("conflict-sheet\t"));
 
         fs::remove_dir_all(root).unwrap();
     }

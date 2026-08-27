@@ -15,13 +15,13 @@ use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
-    MenuContract, OperationConflictContract, OperationConflictInput, OperationProgressContract,
-    OperationProgressInput, OperationProgressState, PermissionPromptKind,
-    PermissionRefreshContract, ProviderConflictContract, ProviderConflictInput, SearchResultsBatch,
-    SearchResultsContract, SearchResultsOptions, SearchResultsStage, SidebarCloudState,
-    SidebarContract, SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata,
-    TrashViewContract, TrashViewOptions, VirtualSurface, VirtualizationContract,
-    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    MenuContract, OperationConflictContract, OperationConflictInput, OperationConflictPaths,
+    OperationProgressContract, OperationProgressInput, OperationProgressState,
+    PermissionPromptKind, PermissionRefreshContract, ProviderConflictContract,
+    ProviderConflictInput, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
+    SearchResultsStage, SidebarCloudState, SidebarContract, SidebarVolumeSpec, TitlebarContract,
+    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
+    VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -491,11 +491,18 @@ fn parse_required_resolution_policy(value: Option<String>) -> Result<ConflictPol
 fn operation_conflict_contract(report: &OperationConflictReport) -> OperationConflictContract {
     OperationConflictContract::from_input(OperationConflictInput::new(
         report.operation,
-        report
-            .target
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "-".to_string()),
+        OperationConflictPaths::new(
+            report
+                .source
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            report
+                .target
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
         report.target_kind.as_str(),
         report.selected_policy.as_str(),
         report
@@ -519,7 +526,7 @@ fn runtime_operation_conflict_input(
 ) -> OperationConflictInput {
     OperationConflictInput::new(
         conflict.operation.clone(),
-        conflict.target.clone(),
+        OperationConflictPaths::new(conflict.source.clone(), conflict.target.clone()),
         conflict.target_kind.clone(),
         conflict.selected_policy.clone(),
         conflict.available_policies.clone(),

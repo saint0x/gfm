@@ -35,9 +35,9 @@ pub use context::{
 pub use dialog::{
     render as render_dialog, DialogButtonRole, DialogButtonSpec, DialogContract, DialogFieldKind,
     DialogFieldSpec, DialogPresentation, DialogSurface, OperationConflictContract,
-    OperationConflictInput, OperationProgressCommand, OperationProgressCommandSpec,
-    OperationProgressContract, OperationProgressInput, OperationProgressState,
-    PermissionPromptKind, ProviderConflictContract, ProviderConflictInput,
+    OperationConflictInput, OperationConflictPaths, OperationProgressCommand,
+    OperationProgressCommandSpec, OperationProgressContract, OperationProgressInput,
+    OperationProgressState, PermissionPromptKind, ProviderConflictContract, ProviderConflictInput,
 };
 pub use gallery::{
     render as render_gallery_view, GalleryFilmstripItemSpec, GalleryKeyboardFlow,
@@ -597,7 +597,7 @@ mod tests {
     fn lifecycle_contract_tracks_operation_conflict_surfaces() {
         let conflict = OperationConflictContract::from_input(OperationConflictInput::new(
             "copy",
-            "/tmp/target",
+            OperationConflictPaths::new("/tmp/source", "/tmp/target"),
             "file",
             "fail",
             vec![
@@ -620,7 +620,7 @@ mod tests {
             .as_tsv()
             .contains("button\tmerge\tMerge\talternate\tenabled=false"));
         assert!(contract.as_tsv().contains(
-            "\noperation-conflict-row\t0\toperation=copy\ttarget=/tmp/target\tkind=file\t"
+            "\noperation-conflict-row\t0\toperation=copy\tsource=/tmp/source\ttarget=/tmp/target\tkind=file\t"
         ));
     }
 

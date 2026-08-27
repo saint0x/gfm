@@ -357,9 +357,17 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
         "{conflict_store}"
     );
     assert!(
+        conflict_store.contains(&format!("\tsource={}\t", source.display())),
+        "{conflict_store}"
+    );
+    assert!(
         conflict_store.contains(
             "\texists=true\tkind=directory\tpolicy=fail\tavailable=replace,keep-both,merge,skip\tblocks-operation=true\t"
         ),
+        "{conflict_store}"
+    );
+    assert!(
+        conflict_store.contains(&format!("\tsource={}\t", source_dir.display())),
         "{conflict_store}"
     );
 
@@ -389,11 +397,17 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("\noperation-conflict-row\t0\toperation=copy\t"),
+        stdout.contains(&format!(
+            "\noperation-conflict-row\t0\toperation=copy\tsource={}\t",
+            source.display()
+        )),
         "{stdout}"
     );
     assert!(
-        stdout.contains("\noperation-conflict-row\t1\toperation=move\t"),
+        stdout.contains(&format!(
+            "\noperation-conflict-row\t1\toperation=move\tsource={}\t",
+            source_dir.display()
+        )),
         "{stdout}"
     );
     assert!(stdout.contains("\tblocks-operation=true\t"), "{stdout}");
@@ -471,6 +485,13 @@ fn resolves_operation_conflict_surface_before_next_lifecycle_contract() {
     );
     assert!(
         resolve_stdout.contains("\noperation-conflict-ui\toperation=copy\t"),
+        "{resolve_stdout}"
+    );
+    assert!(
+        resolve_stdout.contains(&format!(
+            "\noperation-conflict-row\t0\toperation=copy\tsource={}\t",
+            source.display()
+        )),
         "{resolve_stdout}"
     );
 
@@ -1028,7 +1049,10 @@ fn reports_operation_conflict_sheet_from_existing_destination() {
     assert!(stdout.contains("button\tmerge\tMerge\talternate\tenabled=false"));
     assert!(stdout.contains("\noperation-conflict-ui\toperation=copy\t"));
     assert!(stdout.contains("\tfocus=keep-both\tdefault-action=keep-both\tcancel-action=stop\t"));
-    assert!(stdout.contains("\noperation-conflict-row\t0\toperation=copy\t"));
+    assert!(stdout.contains(&format!(
+        "\noperation-conflict-row\t0\toperation=copy\tsource={}\t",
+        source.display()
+    )));
     assert!(!stdout.contains("\texists=true"));
     assert!(stdout.contains(
         "\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\t"
@@ -1065,7 +1089,10 @@ fn reports_directory_operation_conflict_with_merge_resolution() {
 
     assert!(stdout.contains("button\tmerge\tMerge\talternate\tenabled=true"));
     assert!(stdout.contains("\tfocus=keep-both\tdefault-action=keep-both\tcancel-action=stop\t"));
-    assert!(stdout.contains("\noperation-conflict-row\t0\toperation=move\t"));
+    assert!(stdout.contains(&format!(
+        "\noperation-conflict-row\t0\toperation=move\tsource={}\t",
+        source.display()
+    )));
     assert!(stdout.contains("\tkind=directory\tpolicy=fail\tavailable=replace,keep-both,merge,skip\tblocks-operation=true\t"));
 
     let _ = std::fs::remove_dir_all(root);

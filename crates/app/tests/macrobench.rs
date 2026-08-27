@@ -73,11 +73,16 @@ fn materializes_parity_fixture_from_binary() {
     let fixture = root.join("gfm-parity-fixture");
 
     assert!(stdout.contains("fixture\t"), "{stdout}");
-    assert!(stdout.contains("\tscenarios\t16"), "{stdout}");
+    assert!(stdout.contains("\tscenarios\t17"), "{stdout}");
     assert!(stdout.contains("icon\ticon\t"), "{stdout}");
     assert!(stdout.contains("network-volume\ticon\t"), "{stdout}");
+    assert!(stdout.contains("conflict-sheet\ticon\t"), "{stdout}");
     assert!(fixture.join("manifest.tsv").exists());
     assert!(fixture.join("search").join("Needle Name.txt").exists());
+    assert!(fixture
+        .join("conflict-sheet")
+        .join(".gfm-operation-conflicts.tsv")
+        .exists());
     assert_eq!(fs::read_dir(fixture.join("empty")).unwrap().count(), 0);
 
     fs::remove_dir_all(root).unwrap();
