@@ -1,4 +1,7 @@
-use crate::{access::preflight_access, parse_u64_arg, parse_usize_arg, required_path};
+use crate::{
+    access::{preflight_access_scope, ScopedAccessGuard},
+    parse_u64_arg, parse_usize_arg, required_path,
+};
 use gfm_fs::read_directory;
 use gfm_index::{
     EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth, IndexVolumeState,
@@ -16,7 +19,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .next()
                 .map(PathBuf::from)
                 .unwrap_or(std::env::current_dir().unwrap());
-            preflight_access(&path, AccessIntent::Read, "directory listing")?;
+            let _access = preflight_index_read(&path, "directory listing")?;
             let page = read_directory(path)?;
             for record in page.entries {
                 println!(
@@ -33,7 +36,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "index" => {
             let root = required_path(args.next(), "index requires a root path")?;
             let output = required_path(args.next(), "index requires an output path")?;
-            enforce_index_access(&root)?;
+            let _root_access = enforce_index_access(&root)?;
+            let _output_access = preflight_index_write(&output, "index records")?;
             let snapshot = Indexer::default().build(root)?;
             snapshot.save(output)?;
             eprintln!(
@@ -46,7 +50,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "index-state requires a root path")?;
             let records = required_path(args.next(), "index-state requires a records path")?;
             let state = required_path(args.next(), "index-state requires a state path")?;
-            enforce_index_access(&root)?;
+            let _root_access = enforce_index_access(&root)?;
+            let _records_access = preflight_index_write(&records, "index records")?;
+            let _state_access = preflight_index_write(&state, "index state")?;
             let state = Indexer::default().build_persistent(root, records, state)?;
             println!("{}", state.as_tsv());
         }
@@ -55,6 +61,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-state-inspect requires an index state path",
             )?;
+            let _state_access = preflight_index_read(&state, "index state inspect")?;
             println!("{}", IndexVolumeState::read(state)?.as_tsv());
         }
         "scan-progress" => {
@@ -64,7 +71,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "scan-progress requires a progress checkpoint path",
             )?;
-            enforce_index_access(&root)?;
+            let _root_access = enforce_index_access(&root)?;
+            let _records_access = preflight_index_write(&records, "scan progress records")?;
+            let _progress_access = preflight_index_write(&progress, "scan progress checkpoint")?;
             let checkpoint = Indexer::default().build_with_progress(root, records, progress)?;
             println!("{}", checkpoint.as_tsv());
         }
@@ -73,6 +82,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "scan-progress-inspect requires a progress checkpoint path",
             )?;
+            let _progress_access =
+                preflight_index_read(&progress, "scan progress checkpoint inspect")?;
             println!("{}", Indexer::default().scan_progress(progress)?.as_tsv());
         }
         "fair-scan" => {
@@ -80,10 +91,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let visible_burst =
                 parse_usize_arg(args.next(), "fair-scan requires a visible burst size")?;
             let visible_roots = args.map(PathBuf::from).collect::<Vec<_>>();
-            enforce_index_access(&root)?;
-            for visible_root in &visible_roots {
-                enforce_index_access(visible_root)?;
-            }
+            let _root_access = enforce_index_access(&root)?;
+            let _visible_accesses = visible_roots
+                .iter()
+                .map(|visible_root| enforce_index_access(visible_root))
+                .collect::<Result<Vec<_>>>()?;
             let report = Indexer::default().build_fair(root, &visible_roots, visible_burst)?;
             println!("{}", report.as_tsv());
         }
@@ -97,8 +109,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
-            enforce_index_access(&root)?;
+            let _root_access = enforce_index_access(&root)?;
             let snapshot = Indexer::default().build(root)?;
+            let _from_access = preflight_index_write(&from, "rename correlation source")?;
+            let _to_access = preflight_index_write(&to, "rename correlation destination")?;
             std::fs::rename(&from, &to).map_err(|err| GfmError::io(&from, err))?;
             let mut live = LiveIndex::from_records(snapshot.records);
             let report = live.apply_rename(&from, &to)?;
@@ -110,9 +124,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
-            enforce_index_access(&root)?;
+            let _root_access = enforce_index_access(&root)?;
             let snapshot = Indexer::default().build(root)?;
             if let Some(append) = args.next() {
+                let _path_access = preflight_index_write(&path, "metadata update")?;
                 let mut file = std::fs::OpenOptions::new()
                     .append(true)
                     .open(&path)
@@ -178,6 +193,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(|value| FseventsCursorHealth::parse(&value))
                 .transpose()?
                 .unwrap_or(FseventsCursorHealth::Clean);
+            let _state_access = preflight_index_read(&state, "fsevents cursor checkpoint state")?;
+            let _cursor_access = preflight_index_write(&cursor, "fsevents cursor checkpoint")?;
             let cursor =
                 Indexer::default().checkpoint_fsevents_cursor(state, cursor, event_id, health)?;
             println!("{}", cursor.as_tsv());
@@ -187,6 +204,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "fsevents-cursor-inspect requires a cursor path",
             )?;
+            let _cursor_access = preflight_index_read(&cursor, "fsevents cursor inspect")?;
             println!("{}", FseventsCursor::read(cursor)?.as_tsv());
         }
         "fsevents-cursor-resume" => {
@@ -196,6 +214,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let cursor =
                 required_path(args.next(), "fsevents-cursor-resume requires a cursor path")?;
+            let _state_access = preflight_index_read(&state, "fsevents cursor resume state")?;
+            let _cursor_access = preflight_index_read(&cursor, "fsevents cursor resume")?;
             println!(
                 "{}",
                 Indexer::default()
@@ -222,6 +242,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .next()
                 .and_then(|value| (value != "-").then_some(value));
             let dropped_roots: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            let _state_access = preflight_index_read(&state, "fsevents repair schedule state")?;
+            let _cursor_access = preflight_index_read(&cursor, "fsevents repair schedule cursor")?;
+            let _dropped_access = dropped_roots
+                .iter()
+                .filter(|root| root.exists())
+                .map(|root| preflight_index_read(root, "fsevents repair schedule dropped root"))
+                .collect::<Result<Vec<_>>>()?;
             println!(
                 "{}",
                 Indexer::default()
@@ -237,7 +264,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "watch-once" => {
             let root = required_path(args.next(), "watch-once requires a root path")?;
-            enforce_index_access(&root)?;
+            let _root_access = enforce_index_access(&root)?;
             let stream = FileEventStream::watch(&[WatchRoot::tree(root)])?;
             let event = stream.recv()?;
             println!("{}\t{}", event_marker(&event.kind), event.path.display());
@@ -261,8 +288,23 @@ fn parse_event_ids(value: &str) -> Result<Vec<u64>> {
         .collect()
 }
 
-fn enforce_index_access(root: &Path) -> Result<()> {
-    preflight_access(root, AccessIntent::Index, "index")
+fn enforce_index_access(root: &Path) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(root, AccessIntent::Index, "index")
+}
+
+fn preflight_index_read(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(path, AccessIntent::Read, worker)
+}
+
+fn preflight_index_write(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(write_probe_path(path), AccessIntent::Write, worker)
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.is_dir() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
 }
 
 fn parse_usize(value: &str, message: &str) -> Result<usize> {

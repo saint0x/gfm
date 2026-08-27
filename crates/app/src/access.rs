@@ -9,11 +9,6 @@ use gfm_mac::{
 use gfm_types::{GfmError, Result};
 use std::path::Path;
 
-pub(crate) fn preflight_access(path: &Path, intent: AccessIntent, worker: &str) -> Result<()> {
-    let _ = preflight_access_scope(path, intent, worker)?;
-    Ok(())
-}
-
 pub(crate) struct ScopedAccessGuard {
     _accesses: Vec<SecurityScopedBookmarkAccess>,
 }

@@ -2698,6 +2698,11 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-runtime-thumbnail.png",
+      "data": "png"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-resume-content-offline.job",
       "data": "gfm-content-job-v1\nroot\t.\nsegment_dir\ttmp/gfm-fozzy-offline-volume/background-segments\nrecords_path\ttmp/gfm-fozzy-offline-volume/background-records.gfmidx\ncontent_path\ttmp/gfm-fozzy-offline-volume/background-content.gfmcontent\nbatch_size\t1024\n"
     },
@@ -2722,6 +2727,38 @@
       "args": [
         "quicklook-session",
         "tmp/gfm-fozzy-offline-volume/Project/Preview.pdf"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-offline-volume/runtime.gfmprogress",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-offline-volume/runtime.gfmjobs"
+      },
+      "args": [
+        "thumbnail-generation",
+        "tmp/gfm-fozzy-runtime-thumbnail.png"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-offline-volume/runtime.gfmprogress",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-offline-volume/runtime.gfmjobs"
+      },
+      "args": [
+        "quicklook-session-adaptive",
+        "tmp/gfm-fozzy-preview.pdf",
+        "saturated",
+        "critical",
+        "low",
+        "active"
       ],
       "exit_code": 1,
       "times": 1
@@ -3021,6 +3058,56 @@
       "args": [
         "list",
         "tmp/gfm-fozzy-offline-volume"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index",
+        ".",
+        "tmp/gfm-fozzy-offline-volume/index-output.gfmidx"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-state",
+        ".",
+        "/tmp/gfm-fozzy-host-state-output.gfmidx",
+        "tmp/gfm-fozzy-offline-volume/index-state-output.gfmstate"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/index-state-input.gfmstate",
+      "data": "not parsed after access denial\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-state-inspect",
+        "tmp/gfm-fozzy-offline-volume/index-state-input.gfmstate"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "scan-progress",
+        ".",
+        "/tmp/gfm-fozzy-progress-output.gfmidx",
+        "tmp/gfm-fozzy-offline-volume/scan-progress-output.gfmprogress"
       ],
       "exit_code": 1,
       "times": 1

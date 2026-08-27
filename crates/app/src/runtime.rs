@@ -1,9 +1,11 @@
+use crate::access::{preflight_access_scope, ScopedAccessGuard};
 use gfm_jobs::{
     Cancellation, Job, JobFairnessPolicy, JobJournal, JobPayloadCatalog, JobPayloadKind,
     JobPayloadRecord, JobProgressSnapshot, JobProgressState, JobProgressStore, Priority,
     RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, Task, TaskStatus,
     VolumeConcurrencyPolicy, WorkerPool,
 };
+use gfm_mac::AccessIntent;
 use gfm_ops::OperationConflictReport;
 use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::BTreeSet;
@@ -231,12 +233,14 @@ impl RuntimeJobHandle {
         total_units: u64,
         summary: String,
     ) -> Result<Self> {
+        let payload_path = payload_path.into();
         if let Some(catalog) = runtime_payload_catalog() {
+            let _access = preflight_runtime_write(catalog.path(), label)?;
             catalog.append(&JobPayloadRecord::new(
                 job.id,
                 kind,
                 label,
-                payload_path.into(),
+                payload_path,
                 job.volume,
                 summary.clone(),
             ))?;
@@ -252,6 +256,7 @@ impl RuntimeJobHandle {
         .with_progress(JobProgressState::Planned, 0, summary, job_timestamp_ms());
         let progress_store = runtime_progress_store();
         if let Some(store) = &progress_store {
+            let _access = preflight_runtime_write(store.path(), label)?;
             store.upsert(snapshot.clone())?;
         }
         Ok(Self {
@@ -262,6 +267,7 @@ impl RuntimeJobHandle {
 
     pub(crate) fn running(&self) -> Result<()> {
         if let Some(store) = &self.progress_store {
+            let _access = preflight_runtime_write(store.path(), &self.snapshot.label)?;
             store.upsert(self.snapshot.clone().with_progress(
                 JobProgressState::Running,
                 0,
@@ -274,6 +280,7 @@ impl RuntimeJobHandle {
 
     pub(crate) fn deferred(&self, action: SchedulingAction) -> Result<()> {
         if let Some(store) = &self.progress_store {
+            let _access = preflight_runtime_write(store.path(), &self.snapshot.label)?;
             store.upsert(self.snapshot.clone().with_progress(
                 JobProgressState::Paused,
                 0,
@@ -291,6 +298,7 @@ impl RuntimeJobHandle {
         detail: impl Into<String>,
     ) -> Result<()> {
         if let Some(store) = &self.progress_store {
+            let _access = preflight_runtime_write(store.path(), &self.snapshot.label)?;
             store.upsert(self.snapshot.clone().with_progress(
                 state,
                 completed_units,
@@ -303,6 +311,7 @@ impl RuntimeJobHandle {
 
     pub(crate) fn finish(&self, status: &TaskStatus) -> Result<()> {
         if let Some(store) = &self.progress_store {
+            let _access = preflight_runtime_write(store.path(), &self.snapshot.label)?;
             let (completed_units, detail) = match status {
                 TaskStatus::Started => (0, "still-running".to_string()),
                 TaskStatus::Completed => (self.snapshot.total_units, "completed".to_string()),
@@ -318,6 +327,10 @@ impl RuntimeJobHandle {
         }
         Ok(())
     }
+}
+
+fn preflight_runtime_write(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(write_probe_path(path), AccessIntent::Write, worker)
 }
 
 pub(crate) fn default_journal_path() -> PathBuf {
@@ -547,6 +560,13 @@ fn runtime_payload_path(kind: JobPayloadKind, label: &str) -> PathBuf {
     PathBuf::from("runtime")
         .join(kind.as_str())
         .join(format!("{}.gfmjob", label_slug(label)))
+}
+
+fn write_probe_path(path: &Path) -> &Path {
+    if path.is_dir() {
+        return path;
+    }
+    path.parent().unwrap_or(path)
 }
 
 fn label_slug(label: &str) -> String {

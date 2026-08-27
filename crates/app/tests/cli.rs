@@ -169,6 +169,111 @@ fn watch_once_refuses_unreachable_network_volume_before_subscribing_from_binary(
 }
 
 #[test]
+fn index_routes_refuse_unreachable_outputs_before_writing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-index-route-root");
+    let offline = unique_temp_dir("gfm-cli-index-route-output-unreachable");
+    fs::write(root.join("Visible.txt"), "alpha").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let index = offline.join("records.gfmidx");
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), index.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("index records volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!index.exists());
+
+    let records = root.join("records.gfmidx");
+    let state = offline.join("state.gfmstate");
+    let state_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!state_output.status.success());
+    let state_stderr = String::from_utf8_lossy(&state_output.stderr);
+    assert!(
+        state_stderr.contains("index state volume access blocked: unreachable volume network"),
+        "{state_stderr}"
+    );
+    assert!(!records.exists());
+    assert!(!state.exists());
+
+    let progress = offline.join("scan.gfmprogress");
+    let progress_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "scan-progress",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            progress.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!progress_output.status.success());
+    let progress_stderr = String::from_utf8_lossy(&progress_output.stderr);
+    assert!(
+        progress_stderr
+            .contains("scan progress checkpoint volume access blocked: unreachable volume network"),
+        "{progress_stderr}"
+    );
+    assert!(!records.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn index_routes_refuse_unreachable_state_inputs_before_reading_from_binary() {
+    let offline = unique_temp_dir("gfm-cli-index-route-input-unreachable");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let state = offline.join("state.gfmstate");
+    let progress = offline.join("scan.gfmprogress");
+    let cursor = offline.join("cursor.gfmfsevents");
+    fs::write(&state, "not parsed after access denial\n").unwrap();
+    fs::write(&progress, "not parsed after access denial\n").unwrap();
+    fs::write(&cursor, "not parsed after access denial\n").unwrap();
+
+    let cases = [
+        (
+            vec!["index-state-inspect", state.to_str().unwrap()],
+            "index state inspect volume access blocked: unreachable volume network",
+        ),
+        (
+            vec!["scan-progress-inspect", progress.to_str().unwrap()],
+            "scan progress checkpoint inspect volume access blocked: unreachable volume network",
+        ),
+        (
+            vec!["fsevents-cursor-inspect", cursor.to_str().unwrap()],
+            "fsevents cursor inspect volume access blocked: unreachable volume network",
+        ),
+    ];
+
+    for (args, expected) in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stdout.is_empty(), "{stdout}");
+        assert!(stderr.contains(expected), "{stderr}");
+    }
+
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn operation_preflight_refreshes_permission_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-permission-operation-refresh");
     let source = root.join("source.txt");
@@ -7117,6 +7222,63 @@ fn volume_producers_persist_runtime_payload_and_progress_from_binary() {
     fs::remove_file(catalog).unwrap();
     fs::remove_file(progress).unwrap();
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn volume_producers_refuse_unreachable_runtime_stores_before_progress_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-producer-store-root");
+    let store_root = unique_temp_dir("gfm-cli-runtime-producer-store-unreachable");
+    let image = root.join("Image.png");
+    let document = root.join("Visible.pdf");
+    let catalog = store_root.join("runtime.gfmjobs");
+    let progress = store_root.join("runtime.gfmprogress");
+    fs::write(&image, b"\x89PNG\r\n\x1a\nruntime blocked").unwrap();
+    fs::write(&document, b"%PDF-1.7\nruntime blocked").unwrap();
+    fs::write(store_root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    for args in [
+        vec![
+            "thumbnail-generation".to_string(),
+            image.display().to_string(),
+        ],
+        vec![
+            "quicklook-session-adaptive".to_string(),
+            document.display().to_string(),
+            "saturated".to_string(),
+            "critical".to_string(),
+            "low".to_string(),
+            "active".to_string(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+            .env("GFM_JOB_PROGRESS_STORE", &progress)
+            .args(&args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{args:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stdout.contains("thumbnail-generation\t"),
+            "{args:?}: {stdout}"
+        );
+        assert!(
+            !stdout.contains("quicklook-session\t"),
+            "{args:?}: {stdout}"
+        );
+        assert!(
+            stderr.contains("volume access blocked: unreachable volume network"),
+            "{args:?}: {stderr}"
+        );
+    }
+
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(store_root).unwrap();
 }
 
 #[test]
