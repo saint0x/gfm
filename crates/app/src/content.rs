@@ -685,9 +685,8 @@ pub(crate) fn run_content_search(
 }
 
 fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<usize> {
-    let _journal_access = preflight_access_scope(
+    let _journal_access = retain_optional_recovery_store_access(
         journal.path(),
-        AccessIntent::Read,
         "background content recovery journal",
     )?;
     let mut ids = journal
@@ -697,9 +696,8 @@ fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<usize> {
         .map(|job| job.id)
         .collect::<HashSet<_>>();
     if let Some(store) = runtime_progress_store() {
-        let _progress_access = preflight_access_scope(
+        let _progress_access = retain_optional_recovery_store_access(
             store.path(),
-            AccessIntent::Read,
             "background content recovery progress",
         )?;
         for snapshot in store.restorable()? {
@@ -709,6 +707,19 @@ fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<usize> {
         }
     }
     Ok(ids.len())
+}
+
+fn retain_optional_recovery_store_access(
+    path: &Path,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    let mut guards = Vec::with_capacity(2);
+    let parent = path.parent().unwrap_or(path);
+    guards.push(preflight_access_scope(parent, AccessIntent::Read, worker)?);
+    if path.exists() {
+        guards.push(preflight_access_scope(path, AccessIntent::Read, worker)?);
+    }
+    Ok(guards)
 }
 
 fn retain_extraction_quarantine_access(
