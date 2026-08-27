@@ -49,7 +49,10 @@ impl ParityGateInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParityCaptureProvenance {
     pub macos_build: String,
+    pub hardware_profile: String,
+    pub display_profile: String,
     pub app_version: String,
+    pub fixture_manifest: String,
     pub captured_at: String,
     pub capture_command: String,
     pub reviewer: String,
@@ -70,9 +73,24 @@ impl ParityCaptureProvenance {
                 "parity manifest macOS build cannot be empty".to_string(),
             ));
         }
+        if self.hardware_profile.trim().is_empty() {
+            return Err(GfmError::Format(
+                "parity manifest hardware profile cannot be empty".to_string(),
+            ));
+        }
+        if self.display_profile.trim().is_empty() {
+            return Err(GfmError::Format(
+                "parity manifest display profile cannot be empty".to_string(),
+            ));
+        }
         if self.app_version.trim().is_empty() {
             return Err(GfmError::Format(
                 "parity manifest app version cannot be empty".to_string(),
+            ));
+        }
+        if self.fixture_manifest.trim().is_empty() {
+            return Err(GfmError::Format(
+                "parity manifest fixture manifest cannot be empty".to_string(),
             ));
         }
         if self.captured_at.trim().is_empty() {
@@ -412,7 +430,10 @@ fn parse_versioned_entry(
     let fixture_root = resolve_manifest_path(base, fields[10]);
     let provenance = ParityCaptureProvenance {
         macos_build: profile.macos_build.clone(),
+        hardware_profile: profile.hardware_profile.clone(),
+        display_profile: profile.display_profile.clone(),
         app_version: profile.app_version.clone(),
+        fixture_manifest: profile.fixture_manifest.clone(),
         captured_at: profile.captured_at.clone(),
         capture_command: profile.capture_command.clone(),
         reviewer: profile.reviewer.clone(),
@@ -442,7 +463,10 @@ fn parse_versioned_entry(
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ManifestProfile {
     macos_build: String,
+    hardware_profile: String,
+    display_profile: String,
     app_version: String,
+    fixture_manifest: String,
     captured_at: String,
     capture_command: String,
     reviewer: String,
@@ -454,7 +478,10 @@ struct ManifestProfile {
 
 fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<ManifestProfile> {
     let mut macos_build = None;
+    let mut hardware_profile = None;
+    let mut display_profile = None;
     let mut app_version = None;
+    let mut fixture_manifest = None;
     let mut captured_at = None;
     let mut capture_command = None;
     let mut reviewer = None;
@@ -471,7 +498,10 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
         };
         match key {
             "macos-build" => macos_build = Some(value.to_string()),
+            "hardware-profile" => hardware_profile = Some(value.to_string()),
+            "display-profile" => display_profile = Some(value.to_string()),
             "app-version" => app_version = Some(value.to_string()),
+            "fixture-manifest" => fixture_manifest = Some(value.to_string()),
             "captured-at" => captured_at = Some(value.to_string()),
             "capture-command" => capture_command = Some(value.to_string()),
             "reviewer" => reviewer = Some(value.to_string()),
@@ -502,9 +532,27 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
                 line_index + 1
             ))
         })?,
+        hardware_profile: hardware_profile.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing hardware-profile",
+                line_index + 1
+            ))
+        })?,
+        display_profile: display_profile.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing display-profile",
+                line_index + 1
+            ))
+        })?,
         app_version: app_version.ok_or_else(|| {
             GfmError::Format(format!(
                 "parity gate manifest line {} missing app-version",
+                line_index + 1
+            ))
+        })?,
+        fixture_manifest: fixture_manifest.ok_or_else(|| {
+            GfmError::Format(format!(
+                "parity gate manifest line {} missing fixture-manifest",
                 line_index + 1
             ))
         })?,
@@ -557,9 +605,27 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
             line_index + 1
         )));
     }
+    if profile.hardware_profile.trim().is_empty() {
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} has empty hardware-profile",
+            line_index + 1
+        )));
+    }
+    if profile.display_profile.trim().is_empty() {
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} has empty display-profile",
+            line_index + 1
+        )));
+    }
     if profile.app_version.trim().is_empty() {
         return Err(GfmError::Format(format!(
             "parity gate manifest line {} has empty app-version",
+            line_index + 1
+        )));
+    }
+    if profile.fixture_manifest.trim().is_empty() {
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} has empty fixture-manifest",
             line_index + 1
         )));
     }
@@ -629,12 +695,12 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
 
 fn render_entries_tsv(report: &ParityGateReport) -> String {
     let mut text =
-        "surface\twidth\theight\texpected\tactual\tmask\tmacos-build\tapp-version\tcaptured-at\tcapture-command\treviewer\tapproved-mask-set\tappearance\tscale\tcolor-profile\twindow-width\twindow-height\tfocus\tview-mode\tfixture-root\tmismatched\tunmasked\tmasked\tmax-channel-delta\tpassed\n"
+        "surface\twidth\theight\texpected\tactual\tmask\tmacos-build\thardware-profile\tdisplay-profile\tapp-version\tfixture-manifest\tcaptured-at\tcapture-command\treviewer\tapproved-mask-set\tappearance\tscale\tcolor-profile\twindow-width\twindow-height\tfocus\tview-mode\tfixture-root\tmismatched\tunmasked\tmasked\tmax-channel-delta\tpassed\n"
             .to_string();
     for entry in &report.entries {
         let provenance = entry.input.provenance.as_ref();
         text.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             entry.input.surface.as_str(),
             entry.diff.size.width,
             entry.diff.size.height,
@@ -650,7 +716,16 @@ fn render_entries_tsv(report: &ParityGateReport) -> String {
                 .map(|value| value.macos_build.as_str())
                 .unwrap_or_default(),
             provenance
+                .map(|value| value.hardware_profile.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.display_profile.as_str())
+                .unwrap_or_default(),
+            provenance
                 .map(|value| value.app_version.as_str())
+                .unwrap_or_default(),
+            provenance
+                .map(|value| value.fixture_manifest.as_str())
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.captured_at.as_str())
@@ -937,7 +1012,7 @@ mod tests {
         fs::write(root.join("actual.rgba"), [1, 2, 3, 255]).unwrap();
         fs::write(
             root.join("gate.tsv"),
-            "manifest-version\t1\nprofile\tmacos-build=25A354\tapp-version=0.1.0\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ticon\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ticon\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
         )
         .unwrap();
 
@@ -972,7 +1047,7 @@ mod tests {
         fs::write(root.join("gfm.png"), [1, 2, 3, 255]).unwrap();
         fs::write(
             root.join("gate.tsv"),
-            "manifest-version\t1\nprofile\tmacos-build=25A354\tapp-version=0.1.0\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
         )
         .unwrap();
 
@@ -982,7 +1057,10 @@ mod tests {
         let provenance = inputs[0].provenance.as_ref().unwrap();
 
         assert_eq!(provenance.macos_build, "25A354");
+        assert_eq!(provenance.hardware_profile, "macbookpro18,3");
+        assert_eq!(provenance.display_profile, "studio-display-p3");
         assert_eq!(provenance.app_version, "0.1.0");
+        assert_eq!(provenance.fixture_manifest, "fixtures/manifest.tsv");
         assert_eq!(provenance.captured_at, "2026-08-27T00:00:00Z");
         assert_eq!(provenance.capture_command, "screencapture:-x");
         assert_eq!(provenance.reviewer, "codex");
@@ -994,6 +1072,20 @@ mod tests {
         assert_eq!(provenance.focus, ParityFocusState::Active);
         assert_eq!(provenance.view_mode, ParityViewMode::Icon);
         assert!(provenance.fixture_root.ends_with("fixtures/icon"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn versioned_parity_manifest_rejects_incomplete_capture_profile() {
+        let root = unique_temp_dir("gfm-parity-gate-incomplete-profile");
+        let err = parse_parity_gate_manifest(
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+            &root,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("missing fixture-manifest"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1051,7 +1143,7 @@ mod tests {
         fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
         fs::write(
             root.join("gate.tsv"),
-            "manifest-version\t1\nprofile\tmacos-build=25A354\tapp-version=0.1.0\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\texpected.rgba\tactual.rgba\t2\t1\t\t1040\t720\tactive\tlist\tfixtures/text\n",
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\texpected.rgba\tactual.rgba\t2\t1\t\t1040\t720\tactive\tlist\tfixtures/text\n",
         )
         .unwrap();
 
