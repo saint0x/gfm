@@ -41,7 +41,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "index-content requires a root path")?;
             let records = required_path(args.next(), "index-content requires a records path")?;
             let content = required_path(args.next(), "index-content requires a content path")?;
-            let _access = preflight_access_scope(&root, AccessIntent::Index, "content index")?;
+            let _access =
+                retain_foreground_content_index_access(&root, &records, &content, "content index")?;
             let snapshot = Indexer::default().build(root)?;
             let indexed = snapshot.save_with_content(records, content, &Extractor::default())?;
             eprintln!(
@@ -217,7 +218,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "index-content-segment requires an output segment path",
             )?;
             let _access =
-                preflight_access_scope(&root, AccessIntent::Index, "content segment index")?;
+                retain_content_segment_index_access(&root, &output, "content segment index")?;
             let snapshot = Indexer::default().build(root)?;
             let indexed =
                 snapshot.save_content_segment(output, &Extractor::default(), Vec::new())?;
@@ -736,6 +737,30 @@ fn retain_extraction_quarantine_access(
     Ok(vec![
         preflight_access_scope(path, AccessIntent::Read, worker)?,
         preflight_access_scope(write_probe_path(store), AccessIntent::Write, worker)?,
+    ])
+}
+
+fn retain_foreground_content_index_access(
+    root: &Path,
+    records: &Path,
+    content: &Path,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(root, AccessIntent::Index, worker)?,
+        preflight_access_scope(write_probe_path(records), AccessIntent::Write, worker)?,
+        preflight_access_scope(write_probe_path(content), AccessIntent::Write, worker)?,
+    ])
+}
+
+fn retain_content_segment_index_access(
+    root: &Path,
+    output: &Path,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(root, AccessIntent::Index, worker)?,
+        preflight_access_scope(write_probe_path(output), AccessIntent::Write, worker)?,
     ])
 }
 

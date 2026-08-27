@@ -515,6 +515,56 @@ fn permission_access_contract_uses_full_disk_access_prompt_from_binary() {
 }
 
 #[test]
+fn lifecycle_contract_carries_initial_path_permission_access_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-lifecycle-permission-access-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let home = root.join("home");
+    let protected = home.join("Documents").join("Plan.md");
+    std::fs::create_dir_all(protected.parent().unwrap()).unwrap();
+    std::fs::write(&protected, "protected launch path").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .args(["ui-contract", protected.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("window\tGFM\t"));
+    assert!(
+        stdout.contains("\tpermission-dialog=permission"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\npermission-prompt\tkind=bookmark-acquisition\tsurface=permission"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\npermission-access\tpath=") && stdout.contains("\tintent=read\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tscope=documents\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tmode=security-scoped-bookmark\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tbookmark-required=true\tbookmark-access=true\t"),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
     let progress = std::env::temp_dir().join(format!(
         "gfm-ui-lifecycle-progress-{}.gfmprogress",

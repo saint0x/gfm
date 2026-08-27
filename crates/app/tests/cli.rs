@@ -6191,6 +6191,84 @@ fn searches_persisted_text_content_from_binary() {
 }
 
 #[test]
+fn index_content_refuses_unreachable_records_output_before_scanning_from_binary() {
+    let root = unique_temp_dir("gfm-cli-index-content-source");
+    let output_root = unique_temp_dir("gfm-cli-index-content-records-unreachable");
+    fs::write(root.join("archive.md"), "the body contains nooutputmarker").unwrap();
+    fs::write(
+        output_root.join(".gfm-volume-kind"),
+        "network-unreachable\n",
+    )
+    .unwrap();
+    let records = output_root.join("records.gfmidx");
+    let content = unique_temp_path("gfm-cli-index-content-local", "gfmcontent");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-content",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("hit\t"), "{stdout}");
+    assert!(
+        stderr.contains("content index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("indexed "), "{stderr}");
+    assert!(!records.exists());
+    assert!(!content.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(output_root).unwrap();
+}
+
+#[test]
+fn index_content_refuses_unreachable_content_output_before_scanning_from_binary() {
+    let root = unique_temp_dir("gfm-cli-index-content-content-source");
+    let output_root = unique_temp_dir("gfm-cli-index-content-content-unreachable");
+    fs::write(root.join("archive.md"), "the body contains noarchivewrite").unwrap();
+    fs::write(
+        output_root.join(".gfm-volume-kind"),
+        "network-unreachable\n",
+    )
+    .unwrap();
+    let records = unique_temp_path("gfm-cli-index-content-records-local", "gfmidx");
+    let content = output_root.join("content.gfmcontent");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-content",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("hit\t"), "{stdout}");
+    assert!(
+        stderr.contains("content index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("indexed "), "{stderr}");
+    assert!(!records.exists());
+    assert!(!content.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(output_root).unwrap();
+}
+
+#[test]
 fn adaptive_persisted_content_search_applies_snippet_pressure_budget_from_binary() {
     let root = unique_temp_dir("gfm-cli-durable-adaptive-snippet-root");
     let records = unique_temp_path("gfm-cli-durable-adaptive-snippet-records", "gfmidx");
@@ -7500,6 +7578,42 @@ fn compacts_content_segments_from_binary() {
     fs::remove_file(tiered_content).unwrap();
     fs::remove_file(maintained_content).unwrap();
     fs::remove_file(manifest).unwrap();
+}
+
+#[test]
+fn index_content_segment_refuses_unreachable_output_before_scanning_from_binary() {
+    let root = unique_temp_dir("gfm-cli-segment-source");
+    let output_root = unique_temp_dir("gfm-cli-segment-output-unreachable");
+    fs::write(root.join("segment.md"), "the body contains nosegmentwrite").unwrap();
+    fs::write(
+        output_root.join(".gfm-volume-kind"),
+        "network-unreachable\n",
+    )
+    .unwrap();
+    let segment = output_root.join("content.gfmseg");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-content-segment",
+            root.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("hit\t"), "{stdout}");
+    assert!(
+        stderr.contains("content segment index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("content-segmented"), "{stderr}");
+    assert!(!segment.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(output_root).unwrap();
 }
 
 #[test]

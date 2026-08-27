@@ -19,13 +19,13 @@ use gfm_ui::{
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
     MenuContract, OperationConflictContract, OperationConflictInput, OperationConflictPaths,
     OperationProgressContract, OperationProgressInput, OperationProgressState,
-    PermissionPromptKind, PermissionRefreshContract, ProviderConflictContract,
-    ProviderConflictInput, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
-    SearchResultsStage, SidebarCloudInvalidation, SidebarCloudState, SidebarContract,
-    SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind, SidebarVolumeMountState,
-    SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
-    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
-    WindowSessionContract, WindowSessionStore,
+    PermissionAccessContract, PermissionPromptKind, PermissionRefreshContract,
+    ProviderConflictContract, ProviderConflictInput, SearchResultsBatch, SearchResultsContract,
+    SearchResultsOptions, SearchResultsStage, SidebarCloudInvalidation, SidebarCloudState,
+    SidebarContract, SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind,
+    SidebarVolumeMountState, SidebarVolumeSpec, TitlebarContract, ToolbarContract,
+    TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
+    VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -543,24 +543,37 @@ fn print_permission_onboarding_contract(
 }
 
 fn print_permission_access_contract(admission: &SecurityWorkerAdmissionReport) {
-    let prompt = permission_prompt_kind_for_admission(admission);
-    println!("{}", DialogContract::permission_prompt(prompt).as_tsv());
+    let access = permission_access_contract(admission);
     println!(
-        "permission-access\tpath={}\tintent={}\tscope={}\tprobe={}\tmode={}\taccess-action={}\tworker-action={}\tbookmark-required={}\tbookmark-access={}\trefresh-on-permission-change={}\tprompt-kind={}\treason={}",
-        admission.access.path.display(),
-        admission.access.intent.as_str(),
-        admission.access.scope.as_str(),
-        admission.access.probe.as_str(),
-        admission.access.mode.as_str(),
-        admission.access.action.as_str(),
-        admission.worker_action.as_str(),
+        "{}",
+        DialogContract::permission_prompt(access.prompt_kind).as_tsv()
+    );
+    println!("{}", access.as_tsv());
+    println!("{}", admission.as_tsv());
+}
+
+fn permission_access_contract(
+    admission: &SecurityWorkerAdmissionReport,
+) -> PermissionAccessContract {
+    PermissionAccessContract {
+        path: admission.access.path.display().to_string(),
+        intent: admission.access.intent.as_str().to_string(),
+        scope: admission.access.scope.as_str().to_string(),
+        probe: admission.access.probe.as_str().to_string(),
+        mode: admission.access.mode.as_str().to_string(),
+        access_action: admission.access.action.as_str().to_string(),
+        worker_action: admission.worker_action.as_str().to_string(),
+        bookmark_required: false,
+        bookmark_access: false,
+        refresh_on_permission_change: false,
+        prompt_kind: permission_prompt_kind_for_admission(admission),
+        reason: admission.reason.clone(),
+    }
+    .with_bookmark_state(
         admission.access.bookmark_required,
         admission.needs_bookmark_access,
-        admission.refresh_on_permission_change,
-        prompt.as_str(),
-        escape_interface_field(&admission.reason)
-    );
-    println!("{}", admission.as_tsv());
+    )
+    .with_refresh_on_permission_change(admission.refresh_on_permission_change)
 }
 
 fn parse_conflict_contract_operation(args: &mut impl Iterator<Item = String>) -> Result<Operation> {
@@ -783,10 +796,18 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
     }
     let plan = current_permission_onboarding()?;
     if plan.finder_parity_default || plan.action != gfm_mac::PermissionAction::ContinueNormally {
-        Ok(spec.with_permission_prompt(permission_prompt_kind(&plan)))
-    } else {
-        Ok(spec)
+        spec = spec.with_permission_prompt(permission_prompt_kind(&plan));
     }
+    let admission = SecurityWorkerAdmissionReport::evaluate(
+        &spec.initial_path,
+        AccessIntent::Read,
+        "window initial path",
+    );
+    let access = permission_access_contract(&admission);
+    if permission_access_requires_surface(&access) {
+        spec = spec.with_permission_access(access);
+    }
+    Ok(spec)
 }
 
 fn permission_refresh_contract(
@@ -859,6 +880,13 @@ fn permission_prompt_kind_for_admission(
         return PermissionPromptKind::Blocked;
     }
     PermissionPromptKind::General
+}
+
+fn permission_access_requires_surface(access: &PermissionAccessContract) -> bool {
+    access.bookmark_required
+        || access.scope == "full-disk-access"
+        || access.mode == "degraded-metadata-only"
+        || access.probe == "denied"
 }
 
 fn default_current_path(path: Option<String>) -> PathBuf {

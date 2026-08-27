@@ -3633,6 +3633,29 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "index-content",
+        ".",
+        "tmp/gfm-fozzy-offline-volume/content-output.gfmidx",
+        "/tmp/gfm-fozzy-host-output.gfmcontent"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-content-segment",
+        ".",
+        "tmp/gfm-fozzy-offline-volume/content-output.gfmseg"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "ui-list-view-contract",
         "tmp/gfm-fozzy-offline-volume",
         "6",

@@ -97,7 +97,55 @@ pub struct AppLaunchSpec {
     pub operation_conflicts: Vec<OperationConflictContract>,
     pub permission_dialog: Option<DialogContract>,
     pub permission_prompt: Option<PermissionPromptKind>,
+    pub permission_access: Option<PermissionAccessContract>,
     pub permission_refresh: Option<PermissionRefreshContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionAccessContract {
+    pub path: String,
+    pub intent: String,
+    pub scope: String,
+    pub probe: String,
+    pub mode: String,
+    pub access_action: String,
+    pub worker_action: String,
+    pub bookmark_required: bool,
+    pub bookmark_access: bool,
+    pub refresh_on_permission_change: bool,
+    pub prompt_kind: PermissionPromptKind,
+    pub reason: String,
+}
+
+impl PermissionAccessContract {
+    pub fn with_bookmark_state(mut self, required: bool, access: bool) -> Self {
+        self.bookmark_required = required;
+        self.bookmark_access = access;
+        self
+    }
+
+    pub fn with_refresh_on_permission_change(mut self, refresh: bool) -> Self {
+        self.refresh_on_permission_change = refresh;
+        self
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "permission-access\tpath={}\tintent={}\tscope={}\tprobe={}\tmode={}\taccess-action={}\tworker-action={}\tbookmark-required={}\tbookmark-access={}\trefresh-on-permission-change={}\tprompt-kind={}\treason={}",
+            escape_contract_field(&self.path),
+            escape_contract_field(&self.intent),
+            escape_contract_field(&self.scope),
+            escape_contract_field(&self.probe),
+            escape_contract_field(&self.mode),
+            escape_contract_field(&self.access_action),
+            escape_contract_field(&self.worker_action),
+            self.bookmark_required,
+            self.bookmark_access,
+            self.refresh_on_permission_change,
+            self.prompt_kind.as_str(),
+            escape_contract_field(&self.reason)
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +184,16 @@ impl PermissionRefreshContract {
             self.refresh_operations
         )
     }
+}
+
+fn escape_contract_field(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            '\t' | '\n' | '\r' => ' ',
+            other => other,
+        })
+        .collect()
 }
 
 impl AppLaunchSpec {
@@ -219,6 +277,11 @@ impl AppLaunchSpec {
                 "native app permission prompt binding requires a permission dialog".to_string(),
             ));
         }
+        if self.permission_access.is_some() && self.permission_dialog.is_none() {
+            return Err(GfmError::Format(
+                "native app permission access binding requires a permission dialog".to_string(),
+            ));
+        }
         titlebar::TitlebarContract::from_spec(self)?;
         Ok(())
     }
@@ -231,6 +294,21 @@ impl AppLaunchSpec {
     pub fn with_permission_prompt(mut self, kind: PermissionPromptKind) -> Self {
         self.permission_dialog = Some(DialogContract::permission_prompt(kind));
         self.permission_prompt = Some(kind);
+        self
+    }
+
+    pub fn with_permission_access(mut self, access: PermissionAccessContract) -> Self {
+        let prompt = access.prompt_kind;
+        if self.permission_prompt.is_none()
+            || self.permission_prompt == Some(PermissionPromptKind::General)
+        {
+            self.permission_dialog = Some(DialogContract::permission_prompt(prompt));
+            self.permission_prompt = Some(prompt);
+        } else {
+            self.permission_dialog
+                .get_or_insert_with(|| DialogContract::permission_prompt(prompt));
+        }
+        self.permission_access = Some(access);
         self
     }
 
@@ -272,6 +350,7 @@ impl Default for AppLaunchSpec {
             operation_conflicts: Vec::new(),
             permission_dialog: None,
             permission_prompt: None,
+            permission_access: None,
             permission_refresh: None,
         }
     }
@@ -293,6 +372,7 @@ pub struct WindowLifecycleContract {
     pub operation_conflicts: Vec<OperationConflictContract>,
     pub permission_dialog: Option<DialogSurface>,
     pub permission_prompt: Option<PermissionPromptKind>,
+    pub permission_access: Option<PermissionAccessContract>,
     pub permission_refresh: Option<PermissionRefreshContract>,
 }
 
@@ -314,6 +394,7 @@ impl WindowLifecycleContract {
             operation_conflicts: spec.operation_conflicts.clone(),
             permission_dialog: spec.permission_dialog.as_ref().map(|dialog| dialog.surface),
             permission_prompt: spec.permission_prompt,
+            permission_access: spec.permission_access.clone(),
             permission_refresh: spec.permission_refresh.clone(),
         })
     }
@@ -349,6 +430,9 @@ impl WindowLifecycleContract {
                 "permission-prompt\tkind={}\tsurface=permission",
                 prompt.as_str()
             ));
+        }
+        if let Some(access) = &self.permission_access {
+            lines.push(access.as_tsv());
         }
         if let Some(refresh) = &self.permission_refresh {
             lines.push(refresh.as_tsv());
@@ -392,6 +476,7 @@ fn open_main_window(
             progress_surfaces: spec.progress_surfaces,
             operation_conflicts: spec.operation_conflicts,
             permission_dialog: spec.permission_dialog,
+            permission_access: spec.permission_access,
             permission_refresh: spec.permission_refresh,
             initial_path: spec.initial_path,
         })
@@ -460,6 +545,7 @@ struct RootView {
     progress_surfaces: Vec<OperationProgressContract>,
     operation_conflicts: Vec<OperationConflictContract>,
     permission_dialog: Option<DialogContract>,
+    permission_access: Option<PermissionAccessContract>,
     permission_refresh: Option<PermissionRefreshContract>,
     initial_path: PathBuf,
 }
@@ -489,6 +575,14 @@ impl Render for RootView {
             );
         if let Some(dialog) = &self.permission_dialog {
             root = root.child(dialog::render(dialog));
+        }
+        if let Some(access) = &self.permission_access {
+            root = root.child(
+                div()
+                    .id("permission-access-state")
+                    .invisible()
+                    .child(access.as_tsv()),
+            );
         }
         for progress in &self.progress_surfaces {
             root = root
@@ -569,6 +663,67 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\npermission-prompt\tkind=bookmark-acquisition\tsurface=permission"));
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_permission_access_state() {
+        let access = PermissionAccessContract {
+            path: "/Users/me/Documents/Plan.md".to_string(),
+            intent: "read".to_string(),
+            scope: "documents".to_string(),
+            probe: "granted".to_string(),
+            mode: "security-scoped-bookmark".to_string(),
+            access_action: "allow".to_string(),
+            worker_action: "start".to_string(),
+            bookmark_required: false,
+            bookmark_access: false,
+            refresh_on_permission_change: false,
+            prompt_kind: PermissionPromptKind::BookmarkAcquisition,
+            reason: "window initial path may start after retained security-scoped bookmark access"
+                .to_string(),
+        }
+        .with_bookmark_state(true, true)
+        .with_refresh_on_permission_change(false);
+        let spec = AppLaunchSpec::new("/Users/me/Documents/Plan.md")
+            .with_permission_access(access.clone());
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert_eq!(contract.permission_dialog, Some(DialogSurface::Permission));
+        assert_eq!(
+            contract.permission_prompt,
+            Some(PermissionPromptKind::BookmarkAcquisition)
+        );
+        assert_eq!(contract.permission_access, Some(access));
+        assert!(contract.as_tsv().contains(
+            "\npermission-access\tpath=/Users/me/Documents/Plan.md\tintent=read\tscope=documents\t"
+        ));
+        assert!(contract
+            .as_tsv()
+            .contains("\tbookmark-required=true\tbookmark-access=true\t"));
+    }
+
+    #[test]
+    fn rejects_permission_access_without_permission_dialog() {
+        let mut spec = AppLaunchSpec::new("/tmp/gfm");
+        spec.permission_access = Some(PermissionAccessContract {
+            path: "/tmp/gfm".to_string(),
+            intent: "read".to_string(),
+            scope: "none".to_string(),
+            probe: "missing".to_string(),
+            mode: "denied".to_string(),
+            access_action: "deny".to_string(),
+            worker_action: "deny".to_string(),
+            bookmark_required: false,
+            bookmark_access: false,
+            refresh_on_permission_change: false,
+            prompt_kind: PermissionPromptKind::Blocked,
+            reason: "path is not present on this host".to_string(),
+        });
+
+        let err = WindowLifecycleContract::from_spec(&spec).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("permission access binding requires a permission dialog"));
     }
 
     #[test]
