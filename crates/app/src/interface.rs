@@ -198,8 +198,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "ui-operation-conflict-resolve requires a target path",
             )?;
             let policy = parse_required_resolution_policy(args.next())?;
-            let store = crate::runtime::OperationConflictStore::new(store_path);
-            let resolved = store.resolve(&target, policy.as_str())?;
+            let (resolved, store_path) = resolve_ui_operation_conflict(store_path, target, policy)?;
             println!(
                 "operation-conflict-control\tresolve\ttarget={}\tpolicy={}\tblocks-operation={}\treason={}",
                 escape_interface_field(&resolved.target),
@@ -209,7 +208,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             );
             println!(
                 "{}",
-                runtime_operation_conflict_contract(&resolved, Some(store.path())).as_tsv()
+                runtime_operation_conflict_contract(&resolved, Some(&store_path)).as_tsv()
             );
         }
         "ui-titlebar-contract" => {
@@ -997,6 +996,40 @@ fn read_ui_operation_conflicts(
             let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
             cancellation.check()?;
             store.read()
+        },
+    )
+}
+
+fn resolve_ui_operation_conflict(
+    store_path: PathBuf,
+    target: String,
+    policy: ConflictPolicy,
+) -> Result<(crate::runtime::RuntimeOperationConflict, PathBuf)> {
+    const WORKER: &str = "ui operation conflict resolve";
+    crate::access::preflight_volume_access_scope(
+        write_probe_path(&store_path),
+        AccessIntent::Write,
+        WORKER,
+    )?;
+    let volume = crate::detect_volume_id(write_probe_path(&store_path))
+        .ok()
+        .or_else(|| crate::parent_volume(write_probe_path(&store_path)));
+    crate::runtime::run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        WORKER,
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = crate::access::preflight_access_scope(
+                write_probe_path(&store_path),
+                AccessIntent::Write,
+                WORKER,
+            )?;
+            cancellation.check()?;
+            let store = crate::runtime::OperationConflictStore::new(store_path.clone());
+            let resolved = store.resolve(&target, policy.as_str())?;
+            cancellation.check()?;
+            Ok((resolved, store_path))
         },
     )
 }

@@ -1,10 +1,12 @@
-use crate::access::{preflight_access_scope, ScopedAccessGuard};
+use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
+use crate::{parent_volume, runtime::run_volume_task_cancellable};
+use gfm_jobs::Priority;
 use gfm_mac::AccessIntent;
 use gfm_packaging::{
     build_app_bundle, notarize_app_bundle, register_launch_services, require_codesign_toolchain,
-    require_release_xcode_toolchain, validate_release_artifact, AppBundleSpec,
-    AppleToolchainReport, NotarizationCredentials, NotarizationSpec, ReleaseArtifactSpec,
-    ReleasePolicy, SigningIdentity,
+    require_release_xcode_toolchain, validate_release_artifact, AppBundle, AppBundleSpec,
+    AppleToolchainReport, NotarizationCredentials, NotarizationSpec, NotarizationTicket,
+    ReleaseArtifactReport, ReleaseArtifactSpec, ReleasePolicy, SigningIdentity,
 };
 use gfm_types::{GfmError, Result};
 use std::path::{Path, PathBuf};
@@ -18,7 +20,6 @@ pub fn release_policy() -> Result<()> {
 
 pub fn release_validate(args: &mut impl Iterator<Item = String>) -> Result<()> {
     let app_path = required_path(args.next(), "release-validate requires a .app path")?;
-    let _access = retain_packaging_read_access(&app_path, "release validate app")?;
     let mut spec = ReleaseArtifactSpec::new(app_path);
     for arg in args {
         match arg.as_str() {
@@ -32,10 +33,7 @@ pub fn release_validate(args: &mut impl Iterator<Item = String>) -> Result<()> {
             }
         }
     }
-    if spec.require_signed || spec.require_notarized || spec.assess_gatekeeper {
-        require_release_xcode_toolchain()?;
-    }
-    let report = validate_release_artifact(&spec)?;
+    let report = run_release_validate(spec)?;
     println!(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}",
         report.app_path.display(),
@@ -53,17 +51,13 @@ pub fn bundle_app(args: &mut impl Iterator<Item = String>) -> Result<()> {
     let executable = required_path(args.next(), "bundle-app requires an executable path")?;
     let icon = required_path(args.next(), "bundle-app requires an icon path")?;
     let output_dir = required_path(args.next(), "bundle-app requires an output directory")?;
-    let _access = retain_bundle_access(&executable, &icon, &output_dir)?;
     let mut spec = AppBundleSpec::new(executable, icon, output_dir);
     spec.signing_identity = match args.next().as_deref() {
         Some("--unsigned") => SigningIdentity::Unsigned,
         Some("--ad-hoc") | None => SigningIdentity::AdHoc,
         Some(identity) => SigningIdentity::DeveloperId(identity.to_string()),
     };
-    if spec.signing_identity != SigningIdentity::Unsigned {
-        require_codesign_toolchain()?;
-    }
-    let bundle = build_app_bundle(&spec)?;
+    let bundle = run_bundle_app(spec)?;
     println!(
         "{}\t{}\t{}",
         bundle.app_path.display(),
@@ -75,8 +69,7 @@ pub fn bundle_app(args: &mut impl Iterator<Item = String>) -> Result<()> {
 
 pub fn register_app(args: &mut impl Iterator<Item = String>) -> Result<()> {
     let app_path = required_path(args.next(), "register-app requires an .app path")?;
-    let _access = preflight_access_scope(&app_path, AccessIntent::Operate, "register app")?;
-    register_launch_services(&app_path)?;
+    run_register_app(app_path.clone())?;
     println!("{}", app_path.display());
     Ok(())
 }
@@ -85,9 +78,7 @@ pub fn notarize_app(args: &mut impl Iterator<Item = String>) -> Result<()> {
     let app_path = required_path(args.next(), "notarize-app requires an .app path")?;
     let output_dir = required_path(args.next(), "notarize-app requires an output directory")?;
     let credentials = notarization_credentials(args)?;
-    let _access = retain_notarize_access(&app_path, &output_dir, &credentials)?;
-    require_release_xcode_toolchain()?;
-    let ticket = notarize_app_bundle(&NotarizationSpec::new(app_path, output_dir, credentials))?;
+    let ticket = run_notarize_app(NotarizationSpec::new(app_path, output_dir, credentials))?;
     println!(
         "{}\t{}\t{:?}\t{}",
         ticket.submission_id,
@@ -143,8 +134,80 @@ fn print_toolchain_report(report: &AppleToolchainReport) {
     println!("metal-smoke-test\t{}", report.metal_smoke_tested);
 }
 
+fn run_release_validate(spec: ReleaseArtifactSpec) -> Result<ReleaseArtifactReport> {
+    const WORKER: &str = "release validate app";
+    preflight_volume_access_scope(&spec.app_path, AccessIntent::Read, WORKER)?;
+    let volume = parent_volume(&spec.app_path);
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_packaging_read_access(&spec.app_path, WORKER)?;
+        cancellation.check()?;
+        if spec.require_signed || spec.require_notarized || spec.assess_gatekeeper {
+            require_release_xcode_toolchain()?;
+        }
+        validate_release_artifact(&spec)
+    })
+}
+
+fn run_bundle_app(spec: AppBundleSpec) -> Result<AppBundle> {
+    const WORKER: &str = "bundle app";
+    preflight_bundle_volumes(&spec)?;
+    let volume = parent_volume(write_probe_path(&spec.output_dir))
+        .or_else(|| parent_volume(&spec.executable))
+        .or_else(|| parent_volume(&spec.icon));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_bundle_access(&spec.executable, &spec.icon, &spec.output_dir)?;
+        cancellation.check()?;
+        if spec.signing_identity != SigningIdentity::Unsigned {
+            require_codesign_toolchain()?;
+        }
+        build_app_bundle(&spec)
+    })
+}
+
+fn run_register_app(app_path: PathBuf) -> Result<()> {
+    const WORKER: &str = "register app";
+    preflight_volume_access_scope(&app_path, AccessIntent::Operate, WORKER)?;
+    let volume = parent_volume(&app_path);
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_access_scope(&app_path, AccessIntent::Operate, WORKER)?;
+        cancellation.check()?;
+        register_launch_services(&app_path)
+    })
+}
+
+fn run_notarize_app(spec: NotarizationSpec) -> Result<NotarizationTicket> {
+    const WORKER: &str = "notarize app";
+    preflight_notarize_volumes(&spec)?;
+    let volume =
+        parent_volume(write_probe_path(&spec.output_dir)).or_else(|| parent_volume(&spec.app_path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_notarize_access(&spec.app_path, &spec.output_dir, &spec.credentials)?;
+        cancellation.check()?;
+        require_release_xcode_toolchain()?;
+        notarize_app_bundle(&spec)
+    })
+}
+
 fn retain_packaging_read_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
     preflight_access_scope(path, AccessIntent::Read, worker)
+}
+
+fn preflight_bundle_volumes(spec: &AppBundleSpec) -> Result<()> {
+    preflight_volume_access_scope(
+        &spec.executable,
+        AccessIntent::Read,
+        "bundle app executable",
+    )?;
+    preflight_volume_access_scope(&spec.icon, AccessIntent::Read, "bundle app icon")?;
+    preflight_volume_access_scope(
+        write_probe_path(&spec.output_dir),
+        AccessIntent::Write,
+        "bundle app output",
+    )
 }
 
 fn retain_bundle_access(
@@ -161,6 +224,19 @@ fn retain_bundle_access(
             "bundle app output",
         )?,
     ])
+}
+
+fn preflight_notarize_volumes(spec: &NotarizationSpec) -> Result<()> {
+    preflight_volume_access_scope(&spec.app_path, AccessIntent::Read, "notarize app")?;
+    preflight_volume_access_scope(
+        write_probe_path(&spec.output_dir),
+        AccessIntent::Write,
+        "notarize output",
+    )?;
+    if let NotarizationCredentials::ApiKey { key_path, .. } = &spec.credentials {
+        preflight_volume_access_scope(key_path, AccessIntent::Read, "notarize api key")?;
+    }
+    Ok(())
 }
 
 fn retain_notarize_access(

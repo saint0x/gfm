@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,6 +29,10 @@ fn bundles_unsigned_app_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "bundle app executable", &executable);
+    assert_worker_admitted(&stderr, "bundle app icon", &icon);
+    assert_worker_admitted(&stderr, "bundle app output", &root);
 
     assert!(stdout.contains("GFM.app"), "{stdout}");
     assert!(dist.join("GFM.app/Contents/MacOS/gfm").is_file());
@@ -51,6 +56,12 @@ fn bundles_unsigned_app_from_binary() {
         String::from_utf8_lossy(&validate.stderr)
     );
     let validate_stdout = String::from_utf8(validate.stdout).unwrap();
+    let validate_stderr = String::from_utf8_lossy(&validate.stderr);
+    assert_worker_admitted(
+        &validate_stderr,
+        "release validate app",
+        &dist.join("GFM.app"),
+    );
     assert!(
         validate_stdout.contains("com.saint0x.gfm"),
         "{validate_stdout}"
@@ -217,4 +228,17 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn assert_worker_admitted(stderr: &str, worker: &str, path: &Path) {
+    let expected_worker = format!("worker={worker}");
+    let expected_path = format!("path={}", path.display());
+    assert!(
+        stderr.lines().any(|line| {
+            line.starts_with("security-worker-admission\t")
+                && line.split('\t').any(|field| field == expected_worker)
+                && line.split('\t').any(|field| field == expected_path)
+        }),
+        "{stderr}"
+    );
 }
