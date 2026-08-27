@@ -78,21 +78,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             })?;
             let new_archive = parse_content_manifest_archive_spec(&new_archive)?;
             let retired_paths = args.map(PathBuf::from).collect::<Vec<_>>();
-            let _access =
-                retain_manifest_promotion_access(&manifest_path, &new_archive, &retired_paths)?;
-            let promotion =
-                promote_content_archive_manifest(&manifest_path, new_archive, &retired_paths)?;
-            eprintln!(
-                "content-manifest-promoted\tarchives={}\tretired={}\tmissing-retirements={}",
-                promotion.manifest.archives.len(),
-                promotion.retired_archives.len(),
-                promotion.missing_retirements.len()
-            );
-            for path in promotion.retired_archives {
-                println!("retire\t{}", path.display());
-            }
-            for path in promotion.missing_retirements {
-                println!("missing-retirement\t{}", path.display());
+            let (summary, lines) =
+                run_manifest_promotion(manifest_path, new_archive, retired_paths)?;
+            eprintln!("{summary}");
+            for line in lines {
+                println!("{line}");
             }
         }
         "content-manifest-promotion-recovery-plan" => {
@@ -579,6 +569,68 @@ fn retain_manifest_promotion_access(
         )?);
     }
     Ok(guards)
+}
+
+fn preflight_manifest_promotion_volumes(
+    manifest_path: &Path,
+    new_archive: &ContentArchiveManifestEntry,
+    retired_paths: &[PathBuf],
+) -> Result<()> {
+    preflight_volume_access_scope(
+        manifest_path,
+        AccessIntent::Read,
+        "content manifest promotion manifest",
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(manifest_path),
+        AccessIntent::Write,
+        "content manifest promotion manifest",
+    )?;
+    preflight_volume_access_scope(
+        &resolve_manifest_path(manifest_path, &new_archive.path),
+        AccessIntent::Read,
+        "content manifest promotion archive",
+    )?;
+    for path in retired_paths {
+        preflight_volume_access_scope(
+            existing_read_probe_path(&resolve_manifest_path(manifest_path, path)),
+            AccessIntent::Read,
+            "content manifest promotion retirement",
+        )?;
+    }
+    Ok(())
+}
+
+fn run_manifest_promotion(
+    manifest_path: PathBuf,
+    new_archive: ContentArchiveManifestEntry,
+    retired_paths: Vec<PathBuf>,
+) -> Result<(String, Vec<String>)> {
+    const WORKER: &str = "content manifest promotion";
+    preflight_manifest_promotion_volumes(&manifest_path, &new_archive, &retired_paths)?;
+    let volume = detect_volume_id(&manifest_path).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access =
+            retain_manifest_promotion_access(&manifest_path, &new_archive, &retired_paths)?;
+        cancellation.check()?;
+        let promotion =
+            promote_content_archive_manifest(&manifest_path, new_archive, &retired_paths)?;
+        let summary = format!(
+            "content-manifest-promoted\tarchives={}\tretired={}\tmissing-retirements={}",
+            promotion.manifest.archives.len(),
+            promotion.retired_archives.len(),
+            promotion.missing_retirements.len()
+        );
+        let mut lines = Vec::new();
+        for path in promotion.retired_archives {
+            lines.push(format!("retire\t{}", path.display()));
+        }
+        for path in promotion.missing_retirements {
+            lines.push(format!("missing-retirement\t{}", path.display()));
+        }
+        Ok((summary, lines))
+    })
 }
 
 fn retain_manifest_promotion_recovery_plan_access(

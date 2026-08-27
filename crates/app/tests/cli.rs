@@ -1045,7 +1045,6 @@ fn search_typing_benchmark_reports_hot_path_latency_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("search-typing-benchmark\t"), "{stdout}");
     assert!(stdout.contains("\trecords=256\t"), "{stdout}");
@@ -2696,7 +2695,6 @@ fn searches_with_structured_filters_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("final notes.md"), "{stdout}");
     assert!(!stdout.contains("draft notes.md"), "{stdout}");
@@ -2766,7 +2764,6 @@ fn searches_with_boolean_groups_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("report.md"), "{stdout}");
     assert!(stdout.contains("invoice.md"), "{stdout}");
@@ -2791,7 +2788,6 @@ fn streams_hot_then_deep_search_batches_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8(output.stdout).unwrap();
     let hot = stdout.find("batch\thot").expect(&stdout);
     let deep = stdout.find("batch\tdeep").expect(&stdout);
@@ -3232,7 +3228,6 @@ fn searches_persisted_tags_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("tagged.md"), "{stdout}");
     assert!(!stdout.contains("other.md"), "{stdout}");
@@ -5164,7 +5159,6 @@ fn searches_with_scope_prefixes_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("Desktop/report.md"), "{stdout}");
     assert!(!stdout.contains("Downloads/report.md"), "{stdout}");
@@ -6171,7 +6165,6 @@ fn recovers_interrupted_operation_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("987\tcompleted\tcopy\t"), "{stdout}");
     assert_eq!(
@@ -8876,6 +8869,21 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         String::from_utf8_lossy(&promote_output.stderr)
     );
     let promote_stderr = String::from_utf8(promote_output.stderr).unwrap();
+    assert_worker_admitted(
+        &promote_stderr,
+        "content manifest promotion manifest",
+        &manifest,
+    );
+    assert_worker_admitted(
+        &promote_stderr,
+        "content manifest promotion archive",
+        &third_content,
+    );
+    assert_worker_admitted(
+        &promote_stderr,
+        "content manifest promotion retirement",
+        &first_content,
+    );
     assert!(
         promote_stderr.contains("content-manifest-promoted")
             && promote_stderr.contains("archives=2")
@@ -9695,6 +9703,13 @@ fn content_manifest_promote_refuses_unreachable_volume_before_journaling_from_bi
         stderr.contains(
             "content manifest promotion manifest volume access blocked: unreachable volume network"
         ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content manifest promotion\tpath={}",
+            manifest.display()
+        )),
         "{stderr}"
     );
     assert_eq!(fs::read_to_string(&manifest).unwrap(), original_manifest);
@@ -11493,6 +11508,8 @@ fn reports_recoverable_jobs_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "jobs recover", &journal);
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
@@ -11747,6 +11764,8 @@ fn reports_job_payload_catalog_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "jobs payload catalog", catalog.parent().unwrap());
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     for kind in [
@@ -11816,6 +11835,12 @@ fn reports_restorable_job_progress_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(
+        &stderr,
+        "jobs progress snapshot",
+        progress.parent().unwrap(),
+    );
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("progress\t1\tforeground\tinteractive\tcopy selected files\t1\trunning\t42\t100\tcopy:/source->/target\t1000"), "{stdout}");
@@ -11849,6 +11874,8 @@ fn normalizes_interrupted_job_progress_for_restore_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "jobs progress restore", progress.parent().unwrap());
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("progress\t1\tforeground\tinteractive\tcopy selected files\t1\tpaused\t42\t100\tinterrupted:running:copy:/source->/target\t2000"), "{stdout}");
@@ -11896,6 +11923,12 @@ fn progress_control_pause_resume_and_stop_persist_from_binary() {
         pause.status.success(),
         "{}",
         String::from_utf8_lossy(&pause.stderr)
+    );
+    let pause_stderr = String::from_utf8_lossy(&pause.stderr);
+    assert_worker_admitted(
+        &pause_stderr,
+        "jobs progress control",
+        progress.parent().unwrap(),
     );
     let pause_stdout = String::from_utf8(pause.stdout).unwrap();
     assert!(
@@ -11993,6 +12026,12 @@ fn reports_payload_restore_plan_from_existing_stores() {
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(
+        &stderr,
+        "jobs payload restore plan",
+        progress.parent().unwrap(),
     );
 
     let stdout = String::from_utf8(output.stdout).unwrap();

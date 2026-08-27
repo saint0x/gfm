@@ -1,5 +1,7 @@
 use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
-use crate::runtime::{default_job_journal_path, run_scheduled_volume_task};
+use crate::runtime::{
+    default_job_journal_path, run_scheduled_volume_task, run_volume_task_cancellable,
+};
 use crate::{
     parent_volume, parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg,
     required_path,
@@ -22,17 +24,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .next()
                 .map(PathBuf::from)
                 .unwrap_or_else(default_job_journal_path);
-            let _access = preflight_access_scope(&journal, AccessIntent::Read, "jobs recover")?;
-            let recoverable =
-                JobJournal::new(journal).recoverable(RetryPolicy { max_attempts: 2 })?;
-            for job in recoverable {
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    job.id.value(),
-                    job.attempts,
-                    recovery_reason(job.reason),
-                    job.label
-                );
+            for line in run_jobs_recover(journal)? {
+                println!("{line}");
             }
         }
         "jobs-retry-plan" => {
@@ -58,16 +51,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "jobs-payload-catalog" => {
             let path = required_path(args.next(), "jobs-payload-catalog requires a catalog path")?;
-            let _access = preflight_access_scope(
-                write_probe_path(&path),
-                AccessIntent::Write,
-                "jobs payload catalog",
-            )?;
-            let catalog = JobPayloadCatalog::new(&path);
-            let records = sample_payload_catalog_records();
-            catalog.write_all(&records)?;
-            for record in catalog.read()? {
-                println!("{}", record.as_tsv());
+            for line in run_jobs_payload_catalog(path)? {
+                println!("{line}");
             }
         }
         "jobs-fairness-plan" => {
@@ -102,17 +87,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "jobs-progress-snapshot requires a progress path",
             )?;
-            let _access = preflight_access_scope(
-                write_probe_path(&path),
-                AccessIntent::Write,
-                "jobs progress snapshot",
-            )?;
-            let store = JobProgressStore::new(&path);
-            for snapshot in sample_progress_snapshots() {
-                store.upsert(snapshot)?;
-            }
-            for snapshot in store.restorable()? {
-                println!("{}", snapshot.as_tsv());
+            for line in run_jobs_progress_snapshot(path)? {
+                println!("{line}");
             }
         }
         "jobs-progress-restore" => {
@@ -121,14 +97,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "jobs-progress-restore requires a progress path",
             )?;
             let updated_ms = parse_optional_timestamp_ms("jobs-progress-restore", args.next())?;
-            let _access = preflight_access_scope(
-                write_probe_path(&path),
-                AccessIntent::Write,
-                "jobs progress restore",
-            )?;
-            let store = JobProgressStore::new(&path);
-            for snapshot in store.restore_interrupted(updated_ms)? {
-                println!("{}", snapshot.as_tsv());
+            for line in run_jobs_progress_restore(path, updated_ms)? {
+                println!("{line}");
             }
         }
         "jobs-progress-control" => {
@@ -139,22 +109,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let job_id = parse_u64_arg(args.next(), "jobs-progress-control requires a job id")?;
             let command = parse_progress_command(args.next())?;
             let updated_ms = parse_optional_timestamp_ms("jobs-progress-control", args.next())?;
-            let _access = preflight_access_scope(
-                write_probe_path(&path),
-                AccessIntent::Write,
-                "jobs progress control",
-            )?;
-            let store = JobProgressStore::new(&path);
-            let snapshot =
-                store.apply_command(gfm_jobs::JobId::from_raw(job_id), command, updated_ms)?;
-            println!(
-                "progress-control\t{}\tjob={}\tstate={}\tdetail={}",
-                command.as_str(),
-                snapshot.id.value(),
-                snapshot.state.as_str(),
-                snapshot.detail
-            );
-            println!("{}", snapshot.as_tsv());
+            for line in run_jobs_progress_control(path, job_id, command, updated_ms)? {
+                println!("{line}");
+            }
         }
         "jobs-payload-restore-plan" => {
             let catalog_path = required_path(
@@ -166,25 +123,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "jobs-payload-restore-plan requires a progress path",
             )?;
             let updated_ms = parse_optional_timestamp_ms("jobs-payload-restore-plan", args.next())?;
-            let _access = retain_payload_restore_access(&catalog_path, &progress_path)?;
-            let store = JobProgressStore::new(&progress_path);
-            let restored = store.restore_interrupted(updated_ms)?;
-            let payloads = JobPayloadCatalog::new(&catalog_path)
-                .read_for_ids(restored.iter().map(|snapshot| snapshot.id))?
-                .into_iter()
-                .map(|record| (record.id, record))
-                .collect::<HashMap<_, _>>();
-            for snapshot in restored {
-                if let Some(payload) = payloads.get(&snapshot.id) {
-                    println!("restore\t{}\t{}", snapshot.state.as_str(), payload.as_tsv());
-                } else {
-                    println!(
-                        "missing-payload\t{}\t{}\t{}",
-                        snapshot.id.value(),
-                        snapshot.state.as_str(),
-                        snapshot.label
-                    );
-                }
+            for line in run_jobs_payload_restore_plan(catalog_path, progress_path, updated_ms)? {
+                println!("{line}");
             }
         }
         "jobs-cancel-tree" => {
@@ -250,6 +190,172 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn run_jobs_recover(journal: PathBuf) -> Result<Vec<String>> {
+    const WORKER: &str = "jobs recover";
+    preflight_volume_access_scope(&journal, AccessIntent::Read, WORKER)?;
+    let volume = parent_volume(&journal);
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_access_scope(&journal, AccessIntent::Read, WORKER)?;
+        cancellation.check()?;
+        let lines = JobJournal::new(journal)
+            .recoverable(RetryPolicy { max_attempts: 2 })?
+            .into_iter()
+            .map(|job| {
+                format!(
+                    "{}\t{}\t{}\t{}",
+                    job.id.value(),
+                    job.attempts,
+                    recovery_reason(job.reason),
+                    job.label
+                )
+            })
+            .collect();
+        Ok(lines)
+    })
+}
+
+fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
+    const WORKER: &str = "jobs payload catalog";
+    preflight_volume_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
+    let volume = parent_volume(write_probe_path(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
+        cancellation.check()?;
+        let catalog = JobPayloadCatalog::new(&path);
+        let records = sample_payload_catalog_records();
+        catalog.write_all(&records)?;
+        let lines = catalog
+            .read()?
+            .into_iter()
+            .map(|record| record.as_tsv())
+            .collect();
+        Ok(lines)
+    })
+}
+
+fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
+    const WORKER: &str = "jobs progress snapshot";
+    preflight_volume_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
+    let volume = parent_volume(write_probe_path(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
+        cancellation.check()?;
+        let store = JobProgressStore::new(&path);
+        for snapshot in sample_progress_snapshots() {
+            store.upsert(snapshot)?;
+        }
+        let lines = store
+            .restorable()?
+            .into_iter()
+            .map(|snapshot| snapshot.as_tsv())
+            .collect();
+        Ok(lines)
+    })
+}
+
+fn run_jobs_progress_restore(path: PathBuf, updated_ms: u64) -> Result<Vec<String>> {
+    const WORKER: &str = "jobs progress restore";
+    preflight_volume_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
+    let volume = parent_volume(write_probe_path(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
+        cancellation.check()?;
+        let lines = JobProgressStore::new(&path)
+            .restore_interrupted(updated_ms)?
+            .into_iter()
+            .map(|snapshot| snapshot.as_tsv())
+            .collect();
+        Ok(lines)
+    })
+}
+
+fn run_jobs_progress_control(
+    path: PathBuf,
+    job_id: u64,
+    command: JobProgressCommand,
+    updated_ms: u64,
+) -> Result<Vec<String>> {
+    const WORKER: &str = "jobs progress control";
+    preflight_volume_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
+    let volume = parent_volume(write_probe_path(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
+        cancellation.check()?;
+        let snapshot = JobProgressStore::new(&path).apply_command(
+            gfm_jobs::JobId::from_raw(job_id),
+            command,
+            updated_ms,
+        )?;
+        Ok(vec![
+            format!(
+                "progress-control\t{}\tjob={}\tstate={}\tdetail={}",
+                command.as_str(),
+                snapshot.id.value(),
+                snapshot.state.as_str(),
+                snapshot.detail
+            ),
+            snapshot.as_tsv(),
+        ])
+    })
+}
+
+fn run_jobs_payload_restore_plan(
+    catalog_path: PathBuf,
+    progress_path: PathBuf,
+    updated_ms: u64,
+) -> Result<Vec<String>> {
+    const WORKER: &str = "jobs payload restore plan";
+    preflight_payload_restore_volumes(&catalog_path, &progress_path)?;
+    let volume =
+        parent_volume(write_probe_path(&progress_path)).or_else(|| parent_volume(&catalog_path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_payload_restore_access(&catalog_path, &progress_path)?;
+        cancellation.check()?;
+        let store = JobProgressStore::new(&progress_path);
+        let restored = store.restore_interrupted(updated_ms)?;
+        let payloads = JobPayloadCatalog::new(&catalog_path)
+            .read_for_ids(restored.iter().map(|snapshot| snapshot.id))?
+            .into_iter()
+            .map(|record| (record.id, record))
+            .collect::<HashMap<_, _>>();
+        let lines = restored
+            .into_iter()
+            .map(|snapshot| {
+                if let Some(payload) = payloads.get(&snapshot.id) {
+                    format!("restore\t{}\t{}", snapshot.state.as_str(), payload.as_tsv())
+                } else {
+                    format!(
+                        "missing-payload\t{}\t{}\t{}",
+                        snapshot.id.value(),
+                        snapshot.state.as_str(),
+                        snapshot.label
+                    )
+                }
+            })
+            .collect();
+        Ok(lines)
+    })
+}
+
+fn preflight_payload_restore_volumes(catalog_path: &Path, progress_path: &Path) -> Result<()> {
+    preflight_volume_access_scope(
+        catalog_path,
+        AccessIntent::Read,
+        "jobs payload restore plan",
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(progress_path),
+        AccessIntent::Write,
+        "jobs payload restore plan",
+    )
 }
 
 fn retain_payload_restore_access(
