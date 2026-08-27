@@ -26,6 +26,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     match command {
         "records-verify" => {
             let records = required_path(args.next(), "records-verify requires a records path")?;
+            let _access = retain_archive_read_access(&records, "records verify")?;
             let archive = MmapRecordArchive::open(records)?;
             println!(
                 "records-verify\trecords={}\tbytes={}\tchecksum={}",
@@ -202,6 +203,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let records = required_path(args.next(), "index-columns requires a records path")?;
             let output =
                 required_path(args.next(), "index-columns requires an output columns path")?;
+            let _access = retain_record_sidecar_build_access(&records, &output, "index columns")?;
             let archive = MmapRecordArchive::open(records)?;
             let records = archive.records()?;
             write_record_columns(output, &records)?;
@@ -209,6 +211,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "columns-verify" => {
             let columns = required_path(args.next(), "columns-verify requires a columns path")?;
+            let _access = retain_archive_read_access(&columns, "columns verify")?;
             let archive = MmapRecordColumns::open(columns)?;
             println!(
                 "columns-verify\trecords={}\tbytes={}\tchecksum={}",
@@ -225,6 +228,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let columns = required_path(args.next(), "columns-lookup requires a columns path")?;
             let volume = parse_u64_arg(args.next(), "columns-lookup requires a volume id")?;
             let node = parse_u64_arg(args.next(), "columns-lookup requires a node id")?;
+            let _access = retain_archive_read_access(&columns, "columns lookup")?;
             let archive = MmapRecordColumns::open(columns)?;
             match archive.find(FileId::new(VolumeId(volume), node))? {
                 Some(column) => println!(
@@ -246,6 +250,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-metadata requires an output metadata path",
             )?;
+            let _access = retain_record_sidecar_build_access(&records, &output, "index metadata")?;
             let archive = MmapRecordArchive::open(records)?;
             let postings = metadata_postings_from_records(&archive.records()?);
             write_metadata_postings(output, &postings)?;
@@ -257,6 +262,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-dictionary requires an output dictionary path",
             )?;
+            let _access =
+                retain_record_sidecar_build_access(&records, &output, "index dictionary")?;
             let archive = MmapRecordArchive::open(records)?;
             let report = dictionary_term_report_from_records(&archive.records()?);
             write_dictionary(output, &report.terms)?;
@@ -276,6 +283,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let records = required_path(args.next(), "index-prefixes requires a records path")?;
             let output =
                 required_path(args.next(), "index-prefixes requires an output prefix path")?;
+            let _access = retain_record_sidecar_build_access(&records, &output, "index prefixes")?;
             let archive = MmapRecordArchive::open(records)?;
             let postings = prefix_postings_from_records(&archive.records()?);
             write_prefix_postings(output, &postings)?;
@@ -287,6 +295,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-substrings requires an output substring path",
             )?;
+            let _access =
+                retain_record_sidecar_build_access(&records, &output, "index substrings")?;
             let archive = MmapRecordArchive::open(records)?;
             let postings = substring_postings_from_records(&archive.records()?);
             write_substring_postings(output, &postings)?;
@@ -295,6 +305,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "index-fuzzy" => {
             let records = required_path(args.next(), "index-fuzzy requires a records path")?;
             let output = required_path(args.next(), "index-fuzzy requires an output fuzzy path")?;
+            let _access = retain_record_sidecar_build_access(&records, &output, "index fuzzy")?;
             let archive = MmapRecordArchive::open(records)?;
             let postings = fuzzy_postings_from_records(&archive.records()?);
             write_fuzzy_postings(output, &postings)?;
@@ -374,6 +385,25 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn retain_archive_read_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(path, AccessIntent::Read, worker)
+}
+
+fn retain_record_sidecar_build_access(
+    records: &Path,
+    output: &Path,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(records, AccessIntent::Read, &format!("{worker} records"))?,
+        preflight_access_scope(
+            write_probe_path(output),
+            AccessIntent::Write,
+            &format!("{worker} output"),
+        )?,
+    ])
 }
 
 fn retain_derived_sidecar_rebuild_access(

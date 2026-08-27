@@ -1168,6 +1168,112 @@ fn rebuilds_columns_archive_from_binary() {
 }
 
 #[test]
+fn archive_read_routes_refuse_unreachable_volume_before_mapping_from_binary() {
+    let offline = unique_temp_dir("gfm-cli-archive-read-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let cases = [
+        (
+            "records-verify",
+            "gfmidx",
+            vec![],
+            "records verify",
+            "records-verify\t",
+        ),
+        (
+            "columns-verify",
+            "gfmcols",
+            vec![],
+            "columns verify",
+            "columns-verify\t",
+        ),
+        (
+            "columns-lookup",
+            "gfmcols",
+            vec!["1", "1"],
+            "columns lookup",
+            "columns\t",
+        ),
+    ];
+
+    for (route, extension, tail_args, worker, forbidden_stdout) in cases {
+        let archive = offline.join(format!("{route}.{extension}"));
+        fs::write(&archive, "not opened").unwrap();
+        let mut args = vec![route.to_string(), archive.to_string_lossy().into_owned()];
+        args.extend(tail_args.into_iter().map(str::to_string));
+
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains(forbidden_stdout), "{route}: {stdout}");
+        assert!(
+            stderr.contains(&format!(
+                "{worker} volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
+    }
+
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn record_sidecar_build_routes_refuse_unreachable_output_before_mapping_from_binary() {
+    let root = unique_temp_dir("gfm-cli-record-sidecar-build-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-record-sidecar-build-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = root.join("records.gfmidx");
+    fs::write(&records, "not opened").unwrap();
+
+    let cases = [
+        ("index-columns", "columns.gfmcols", "index columns"),
+        ("index-metadata", "metadata.gfmmeta", "index metadata"),
+        ("index-dictionary", "dictionary.gfmdict", "index dictionary"),
+        ("index-prefixes", "prefixes.gfmprefix", "index prefixes"),
+        (
+            "index-substrings",
+            "substrings.gfmsubstr",
+            "index substrings",
+        ),
+        ("index-fuzzy", "fuzzy.gfmfuzzy", "index fuzzy"),
+    ];
+
+    for (route, output_name, worker) in cases {
+        let output_path = offline.join(output_name);
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args([
+                route,
+                records.to_str().unwrap(),
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stdout.is_empty(), "{route}: {stdout}");
+        assert!(
+            stderr.contains(&format!(
+                "{worker} output volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
+        assert!(!output_path.exists(), "{route}: {}", output_path.display());
+    }
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn rebuilds_derived_sidecars_from_binary() {
     let root = unique_temp_dir("gfm-cli-derived-rebuild-root");
     let records = unique_temp_path("gfm-cli-derived-rebuild-records", "gfmidx");
@@ -3055,6 +3161,147 @@ fn search_index_columns_refuses_unreachable_columns_before_open_from_binary() {
         "{stderr}"
     );
     assert!(!stderr.contains("invalid magic"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn archive_read_helpers_refuse_unreachable_volume_before_mapping_from_binary() {
+    let offline = unique_temp_dir("gfm-cli-archive-read-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let cases = [
+        (
+            "records-verify",
+            "gfmidx",
+            Vec::<&str>::new(),
+            "records verify",
+            "records-verify\t",
+        ),
+        (
+            "columns-verify",
+            "gfmcols",
+            Vec::<&str>::new(),
+            "columns verify",
+            "columns-verify\t",
+        ),
+        (
+            "columns-lookup",
+            "gfmcols",
+            vec!["1", "1"],
+            "columns lookup",
+            "columns\t",
+        ),
+    ];
+
+    for (route, extension, tail_args, worker, forbidden_stdout) in cases {
+        let archive = offline.join(format!("{route}.{extension}"));
+        fs::write(&archive, "not opened").unwrap();
+        let mut args = vec![route.to_string(), archive.to_string_lossy().into_owned()];
+        args.extend(tail_args.into_iter().map(str::to_string));
+
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains(forbidden_stdout), "{route}: {stdout}");
+        assert!(
+            stderr.contains(&format!(
+                "{worker} volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
+    }
+
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn record_sidecar_builders_refuse_unreachable_records_before_mapping_from_binary() {
+    let root = unique_temp_dir("gfm-cli-record-sidecar-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-record-sidecar-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = offline.join("records.gfmidx");
+    fs::write(&records, "not opened").unwrap();
+    let cases = [
+        ("index-columns", "gfmcols", "index columns"),
+        ("index-metadata", "gfmmeta", "index metadata"),
+        ("index-dictionary", "gfmdict", "index dictionary"),
+        ("index-prefixes", "gfmprefix", "index prefixes"),
+        ("index-substrings", "gfmsubstr", "index substrings"),
+        ("index-fuzzy", "gfmfuzzy", "index fuzzy"),
+    ];
+
+    for (route, extension, worker) in cases {
+        let output_path = root.join(format!("{route}.{extension}"));
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args([
+                route,
+                records.to_str().unwrap(),
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "{worker} records volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
+        assert!(!output_path.exists(), "{route}");
+    }
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn record_sidecar_builders_refuse_unreachable_outputs_before_mapping_from_binary() {
+    let root = unique_temp_dir("gfm-cli-record-sidecar-output-root");
+    let offline = unique_temp_dir("gfm-cli-record-sidecar-output-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = root.join("records.gfmidx");
+    fs::write(&records, "not opened").unwrap();
+    let cases = [
+        ("index-columns", "gfmcols", "index columns"),
+        ("index-metadata", "gfmmeta", "index metadata"),
+        ("index-dictionary", "gfmdict", "index dictionary"),
+        ("index-prefixes", "gfmprefix", "index prefixes"),
+        ("index-substrings", "gfmsubstr", "index substrings"),
+        ("index-fuzzy", "gfmfuzzy", "index fuzzy"),
+    ];
+
+    for (route, extension, worker) in cases {
+        let output_path = offline.join(format!("{route}.{extension}"));
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args([
+                route,
+                records.to_str().unwrap(),
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "{worker} output volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
+        assert!(!output_path.exists(), "{route}");
+    }
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(offline).unwrap();
