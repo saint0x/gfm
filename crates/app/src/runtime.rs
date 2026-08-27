@@ -13,7 +13,7 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn run_volume_task<T>(
@@ -37,8 +37,7 @@ pub(crate) fn run_volume_task_cancellable<T>(
 where
     T: Send + 'static,
 {
-    let result_slot = Arc::new(Mutex::new(None));
-    let result_slot_task = Arc::clone(&result_slot);
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
     let job = if let Some(volume) = volume {
         scheduler.schedule_on_volume(priority, label, volume)
@@ -57,9 +56,9 @@ where
     let task = Task::new(job.clone(), move |cancellation| {
         runtime_task.running()?;
         let result = work(cancellation)?;
-        *result_slot_task
-            .lock()
-            .expect("volume task result lock poisoned") = Some(result);
+        result_tx
+            .send(result)
+            .map_err(|_| GfmError::Format(format!("{label} result receiver dropped")))?;
         Ok(())
     });
     let report = WorkerPool::new(1).run_isolated(vec![task], VolumeConcurrencyPolicy::new(1));
@@ -79,12 +78,9 @@ where
             return Err(GfmError::Format(format!("{label} job failed: {message}")))
         }
     }
-    let result = result_slot
-        .lock()
-        .expect("volume task result lock poisoned")
-        .take()
-        .ok_or_else(|| GfmError::Format(format!("{label} job completed without a result")))?;
-    Ok(result)
+    result_rx
+        .try_recv()
+        .map_err(|_| GfmError::Format(format!("{label} job completed without a result")))
 }
 
 pub(crate) fn run_volume_task_cancellable_without_progress<T>(
@@ -96,8 +92,7 @@ pub(crate) fn run_volume_task_cancellable_without_progress<T>(
 where
     T: Send + 'static,
 {
-    let result_slot = Arc::new(Mutex::new(None));
-    let result_slot_task = Arc::clone(&result_slot);
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
     let job = if let Some(volume) = volume {
         scheduler.schedule_on_volume(priority, label, volume)
@@ -107,9 +102,9 @@ where
     let job = drain_single_runtime_job(&mut scheduler, job, label)?;
     let task = Task::new(job.clone(), move |cancellation| {
         let result = work(cancellation)?;
-        *result_slot_task
-            .lock()
-            .expect("volume task result lock poisoned") = Some(result);
+        result_tx
+            .send(result)
+            .map_err(|_| GfmError::Format(format!("{label} result receiver dropped")))?;
         Ok(())
     });
     let report = WorkerPool::new(1).run_isolated(vec![task], VolumeConcurrencyPolicy::new(1));
@@ -128,12 +123,9 @@ where
             return Err(GfmError::Format(format!("{label} job failed: {message}")))
         }
     }
-    let result = result_slot
-        .lock()
-        .expect("volume task result lock poisoned")
-        .take()
-        .ok_or_else(|| GfmError::Format(format!("{label} job completed without a result")))?;
-    Ok(result)
+    result_rx
+        .try_recv()
+        .map_err(|_| GfmError::Format(format!("{label} job completed without a result")))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,16 +213,15 @@ where
         format!("{}:{label}:adaptive", priority.as_str()),
     )?;
 
-    let result_slot = Arc::new(Mutex::new(None));
-    let result_slot_task = Arc::clone(&result_slot);
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
     let job = drain_single_runtime_job(&mut scheduler, job, label)?;
     let runtime_task = runtime.clone();
     let task = RetriableTask::new(job.clone(), move |cancellation| {
         runtime_task.running()?;
         let result = work(cancellation)?;
-        *result_slot_task
-            .lock()
-            .expect("scheduled task result lock poisoned") = Some(result);
+        result_tx
+            .send(result)
+            .map_err(|_| GfmError::Format(format!("{label} result receiver dropped")))?;
         Ok(())
     });
     let report = WorkerPool::new(scheduling.worker_threads).run_retriable_isolated(
@@ -255,11 +246,9 @@ where
             return Err(GfmError::Format(format!("{label} job failed: {message}")))
         }
     }
-    let result = result_slot
-        .lock()
-        .expect("scheduled task result lock poisoned")
-        .take()
-        .ok_or_else(|| GfmError::Format(format!("{label} job completed without a result")))?;
+    let result = result_rx
+        .try_recv()
+        .map_err(|_| GfmError::Format(format!("{label} job completed without a result")))?;
     Ok(ScheduledTaskOutcome {
         result: Some(result),
         scheduling_action: scheduling.action,
