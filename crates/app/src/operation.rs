@@ -401,6 +401,26 @@ fn operation_access_gate(
         gate = gate.with_decision(requirement.path, decision);
     }
     for requirement in operation.access_requirements() {
+        let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        let Some(volume) = unreachable_volume_for_path(volume_report, &probe_path) else {
+            continue;
+        };
+        let reason = format!(
+            "unreachable volume {}; label={}; root={}; stable-id={}; mount={}; reachable={}; role={}",
+            volume.kind.as_str(),
+            volume.label,
+            volume.path.display(),
+            volume.stable_identity,
+            volume.mount_state.as_str(),
+            volume
+                .reachable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            requirement.role.as_str()
+        );
+        gate = gate.with_decision(requirement.path, OperationAccessDecision::deny(reason));
+    }
+    for requirement in operation.access_requirements() {
         if !requirement_mutates_volume(operation, requirement.role) {
             continue;
         }
@@ -422,6 +442,17 @@ fn operation_access_gate(
         gate = gate.with_decision(requirement.path, OperationAccessDecision::deny(reason));
     }
     gate
+}
+
+fn unreachable_volume_for_path<'a>(
+    report: &'a VolumeDiscoveryReport,
+    path: &Path,
+) -> Option<&'a gfm_mac::VolumeDescriptor> {
+    report
+        .volumes
+        .iter()
+        .filter(|volume| volume.reachable == Some(false) && path.starts_with(&volume.path))
+        .max_by_key(|volume| volume.path.components().count())
 }
 
 fn requirement_mutates_volume(operation: &Operation, role: OperationAccessRole) -> bool {
@@ -731,6 +762,87 @@ mod tests {
             .contains("read-only volume external"));
 
         fs::set_permissions(&volume, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_access_gate_refuses_unreachable_network_volume_before_copying() {
+        let root = unique_temp_dir("gfm-app-op-unreachable-volume");
+        let source_root = root.join("Source");
+        let volume = root.join("TeamShare");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&volume).unwrap();
+        fs::write(volume.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+        let source = source_root.join("source.txt");
+        let destination = volume.join("copy.txt");
+        fs::write(&source, "content").unwrap();
+        let mut report = VolumeDiscoveryReport::from_paths(vec![volume.clone()]);
+        report.volumes[0].reachable = Some(false);
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let gate = operation_access_gate(&operation, &report);
+        let journal = root.join("journal.tsv");
+        let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
+            .execute(operation)
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err.to_string().contains("unreachable volume network"));
+        assert!(err.to_string().contains("role=destination-parent"));
+        assert!(!destination.exists());
+        let journal_entries = read_journal(&journal).unwrap();
+        assert_eq!(journal_entries.len(), 2);
+        assert_eq!(journal_entries[0].status, OperationStatus::Started);
+        assert_eq!(journal_entries[1].status, OperationStatus::Failed);
+        assert!(journal_entries[1]
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("unreachable volume network"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_access_gate_refuses_unreachable_network_source_before_planning() {
+        let root = unique_temp_dir("gfm-app-op-unreachable-source");
+        let volume = root.join("TeamShare");
+        let destination_root = root.join("Destination");
+        fs::create_dir_all(&volume).unwrap();
+        fs::create_dir_all(&destination_root).unwrap();
+        fs::write(volume.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+        let source = volume.join("source.txt");
+        let destination = destination_root.join("copy.txt");
+        let mut report = VolumeDiscoveryReport::from_paths(vec![volume.clone()]);
+        report.volumes[0].reachable = Some(false);
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let gate = operation_access_gate(&operation, &report);
+        let journal = root.join("journal.tsv");
+        let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
+            .execute(operation)
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err.to_string().contains("unreachable volume network"));
+        assert!(err.to_string().contains("role=source"));
+        assert!(!destination.exists());
+        let journal_entries = read_journal(&journal).unwrap();
+        assert_eq!(journal_entries.len(), 2);
+        assert_eq!(journal_entries[0].status, OperationStatus::Started);
+        assert_eq!(journal_entries[1].status, OperationStatus::Failed);
+        assert!(journal_entries[1]
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("unreachable volume network"));
+
         fs::remove_dir_all(root).unwrap();
     }
 

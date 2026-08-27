@@ -15,6 +15,7 @@ use core_foundation_sys::string::CFStringRef;
 use core_foundation_sys::url::CFURLRef;
 use core_foundation_sys::uuid::{CFUUIDCreateString, CFUUIDRef};
 use libc::{c_void, statfs, MNT_LOCAL, MNT_NOWAIT, MNT_RDONLY};
+use objc::runtime::{Object, Sel, BOOL};
 use std::ffi::{CStr, CString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -162,6 +163,12 @@ extern "C" {
     ) -> core_foundation_sys::base::Boolean;
 }
 
+#[link(name = "objc")]
+extern "C" {
+    fn objc_msgSend();
+    fn sel_registerName(name: *const libc::c_char) -> Sel;
+}
+
 extern "C" {
     fn CFBooleanGetTypeID() -> core_foundation_sys::base::CFTypeID;
 }
@@ -211,6 +218,7 @@ pub struct NativeVolumeResourceValues {
     pub is_internal: Option<bool>,
     pub is_local: Option<bool>,
     pub is_read_only: Option<bool>,
+    pub is_reachable: Option<bool>,
     pub is_removable: Option<bool>,
     pub remount_url: Option<String>,
     pub supports_case_preserved_names: Option<bool>,
@@ -780,6 +788,7 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
         is_internal: copy_resource_bool(url, unsafe { NSURLVolumeIsInternalKey }),
         is_local: copy_resource_bool(url, unsafe { NSURLVolumeIsLocalKey }),
         is_read_only: copy_resource_bool(url, unsafe { NSURLVolumeIsReadOnlyKey }),
+        is_reachable: check_resource_is_reachable(url),
         is_removable: copy_resource_bool(url, unsafe { NSURLVolumeIsRemovableKey }),
         remount_url: copy_resource_url_string(url, unsafe { NSURLVolumeURLForRemountingKey }),
         supports_case_preserved_names: copy_resource_bool(url, unsafe {
@@ -938,6 +947,18 @@ fn copy_resource_url_string(url: CFURLRef, key: CFStringRef) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn check_resource_is_reachable(url: CFURLRef) -> Option<bool> {
+    if url.is_null() {
+        return None;
+    }
+    let url = url as *mut Object;
+    let mut error: *mut Object = ptr::null_mut();
+    let selector = unsafe { sel_registerName(c"checkResourceIsReachableAndReturnError:".as_ptr()) };
+    let send: unsafe extern "C" fn(*mut Object, Sel, *mut *mut Object) -> BOOL =
+        unsafe { std::mem::transmute(objc_msgSend as *const ()) };
+    Some(unsafe { send(url, selector, &mut error) })
+}
+
 fn copy_resource_value(url: CFURLRef, key: CFStringRef) -> Option<CFType> {
     let mut value: CFTypeRef = ptr::null();
     let copied = unsafe { CFURLCopyResourcePropertyForKey(url, key, &mut value, ptr::null_mut()) };
@@ -1047,6 +1068,7 @@ fn unavailable_resource_values(
         is_internal: None,
         is_local: None,
         is_read_only: None,
+        is_reachable: None,
         is_removable: None,
         remount_url: None,
         supports_case_preserved_names: None,
@@ -1105,6 +1127,7 @@ mod tests {
 
         assert_eq!(values.status, NativeVolumeStatus::Available);
         assert!(values.is_local.is_some() || values.is_read_only.is_some());
+        assert_eq!(values.is_reachable, Some(true));
         assert!(values.is_browsable.is_some() || values.volume_uuid.is_some());
     }
 

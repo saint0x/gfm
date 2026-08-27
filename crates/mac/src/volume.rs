@@ -122,6 +122,7 @@ pub struct VolumeDescriptor {
     pub resource_uuid: Option<String>,
     pub resource_automounted: Option<bool>,
     pub resource_browsable: Option<bool>,
+    pub resource_reachable: Option<bool>,
     pub resource_remount_url: Option<String>,
     pub mount_table_status: Option<NativeVolumeStatus>,
     pub mount_from: Option<String>,
@@ -277,6 +278,7 @@ impl VolumeDescriptor {
                 .as_ref()
                 .and_then(|resource| resource.is_automounted),
             resource_browsable: resource.as_ref().and_then(|resource| resource.is_browsable),
+            resource_reachable: resource.as_ref().and_then(|resource| resource.is_reachable),
             resource_remount_url: resource
                 .as_ref()
                 .and_then(|resource| resource.remount_url.clone()),
@@ -355,7 +357,7 @@ impl VolumeDescriptor {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-reachable={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -442,6 +444,9 @@ impl VolumeDescriptor {
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.resource_browsable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.resource_reachable
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.resource_remount_url
@@ -1265,7 +1270,7 @@ fn volume_reachability(
     }
     resource
         .filter(|resource| resource.status == NativeVolumeStatus::Available)
-        .and_then(|resource| resource.is_browsable)
+        .and_then(|resource| resource.is_reachable.or(resource.is_browsable))
         .or_else(|| Some(path.exists()))
 }
 
@@ -1619,6 +1624,7 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tresource-uuid="));
         assert!(descriptor.as_tsv().contains("\tresource-automounted="));
         assert!(descriptor.as_tsv().contains("\tresource-browsable="));
+        assert!(descriptor.as_tsv().contains("\tresource-reachable=true\t"));
         assert!(descriptor.as_tsv().contains("\tresource-remount-url="));
         assert!(descriptor.as_tsv().contains("\tmount-status=available\t"));
         assert!(descriptor.as_tsv().contains("\tvolume-type="));
@@ -1730,6 +1736,21 @@ mod tests {
         assert!(descriptor.network);
         assert!(descriptor.ejectable);
         assert_eq!(descriptor.commands.unmount, VolumeCommandState::Enabled);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn network_reachability_prefers_native_reachability_over_existing_path() {
+        let root = unique_temp_dir("gfm-volume-network-unreachable");
+        let resource = resource_values(|values| {
+            values.is_reachable = Some(false);
+            values.is_browsable = Some(true);
+        });
+
+        let reachable = volume_reachability(true, MountState::Mounted, Some(&resource), &root);
+
+        assert_eq!(reachable, Some(false));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -2112,6 +2133,7 @@ mod tests {
             is_internal: None,
             is_local: None,
             is_read_only: None,
+            is_reachable: None,
             is_removable: None,
             remount_url: None,
             supports_case_preserved_names: None,
