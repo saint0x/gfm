@@ -1077,6 +1077,13 @@ fn search_typing_session_benchmark_reports_cache_reuse_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("security-worker-admission\tworker=operation journal\t")
+            && stderr.contains("\tworker-action=start\t")
+            && stderr.contains("\tcan-touch-filesystem=true\t"),
+        "{stderr}"
+    );
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
@@ -5667,6 +5674,13 @@ fn operation_conflict_apply_executes_resolved_copy_from_binary() {
         stdout.contains("operation-conflict-control\tapply\t"),
         "{stdout}"
     );
+    let stderr = String::from_utf8_lossy(&apply.stderr);
+    assert!(
+        stderr.contains("security-worker-admission\tworker=operation conflict store\t")
+            && stderr.contains("\tworker-action=start\t")
+            && stderr.contains("\tcan-touch-filesystem=true\t"),
+        "{stderr}"
+    );
     assert_eq!(fs::read_to_string(&source).unwrap(), "new report");
     assert_eq!(fs::read_to_string(&destination).unwrap(), "old report");
     assert_eq!(fs::read_to_string(&copied).unwrap(), "new report");
@@ -9045,6 +9059,17 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         String::from_utf8_lossy(&cleanup_plan_output.stderr)
     );
     let cleanup_plan_stderr = String::from_utf8(cleanup_plan_output.stderr).unwrap();
+    assert_worker_admitted(&cleanup_plan_stderr, "content cleanup plan", &manifest);
+    assert_worker_admitted(
+        &cleanup_plan_stderr,
+        "content manifest cleanup candidate",
+        &first_content,
+    );
+    assert_worker_admitted(
+        &cleanup_plan_stderr,
+        "content cleanup plan active archive",
+        &second_content,
+    );
     assert!(
         cleanup_plan_stderr.contains("content-cleanup-plan")
             && cleanup_plan_stderr.contains("action=Cleanup")
@@ -9079,6 +9104,7 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         String::from_utf8_lossy(&cleanup_output.stderr)
     );
     let cleanup_stderr = String::from_utf8(cleanup_output.stderr).unwrap();
+    assert_worker_admitted(&cleanup_stderr, "content manifest cleanup", &manifest);
     assert!(
         cleanup_stderr.contains("content-manifest-cleanup")
             && cleanup_stderr.contains("removed=1")
@@ -9357,6 +9383,78 @@ fn content_manifest_promotion_recover_refuses_unreachable_archive_before_complet
     );
     assert_eq!(fs::read_to_string(&manifest).unwrap(), original_manifest);
     assert!(journal_path.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_cleanup_plan_refuses_unreachable_active_archive_before_metadata_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-cleanup-plan-active-unreachable");
+    let local = root.join("local");
+    let offline = root.join("offline");
+    fs::create_dir_all(&local).unwrap();
+    fs::create_dir_all(&offline).unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let manifest = local.join("content.gfmmanifest");
+    let active = offline.join("active.gfmcontent");
+    let retired = local.join("retired.gfmcontent");
+    fs::write(
+        &active,
+        "active archive is not statted after access denial\n",
+    )
+    .unwrap();
+    write_content_postings(
+        &retired,
+        &[ContentPosting {
+            term: "retiredneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: active.clone(),
+    }])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-cleanup-plan",
+            manifest.to_str().unwrap(),
+            "1",
+            "0",
+            "1",
+            retired.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("content-cleanup-plan\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "content cleanup plan active archive volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert_worker_admitted(&stderr, "content cleanup plan", &manifest);
+    assert_worker_admitted(&stderr, "content manifest cleanup candidate", &retired);
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content cleanup plan active archive\tpath={}",
+            active.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("after access denial") && !stderr.contains("metadata"),
+        "{stderr}"
+    );
 
     fs::remove_dir_all(root).unwrap();
 }

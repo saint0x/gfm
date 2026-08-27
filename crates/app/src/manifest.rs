@@ -125,23 +125,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-manifest-cleanup requires at least one candidate archive".to_string(),
                 ));
             }
-            let _access = retain_manifest_cleanup_access(&manifest_path, &candidates, true)?;
-            let manifest = ContentArchiveManifest::read(&manifest_path)?;
-            let report = manifest.cleanup_inactive_archives(&manifest_path, &candidates)?;
-            eprintln!(
-                "content-manifest-cleanup\tremoved={}\tactive={}\tmissing={}",
-                report.removed_archives.len(),
-                report.active_archives.len(),
-                report.missing_archives.len()
-            );
-            for path in report.removed_archives {
-                println!("removed\t{}", path.display());
-            }
-            for path in report.active_archives {
-                println!("active\t{}", path.display());
-            }
-            for path in report.missing_archives {
-                println!("missing\t{}", path.display());
+            let (summary, lines) = run_manifest_cleanup(manifest_path, candidates)?;
+            eprintln!("{summary}");
+            for line in lines {
+                println!("{line}");
             }
         }
         "content-cleanup-plan" => {
@@ -160,44 +147,148 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "content-cleanup-plan requires max-cleanup-archives",
             )?;
             let candidates = args.map(PathBuf::from).collect::<Vec<_>>();
-            let _access = retain_manifest_cleanup_access(&manifest_path, &candidates, false)?;
-            let manifest = ContentArchiveManifest::read(&manifest_path)?;
-            let plan = manifest.plan_inactive_archive_cleanup(
-                &manifest_path,
-                &candidates,
-                &ContentArchiveCleanupPolicy {
+            let (summary, lines) = run_content_cleanup_plan(
+                manifest_path,
+                candidates,
+                ContentArchiveCleanupPolicy {
                     min_retired_archives,
                     min_retired_bytes,
                     max_cleanup_archives,
                 },
             )?;
-            eprintln!(
-                "content-cleanup-plan\taction={:?}\tcleanup={}\tdeferred={}\tactive={}\tmissing={}\tactive-bytes={}\tcleanup-bytes={}\tdeferred-bytes={}",
-                plan.action,
-                plan.cleanup_archives.len(),
-                plan.deferred_archives.len(),
-                plan.active_archives.len(),
-                plan.missing_archives.len(),
-                plan.active_bytes,
-                plan.cleanup_bytes,
-                plan.deferred_bytes
-            );
-            for path in plan.cleanup_archives {
-                println!("cleanup\t{}", path.display());
-            }
-            for path in plan.deferred_archives {
-                println!("defer\t{}", path.display());
-            }
-            for path in plan.active_archives {
-                println!("active\t{}", path.display());
-            }
-            for path in plan.missing_archives {
-                println!("missing\t{}", path.display());
+            eprintln!("{summary}");
+            for line in lines {
+                println!("{line}");
             }
         }
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn run_manifest_cleanup(
+    manifest_path: PathBuf,
+    candidates: Vec<PathBuf>,
+) -> Result<(String, Vec<String>)> {
+    const WORKER: &str = "content manifest cleanup";
+    preflight_manifest_cleanup_volumes(&manifest_path, &candidates, true, WORKER)?;
+    let volume = detect_volume_id(&manifest_path).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_manifest_cleanup_access(&manifest_path, &candidates, true, WORKER)?;
+        cancellation.check()?;
+        render_manifest_cleanup(&manifest_path, &candidates)
+    })
+}
+
+fn run_content_cleanup_plan(
+    manifest_path: PathBuf,
+    candidates: Vec<PathBuf>,
+    policy: ContentArchiveCleanupPolicy,
+) -> Result<(String, Vec<String>)> {
+    const WORKER: &str = "content cleanup plan";
+    const ACTIVE_ARCHIVE_WORKER: &str = "content cleanup plan active archive";
+    preflight_manifest_cleanup_volumes(&manifest_path, &candidates, false, WORKER)?;
+    let volume = detect_volume_id(&manifest_path).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_manifest_cleanup_access(&manifest_path, &candidates, false, WORKER)?;
+        let manifest = ContentArchiveManifest::read(&manifest_path)?;
+        let active_archive_paths = manifest.resolved_archive_paths(&manifest_path);
+        preflight_manifest_cleanup_archive_volumes(&active_archive_paths, ACTIVE_ARCHIVE_WORKER)?;
+        cancellation.check()?;
+        let _active_archive_access = retain_manifest_promotion_recovery_archive_access(
+            &active_archive_paths,
+            ACTIVE_ARCHIVE_WORKER,
+        )?;
+        cancellation.check()?;
+        render_cleanup_plan(&manifest_path, &candidates, &policy)
+    })
+}
+
+fn render_manifest_cleanup(
+    manifest_path: &Path,
+    candidates: &[PathBuf],
+) -> Result<(String, Vec<String>)> {
+    let manifest = ContentArchiveManifest::read(manifest_path)?;
+    let report = manifest.cleanup_inactive_archives(manifest_path, candidates)?;
+    let summary = format!(
+        "content-manifest-cleanup\tremoved={}\tactive={}\tmissing={}",
+        report.removed_archives.len(),
+        report.active_archives.len(),
+        report.missing_archives.len()
+    );
+    let mut lines = Vec::new();
+    for path in report.removed_archives {
+        lines.push(format!("removed\t{}", path.display()));
+    }
+    for path in report.active_archives {
+        lines.push(format!("active\t{}", path.display()));
+    }
+    for path in report.missing_archives {
+        lines.push(format!("missing\t{}", path.display()));
+    }
+    Ok((summary, lines))
+}
+
+fn render_cleanup_plan(
+    manifest_path: &Path,
+    candidates: &[PathBuf],
+    policy: &ContentArchiveCleanupPolicy,
+) -> Result<(String, Vec<String>)> {
+    let manifest = ContentArchiveManifest::read(manifest_path)?;
+    let plan = manifest.plan_inactive_archive_cleanup(manifest_path, candidates, policy)?;
+    let summary = format!(
+        "content-cleanup-plan\taction={:?}\tcleanup={}\tdeferred={}\tactive={}\tmissing={}\tactive-bytes={}\tcleanup-bytes={}\tdeferred-bytes={}",
+        plan.action,
+        plan.cleanup_archives.len(),
+        plan.deferred_archives.len(),
+        plan.active_archives.len(),
+        plan.missing_archives.len(),
+        plan.active_bytes,
+        plan.cleanup_bytes,
+        plan.deferred_bytes
+    );
+    let mut lines = Vec::new();
+    for path in plan.cleanup_archives {
+        lines.push(format!("cleanup\t{}", path.display()));
+    }
+    for path in plan.deferred_archives {
+        lines.push(format!("defer\t{}", path.display()));
+    }
+    for path in plan.active_archives {
+        lines.push(format!("active\t{}", path.display()));
+    }
+    for path in plan.missing_archives {
+        lines.push(format!("missing\t{}", path.display()));
+    }
+    Ok((summary, lines))
+}
+
+fn preflight_manifest_cleanup_volumes(
+    manifest_path: &Path,
+    candidates: &[PathBuf],
+    removes_candidates: bool,
+    worker: &str,
+) -> Result<()> {
+    preflight_volume_access_scope(manifest_path, AccessIntent::Read, worker)?;
+    for candidate in candidates {
+        let path = resolve_manifest_path(manifest_path, candidate);
+        let (path, intent) = if removes_candidates {
+            (write_probe_path(&path), AccessIntent::Write)
+        } else {
+            (existing_read_probe_path(&path), AccessIntent::Read)
+        };
+        preflight_volume_access_scope(path, intent, "content manifest cleanup candidate")?;
+    }
+    Ok(())
+}
+
+fn preflight_manifest_cleanup_archive_volumes(paths: &[PathBuf], worker: &str) -> Result<()> {
+    for path in paths {
+        preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
+    }
+    Ok(())
 }
 
 fn retain_manifest_write_access(
@@ -628,11 +719,12 @@ fn retain_manifest_cleanup_access(
     manifest_path: &Path,
     candidates: &[PathBuf],
     removes_candidates: bool,
+    worker: &str,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = vec![preflight_access_scope(
         manifest_path,
         AccessIntent::Read,
-        "content manifest cleanup",
+        worker,
     )?];
     for candidate in candidates {
         let path = resolve_manifest_path(manifest_path, candidate);

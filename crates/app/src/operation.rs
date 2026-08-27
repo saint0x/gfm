@@ -5,8 +5,8 @@ use crate::access::{
 use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
 use crate::runtime::{
     default_journal_path, default_security_bookmarks_path, default_trash_metadata_path,
-    run_volume_task, runtime_operation_conflict_store, OperationConflictStore,
-    RuntimeOperationConflict,
+    run_volume_task, run_volume_task_cancellable, runtime_operation_conflict_store,
+    OperationConflictStore, RuntimeOperationConflict,
 };
 use crate::{detect_volume_id, parent_volume, required_path};
 use gfm_jobs::Priority;
@@ -27,9 +27,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     match command {
         "ops-recover" => {
             let (journal, policy) = parse_ops_recover_args(args)?;
-            let _journal_access = preflight_operation_journal_write(&journal)?;
-            let report =
-                Operator::new(OperationContext::new(journal)).recover_with_policy(policy)?;
+            let report = recover_operations_from_journal(journal, policy)?;
             for outcome in report.outcomes {
                 println!(
                     "{}\t{}\t{}\t{}",
@@ -54,10 +52,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "operation-conflict-apply requires replace, keep-both, merge, or skip",
             )?;
             let store = OperationConflictStore::new(store_path);
-            let pending = blocking_operation_conflict(&store, &target)?;
+            let pending = read_blocking_operation_conflict(&store, target.clone())?;
             let operation = operation_from_runtime_conflict(&pending)?;
             execute_operation(operation, conflict)?;
-            let resolved = store.resolve(&target, conflict.as_str())?;
+            let resolved = resolve_operation_conflict(&store, target, conflict)?;
             println!(
                 "operation-conflict-control\tapply\ttarget={}\tpolicy={}\tblocks-operation={}\treason={}",
                 resolved.target,
@@ -76,7 +74,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "operation-conflict-apply-all requires replace, keep-both, merge, or skip",
             )?;
             let store = OperationConflictStore::new(store_path);
-            let pending = blocking_operation_conflicts(&store)?;
+            let pending = read_blocking_operation_conflicts(&store)?;
             let operations = pending
                 .iter()
                 .map(|record| {
@@ -88,12 +86,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let mut completed_targets = Vec::with_capacity(total);
             for (record, operation) in pending.iter().zip(operations) {
                 if let Err(err) = execute_operation(operation, conflict) {
-                    store.resolve_targets(&completed_targets, conflict.as_str())?;
+                    resolve_operation_conflicts(&store, completed_targets.clone(), conflict)?;
                     return Err(err);
                 }
                 completed_targets.push(record.target.clone());
             }
-            store.resolve_targets(&completed_targets, conflict.as_str())?;
+            resolve_operation_conflicts(&store, completed_targets, conflict)?;
             println!(
                 "operation-conflict-control\tapply-all\tpolicy={}\tresolved={total}\tblocks-operation=false",
                 conflict.as_str()
@@ -234,12 +232,82 @@ fn parse_required_conflict_policy(value: Option<String>, message: &str) -> Resul
     }
 }
 
-fn blocking_operation_conflict(
+fn recover_operations_from_journal(
+    journal: PathBuf,
+    policy: OperationRecoveryPolicy,
+) -> Result<gfm_ops::OperationRecoveryReport> {
+    const WORKER: &str = "operation journal";
+    preflight_volume_access_scope(write_probe_path(&journal), AccessIntent::Write, WORKER)?;
+    let volume = control_file_volume(write_probe_path(&journal));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _journal_access = preflight_operation_journal_write(&journal)?;
+        cancellation.check()?;
+        Operator::new(OperationContext::new(journal)).recover_with_policy(policy)
+    })
+}
+
+fn read_blocking_operation_conflict(
     store: &OperationConflictStore,
+    target: String,
+) -> Result<RuntimeOperationConflict> {
+    blocking_operation_conflict(read_operation_conflicts(store)?, &target)
+}
+
+fn read_blocking_operation_conflicts(
+    store: &OperationConflictStore,
+) -> Result<Vec<RuntimeOperationConflict>> {
+    blocking_operation_conflicts(read_operation_conflicts(store)?)
+}
+
+fn read_operation_conflicts(
+    store: &OperationConflictStore,
+) -> Result<Vec<RuntimeOperationConflict>> {
+    const WORKER: &str = "operation conflict store";
+    preflight_volume_access_scope(store.path(), AccessIntent::Read, WORKER)?;
+    let volume = control_file_volume(store.path());
+    let path = store.path().to_path_buf();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let store = OperationConflictStore::new(path);
+        store.read()
+    })
+}
+
+fn resolve_operation_conflict(
+    store: &OperationConflictStore,
+    target: String,
+    conflict: ConflictPolicy,
+) -> Result<RuntimeOperationConflict> {
+    let resolved = resolve_operation_conflicts(store, vec![target.clone()], conflict)?;
+    resolved.into_iter().next().ok_or_else(|| {
+        GfmError::Format(format!(
+            "operation conflict store has no blocking conflict for `{target}`"
+        ))
+    })
+}
+
+fn resolve_operation_conflicts(
+    store: &OperationConflictStore,
+    targets: Vec<String>,
+    conflict: ConflictPolicy,
+) -> Result<Vec<RuntimeOperationConflict>> {
+    const WORKER: &str = "operation conflict store";
+    preflight_volume_access_scope(write_probe_path(store.path()), AccessIntent::Write, WORKER)?;
+    let volume = control_file_volume(write_probe_path(store.path()));
+    let path = store.path().to_path_buf();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let store = OperationConflictStore::new(path);
+        store.resolve_targets(&targets, conflict.as_str())
+    })
+}
+
+fn blocking_operation_conflict(
+    conflicts: Vec<RuntimeOperationConflict>,
     target: &str,
 ) -> Result<RuntimeOperationConflict> {
-    store
-        .read()?
+    conflicts
         .into_iter()
         .find(|conflict| conflict.target == target && conflict.blocks_operation)
         .ok_or_else(|| {
@@ -250,10 +318,9 @@ fn blocking_operation_conflict(
 }
 
 fn blocking_operation_conflicts(
-    store: &OperationConflictStore,
+    conflicts: Vec<RuntimeOperationConflict>,
 ) -> Result<Vec<RuntimeOperationConflict>> {
-    let conflicts = store
-        .read()?
+    let conflicts = conflicts
         .into_iter()
         .filter(|conflict| conflict.blocks_operation)
         .collect::<Vec<_>>();
@@ -459,6 +526,10 @@ fn write_probe_path(path: &Path) -> &Path {
         return path;
     }
     path.parent().unwrap_or(path)
+}
+
+fn control_file_volume(path: &Path) -> Option<VolumeId> {
+    detect_volume_id(path).ok().or_else(|| parent_volume(path))
 }
 
 fn operation_access_gate(
