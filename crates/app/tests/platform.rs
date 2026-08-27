@@ -1,3 +1,5 @@
+use gfm_preview::{PreviewCache, PreviewCacheConfig, PreviewEntry, PreviewKind, PreviewRequestKey};
+use gfm_types::{FileId, VolumeId};
 use std::process::Command;
 
 #[test]
@@ -1116,6 +1118,15 @@ fn reports_preview_cache_fileprovider_invalidation_from_binary() {
     let cache = root.join("cache");
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
+    let mut seeded_cache = PreviewCache::new(PreviewCacheConfig::new(&cache)).unwrap();
+    let seeded_key = PreviewRequestKey::new(
+        FileId::new(VolumeId(42), 9001),
+        evicted.clone(),
+        PreviewKind::Thumbnail,
+    );
+    seeded_cache
+        .insert(PreviewEntry::new(seeded_key, b"cached thumbnail".to_vec()))
+        .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("preview-cache-fileprovider-invalidation")
@@ -1134,7 +1145,7 @@ fn reports_preview_cache_fileprovider_invalidation_from_binary() {
     assert!(stdout.starts_with("preview-cache-invalidation\t"));
     assert!(stdout.contains("\tkind=thumbnail\treason=content-or-icloud\t"));
     assert!(stdout.contains("\tinvalidate-memory=true\tinvalidate-disk=true\t"));
-    assert!(stdout.contains("\tremoved-memory=false\tremoved-disk=false\n"));
+    assert!(stdout.contains("\tremoved-memory=false\tremoved-disk=true\n"));
 
     let _ = std::fs::remove_dir_all(root);
 }

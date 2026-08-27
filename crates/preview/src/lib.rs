@@ -1,7 +1,9 @@
-use gfm_types::{FileId, GfmError, Result};
+use gfm_types::{FileId, GfmError, Result, VolumeId};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ffi::OsString;
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -36,6 +38,16 @@ impl PreviewKind {
             Self::Thumbnail => "thumbnail",
             Self::QuickLook => "quick-look",
             Self::Text => "text",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "icon" => Some(Self::Icon),
+            "thumbnail" => Some(Self::Thumbnail),
+            "quick-look" => Some(Self::QuickLook),
+            "text" => Some(Self::Text),
+            _ => None,
         }
     }
 }
@@ -119,6 +131,7 @@ pub struct PreviewCache {
     config: PreviewCacheConfig,
     memory: HashMap<PreviewRequestKey, PreviewEntry>,
     order: VecDeque<PreviewRequestKey>,
+    disk_index: HashMap<(PathBuf, PreviewKind), PreviewRequestKey>,
     memory_bytes: usize,
 }
 
@@ -138,10 +151,16 @@ impl PreviewCache {
             fs::create_dir_all(&config.disk_root)
                 .map_err(|err| GfmError::io(&config.disk_root, err))?;
         }
+        let disk_index = if config.disk_enabled {
+            load_disk_index(&config)?
+        } else {
+            HashMap::new()
+        };
         Ok(Self {
             config,
             memory: HashMap::new(),
             order: VecDeque::new(),
+            disk_index,
             memory_bytes: 0,
         })
     }
@@ -156,6 +175,7 @@ impl PreviewCache {
         }
         if self.config.disk_enabled {
             self.write_disk(&entry)?;
+            self.write_disk_index_entry(&entry.key)?;
         }
         self.insert_memory(entry);
         Ok(())
@@ -185,6 +205,7 @@ impl PreviewCache {
             if path.exists() {
                 fs::remove_file(&path).map_err(|err| GfmError::io(&path, err))?;
             }
+            self.remove_disk_index_entry(key)?;
         }
         Ok(())
     }
@@ -214,6 +235,14 @@ impl PreviewCache {
         })
     }
 
+    pub fn disk_key_for_path_kind(
+        &self,
+        path: &Path,
+        kind: PreviewKind,
+    ) -> Option<PreviewRequestKey> {
+        self.disk_index.get(&(path.to_path_buf(), kind)).cloned()
+    }
+
     pub fn memory_bytes(&self) -> usize {
         self.memory_bytes
     }
@@ -227,15 +256,17 @@ impl PreviewCache {
         true
     }
 
-    fn remove_disk(&self, key: &PreviewRequestKey) -> Result<bool> {
+    fn remove_disk(&mut self, key: &PreviewRequestKey) -> Result<bool> {
         if !self.config.disk_enabled {
             return Ok(false);
         }
         let path = self.disk_path(key);
         if !path.exists() {
+            self.remove_disk_index_entry(key)?;
             return Ok(false);
         }
         fs::remove_file(&path).map_err(|err| GfmError::io(&path, err))?;
+        self.remove_disk_index_entry(key)?;
         Ok(true)
     }
 
@@ -273,6 +304,26 @@ impl PreviewCache {
         fs::rename(&tmp, &path).map_err(|err| GfmError::io(&path, err))
     }
 
+    fn write_disk_index_entry(&mut self, key: &PreviewRequestKey) -> Result<()> {
+        if !self.config.disk_enabled {
+            return Ok(());
+        }
+        self.disk_index
+            .insert((key.path.clone(), key.kind), key.clone());
+        write_disk_index(&self.config, &self.disk_index)
+    }
+
+    fn remove_disk_index_entry(&mut self, key: &PreviewRequestKey) -> Result<()> {
+        if !self.config.disk_enabled {
+            return Ok(());
+        }
+        let removed = self.disk_index.remove(&(key.path.clone(), key.kind));
+        if removed.is_some() {
+            write_disk_index(&self.config, &self.disk_index)?;
+        }
+        Ok(())
+    }
+
     fn read_disk(&self, key: &PreviewRequestKey) -> Result<Option<PreviewEntry>> {
         let path = self.disk_path(key);
         if !path.is_file() {
@@ -289,6 +340,99 @@ impl PreviewCache {
     fn disk_path(&self, key: &PreviewRequestKey) -> PathBuf {
         self.config.disk_root.join(key.stable_name())
     }
+}
+
+fn preview_cache_index_path(config: &PreviewCacheConfig) -> PathBuf {
+    config.disk_root.join("preview-cache-index.tsv")
+}
+
+fn load_disk_index(
+    config: &PreviewCacheConfig,
+) -> Result<HashMap<(PathBuf, PreviewKind), PreviewRequestKey>> {
+    let path = preview_cache_index_path(config);
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return Ok(HashMap::new());
+    };
+    let mut index = HashMap::new();
+    for line in contents.lines() {
+        let Some(key) = parse_disk_index_line(line) else {
+            continue;
+        };
+        if config.disk_root.join(key.stable_name()).is_file() {
+            index.insert((key.path.clone(), key.kind), key);
+        }
+    }
+    Ok(index)
+}
+
+fn write_disk_index(
+    config: &PreviewCacheConfig,
+    index: &HashMap<(PathBuf, PreviewKind), PreviewRequestKey>,
+) -> Result<()> {
+    let path = preview_cache_index_path(config);
+    let tmp = path.with_extension("tmp");
+    let mut lines = Vec::new();
+    for key in index.values() {
+        lines.push(format_disk_index_line(key));
+    }
+    lines.sort();
+    fs::write(&tmp, lines.join("\n")).map_err(|err| GfmError::io(&tmp, err))?;
+    fs::rename(&tmp, &path).map_err(|err| GfmError::io(&path, err))
+}
+
+fn format_disk_index_line(key: &PreviewRequestKey) -> String {
+    format!(
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        key.kind.as_str(),
+        key.file_id.volume.0,
+        key.file_id.node,
+        key.pixel_size,
+        key.scale_factor_milli,
+        key.content_epoch,
+        hex_encode_path(&key.path)
+    )
+}
+
+fn parse_disk_index_line(line: &str) -> Option<PreviewRequestKey> {
+    let mut parts = line.split('\t');
+    let kind = PreviewKind::parse(parts.next()?)?;
+    let volume = parts.next()?.parse().ok()?;
+    let node = parts.next()?.parse().ok()?;
+    let pixel_size = parts.next()?.parse().ok()?;
+    let scale_factor_milli = parts.next()?.parse().ok()?;
+    let content_epoch = parts.next()?.parse().ok()?;
+    let path = hex_decode_path(parts.next()?)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(PreviewRequestKey {
+        file_id: FileId::new(VolumeId(volume), node),
+        path,
+        kind,
+        pixel_size,
+        scale_factor_milli,
+        content_epoch,
+    })
+}
+
+fn hex_encode_path(path: &Path) -> String {
+    path.as_os_str()
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn hex_decode_path(value: &str) -> Option<PathBuf> {
+    if !value.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(value.len() / 2);
+    for chunk in value.as_bytes().chunks_exact(2) {
+        let hex = std::str::from_utf8(chunk).ok()?;
+        bytes.push(u8::from_str_radix(hex, 16).ok()?);
+    }
+    Some(PathBuf::from(OsString::from_vec(bytes)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -799,6 +943,48 @@ mod tests {
         assert!(report.removed_disk);
         assert_eq!(report.decision.reason, "content-or-icloud");
         assert_eq!(cache.get(&key).unwrap(), None);
+    }
+
+    #[test]
+    fn reloaded_cache_resolves_disk_key_for_fileprovider_invalidation() {
+        let root = temp_root("indexed-icloud-invalidation");
+        let key = key("remote.icloud", PreviewKind::Thumbnail);
+        let mut cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        })
+        .unwrap();
+        cache
+            .insert(PreviewEntry::new(key.clone(), b"cloud".to_vec()))
+            .unwrap();
+
+        let mut reloaded = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root,
+            disk_enabled: true,
+        })
+        .unwrap();
+        let resolved = reloaded
+            .disk_key_for_path_kind(&key.path, key.kind)
+            .expect("disk index should retain the preview request key");
+
+        let report = reloaded
+            .apply_invalidation(
+                &resolved,
+                PreviewInvalidationEvent {
+                    icloud_state_changed: true,
+                    ..PreviewInvalidationEvent::default()
+                },
+            )
+            .unwrap();
+
+        assert!(!report.removed_memory);
+        assert!(report.removed_disk);
+        assert_eq!(reloaded.disk_key_for_path_kind(&key.path, key.kind), None);
+        assert_eq!(reloaded.get(&key).unwrap(), None);
     }
 
     #[test]

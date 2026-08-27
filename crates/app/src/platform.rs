@@ -256,10 +256,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let report = FileProviderInvalidationReport::evaluate(path.clone(), previous)?;
             let key = PreviewRequestKey::new(record.id, path, kind);
             let mut cache = PreviewCache::new(PreviewCacheConfig::new(cache_root))?;
+            let invalidation_key = cache
+                .disk_key_for_path_kind(&key.path, key.kind)
+                .unwrap_or_else(|| key.clone());
             println!(
                 "{}",
                 cache
-                    .apply_invalidation(&key, preview_invalidation_for_fileprovider(&report))?
+                    .apply_invalidation(
+                        &invalidation_key,
+                        preview_invalidation_for_fileprovider(&report),
+                    )?
                     .as_tsv()
             );
         }
