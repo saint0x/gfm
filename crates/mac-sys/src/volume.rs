@@ -631,7 +631,7 @@ pub fn submit_volume_operation(
 
 pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationResult {
     let operation = NativeVolumeOperation::Mount;
-    if bsd_name.is_empty() || bsd_name.contains('/') || bsd_name.as_bytes().contains(&0) {
+    if !valid_bsd_disk_name(bsd_name) {
         return NativeVolumeOperationResult {
             operation,
             status: NativeVolumeOperationStatus::Unsupported,
@@ -706,6 +706,35 @@ pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationR
     }
 
     result
+}
+
+fn valid_bsd_disk_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("disk") else {
+        return false;
+    };
+    let bytes = rest.as_bytes();
+    if bytes.is_empty() || bytes.contains(&0) || bytes.contains(&b'/') {
+        return false;
+    }
+    let mut index = 0;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        index += 1;
+    }
+    if index == 0 {
+        return false;
+    }
+    if index == bytes.len() {
+        return true;
+    }
+    if bytes[index] != b's' {
+        return false;
+    }
+    index += 1;
+    let slice_start = index;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        index += 1;
+    }
+    index == bytes.len() && index > slice_start
 }
 
 unsafe extern "C" fn volume_operation_callback(
@@ -1213,5 +1242,27 @@ mod tests {
             result.reason.as_deref(),
             Some("diskarbitration-mount-requires-bsd-name")
         );
+    }
+
+    #[test]
+    fn malformed_bsd_mount_identity_does_not_submit_to_diskarbitration() {
+        for name in ["notadisk", "disk", "diskXs1", "disk4s", "disk4s1/evil"] {
+            let result = submit_volume_mount_by_bsd_name(name);
+
+            assert_eq!(result.operation, NativeVolumeOperation::Mount);
+            assert_eq!(result.status, NativeVolumeOperationStatus::Unsupported);
+            assert_eq!(result.dissenter_status, None);
+            assert_eq!(
+                result.reason.as_deref(),
+                Some("diskarbitration-mount-requires-bsd-name")
+            );
+        }
+    }
+
+    #[test]
+    fn bsd_mount_identity_accepts_disk_and_slice_forms() {
+        assert!(valid_bsd_disk_name("disk4"));
+        assert!(valid_bsd_disk_name("disk4s1"));
+        assert!(!valid_bsd_disk_name("notadisk"));
     }
 }

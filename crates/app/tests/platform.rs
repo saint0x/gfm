@@ -1596,4 +1596,20 @@ fn reports_volume_mount_bsd_refusal_from_binary() {
     assert!(stdout.contains("\tdisposition=unsupported\tnative-status=unsupported\t"));
     assert!(stdout.contains("\tdissenter-status=-\t"));
     assert!(stdout.contains("\treason=diskarbitration-mount-requires-bsd-name\n"));
+
+    let malformed = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-mount-bsd")
+        .arg("notadisk")
+        .output()
+        .unwrap();
+    assert!(
+        malformed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&malformed.stderr)
+    );
+    let malformed_stdout = String::from_utf8(malformed.stdout).unwrap();
+    assert!(malformed_stdout.starts_with("volume-mount-bsd\tbsd-name=notadisk\t"));
+    assert!(malformed_stdout.contains("\tdisposition=unsupported\tnative-status=unsupported\t"));
+    assert!(malformed_stdout.contains("\tdissenter-status=-\t"));
+    assert!(malformed_stdout.contains("\treason=diskarbitration-mount-requires-bsd-name\n"));
 }

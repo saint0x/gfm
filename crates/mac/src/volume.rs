@@ -1919,6 +1919,23 @@ mod tests {
     }
 
     #[test]
+    fn volume_mount_identity_refuses_malformed_bsd_name_before_native_call() {
+        let report = VolumeMountIdentityReport::execute("notadisk");
+
+        assert_eq!(report.bsd_name, "notadisk");
+        assert_eq!(report.disposition, VolumeOperationDisposition::Unsupported);
+        assert_eq!(
+            report.native_status,
+            NativeVolumeOperationStatus::Unsupported
+        );
+        assert_eq!(report.dissenter_status, None);
+        assert_eq!(report.reason, "diskarbitration-mount-requires-bsd-name");
+        assert!(report
+            .as_tsv()
+            .starts_with("volume-mount-bsd\tbsd-name=notadisk\t"));
+    }
+
+    #[test]
     fn discovery_report_orders_volumes_stably() {
         let first = unique_temp_dir("gfm-volume-a");
         let second = unique_temp_dir("gfm-volume-b");
