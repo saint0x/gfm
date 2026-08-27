@@ -279,6 +279,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let index_path =
                 required_path(args.next(), "search-index-mmap requires an index path")?;
             let query = required_string(args.next(), "search-index-mmap requires a query string")?;
+            let _access = preflight_search_archive_access(&index_path, "search index mmap")?;
             let live = LiveIndex::from_records(MmapRecordArchive::open(index_path)?.records()?);
             for hit in live.search(&query, 50) {
                 print_hit(&hit);
@@ -291,6 +292,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 required_path(args.next(), "search-index-columns requires a columns path")?;
             let query =
                 required_string(args.next(), "search-index-columns requires a query string")?;
+            let _access = preflight_search_index_columns_access(&records, &columns)?;
             let records = MmapRecordArchive::open(records)?;
             let columns = MmapRecordColumns::open(columns)?;
             let mut search_columns = Vec::with_capacity(columns.len());
@@ -690,6 +692,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "fuzzy-terms-mmap" => {
             let fuzzy = required_path(args.next(), "fuzzy-terms-mmap requires a fuzzy path")?;
             let key = required_string(args.next(), "fuzzy-terms-mmap requires a key")?;
+            let _access = preflight_search_archive_access(&fuzzy, "fuzzy terms mmap")?;
             let archive = MmapFuzzyArchive::open(fuzzy)?;
             for term in archive.terms_for(&key)? {
                 println!("{term}");
@@ -697,6 +700,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "fuzzy-verify" => {
             let fuzzy = required_path(args.next(), "fuzzy-verify requires a fuzzy path")?;
+            let _access = preflight_search_archive_access(&fuzzy, "fuzzy verify")?;
             let archive = MmapFuzzyArchive::open(fuzzy)?;
             println!(
                 "fuzzy-verify\tkeys={}\tbytes={}\tchecksum={}",
@@ -708,6 +712,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "prefix-ids-mmap" => {
             let prefixes = required_path(args.next(), "prefix-ids-mmap requires a prefix path")?;
             let prefix = required_string(args.next(), "prefix-ids-mmap requires a prefix")?;
+            let _access = preflight_search_archive_access(&prefixes, "prefix ids mmap")?;
             let archive = MmapPrefixArchive::open(prefixes)?;
             print_file_ids(archive.ids_for(&prefix)?);
         }
@@ -717,11 +722,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let prefix = required_string(args.next(), "prefix-id-block-mmap requires a prefix")?;
             let block_index =
                 parse_usize_arg(args.next(), "prefix-id-block-mmap requires a block index")?;
+            let _access = preflight_search_archive_access(&prefixes, "prefix id block mmap")?;
             let archive = MmapPrefixArchive::open(prefixes)?;
             print_file_ids(archive.id_block_for(&prefix, block_index)?);
         }
         "prefix-verify" => {
             let prefixes = required_path(args.next(), "prefix-verify requires a prefix path")?;
+            let _access = preflight_search_archive_access(&prefixes, "prefix verify")?;
             let archive = MmapPrefixArchive::open(prefixes)?;
             println!(
                 "prefix-verify\tprefixes={}\tbytes={}\tchecksum={}",
@@ -734,6 +741,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let substrings =
                 required_path(args.next(), "substring-ids-mmap requires a substring path")?;
             let gram = required_string(args.next(), "substring-ids-mmap requires a trigram")?;
+            let _access = preflight_search_archive_access(&substrings, "substring ids mmap")?;
             let archive = MmapSubstringArchive::open(substrings)?;
             print_file_ids(archive.ids_for(&gram)?);
         }
@@ -747,12 +755,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "substring-id-block-mmap requires a block index",
             )?;
+            let _access = preflight_search_archive_access(&substrings, "substring id block mmap")?;
             let archive = MmapSubstringArchive::open(substrings)?;
             print_file_ids(archive.id_block_for(&gram, block_index)?);
         }
         "substring-verify" => {
             let substrings =
                 required_path(args.next(), "substring-verify requires a substring path")?;
+            let _access = preflight_search_archive_access(&substrings, "substring verify")?;
             let archive = MmapSubstringArchive::open(substrings)?;
             println!(
                 "substring-verify\tgrams={}\tbytes={}\tchecksum={}",
@@ -765,6 +775,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let dictionary =
                 required_path(args.next(), "dictionary-lookup requires a dictionary path")?;
             let term = required_string(args.next(), "dictionary-lookup requires a term")?;
+            let _access = preflight_search_archive_access(&dictionary, "dictionary lookup")?;
             let archive = MmapDictionary::open(dictionary)?;
             match archive.find(&term)? {
                 Some(index) => println!("dictionary\tfound\tindex={index}\tterm={term}"),
@@ -774,6 +785,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "dictionary-verify" => {
             let dictionary =
                 required_path(args.next(), "dictionary-verify requires a dictionary path")?;
+            let _access = preflight_search_archive_access(&dictionary, "dictionary verify")?;
             let archive = MmapDictionary::open(dictionary)?;
             println!(
                 "dictionary-verify\tterms={}\tbytes={}\tchecksum={}",
@@ -794,6 +806,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "metadata field",
             )?;
             let term = required_string(args.next(), "metadata-ids-mmap requires a term")?;
+            let _access = preflight_search_archive_access(&metadata, "metadata ids mmap")?;
             let archive = MmapMetadataArchive::open(metadata)?;
             print_file_ids(archive.ids_for(field, &term)?);
         }
@@ -809,11 +822,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let term = required_string(args.next(), "metadata-id-block-mmap requires a term")?;
             let block_index =
                 parse_usize_arg(args.next(), "metadata-id-block-mmap requires a block index")?;
+            let _access = preflight_search_archive_access(&metadata, "metadata id block mmap")?;
             let archive = MmapMetadataArchive::open(metadata)?;
             print_file_ids(archive.id_block_for(field, &term, block_index)?);
         }
         "metadata-verify" => {
             let metadata = required_path(args.next(), "metadata-verify requires a metadata path")?;
+            let _access = preflight_search_archive_access(&metadata, "metadata verify")?;
             let archive = MmapMetadataArchive::open(metadata)?;
             println!(
                 "metadata-verify\tterms={}\tbytes={}\tchecksum={}",
@@ -833,6 +848,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
 
 fn preflight_content_archive_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
     preflight_access_scope(path, AccessIntent::Read, worker)
+}
+
+fn preflight_search_archive_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
+    preflight_access_scope(path, AccessIntent::Read, worker)
+}
+
+fn preflight_search_index_columns_access(
+    records: &Path,
+    columns: &Path,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(records, AccessIntent::Read, "search index columns records")?,
+        preflight_access_scope(columns, AccessIntent::Read, "search index columns columns")?,
+    ])
 }
 
 fn preflight_content_index_search_access(

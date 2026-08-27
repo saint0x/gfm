@@ -2892,6 +2892,175 @@ fn searches_persisted_tags_from_binary() {
 }
 
 #[test]
+fn direct_search_archives_refuse_unreachable_volume_before_mapping_from_binary() {
+    let offline = unique_temp_dir("gfm-cli-direct-search-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let cases = [
+        (
+            "search-index-mmap",
+            "gfmidx",
+            vec!["needle"],
+            "search index mmap",
+            "hit\t",
+        ),
+        (
+            "fuzzy-terms-mmap",
+            "gfmfuzzy",
+            vec!["key"],
+            "fuzzy terms mmap",
+            "fuzzy-verify\t",
+        ),
+        (
+            "fuzzy-verify",
+            "gfmfuzzy",
+            vec![],
+            "fuzzy verify",
+            "fuzzy-verify\t",
+        ),
+        (
+            "prefix-ids-mmap",
+            "gfmprefix",
+            vec!["tag"],
+            "prefix ids mmap",
+            "1\t",
+        ),
+        (
+            "prefix-id-block-mmap",
+            "gfmprefix",
+            vec!["tag", "0"],
+            "prefix id block mmap",
+            "1\t",
+        ),
+        (
+            "prefix-verify",
+            "gfmprefix",
+            vec![],
+            "prefix verify",
+            "prefix-verify\t",
+        ),
+        (
+            "substring-ids-mmap",
+            "gfmsubstr",
+            vec!["tag"],
+            "substring ids mmap",
+            "1\t",
+        ),
+        (
+            "substring-id-block-mmap",
+            "gfmsubstr",
+            vec!["tag", "0"],
+            "substring id block mmap",
+            "1\t",
+        ),
+        (
+            "substring-verify",
+            "gfmsubstr",
+            vec![],
+            "substring verify",
+            "substring-verify\t",
+        ),
+        (
+            "dictionary-lookup",
+            "gfmdict",
+            vec!["tag"],
+            "dictionary lookup",
+            "dictionary\t",
+        ),
+        (
+            "dictionary-verify",
+            "gfmdict",
+            vec![],
+            "dictionary verify",
+            "dictionary-verify\t",
+        ),
+        (
+            "metadata-ids-mmap",
+            "gfmmeta",
+            vec!["tag", "Important"],
+            "metadata ids mmap",
+            "1\t",
+        ),
+        (
+            "metadata-id-block-mmap",
+            "gfmmeta",
+            vec!["tag", "Important", "0"],
+            "metadata id block mmap",
+            "1\t",
+        ),
+        (
+            "metadata-verify",
+            "gfmmeta",
+            vec![],
+            "metadata verify",
+            "metadata-verify\t",
+        ),
+    ];
+
+    for (route, extension, tail_args, worker, forbidden_stdout) in cases {
+        let archive = offline.join(format!("{route}.{extension}"));
+        fs::write(&archive, "not opened").unwrap();
+        let mut args = vec![route.to_string(), archive.to_string_lossy().into_owned()];
+        args.extend(tail_args.into_iter().map(str::to_string));
+
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains(forbidden_stdout), "{route}: {stdout}");
+        assert!(
+            stderr.contains(&format!(
+                "{worker} volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
+    }
+
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn search_index_columns_refuses_unreachable_columns_before_open_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-columns-preflight-root");
+    let offline = unique_temp_dir("gfm-cli-search-columns-preflight-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let records = root.join("records.gfmidx");
+    let columns = offline.join("columns.gfmcols");
+    fs::write(&records, "not opened").unwrap();
+    fs::write(&columns, "not opened").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-index-columns",
+            records.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            "needle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("hit\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "search index columns columns volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("invalid magic"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn search_index_sidecars_refuses_unreachable_content_before_open_from_binary() {
     let root = unique_temp_dir("gfm-cli-sidecar-preflight-root");
     let offline = unique_temp_dir("gfm-cli-sidecar-preflight-offline");
