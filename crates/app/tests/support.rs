@@ -931,8 +931,16 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(stdout.starts_with("window\tGFM\t"), "{stdout}");
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=ui operation conflict store\tpath={}",
+            conflicts.display()
+        )),
+        "{stderr}"
+    );
     assert!(
         stdout.contains(
             "\noperation-conflict-ui\toperation=batch\ttarget=2 items\tkind=mixed\tpolicy=fail\tavailable=replace,keep-both,skip\t"
@@ -984,6 +992,56 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
     );
 
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn ui_operation_conflicts_refuse_unreachable_store_before_worker_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-lifecycle-conflict-root-{}",
+        std::process::id()
+    ));
+    let offline = std::env::temp_dir().join(format!(
+        "gfm-ui-lifecycle-conflict-offline-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&offline);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&offline).unwrap();
+    std::fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let conflicts = offline.join("operation-conflicts.tsv");
+    std::fs::write(
+        &conflicts,
+        "operation-conflict\toperation=copy\tsource=/tmp/source\ttarget=/tmp/target\texists=true\tkind=file\tpolicy=fail\tavailable=replace,keep-both,skip\tblocks-operation=true\treason=destination-conflict-requires-user-resolution\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPERATION_CONFLICT_STORE", &conflicts)
+        .args(["ui-contract", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("\noperation-conflict-ui\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "ui operation conflict store volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=ui operation conflict store\tpath={}",
+            conflicts.display()
+        )),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(offline);
 }
 
 #[test]

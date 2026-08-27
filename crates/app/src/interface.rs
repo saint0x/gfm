@@ -983,6 +983,29 @@ fn read_ui_progress_snapshots(path: &Path) -> Result<Vec<JobProgressSnapshot>> {
     )
 }
 
+fn read_ui_operation_conflicts(
+    store: &crate::runtime::OperationConflictStore,
+) -> Result<Vec<crate::runtime::RuntimeOperationConflict>> {
+    const WORKER: &str = "ui operation conflict store";
+    crate::access::preflight_volume_access_scope(store.path(), AccessIntent::Read, WORKER)?;
+    let volume = crate::detect_volume_id(store.path())
+        .ok()
+        .or_else(|| crate::parent_volume(store.path()));
+    let path = store.path().to_path_buf();
+    let store = crate::runtime::OperationConflictStore::new(path.clone());
+    crate::runtime::run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        WORKER,
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
+            cancellation.check()?;
+            store.read()
+        },
+    )
+}
+
 fn preflight_ui_fileprovider_read(
     path: &Path,
     worker: &'static str,
@@ -1003,8 +1026,7 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
         spec = spec.with_progress_surfaces(progress_surfaces);
     }
     if let Some(store) = crate::runtime::runtime_operation_conflict_store() {
-        let conflict_inputs = store
-            .read()?
+        let conflict_inputs = read_ui_operation_conflicts(&store)?
             .iter()
             .filter(|conflict| conflict.blocks_operation)
             .map(|conflict| runtime_operation_conflict_input(conflict, Some(store.path())))
