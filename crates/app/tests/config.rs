@@ -17,6 +17,14 @@ fn creates_checks_and_dumps_config_from_binary() {
         "{}",
         String::from_utf8_lossy(&init_output.stderr)
     );
+    let init_stderr = String::from_utf8_lossy(&init_output.stderr);
+    assert!(
+        init_stderr.contains(&format!(
+            "security-worker-admission\tworker=config init\tpath={}",
+            root.display()
+        )),
+        "{init_stderr}"
+    );
     let init_stdout = String::from_utf8(init_output.stdout).unwrap();
     assert!(init_stdout.contains("3\t"), "{init_stdout}");
     assert!(config.exists());
@@ -30,6 +38,14 @@ fn creates_checks_and_dumps_config_from_binary() {
         "{}",
         String::from_utf8_lossy(&check_output.stderr)
     );
+    let check_stderr = String::from_utf8_lossy(&check_output.stderr);
+    assert!(
+        check_stderr.contains(&format!(
+            "security-worker-admission\tworker=config check\tpath={}",
+            config.display()
+        )),
+        "{check_stderr}"
+    );
 
     let dump_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["config-dump", config.to_str().unwrap()])
@@ -39,6 +55,14 @@ fn creates_checks_and_dumps_config_from_binary() {
         dump_output.status.success(),
         "{}",
         String::from_utf8_lossy(&dump_output.stderr)
+    );
+    let dump_stderr = String::from_utf8_lossy(&dump_output.stderr);
+    assert!(
+        dump_stderr.contains(&format!(
+            "security-worker-admission\tworker=config dump\tpath={}",
+            config.display()
+        )),
+        "{dump_stderr}"
     );
     let dump_stdout = String::from_utf8(dump_output.stdout).unwrap();
     assert!(dump_stdout.contains("schema_version = 3"), "{dump_stdout}");
@@ -72,6 +96,10 @@ fn config_routes_refuse_unreachable_volume_before_loading_or_persisting_from_bin
         init_stderr.contains("config init volume access blocked: unreachable volume network"),
         "{init_stderr}"
     );
+    assert!(
+        !init_stderr.contains("security-worker-admission\tworker=config init\t"),
+        "{init_stderr}"
+    );
     assert!(!offline.join("new.toml").exists());
 
     for (route, worker) in [
@@ -94,6 +122,10 @@ fn config_routes_refuse_unreachable_volume_before_loading_or_persisting_from_bin
         );
         assert!(
             !stderr.contains("invalid GFM config TOML"),
+            "{route}: {stderr}"
+        );
+        assert!(
+            !stderr.contains(&format!("security-worker-admission\tworker={worker}\t")),
             "{route}: {stderr}"
         );
     }

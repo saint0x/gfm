@@ -1,4 +1,4 @@
-use gfm_config::ConfigStore;
+use gfm_config::{ConfigStore, GfmConfig};
 use gfm_content::QuarantineFailureKind;
 use gfm_index::{
     BatteryState, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor, IoPressure,
@@ -55,21 +55,17 @@ fn run() -> Result<()> {
         }
         Some("config-init") => {
             let store = config_store(args.next())?;
-            let _access = preflight_config_init(&store)?;
-            let config = store.load_or_create_default()?;
+            let config = run_config_init(&store)?;
             println!("{}\t{}", config.schema_version, store.path().display());
         }
         Some("config-check") => {
             let store = config_store(args.next())?;
-            let _access = preflight_config_read(&store, "config check")?;
-            let config = store.load()?;
-            config.validate()?;
+            let config = run_config_check(&store)?;
             println!("{}\t{}", config.schema_version, store.path().display());
         }
         Some("config-dump") => {
             let store = config_store(args.next())?;
-            let _access = preflight_config_read(&store, "config dump")?;
-            let config = store.load_or_create_default()?;
+            let config = run_config_dump(&store)?;
             print!("{}", config.to_toml()?);
         }
         Some("support-check") => {
@@ -438,6 +434,70 @@ pub(crate) fn config_store(value: Option<String>) -> Result<ConfigStore> {
     value
         .map(|path| Ok(ConfigStore::new(path)))
         .unwrap_or_else(ConfigStore::platform_default)
+}
+
+fn run_config_init(store: &ConfigStore) -> Result<GfmConfig> {
+    const WORKER: &str = "config init";
+    preflight_config_init_volume(store)?;
+    let volume = config_volume(store);
+    let store = store.clone();
+    runtime::run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_config_init(&store)?;
+        cancellation.check()?;
+        store.load_or_create_default()
+    })
+}
+
+fn run_config_check(store: &ConfigStore) -> Result<GfmConfig> {
+    const WORKER: &str = "config check";
+    access::preflight_volume_access_scope(store.path(), AccessIntent::Read, WORKER)?;
+    let volume = config_volume(store);
+    let store = store.clone();
+    runtime::run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_config_read(&store, WORKER)?;
+        cancellation.check()?;
+        let config = store.load()?;
+        config.validate()?;
+        Ok(config)
+    })
+}
+
+fn run_config_dump(store: &ConfigStore) -> Result<GfmConfig> {
+    const WORKER: &str = "config dump";
+    access::preflight_volume_access_scope(store.path(), AccessIntent::Read, WORKER)?;
+    let volume = config_volume(store);
+    let store = store.clone();
+    runtime::run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_config_read(&store, WORKER)?;
+        cancellation.check()?;
+        store.load_or_create_default()
+    })
+}
+
+fn preflight_config_init_volume(store: &ConfigStore) -> Result<()> {
+    if store.path().exists() {
+        access::preflight_volume_access_scope(store.path(), AccessIntent::Read, "config init")
+    } else {
+        access::preflight_volume_access_scope(
+            config_write_probe_path(store.path()),
+            AccessIntent::Write,
+            "config init",
+        )
+    }
+}
+
+fn config_volume(store: &ConfigStore) -> Option<VolumeId> {
+    let probe = if store.path().exists() {
+        store.path()
+    } else {
+        config_write_probe_path(store.path())
+    };
+    detect_volume_id(probe)
+        .ok()
+        .or_else(|| parent_volume(probe))
 }
 
 pub(crate) fn preflight_config_write(
