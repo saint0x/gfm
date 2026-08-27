@@ -6814,7 +6814,7 @@ fn reports_compressed_pdf_extraction_from_binary() {
     assert_eq!(
         stderr
             .matches(&format!(
-                "security-worker-admission\tworker=adaptive extraction worker\tpath={}",
+                "security-worker-admission\tworker=content extraction\tpath={}",
                 path.display()
             ))
             .count(),
@@ -6836,6 +6836,37 @@ fn reports_compressed_pdf_extraction_from_binary() {
         "{stdout}"
     );
     assert!(stdout.contains("quarantine\tallow"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extract_report_refuses_unreachable_volume_before_extraction_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-report-unreachable");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Offline.pdf");
+    fs::write(&path, minimal_pdf("offline extraction")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["extract-report", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("extract\t"), "{stdout}");
+    assert!(
+        stderr.contains("content extraction volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content extraction\tpath={}",
+            path.display()
+        )),
+        "{stderr}"
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -7454,6 +7485,8 @@ fn reports_extraction_cache_hits_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "content extraction cache", &path);
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines = stdout.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 2, "{stdout}");
@@ -7473,6 +7506,38 @@ fn reports_extraction_cache_hits_from_binary() {
         "{stdout}"
     );
     assert!(stdout.contains("\tmetadata-epoch="), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extract_cache_refuses_unreachable_volume_before_metadata_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-cache-unreachable");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Cache.md");
+    fs::write(&path, "offline cache needle").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["extract-cache", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("extract-cache\t"), "{stdout}");
+    assert!(
+        stderr
+            .contains("content extraction cache volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content extraction cache\tpath={}",
+            path.display()
+        )),
+        "{stderr}"
+    );
 
     fs::remove_dir_all(root).unwrap();
 }

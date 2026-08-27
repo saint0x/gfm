@@ -72,30 +72,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "extract-report" => {
             let path = required_path(args.next(), "extract-report requires a path")?;
-            let _access = preflight_access_scope(&path, AccessIntent::Read, "content extraction")?;
-            let extractor = Extractor::default();
-            let report = extractor.extract_path_report(&path)?;
-            let mut quarantine = ExtractionQuarantine::default();
-            let decision = quarantine.record_report(&report);
-            println!("{}", report.as_tsv());
-            println!("{}", decision.as_tsv());
+            print!(
+                "{}",
+                run_extraction_report(path, "content extraction", Extractor::default(),)?
+            );
         }
         "extract-report-adaptive" => {
             let path = required_path(args.next(), "extract-report-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(args, "extract report")?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Read, "adaptive content extraction")?;
             let root = path
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
             let extractor =
                 Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
-            let report = extractor.extract_path_report(&path)?;
-            let mut quarantine = ExtractionQuarantine::default();
-            let decision = quarantine.record_report(&report);
-            println!("{}", report.as_tsv());
-            println!("{}", decision.as_tsv());
+            print!(
+                "{}",
+                run_extraction_report(path, "adaptive content extraction", extractor,)?
+            );
         }
         "extract-worker-adaptive" => {
             let path = required_path(args.next(), "extract-worker-adaptive requires a path")?;
@@ -244,12 +238,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "extract-cache" => {
             let path = required_path(args.next(), "extract-cache requires a path")?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Read, "content extraction cache")?;
-            let record = record_for_path(&path, None, false)?;
-            let mut cached = CachedExtractor::default();
-            println!("{}", cached.extract_record_report(&record)?.as_tsv());
-            println!("{}", cached.extract_record_report(&record)?.as_tsv());
+            print!("{}", run_extraction_cache(path)?);
         }
         "extract-quarantine" => {
             let path = required_path(args.next(), "extract-quarantine requires a path")?;
@@ -817,6 +806,46 @@ pub(crate) fn run_content_search(
             Ok((indexed, hits))
         },
     )
+}
+
+fn run_extraction_report(
+    path: PathBuf,
+    worker: &'static str,
+    extractor: Extractor,
+) -> Result<String> {
+    preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    let volume = detect_volume_id(&path)
+        .ok()
+        .or_else(|| parent_volume(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_access_scope(&path, AccessIntent::Read, worker)?;
+        cancellation.check()?;
+        let report = extractor.extract_path_report(&path)?;
+        let mut quarantine = ExtractionQuarantine::default();
+        let decision = quarantine.record_report(&report);
+        Ok(format!("{}\n{}\n", report.as_tsv(), decision.as_tsv()))
+    })
+}
+
+fn run_extraction_cache(path: PathBuf) -> Result<String> {
+    const WORKER: &str = "content extraction cache";
+    preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
+    let volume = detect_volume_id(&path)
+        .ok()
+        .or_else(|| parent_volume(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
+        cancellation.check()?;
+        let record = record_for_path(&path, None, false)?;
+        cancellation.check()?;
+        let mut cached = CachedExtractor::default();
+        let first = cached.extract_record_report(&record)?.as_tsv();
+        cancellation.check()?;
+        let second = cached.extract_record_report(&record)?.as_tsv();
+        Ok(format!("{first}\n{second}\n"))
+    })
 }
 
 fn run_index_footprint_inspect(
