@@ -649,61 +649,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let cancel_after_access = command == "quicklook-session-adaptive-cancel-after-access";
             let path = required_path(args.next(), &format!("{command} requires a path"))?;
             let pressure = parse_required_scheduling_pressure(args, "quicklook preview")?;
-            let rect = Rect::new(0, 0, 640, 480);
-            let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
-            let volume_path = path.clone();
-            let outcome = match run_preview_contract_adaptive_with_volume(
-                Priority::Visible,
-                "quicklook preview",
-                pressure,
-                move || {
-                    preflight_volume_access_scope(
-                        &volume_path,
-                        AccessIntent::Preview,
-                        "adaptive quicklook preview",
-                    )?;
-                    Ok(detect_volume_id(&volume_path).ok())
-                },
-                move |cancellation| {
-                    cancellation.check()?;
-                    let _access = preflight_access_scope(
-                        &path,
-                        AccessIntent::Preview,
-                        "adaptive quicklook preview",
-                    )?;
-                    if cancel_after_access {
-                        cancellation.cancel();
-                    }
-                    cancellation.check()?;
-                    let record = record_for_path(&path, None, false)?;
-                    cancellation.check()?;
-                    let cloud = FileProviderStateReport::read_path(&path)?.materialization;
-                    cancellation.check()?;
-                    let input = QuickLookSessionInput::new(
-                        PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
-                        rect,
-                        viewport,
-                    )
-                    .with_cloud_materialization(cloud)
-                    .with_scheduling_policy(
-                        PreviewSchedulingPolicy {
-                            max_visible: 1,
-                            max_prefetch: 1,
-                            cancel_offscreen: true,
-                        }
-                        .adapted_for_pressure(pressure),
-                    )
-                    .with_invalidation(PreviewInvalidationEvent {
-                        content_changed: true,
-                        ..PreviewInvalidationEvent::default()
-                    });
-                    QuickLookSessionContract::from_input_checked(
-                        &PreviewSecurityPolicy::default(),
-                        input,
-                        || cancellation.check(),
-                    )
-                },
-            ) {
+            let outcome = match run_adaptive_quicklook_session(path, pressure, cancel_after_access)
+            {
                 Ok(outcome) => outcome,
                 Err(GfmError::Cancelled) if cancel_after_access => {
                     println!("quicklook-session\tstatus=cancelled\treason=cancelled-after-access");
@@ -768,66 +715,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 command == "thumbnail-generation-adaptive-cancel-after-access";
             let path = required_path(args.next(), &format!("{command} requires a path"))?;
             let pressure = parse_required_scheduling_pressure(args, "thumbnail generation")?;
-            let volume_path = path.clone();
-            let outcome = match run_preview_contract_adaptive_with_volume(
-                Priority::Background,
-                "thumbnail generation",
-                pressure,
-                move || {
-                    preflight_volume_access_scope(
-                        &volume_path,
-                        AccessIntent::Preview,
-                        "adaptive thumbnail generation volume",
-                    )?;
-                    Ok(detect_volume_id(&volume_path).ok())
-                },
-                move |cancellation| {
-                    cancellation.check()?;
-                    let _access = preflight_access_scope(
-                        &path,
-                        AccessIntent::Preview,
-                        "adaptive thumbnail generation",
-                    )?;
-                    if cancel_after_access {
-                        cancellation.cancel();
+            let outcome =
+                match run_adaptive_thumbnail_generation(path, pressure, cancel_after_access) {
+                    Ok(outcome) => outcome,
+                    Err(GfmError::Cancelled) if cancel_after_access => {
+                        println!(
+                            "thumbnail-generation\tstatus=cancelled\treason=cancelled-after-access"
+                        );
+                        return Ok(true);
                     }
-                    cancellation.check()?;
-                    let record = record_for_path(&path, None, false)?;
-                    cancellation.check()?;
-                    let rect = Rect::new(0, 0, 160, 160);
-                    let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
-                    let cloud = FileProviderStateReport::read_path(&path)?.materialization;
-                    cancellation.check()?;
-                    let input = ThumbnailGenerationInput::new(
-                        PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
-                        rect,
-                        viewport,
-                    )
-                    .with_cloud_materialization(cloud)
-                    .with_scheduling_policy(
-                        PreviewSchedulingPolicy::default().adapted_for_pressure(pressure),
-                    )
-                    .with_size(512, 2_000)
-                    .with_invalidation(PreviewInvalidationEvent {
-                        metadata_changed: true,
-                        ..PreviewInvalidationEvent::default()
-                    });
-                    ThumbnailGenerationContract::from_input_checked(
-                        &PreviewSecurityPolicy::default(),
-                        input,
-                        || cancellation.check(),
-                    )
-                },
-            ) {
-                Ok(outcome) => outcome,
-                Err(GfmError::Cancelled) if cancel_after_access => {
-                    println!(
-                        "thumbnail-generation\tstatus=cancelled\treason=cancelled-after-access"
-                    );
-                    return Ok(true);
-                }
-                Err(err) => return Err(err),
-            };
+                    Err(err) => return Err(err),
+                };
             match outcome.result {
                 Some(contract) => println!(
                     "{}\taction={}\tdeferred={}",
@@ -1427,6 +1325,113 @@ fn run_thumbnail_generation(path: PathBuf) -> Result<ThumbnailGenerationContract
             || cancellation.check(),
         )
     })
+}
+
+fn run_adaptive_quicklook_session(
+    path: PathBuf,
+    pressure: SchedulingPressure,
+    cancel_after_access: bool,
+) -> Result<crate::runtime::ScheduledTaskOutcome<QuickLookSessionContract>> {
+    const WORKER: &str = "adaptive quicklook preview";
+    let volume_path = path.clone();
+    run_preview_contract_adaptive_with_volume(
+        Priority::Visible,
+        "quicklook preview",
+        pressure,
+        move || {
+            preflight_volume_access_scope(&volume_path, AccessIntent::Preview, WORKER)?;
+            Ok(detect_volume_id(&volume_path)
+                .ok()
+                .or_else(|| parent_volume(&volume_path)))
+        },
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = preflight_access_scope(&path, AccessIntent::Preview, WORKER)?;
+            if cancel_after_access {
+                cancellation.cancel();
+            }
+            cancellation.check()?;
+            let record = record_for_path(&path, None, false)?;
+            cancellation.check()?;
+            let cloud = FileProviderStateReport::read_path(&path)?.materialization;
+            cancellation.check()?;
+            let input = QuickLookSessionInput::new(
+                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
+                Rect::new(0, 0, 640, 480),
+                Viewport::new(Rect::new(0, 0, 1024, 768), 256),
+            )
+            .with_cloud_materialization(cloud)
+            .with_scheduling_policy(
+                PreviewSchedulingPolicy {
+                    max_visible: 1,
+                    max_prefetch: 1,
+                    cancel_offscreen: true,
+                }
+                .adapted_for_pressure(pressure),
+            )
+            .with_invalidation(PreviewInvalidationEvent {
+                content_changed: true,
+                ..PreviewInvalidationEvent::default()
+            });
+            QuickLookSessionContract::from_input_checked(
+                &PreviewSecurityPolicy::default(),
+                input,
+                || cancellation.check(),
+            )
+        },
+    )
+}
+
+fn run_adaptive_thumbnail_generation(
+    path: PathBuf,
+    pressure: SchedulingPressure,
+    cancel_after_access: bool,
+) -> Result<crate::runtime::ScheduledTaskOutcome<ThumbnailGenerationContract>> {
+    const VOLUME_WORKER: &str = "adaptive thumbnail generation volume";
+    const WORKER: &str = "adaptive thumbnail generation";
+    let volume_path = path.clone();
+    run_preview_contract_adaptive_with_volume(
+        Priority::Background,
+        "thumbnail generation",
+        pressure,
+        move || {
+            preflight_volume_access_scope(&volume_path, AccessIntent::Preview, VOLUME_WORKER)?;
+            Ok(detect_volume_id(&volume_path)
+                .ok()
+                .or_else(|| parent_volume(&volume_path)))
+        },
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = preflight_access_scope(&path, AccessIntent::Preview, WORKER)?;
+            if cancel_after_access {
+                cancellation.cancel();
+            }
+            cancellation.check()?;
+            let record = record_for_path(&path, None, false)?;
+            cancellation.check()?;
+            let cloud = FileProviderStateReport::read_path(&path)?.materialization;
+            cancellation.check()?;
+            let input = ThumbnailGenerationInput::new(
+                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
+                Rect::new(0, 0, 160, 160),
+                Viewport::new(Rect::new(0, 0, 1024, 768), 256),
+            )
+            .with_cloud_materialization(cloud)
+            .with_scheduling_policy(
+                PreviewSchedulingPolicy::default().adapted_for_pressure(pressure),
+            )
+            .with_size(512, 2_000)
+            .with_invalidation(PreviewInvalidationEvent {
+                metadata_changed: true,
+                ..PreviewInvalidationEvent::default()
+            });
+            ThumbnailGenerationContract::from_input_checked(
+                &PreviewSecurityPolicy::default(),
+                input,
+                || cancellation.check(),
+            )
+        },
+    )
 }
 
 fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<Vec<String>> {

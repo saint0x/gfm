@@ -335,6 +335,8 @@ impl WorkerSandbox {
                 .arg(input)
                 .args(scheduling_pressure_args(pressure));
             command.env("GFM_PERMISSION_STATE", permission_state);
+            command.env_remove("GFM_JOB_PAYLOAD_CATALOG");
+            command.env_remove("GFM_JOB_PROGRESS_STORE");
             command
         } else {
             let mut command = Command::new(exe);
@@ -343,6 +345,8 @@ impl WorkerSandbox {
                 .arg(input)
                 .args(scheduling_pressure_args(pressure));
             command.env("GFM_PERMISSION_STATE", permission_state);
+            command.env_remove("GFM_JOB_PAYLOAD_CATALOG");
+            command.env_remove("GFM_JOB_PROGRESS_STORE");
             command
         }
     }

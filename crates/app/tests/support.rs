@@ -2107,6 +2107,7 @@ fn adaptive_quicklook_session_stays_visible_under_pressure_from_binary() {
     assert!(stdout.starts_with("quicklook-session\tquick-look\t"));
     assert!(stdout.contains("\tschedule=scheduled:visible\taction=Run\tdeferred=false\n"));
     assert_eq!(preview_security_scope_count(&stderr), 1, "{stderr}");
+    assert_worker_admitted(&stderr, "adaptive quicklook preview", &path);
 
     let _ = std::fs::remove_file(path);
 }
@@ -2143,6 +2144,10 @@ fn adaptive_quicklook_session_refuses_unreachable_volume_before_preview_from_bin
         stderr.contains(
             "adaptive quicklook preview volume access blocked: unreachable volume network"
         ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=adaptive quicklook preview\t"),
         "{stderr}"
     );
 
@@ -2182,6 +2187,7 @@ fn adaptive_quicklook_session_cancel_after_access_stops_before_record_read_from_
     );
     assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
     assert_eq!(preview_security_scope_count(&stderr), 1, "{stderr}");
+    assert_worker_admitted(&stderr, "adaptive quicklook preview", &path);
 
     let _ = std::fs::remove_file(path);
 }
@@ -2379,6 +2385,7 @@ fn adaptive_thumbnail_generation_throttles_prefetch_on_battery_from_binary() {
         "{stdout}"
     );
     assert_eq!(preview_security_scope_count(&stderr), 1, "{stderr}");
+    assert_worker_admitted(&stderr, "adaptive thumbnail generation", &path);
 
     let _ = std::fs::remove_file(path);
 }
@@ -2416,6 +2423,7 @@ fn adaptive_thumbnail_generation_cancel_after_access_stops_before_record_read_fr
     );
     assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
     assert_eq!(preview_security_scope_count(&stderr), 1, "{stderr}");
+    assert_worker_admitted(&stderr, "adaptive thumbnail generation", &path);
 
     let _ = std::fs::remove_file(path);
 }

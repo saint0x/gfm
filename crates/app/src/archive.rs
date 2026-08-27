@@ -18,8 +18,9 @@ use gfm_store::{
     rebuild_columns_archive, rebuild_derived_sidecar_checked, recover_sidecars_checked,
     sidecar_kind_name, substring_postings_from_records, write_dictionary, write_fuzzy_postings,
     write_metadata_postings, write_prefix_postings, write_record_columns, write_substring_postings,
-    ArchiveRebuildInputs, ArchiveSchemaKind, MmapRecordArchive, MmapRecordColumns, SidecarHealth,
-    SidecarKind, SidecarPaths, SidecarRecovery, SidecarRecoveryPlan,
+    ArchiveRebuildInputs, ArchiveSchemaKind, ColumnsArchiveRebuild, MmapRecordArchive,
+    MmapRecordColumns, SidecarHealth, SidecarKind, SidecarPaths, SidecarRecovery,
+    SidecarRecoveryPlan,
 };
 use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
 use std::path::{Path, PathBuf};
@@ -116,9 +117,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let records = required_path(args.next(), "records-migrate requires a records path")?;
             let backup_dir =
                 required_path(args.next(), "records-migrate requires a backup directory")?;
-            let _access =
-                retain_archive_migration_access(&records, &backup_dir, "records migrate")?;
-            let migration = migrate_record_archive(records, backup_dir)?;
+            let migration = run_archive_migration(
+                records,
+                backup_dir,
+                "records migrate",
+                migrate_record_archive,
+            )?;
             println!("{}", migration.as_tsv());
         }
         "content-migration-plan" => {
@@ -135,9 +139,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let content = required_path(args.next(), "content-migrate requires a content path")?;
             let backup_dir =
                 required_path(args.next(), "content-migrate requires a backup directory")?;
-            let _access =
-                retain_archive_migration_access(&content, &backup_dir, "content migrate")?;
-            let migration = migrate_content_archive(content, backup_dir)?;
+            let migration = run_archive_migration(
+                content,
+                backup_dir,
+                "content migrate",
+                migrate_content_archive,
+            )?;
             println!("{}", migration.as_tsv());
         }
         "metadata-migration-plan" => {
@@ -154,9 +161,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let metadata = required_path(args.next(), "metadata-migrate requires a metadata path")?;
             let backup_dir =
                 required_path(args.next(), "metadata-migrate requires a backup directory")?;
-            let _access =
-                retain_archive_migration_access(&metadata, &backup_dir, "metadata migrate")?;
-            let migration = migrate_metadata_archive(metadata, backup_dir)?;
+            let migration = run_archive_migration(
+                metadata,
+                backup_dir,
+                "metadata migrate",
+                migrate_metadata_archive,
+            )?;
             println!("{}", migration.as_tsv());
         }
         "columns-rebuild-plan" => {
@@ -172,8 +182,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let columns = required_path(args.next(), "columns-rebuild requires a columns path")?;
             let backup_dir =
                 required_path(args.next(), "columns-rebuild requires a backup directory")?;
-            let _access = retain_columns_rebuild_access(&records, &columns, &backup_dir)?;
-            let rebuild = rebuild_columns_archive(records, columns, backup_dir)?;
+            let rebuild = run_columns_rebuild(records, columns, backup_dir)?;
             println!("{}", rebuild.as_tsv());
         }
         "derived-sidecar-rebuild-plan" => {
@@ -473,6 +482,27 @@ fn run_archive_rebuild_plan(inputs: ArchiveRebuildInputs) -> Result<Vec<String>>
     })
 }
 
+fn run_archive_migration<T>(
+    archive: PathBuf,
+    backup_dir: PathBuf,
+    worker: &'static str,
+    migrate: impl FnOnce(PathBuf, PathBuf) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    preflight_archive_migration_volumes(&archive, &backup_dir, worker)?;
+    let volume = detect_volume_id(&archive)
+        .ok()
+        .or_else(|| parent_volume(&archive));
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_archive_migration_access(&archive, &backup_dir, worker)?;
+        cancellation.check()?;
+        migrate(archive, backup_dir)
+    })
+}
+
 fn run_columns_rebuild_plan(records: PathBuf, columns: PathBuf) -> Result<String> {
     const WORKER: &str = "columns rebuild plan";
     preflight_columns_rebuild_plan_volumes(&records, &columns)?;
@@ -484,6 +514,24 @@ fn run_columns_rebuild_plan(records: PathBuf, columns: PathBuf) -> Result<String
         let _access = retain_columns_rebuild_plan_access(&records, &columns)?;
         cancellation.check()?;
         Ok(plan_columns_archive_rebuild(records, columns).as_tsv())
+    })
+}
+
+fn run_columns_rebuild(
+    records: PathBuf,
+    columns: PathBuf,
+    backup_dir: PathBuf,
+) -> Result<ColumnsArchiveRebuild> {
+    const WORKER: &str = "columns rebuild";
+    preflight_columns_rebuild_volumes(&records, &columns, &backup_dir)?;
+    let volume = detect_volume_id(&records)
+        .ok()
+        .or_else(|| parent_volume(&records));
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_columns_rebuild_access(&records, &columns, &backup_dir)?;
+        cancellation.check()?;
+        rebuild_columns_archive(records, columns, backup_dir)
     })
 }
 
@@ -593,6 +641,24 @@ fn retain_archive_migration_access(
     ])
 }
 
+fn preflight_archive_migration_volumes(
+    archive: &Path,
+    backup_dir: &Path,
+    worker: &str,
+) -> Result<()> {
+    preflight_volume_access_scope(archive, AccessIntent::Read, &format!("{worker} archive"))?;
+    preflight_volume_access_scope(
+        write_probe_path(archive),
+        AccessIntent::Write,
+        &format!("{worker} archive"),
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(backup_dir),
+        AccessIntent::Write,
+        &format!("{worker} backup"),
+    )
+}
+
 fn retain_columns_rebuild_plan_access(
     records: &Path,
     columns: &Path,
@@ -639,6 +705,29 @@ fn retain_columns_rebuild_access(
             "columns rebuild backup",
         )?,
     ])
+}
+
+fn preflight_columns_rebuild_volumes(
+    records: &Path,
+    columns: &Path,
+    backup_dir: &Path,
+) -> Result<()> {
+    preflight_volume_access_scope(records, AccessIntent::Read, "columns rebuild records")?;
+    preflight_volume_access_scope(
+        archive_probe_path(columns),
+        AccessIntent::Read,
+        "columns rebuild columns",
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(columns),
+        AccessIntent::Write,
+        "columns rebuild output",
+    )?;
+    preflight_volume_access_scope(
+        write_probe_path(backup_dir),
+        AccessIntent::Write,
+        "columns rebuild backup",
+    )
 }
 
 fn retain_derived_sidecar_rebuild_plan_access(

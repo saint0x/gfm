@@ -1098,8 +1098,9 @@ fn search_typing_session_benchmark_reports_cache_reuse_from_binary() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("security-worker-admission\tworker=operation journal\t")
-            && stderr.contains("\tworker-action=start\t")
+        stderr.contains(
+            "security-worker-admission\tworker=search typing session benchmark workspace\t"
+        ) && stderr.contains("\tworker-action=start\t")
             && stderr.contains("\tcan-touch-filesystem=true\t"),
         "{stderr}"
     );
@@ -1268,6 +1269,9 @@ fn migrates_legacy_record_archive_from_binary() {
         String::from_utf8_lossy(&migration.stderr)
     );
     let migration_stdout = String::from_utf8(migration.stdout).unwrap();
+    let migration_stderr = String::from_utf8_lossy(&migration.stderr);
+    assert_worker_admitted(&migration_stderr, "records migrate archive", &records);
+    assert_worker_admitted(&migration_stderr, "records migrate backup", &backup);
     assert!(
         migration_stdout.contains(
             "record-archive-migration\tmigrated-records=1\tbefore-status=legacy\tafter-status=current"
@@ -1341,6 +1345,9 @@ fn migrates_legacy_content_archive_from_binary() {
         String::from_utf8_lossy(&migration.stderr)
     );
     let migration_stdout = String::from_utf8(migration.stdout).unwrap();
+    let migration_stderr = String::from_utf8_lossy(&migration.stderr);
+    assert_worker_admitted(&migration_stderr, "content migrate archive", &content);
+    assert_worker_admitted(&migration_stderr, "content migrate backup", &backup);
     assert!(
         migration_stdout.contains(
             "content-archive-migration\tmigrated-postings=1\tbefore-status=legacy\tafter-status=current"
@@ -1418,6 +1425,9 @@ fn migrates_legacy_metadata_archive_from_binary() {
         String::from_utf8_lossy(&migration.stderr)
     );
     let migration_stdout = String::from_utf8(migration.stdout).unwrap();
+    let migration_stderr = String::from_utf8_lossy(&migration.stderr);
+    assert_worker_admitted(&migration_stderr, "metadata migrate archive", &metadata);
+    assert_worker_admitted(&migration_stderr, "metadata migrate backup", &backup);
     assert!(
         migration_stdout.contains(
             "metadata-archive-migration\tmigrated-postings=1\tbefore-status=legacy\tafter-status=current"
@@ -1637,6 +1647,19 @@ fn rebuilds_columns_archive_from_binary() {
         String::from_utf8_lossy(&rebuild.stderr)
     );
     let rebuild_stdout = String::from_utf8(rebuild.stdout).unwrap();
+    let rebuild_stderr = String::from_utf8_lossy(&rebuild.stderr);
+    assert_worker_admitted(&rebuild_stderr, "columns rebuild records", &records);
+    assert_worker_admitted(
+        &rebuild_stderr,
+        "columns rebuild columns",
+        columns.parent().unwrap(),
+    );
+    assert_worker_admitted(
+        &rebuild_stderr,
+        "columns rebuild output",
+        columns.parent().unwrap(),
+    );
+    assert_worker_admitted(&rebuild_stderr, "columns rebuild backup", &backup);
     assert!(
         rebuild_stdout.contains(
             "columns-archive-rebuild\trebuilt-records=2\trecords-status=current\tbefore-status=missing\tafter-status=current",
