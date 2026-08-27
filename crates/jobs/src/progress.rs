@@ -295,7 +295,9 @@ impl JobProgressStore {
                 id.value()
             )));
         };
-        apply_progress_command(snapshot, command, updated_ms)?;
+        if !apply_progress_command(snapshot, command, updated_ms)? {
+            return Ok(snapshot.clone());
+        }
         let updated = snapshot.clone();
         self.write_all(&snapshots)?;
         Ok(updated)
@@ -317,7 +319,7 @@ fn apply_progress_command(
     snapshot: &mut JobProgressSnapshot,
     command: JobProgressCommand,
     updated_ms: u64,
-) -> Result<()> {
+) -> Result<bool> {
     match command {
         JobProgressCommand::Pause => {
             if matches!(
@@ -327,6 +329,11 @@ fn apply_progress_command(
                     | JobProgressState::Failed
             ) {
                 return Err(terminal_command_error(snapshot, command));
+            }
+            if snapshot.state == JobProgressState::Paused
+                && snapshot.detail.starts_with("paused-by-user")
+            {
+                return Ok(false);
             }
             snapshot.state = JobProgressState::Paused;
             snapshot.detail = command_detail("paused-by-user", &snapshot.detail);
@@ -351,7 +358,7 @@ fn apply_progress_command(
         }
     }
     snapshot.updated_ms = updated_ms;
-    Ok(())
+    Ok(true)
 }
 
 fn command_detail(prefix: &str, previous: &str) -> String {
@@ -526,6 +533,37 @@ mod tests {
             "cancelled-by-user:resumed-by-user:paused-by-user:copying"
         );
         assert_eq!(store.restorable().unwrap(), Vec::new());
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn repeated_user_pause_does_not_rewrite_progress_store() {
+        let path = temp_path("progress-pause-noop");
+        let store = JobProgressStore::new(&path);
+        let snapshot = JobProgressSnapshot::new(
+            JobId::from_raw(7),
+            JobClass::Foreground,
+            Priority::Interactive,
+            "copy selected files",
+            Some(VolumeId(2)),
+            100,
+        )
+        .with_progress(JobProgressState::Running, 12, "copying", 1);
+        store.write_all(&[snapshot]).unwrap();
+        let paused = store
+            .apply_command(JobId::from_raw(7), JobProgressCommand::Pause, 2)
+            .unwrap();
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+
+        let repeated = store
+            .apply_command(JobId::from_raw(7), JobProgressCommand::Pause, 3)
+            .unwrap();
+        let after = fs::metadata(&path).unwrap().modified().unwrap();
+
+        assert_eq!(repeated, paused);
+        assert_eq!(before, after);
+        assert_eq!(store.read().unwrap(), vec![paused]);
 
         let _ = fs::remove_file(path);
     }
