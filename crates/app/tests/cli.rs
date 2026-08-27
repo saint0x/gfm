@@ -90,6 +90,14 @@ fn indexes_and_searches_real_files_from_binary() {
         "{}",
         String::from_utf8_lossy(&verify_output.stderr)
     );
+    let verify_stderr = String::from_utf8_lossy(&verify_output.stderr);
+    assert!(
+        verify_stderr.contains(&format!(
+            "security-worker-admission\tworker=records verify\tpath={}",
+            index.display()
+        )),
+        "{verify_stderr}"
+    );
     let verify_stdout = String::from_utf8(verify_output.stdout).unwrap();
     assert!(
         verify_stdout.contains("\tchecksum=verified"),
@@ -1056,6 +1064,14 @@ fn inspects_archive_schema_from_binary() {
         "{}",
         String::from_utf8_lossy(&records_schema.stderr)
     );
+    let records_stderr = String::from_utf8_lossy(&records_schema.stderr);
+    assert!(
+        records_stderr.contains(&format!(
+            "security-worker-admission\tworker=archive schema\tpath={}",
+            index.display()
+        )),
+        "{records_stderr}"
+    );
     let records_stdout = String::from_utf8(records_schema.stdout).unwrap();
     assert!(
         records_stdout
@@ -1085,6 +1101,14 @@ fn inspects_archive_schema_from_binary() {
         prefixes_schema.status.success(),
         "{}",
         String::from_utf8_lossy(&prefixes_schema.stderr)
+    );
+    let prefixes_stderr = String::from_utf8_lossy(&prefixes_schema.stderr);
+    assert!(
+        prefixes_stderr.contains(&format!(
+            "security-worker-admission\tworker=archive schema\tpath={}",
+            prefixes.display()
+        )),
+        "{prefixes_stderr}"
     );
     let prefixes_stdout = String::from_utf8(prefixes_schema.stdout).unwrap();
     assert!(
@@ -1131,6 +1155,14 @@ fn migrates_legacy_record_archive_from_binary() {
         String::from_utf8_lossy(&plan.stderr)
     );
     let plan_stdout = String::from_utf8(plan.stdout).unwrap();
+    let plan_stderr = String::from_utf8_lossy(&plan.stderr);
+    assert!(
+        plan_stderr.contains(&format!(
+            "security-worker-admission\tworker=records migration plan\tpath={}",
+            records.display()
+        )),
+        "{plan_stderr}"
+    );
     assert!(
         plan_stdout.contains("record-archive-migration-plan\taction=migrate"),
         "{plan_stdout}"
@@ -1196,6 +1228,14 @@ fn migrates_legacy_content_archive_from_binary() {
         String::from_utf8_lossy(&plan.stderr)
     );
     let plan_stdout = String::from_utf8(plan.stdout).unwrap();
+    let plan_stderr = String::from_utf8_lossy(&plan.stderr);
+    assert!(
+        plan_stderr.contains(&format!(
+            "security-worker-admission\tworker=content migration plan\tpath={}",
+            content.display()
+        )),
+        "{plan_stderr}"
+    );
     assert!(
         plan_stdout.contains("content-archive-migration-plan\taction=migrate"),
         "{plan_stdout}"
@@ -1265,6 +1305,14 @@ fn migrates_legacy_metadata_archive_from_binary() {
         String::from_utf8_lossy(&plan.stderr)
     );
     let plan_stdout = String::from_utf8(plan.stdout).unwrap();
+    let plan_stderr = String::from_utf8_lossy(&plan.stderr);
+    assert!(
+        plan_stderr.contains(&format!(
+            "security-worker-admission\tworker=metadata migration plan\tpath={}",
+            metadata.display()
+        )),
+        "{plan_stderr}"
+    );
     assert!(
         plan_stdout.contains("metadata-archive-migration-plan\taction=migrate"),
         "{plan_stdout}"
@@ -1329,6 +1377,13 @@ fn archive_schema_refuses_unreachable_archive_before_inspection_from_binary() {
     assert!(!stdout.contains("archive-schema\t"), "{stdout}");
     assert!(
         stderr.contains("archive schema volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=archive schema\tpath={}",
+            records.display()
+        )),
         "{stderr}"
     );
     assert!(!stderr.contains("invalid magic"), "{stderr}");
@@ -4010,6 +4065,13 @@ fn archive_read_helpers_refuse_unreachable_volume_before_mapping_from_binary() {
         assert!(
             stderr.contains(&format!(
                 "{worker} volume access blocked: unreachable volume network"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(
+            !stderr.contains(&format!(
+                "security-worker-admission\tworker={worker}\tpath={}",
+                archive.display()
             )),
             "{route}: {stderr}"
         );
@@ -7456,7 +7518,13 @@ fn searches_persisted_text_content_from_binary() {
     let stderr = String::from_utf8(search_output.stderr).unwrap();
     assert!(stdout.contains("archive.md"), "{stdout}");
     assert!(
-        stderr.contains("content-keys 1")
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=content index search records\tpath={}",
+            records.display()
+        )) && stderr.contains(&format!(
+            "security-worker-admission\tworker=content index search content\tpath={}",
+            content.display()
+        )) && stderr.contains("content-keys 1")
             && stderr.contains("records-loaded 1")
             && stderr.contains("candidate-ids 1")
             && stderr.contains("full-hydration false"),
@@ -7604,7 +7672,18 @@ fn adaptive_persisted_content_search_applies_snippet_pressure_budget_from_binary
     );
 
     let stdout = String::from_utf8(search_output.stdout).unwrap();
+    let stderr = String::from_utf8(search_output.stderr).unwrap();
     assert!(stdout.contains("large.md"), "{stdout}");
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=adaptive content index search records\tpath={}",
+            records.display()
+        )) && stderr.contains(&format!(
+            "security-worker-admission\tworker=adaptive content index search content\tpath={}",
+            content.display()
+        )),
+        "{stderr}"
+    );
     assert!(!stdout.contains("[[persistedpressuremarker]]"), "{stdout}");
 
     fs::remove_dir_all(root).unwrap();
@@ -7745,6 +7824,13 @@ fn search_content_index_refuses_unreachable_records_before_loading_from_binary()
         ),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content index search records\tpath={}",
+            records.display()
+        )),
+        "{stderr}"
+    );
     assert!(!stderr.contains("invalid magic"), "{stderr}");
 
     fs::remove_dir_all(root).unwrap();
@@ -7779,6 +7865,13 @@ fn search_content_index_refuses_unreachable_content_before_loading_from_binary()
         stderr.contains(
             "content index search content volume access blocked: unreachable volume network"
         ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content index search content\tpath={}",
+            content.display()
+        )),
         "{stderr}"
     );
     assert!(!stderr.contains("invalid magic"), "{stderr}");

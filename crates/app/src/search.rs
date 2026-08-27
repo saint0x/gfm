@@ -98,19 +98,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 required_path(args.next(), "search-content-index requires a content path")?;
             let query =
                 required_string(args.next(), "search-content-index requires a query string")?;
-            let _access =
-                preflight_content_index_search_access(&records, &content, "content index search")?;
-            let (live, report) =
-                Indexer::default().load_live_with_content_for_query(records, content, &query)?;
-            eprintln!(
-                "content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
-                report.content_keys,
-                report.records_loaded,
-                report.records_missing,
-                report.candidate_ids,
-                report.full_hydration
-            );
-            for hit in live.search_with_snippets(&query, 50, &Extractor::default(), 96)? {
+            let output = run_content_index_search(
+                records,
+                content,
+                query,
+                Extractor::default(),
+                "content index search",
+            )?;
+            eprintln!("{}", output.diagnostics);
+            for hit in output.hits {
                 print_hit(&hit);
             }
         }
@@ -134,22 +130,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .unwrap_or_else(|| PathBuf::from("."));
             let extractor =
                 Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
-            let _access = preflight_content_index_search_access(
-                &records,
-                &content,
+            let output = run_content_index_search(
+                records,
+                content,
+                query,
+                extractor,
                 "adaptive content index search",
             )?;
-            let (live, report) =
-                Indexer::default().load_live_with_content_for_query(records, content, &query)?;
-            eprintln!(
-                "content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
-                report.content_keys,
-                report.records_loaded,
-                report.records_missing,
-                report.candidate_ids,
-                report.full_hydration
-            );
-            for hit in live.search_with_snippets(&query, 50, &extractor, 96)? {
+            eprintln!("{}", output.diagnostics);
+            for hit in output.hits {
                 print_hit(&hit);
             }
         }
@@ -870,6 +859,11 @@ struct SearchIndexColumnsOutput {
     hits: Vec<SearchHit>,
 }
 
+struct ContentIndexSearchOutput {
+    diagnostics: String,
+    hits: Vec<SearchHit>,
+}
+
 fn run_search_index_columns(
     records: PathBuf,
     columns: PathBuf,
@@ -912,6 +906,38 @@ fn run_search_index_columns(
             })
         },
     )
+}
+
+fn run_content_index_search(
+    records: PathBuf,
+    content: PathBuf,
+    query: String,
+    extractor: Extractor,
+    worker: &'static str,
+) -> Result<ContentIndexSearchOutput> {
+    preflight_volume_access_scope(&records, AccessIntent::Read, &format!("{worker} records"))?;
+    preflight_volume_access_scope(&content, AccessIntent::Read, &format!("{worker} content"))?;
+    let volume = detect_volume_id(&records)
+        .ok()
+        .or_else(|| detect_volume_id(&content).ok());
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_content_index_search_access(&records, &content, worker)?;
+        cancellation.check()?;
+        let (live, report) =
+            Indexer::default().load_live_with_content_for_query(records, content, &query)?;
+        let diagnostics = format!(
+            "content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
+            report.content_keys,
+            report.records_loaded,
+            report.records_missing,
+            report.candidate_ids,
+            report.full_hydration
+        );
+        cancellation.check()?;
+        let hits = live.search_with_snippets(&query, 50, &extractor, 96)?;
+        Ok(ContentIndexSearchOutput { diagnostics, hits })
+    })
 }
 
 fn preflight_search_archive_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {

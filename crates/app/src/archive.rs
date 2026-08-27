@@ -28,18 +28,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     match command {
         "records-verify" => {
             let records = required_path(args.next(), "records-verify requires a records path")?;
-            let _access = retain_archive_read_access(&records, "records verify")?;
-            let archive = MmapRecordArchive::open(records)?;
-            println!(
-                "records-verify\trecords={}\tbytes={}\tchecksum={}",
-                archive.len(),
-                archive.mapped_len(),
-                if archive.is_checksummed() {
-                    "verified"
-                } else {
-                    "legacy"
-                }
-            );
+            let report = run_archive_read(records, "records verify", move |records| {
+                let archive = MmapRecordArchive::open(records)?;
+                Ok(format!(
+                    "records-verify\trecords={}\tbytes={}\tchecksum={}",
+                    archive.len(),
+                    archive.mapped_len(),
+                    if archive.is_checksummed() {
+                        "verified"
+                    } else {
+                        "legacy"
+                    }
+                ))
+            })?;
+            println!("{report}");
         }
         "archive-schema" => {
             let kind = args
@@ -51,8 +53,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     )
             })?;
             let path = required_path(args.next(), "archive-schema requires an archive path")?;
-            let _access = retain_archive_read_access(&path, "archive schema")?;
-            println!("{}", inspect_archive_schema(kind, path).as_tsv());
+            let report = run_archive_read(path, "archive schema", move |path| {
+                Ok(inspect_archive_schema(kind, path).as_tsv())
+            })?;
+            println!("{report}");
         }
         "archive-rebuild-plan" => {
             let records =
@@ -103,8 +107,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "records-migration-plan requires a records path",
             )?;
-            let _access = retain_archive_read_access(&records, "records migration plan")?;
-            println!("{}", plan_record_archive_migration(records).as_tsv());
+            let report = run_archive_read(records, "records migration plan", move |records| {
+                Ok(plan_record_archive_migration(records).as_tsv())
+            })?;
+            println!("{report}");
         }
         "records-migrate" => {
             let records = required_path(args.next(), "records-migrate requires a records path")?;
@@ -120,8 +126,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "content-migration-plan requires a content path",
             )?;
-            let _access = retain_archive_read_access(&content, "content migration plan")?;
-            println!("{}", plan_content_archive_migration(content).as_tsv());
+            let report = run_archive_read(content, "content migration plan", move |content| {
+                Ok(plan_content_archive_migration(content).as_tsv())
+            })?;
+            println!("{report}");
         }
         "content-migrate" => {
             let content = required_path(args.next(), "content-migrate requires a content path")?;
@@ -137,8 +145,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "metadata-migration-plan requires a metadata path",
             )?;
-            let _access = retain_archive_read_access(&metadata, "metadata migration plan")?;
-            println!("{}", plan_metadata_archive_migration(metadata).as_tsv());
+            let report = run_archive_read(metadata, "metadata migration plan", move |metadata| {
+                Ok(plan_metadata_archive_migration(metadata).as_tsv())
+            })?;
+            println!("{report}");
         }
         "metadata-migrate" => {
             let metadata = required_path(args.next(), "metadata-migrate requires a metadata path")?;
@@ -231,38 +241,42 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "columns-verify" => {
             let columns = required_path(args.next(), "columns-verify requires a columns path")?;
-            let _access = retain_archive_read_access(&columns, "columns verify")?;
-            let archive = MmapRecordColumns::open(columns)?;
-            println!(
-                "columns-verify\trecords={}\tbytes={}\tchecksum={}",
-                archive.len(),
-                archive.mapped_len(),
-                if archive.is_checksummed() {
-                    "verified"
-                } else {
-                    "legacy"
-                }
-            );
+            let report = run_archive_read(columns, "columns verify", move |columns| {
+                let archive = MmapRecordColumns::open(columns)?;
+                Ok(format!(
+                    "columns-verify\trecords={}\tbytes={}\tchecksum={}",
+                    archive.len(),
+                    archive.mapped_len(),
+                    if archive.is_checksummed() {
+                        "verified"
+                    } else {
+                        "legacy"
+                    }
+                ))
+            })?;
+            println!("{report}");
         }
         "columns-lookup" => {
             let columns = required_path(args.next(), "columns-lookup requires a columns path")?;
             let volume = parse_u64_arg(args.next(), "columns-lookup requires a volume id")?;
             let node = parse_u64_arg(args.next(), "columns-lookup requires a node id")?;
-            let _access = retain_archive_read_access(&columns, "columns lookup")?;
-            let archive = MmapRecordColumns::open(columns)?;
-            match archive.find(FileId::new(VolumeId(volume), node))? {
-                Some(column) => println!(
-                    "columns\tfound\tid={}:{}\tname={}\text={}\ttags={}\tcomment={}\tpath={}",
-                    column.id.volume.0,
-                    column.id.node,
-                    column.name,
-                    column.extension.as_deref().unwrap_or(""),
-                    column.tags.join(","),
-                    column.comment.as_deref().unwrap_or(""),
-                    column.path
-                ),
-                None => println!("columns\tmissing\tid={volume}:{node}"),
-            }
+            let report = run_archive_read(columns, "columns lookup", move |columns| {
+                let archive = MmapRecordColumns::open(columns)?;
+                Ok(match archive.find(FileId::new(VolumeId(volume), node))? {
+                    Some(column) => format!(
+                        "columns\tfound\tid={}:{}\tname={}\text={}\ttags={}\tcomment={}\tpath={}",
+                        column.id.volume.0,
+                        column.id.node,
+                        column.name,
+                        column.extension.as_deref().unwrap_or(""),
+                        column.tags.join(","),
+                        column.comment.as_deref().unwrap_or(""),
+                        column.path
+                    ),
+                    None => format!("columns\tmissing\tid={volume}:{node}"),
+                })
+            })?;
+            println!("{report}");
         }
         "index-metadata" => {
             let records = required_path(args.next(), "index-metadata requires a records path")?;
@@ -430,6 +444,26 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
 
 fn retain_archive_read_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
     preflight_access_scope(path, AccessIntent::Read, worker)
+}
+
+fn run_archive_read<T>(
+    path: PathBuf,
+    worker: &'static str,
+    read: impl FnOnce(PathBuf) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    let volume = detect_volume_id(&path)
+        .ok()
+        .or_else(|| parent_volume(&path));
+    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+        cancellation.check()?;
+        let _access = retain_archive_read_access(&path, worker)?;
+        cancellation.check()?;
+        read(path)
+    })
 }
 
 fn retain_record_sidecar_build_access(
