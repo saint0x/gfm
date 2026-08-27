@@ -8589,6 +8589,41 @@ fn content_maintenance_refuses_unreachable_output_before_merge_from_binary() {
     );
     assert!(!maintained_content.exists());
 
+    let adaptive_blocked = output_root.join("adaptive-blocked.gfmcontent");
+    let adaptive_blocked_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-maintain-segments-adaptive",
+            manifest.to_str().unwrap(),
+            adaptive_blocked.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!adaptive_blocked_output.status.success());
+    let adaptive_blocked_stdout = String::from_utf8_lossy(&adaptive_blocked_output.stdout);
+    let adaptive_blocked_stderr = String::from_utf8_lossy(&adaptive_blocked_output.stderr);
+    assert!(
+        !adaptive_blocked_stdout.contains("published\t"),
+        "{adaptive_blocked_stdout}"
+    );
+    assert!(
+        adaptive_blocked_stderr
+            .contains("content maintenance volume access blocked: unreachable volume network"),
+        "{adaptive_blocked_stderr}"
+    );
+    assert!(
+        !adaptive_blocked_stderr.contains(&format!(
+            "security-worker-admission\tworker=content maintenance\tpath={}",
+            manifest.display()
+        )),
+        "{adaptive_blocked_stderr}"
+    );
+    assert!(!adaptive_blocked.exists());
+
     let adaptive_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "content-maintain-segments-adaptive",

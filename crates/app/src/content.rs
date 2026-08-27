@@ -377,56 +377,41 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-maintain-segments-adaptive requires at least one segment".to_string(),
                 ));
             }
+            let volume_manifest = manifest_path.clone();
+            let volume_output = output_archive.clone();
+            let volume_segments = segments.clone();
             let worker = BackgroundContentIndexer::default();
-            let outcome =
-                if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
-                    run_scheduled_volume_task_cancellable_with_volume(
-                        Priority::Background,
+            let outcome = run_scheduled_volume_task_cancellable_with_volume(
+                Priority::Background,
+                "content maintenance",
+                pressure,
+                move || {
+                    preflight_content_segments_volumes(
+                        Some(&volume_manifest),
+                        &volume_output,
+                        &volume_segments,
                         "content maintenance",
-                        pressure,
-                        || Ok(None),
-                        move |cancellation| {
-                            let _access = retain_content_segments_access(
-                                Some(&manifest_path),
-                                &output_archive,
-                                &segments,
-                                "content maintenance",
-                            )?;
-                            worker.maintain_segments_cancellable(
-                                &manifest_path,
-                                &output_archive,
-                                &segments,
-                                &ContentMaintenanceOptions::default(),
-                                &cancellation,
-                            )
-                        },
-                    )?
-                } else {
+                    )?;
+                    Ok(detect_volume_id(&volume_manifest)
+                        .ok()
+                        .or_else(|| parent_volume(&volume_output)))
+                },
+                move |cancellation| {
                     let _access = retain_content_segments_access(
                         Some(&manifest_path),
                         &output_archive,
                         &segments,
                         "content maintenance",
                     )?;
-                    let volume = detect_volume_id(&manifest_path)
-                        .ok()
-                        .or_else(|| parent_volume(&output_archive));
-                    run_scheduled_volume_task_cancellable(
-                        volume,
-                        Priority::Background,
-                        "content maintenance",
-                        pressure,
-                        move |cancellation| {
-                            worker.maintain_segments_cancellable(
-                                &manifest_path,
-                                &output_archive,
-                                &segments,
-                                &ContentMaintenanceOptions::default(),
-                                &cancellation,
-                            )
-                        },
-                    )?
-                };
+                    worker.maintain_segments_cancellable(
+                        &manifest_path,
+                        &output_archive,
+                        &segments,
+                        &ContentMaintenanceOptions::default(),
+                        &cancellation,
+                    )
+                },
+            )?;
             if outcome.deferred {
                 eprintln!(
                     "content-maintenance-deferred\taction={:?}",
@@ -896,6 +881,26 @@ fn retain_content_segments_access(
         guards.push(preflight_access_scope(segment, AccessIntent::Read, worker)?);
     }
     Ok(guards)
+}
+
+fn preflight_content_segments_volumes(
+    manifest_path: Option<&Path>,
+    output_archive: &Path,
+    segments: &[PathBuf],
+    worker: &str,
+) -> Result<()> {
+    if let Some(manifest_path) = manifest_path {
+        preflight_volume_access_scope(manifest_path, AccessIntent::Read, worker)?;
+    }
+    preflight_volume_access_scope(
+        write_probe_path(output_archive),
+        AccessIntent::Write,
+        worker,
+    )?;
+    for segment in segments {
+        preflight_volume_access_scope(segment, AccessIntent::Read, worker)?;
+    }
+    Ok(())
 }
 
 fn retain_content_job_access(
