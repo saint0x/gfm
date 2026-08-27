@@ -1602,6 +1602,7 @@ fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<Clo
             {
                 Some(CloudStorageState::Uploading)
             }
+            None if values.download_requested == Some(true) => Some(CloudStorageState::Waiting),
             None if values.is_uploaded == Some(false) => Some(CloudStorageState::Waiting),
             None if values.is_uploaded == Some(true) => Some(CloudStorageState::Downloaded),
             None => None,
@@ -3346,6 +3347,47 @@ mod tests {
         );
         assert_eq!(progress.direction, CloudTransferDirection::Upload);
         assert_eq!(progress.percent_milli, Some(62_500));
+    }
+
+    #[test]
+    fn native_download_requested_without_status_marks_waiting() {
+        let path = PathBuf::from("/tmp/Document.pdf");
+        let mut native = native_values();
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.download_requested = Some(true);
+        native.downloading_status = None;
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+        let progress = progress_for_state(state, &hints);
+
+        assert_eq!(domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(state, CloudStorageState::Waiting);
+        assert_eq!(
+            materialization_for_state(state),
+            CloudMaterialization::InFlight
+        );
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(progress.direction, CloudTransferDirection::Materialize);
+        assert_eq!(progress.percent_milli, None);
+        assert!(progress.requested);
     }
 
     #[test]
