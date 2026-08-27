@@ -47,10 +47,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let discovered = args
                 .map(|spec| parse_content_manifest_archive_spec(&spec))
                 .collect::<Result<Vec<_>>>()?;
-            let _access = retain_manifest_recovery_plan_access(&manifest_path, discovered.iter())?;
-            let plan = plan_content_manifest_recovery(&manifest_path, &discovered);
-            println!("{}", plan.as_tsv());
-            print_content_archive_health("invalid", &plan.invalid_archives);
+            for line in run_manifest_recovery_plan(manifest_path, discovered)? {
+                println!("{line}");
+            }
         }
         "content-manifest-recover" => {
             let manifest_path = required_path(
@@ -323,6 +322,50 @@ fn retain_manifest_recovery_plan_access<'a>(
     Ok(guards)
 }
 
+fn preflight_manifest_recovery_plan_volumes(
+    manifest_path: &Path,
+    discovered: &[ContentArchiveManifestEntry],
+) -> Result<()> {
+    preflight_volume_access_scope(
+        manifest_path,
+        AccessIntent::Read,
+        "content manifest recovery plan",
+    )?;
+    for entry in discovered {
+        preflight_volume_access_scope(
+            existing_read_probe_path(&resolve_manifest_path(manifest_path, &entry.path)),
+            AccessIntent::Read,
+            "content manifest recovery discovered archive",
+        )?;
+    }
+    Ok(())
+}
+
+fn run_manifest_recovery_plan(
+    manifest_path: PathBuf,
+    discovered: Vec<ContentArchiveManifestEntry>,
+) -> Result<Vec<String>> {
+    preflight_manifest_recovery_plan_volumes(&manifest_path, &discovered)?;
+    let volume = detect_volume_id(&manifest_path).ok();
+    run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        "content manifest recovery plan",
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = retain_manifest_recovery_plan_access(&manifest_path, discovered.iter())?;
+            cancellation.check()?;
+            let plan = plan_content_manifest_recovery(&manifest_path, &discovered);
+            let mut lines = vec![plan.as_tsv()];
+            lines.extend(format_content_archive_health(
+                "invalid",
+                &plan.invalid_archives,
+            ));
+            Ok(lines)
+        },
+    )
+}
+
 fn retain_manifest_recovery_access<'a>(
     manifest_path: &Path,
     quarantine: &Path,
@@ -488,13 +531,22 @@ fn content_tier_name(tier: ContentMergeTier) -> &'static str {
 }
 
 fn print_content_archive_health(label: &str, archives: &[ContentArchiveHealth]) {
-    for archive in archives {
-        println!(
-            "{}\t{}\t{}\t{}",
-            label,
-            content_tier_name(archive.entry.tier),
-            archive.resolved_path.display(),
-            archive.detail.as_deref().unwrap_or("-")
-        );
+    for line in format_content_archive_health(label, archives) {
+        println!("{line}");
     }
+}
+
+fn format_content_archive_health(label: &str, archives: &[ContentArchiveHealth]) -> Vec<String> {
+    archives
+        .iter()
+        .map(|archive| {
+            format!(
+                "{}\t{}\t{}\t{}",
+                label,
+                content_tier_name(archive.entry.tier),
+                archive.resolved_path.display(),
+                archive.detail.as_deref().unwrap_or("-")
+            )
+        })
+        .collect()
 }
