@@ -140,17 +140,14 @@ where
     let mut scheduler = Scheduler::new();
     let mut job = scheduler.schedule(priority, label);
     let journal = JobJournal::new(default_job_journal_path());
-    let _journal_access = (scheduling.action != SchedulingAction::Defer)
-        .then(|| preflight_runtime_write(journal.path(), label))
-        .transpose()?;
-    let runtime = RuntimeJobHandle::begin(
-        &job,
-        payload_kind_for_label(label),
-        label,
-        1,
-        format!("{}:{label}:adaptive", priority.as_str()),
-    )?;
     if scheduling.action == SchedulingAction::Defer {
+        let runtime = RuntimeJobHandle::begin(
+            &job,
+            payload_kind_for_label(label),
+            label,
+            1,
+            format!("{}:{label}:adaptive", priority.as_str()),
+        )?;
         runtime.deferred(scheduling.action)?;
         return Ok(ScheduledTaskOutcome {
             result: None,
@@ -164,6 +161,16 @@ where
             .bind_volume(job.id, volume)
             .ok_or_else(|| GfmError::Format(format!("{label} job was not queued")))?;
     }
+    let _journal_access = (scheduling.action != SchedulingAction::Defer)
+        .then(|| preflight_runtime_write(journal.path(), label))
+        .transpose()?;
+    let runtime = RuntimeJobHandle::begin(
+        &job,
+        payload_kind_for_label(label),
+        label,
+        1,
+        format!("{}:{label}:adaptive", priority.as_str()),
+    )?;
 
     let result_slot = Arc::new(Mutex::new(None));
     let result_slot_task = Arc::clone(&result_slot);

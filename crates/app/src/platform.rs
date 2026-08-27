@@ -767,10 +767,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "quicklook-session" => {
             let path = required_path(args.next(), "quicklook-session requires a path")?;
+            preflight_volume_access_scope(&path, AccessIntent::Preview, "quicklook preview")?;
+            let volume = detect_volume_id(&path).ok();
             let rect = Rect::new(0, 0, 640, 480);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
-            let contract =
-                run_preview_contract_cancellable(None, "quicklook preview", move |cancellation| {
+            let contract = run_preview_contract_cancellable(
+                volume,
+                "quicklook preview",
+                move |cancellation| {
                     cancellation.check()?;
                     let _access =
                         preflight_access_scope(&path, AccessIntent::Preview, "quicklook preview")?;
@@ -793,7 +797,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         input,
                         || cancellation.check(),
                     )
-                })?;
+                },
+            )?;
             println!("{}", contract.as_tsv());
         }
         "quicklook-session-adaptive" | "quicklook-session-adaptive-cancel-after-access" => {
@@ -912,10 +917,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "thumbnail-generation" => {
             let path = required_path(args.next(), "thumbnail-generation requires a path")?;
+            preflight_volume_access_scope(&path, AccessIntent::Preview, "thumbnail generation")?;
+            let volume = detect_volume_id(&path).ok();
             let rect = Rect::new(0, 0, 160, 160);
             let viewport = Viewport::new(Rect::new(0, 0, 1024, 768), 256);
             let contract = run_preview_contract_cancellable(
-                None,
+                volume,
                 "thumbnail generation",
                 move |cancellation| {
                     cancellation.check()?;

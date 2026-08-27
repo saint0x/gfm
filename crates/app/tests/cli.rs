@@ -10518,6 +10518,72 @@ fn volume_producers_refuse_unreachable_runtime_stores_before_progress_from_binar
 }
 
 #[test]
+fn visible_preview_producers_refuse_unreachable_targets_before_runtime_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-preview-target-root");
+    let quicklook = root.join("Preview.pdf");
+    let thumbnail = root.join("Preview.png");
+    let catalog = unique_temp_path("gfm-cli-runtime-preview-target", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-runtime-preview-target", "gfmprogress");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&quicklook, b"%PDF-1.7\nruntime blocked").unwrap();
+    fs::write(&thumbnail, b"\x89PNG\r\n\x1a\nruntime blocked").unwrap();
+
+    for args in [
+        vec![
+            "quicklook-session".to_string(),
+            quicklook.display().to_string(),
+        ],
+        vec![
+            "quicklook-session-adaptive".to_string(),
+            quicklook.display().to_string(),
+            "nominal".to_string(),
+            "nominal".to_string(),
+            "ac".to_string(),
+            "idle".to_string(),
+        ],
+        vec![
+            "thumbnail-generation".to_string(),
+            thumbnail.display().to_string(),
+        ],
+        vec![
+            "thumbnail-generation-adaptive".to_string(),
+            thumbnail.display().to_string(),
+            "nominal".to_string(),
+            "nominal".to_string(),
+            "ac".to_string(),
+            "idle".to_string(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+            .env("GFM_JOB_PROGRESS_STORE", &progress)
+            .args(&args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{args:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stdout.contains("quicklook-session\t"),
+            "{args:?}: {stdout}"
+        );
+        assert!(
+            !stdout.contains("thumbnail-generation\t"),
+            "{args:?}: {stdout}"
+        );
+        assert!(
+            stderr.contains("volume access blocked: unreachable volume network"),
+            "{args:?}: {stderr}"
+        );
+        assert!(!catalog.exists(), "{args:?}");
+        assert!(!progress.exists(), "{args:?}");
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn deferred_adaptive_thumbnail_persists_runtime_payload_and_progress_from_binary() {
     let root = unique_temp_dir("gfm-cli-runtime-deferred-thumbnail-root");
     let image = root.join("Deferred.png");

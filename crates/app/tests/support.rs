@@ -1883,7 +1883,6 @@ fn quicklook_refuses_unreachable_network_volume_before_preview_from_binary() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stdout.contains("quicklook-session\t"), "{stdout}");
-    assert!(stderr.contains("quicklook preview job failed:"), "{stderr}");
     assert!(
         stderr.contains("quicklook preview volume access blocked: unreachable volume network"),
         "{stderr}"
@@ -2106,10 +2105,6 @@ fn thumbnail_refuses_unreachable_network_volume_before_generation_from_binary() 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stdout.contains("thumbnail-generation\t"), "{stdout}");
-    assert!(
-        stderr.contains("thumbnail generation job failed:"),
-        "{stderr}"
-    );
     assert!(
         stderr.contains("thumbnail generation volume access blocked: unreachable volume network"),
         "{stderr}"
