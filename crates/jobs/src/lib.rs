@@ -945,7 +945,9 @@ impl WorkerPool {
                         break;
                     };
                     let cancellation = task.job.cancellation();
-                    let result = task.work.take().expect("worker task missing work")(cancellation);
+                    let result = cancellation.check().and_then(|()| {
+                        task.work.take().expect("worker task missing work")(cancellation)
+                    });
                     let status = match result {
                         Ok(()) => TaskStatus::Completed,
                         Err(GfmError::Cancelled) => TaskStatus::Cancelled,
@@ -992,8 +994,9 @@ impl WorkerPool {
                         break;
                     };
                     let cancellation = lease.task.job.cancellation();
-                    let result =
-                        lease.task.work.take().expect("worker task missing work")(cancellation);
+                    let result = cancellation.check().and_then(|()| {
+                        lease.task.work.take().expect("worker task missing work")(cancellation)
+                    });
                     let status = match result {
                         Ok(()) => TaskStatus::Completed,
                         Err(GfmError::Cancelled) => TaskStatus::Cancelled,
@@ -1131,6 +1134,9 @@ fn execute_retriable_task(
     let mut final_status = TaskStatus::Failed("task did not run".to_string());
     let attempts = retry_policy.max_attempts.max(1);
     for attempt in 1..=attempts {
+        if task.job.cancellation().is_cancelled() {
+            return TaskStatus::Cancelled;
+        }
         let started = JournalEntry {
             id: task.job.id,
             label: task.job.label.clone(),

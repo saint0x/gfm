@@ -533,6 +533,46 @@ fn worker_pool_runs_tasks_and_reports_outcomes() {
 }
 
 #[test]
+fn worker_pool_does_not_execute_pre_cancelled_tasks() {
+    let mut scheduler = Scheduler::new();
+    let job = scheduler.schedule(Priority::Visible, "cancelled visible preview");
+    job.cancel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_task = Arc::clone(&calls);
+
+    let report = WorkerPool::new(1).run(vec![Task::new(job, move |_| {
+        calls_task.fetch_add(1, AtomicOrdering::SeqCst);
+        Ok(())
+    })]);
+
+    assert_eq!(report.cancelled(), 1);
+    assert_eq!(report.completed(), 0);
+    assert_eq!(calls.load(AtomicOrdering::SeqCst), 0);
+}
+
+#[test]
+fn isolated_worker_pool_does_not_execute_pre_cancelled_tasks() {
+    let mut scheduler = Scheduler::new();
+    let job =
+        scheduler.schedule_on_volume(Priority::Visible, "cancelled volume thumbnail", VolumeId(9));
+    job.cancel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_task = Arc::clone(&calls);
+
+    let report = WorkerPool::new(1).run_isolated(
+        vec![Task::new(job, move |_| {
+            calls_task.fetch_add(1, AtomicOrdering::SeqCst);
+            Ok(())
+        })],
+        VolumeConcurrencyPolicy::new(1),
+    );
+
+    assert_eq!(report.cancelled(), 1);
+    assert_eq!(report.completed(), 0);
+    assert_eq!(calls.load(AtomicOrdering::SeqCst), 0);
+}
+
+#[test]
 fn worker_pool_allows_nested_child_cancellation_checks() {
     let mut scheduler = Scheduler::new();
     let job = scheduler.schedule(Priority::Visible, "nested preview");
@@ -701,6 +741,31 @@ fn retriable_worker_journals_attempts_until_success() {
     assert_eq!(entries[3].status, TaskStatus::Completed);
 
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn retriable_worker_does_not_execute_or_journal_pre_cancelled_tasks() {
+    let path = temp_path("gfm-job-journal-pre-cancelled", "journal");
+    let journal = JobJournal::new(&path);
+    let mut scheduler = Scheduler::new();
+    let job = scheduler.schedule(Priority::Background, "cancelled background index");
+    job.cancel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_task = Arc::clone(&calls);
+
+    let report = WorkerPool::new(1).run_retriable(
+        vec![RetriableTask::new(job, move |_| {
+            calls_task.fetch_add(1, AtomicOrdering::SeqCst);
+            Ok(())
+        })],
+        &journal,
+        RetryPolicy { max_attempts: 2 },
+    );
+
+    assert_eq!(report.cancelled(), 1);
+    assert_eq!(report.completed(), 0);
+    assert_eq!(calls.load(AtomicOrdering::SeqCst), 0);
+    assert!(journal.read().unwrap().is_empty());
 }
 
 #[test]
