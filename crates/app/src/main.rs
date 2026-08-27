@@ -395,6 +395,7 @@ fn print_usage() {
   gfm ui-permission-onboarding-contract
   gfm ui-progress-job-contract <progress.gfmprogress> <job-id>
   gfm ui-fileprovider-conflict-contract <fileprovider-path>
+  gfm ui-operation-conflict-contract <copy|move|rename|restore> <source> <target> [fail|replace|keep-both|merge|skip]
   gfm ui-titlebar-contract [path]
   gfm ui-session-contract [path] [window-session.tsv]
   gfm ui-toolbar-contract [path]

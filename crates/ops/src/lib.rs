@@ -23,7 +23,8 @@ pub use access::{
     OperationAccessRequirement, OperationAccessRole,
 };
 pub use conflict::{
-    ConflictPolicy, OperationBatchOutcome, OperationBatchReport, OperationConflictPlan,
+    ConflictPolicy, OperationBatchOutcome, OperationBatchReport, OperationConflictKind,
+    OperationConflictPlan, OperationConflictReport,
 };
 pub use context::OperationContext;
 pub use control::{OperationCancellation, OperationPause};

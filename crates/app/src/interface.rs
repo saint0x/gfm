@@ -9,17 +9,19 @@ use gfm_mac::{
     FileProviderConflictReport, FileProviderStateReport, VolumeDescriptor, VolumeDiscoveryReport,
     VolumeKind,
 };
+use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
 use gfm_types::{FileKind, GfmError, Result};
 use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
-    MenuContract, OperationProgressContract, OperationProgressInput, OperationProgressState,
-    PermissionPromptKind, PermissionRefreshContract, ProviderConflictContract,
-    ProviderConflictInput, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
-    SearchResultsStage, SidebarCloudState, SidebarContract, SidebarVolumeSpec, TitlebarContract,
-    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
-    VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    MenuContract, OperationConflictContract, OperationConflictInput, OperationProgressContract,
+    OperationProgressInput, OperationProgressState, PermissionPromptKind,
+    PermissionRefreshContract, ProviderConflictContract, ProviderConflictInput, SearchResultsBatch,
+    SearchResultsContract, SearchResultsOptions, SearchResultsStage, SidebarCloudState,
+    SidebarContract, SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata,
+    TrashViewContract, TrashViewOptions, VirtualSurface, VirtualizationContract,
+    WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -154,6 +156,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 report.reason,
             ));
             println!("{}", contract.as_tsv());
+        }
+        "ui-operation-conflict-contract" => {
+            let operation = parse_conflict_contract_operation(args)?;
+            let conflict = parse_optional_conflict_policy(args.next().as_deref())?;
+            let report = OperationConflictReport::evaluate(&operation, conflict);
+            println!("{}", operation_conflict_contract(&report).as_tsv());
         }
         "ui-titlebar-contract" => {
             let spec = app_launch_spec(args.next())?;
@@ -403,6 +411,63 @@ fn print_permission_onboarding_contract(
     if let Some(refresh) = refresh {
         println!("{}", refresh.as_tsv());
     }
+}
+
+fn parse_conflict_contract_operation(args: &mut impl Iterator<Item = String>) -> Result<Operation> {
+    let kind = required_string(
+        args.next(),
+        "ui-operation-conflict-contract requires copy, move, rename, or restore",
+    )?;
+    let from = required_path(
+        args.next(),
+        "ui-operation-conflict-contract requires a source path",
+    )?;
+    let to = required_path(
+        args.next(),
+        "ui-operation-conflict-contract requires a target path",
+    )?;
+    match kind.as_str() {
+        "copy" => Ok(Operation::Copy { from, to }),
+        "move" => Ok(Operation::Move { from, to }),
+        "rename" => Ok(Operation::Rename { from, to }),
+        "restore" => Ok(Operation::Restore { from, to }),
+        other => Err(GfmError::Format(format!(
+            "ui-operation-conflict-contract operation must be copy, move, rename, or restore; got `{other}`"
+        ))),
+    }
+}
+
+fn parse_optional_conflict_policy(value: Option<&str>) -> Result<ConflictPolicy> {
+    match value.unwrap_or("fail") {
+        "fail" => Ok(ConflictPolicy::Fail),
+        "replace" => Ok(ConflictPolicy::Replace),
+        "keep-both" => Ok(ConflictPolicy::KeepBoth),
+        "merge" => Ok(ConflictPolicy::Merge),
+        "skip" => Ok(ConflictPolicy::Skip),
+        other => Err(GfmError::Format(format!(
+            "conflict policy must be fail, replace, keep-both, merge, or skip; got `{other}`"
+        ))),
+    }
+}
+
+fn operation_conflict_contract(report: &OperationConflictReport) -> OperationConflictContract {
+    OperationConflictContract::from_input(OperationConflictInput::new(
+        report.operation,
+        report
+            .target
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        report.target_kind.as_str(),
+        report.selected_policy.as_str(),
+        report
+            .available_policies
+            .iter()
+            .map(|policy| policy.as_str().to_string())
+            .collect(),
+        report.blocks_operation,
+        report.reason.clone(),
+    ))
 }
 
 fn native_sidebar_volumes() -> Vec<SidebarVolumeSpec> {

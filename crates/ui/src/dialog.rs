@@ -389,6 +389,100 @@ pub struct ProviderConflictContract {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationConflictInput {
+    pub operation: String,
+    pub target: String,
+    pub target_kind: String,
+    pub selected_policy: String,
+    pub available_policies: Vec<String>,
+    pub blocks_operation: bool,
+    pub reason: String,
+}
+
+impl OperationConflictInput {
+    pub fn new(
+        operation: impl Into<String>,
+        target: impl Into<String>,
+        target_kind: impl Into<String>,
+        selected_policy: impl Into<String>,
+        available_policies: Vec<String>,
+        blocks_operation: bool,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            operation: operation.into(),
+            target: target.into(),
+            target_kind: target_kind.into(),
+            selected_policy: selected_policy.into(),
+            available_policies,
+            blocks_operation,
+            reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationConflictContract {
+    pub dialog: DialogContract,
+    pub operation: String,
+    pub target: String,
+    pub target_kind: String,
+    pub selected_policy: String,
+    pub available_policies: Vec<String>,
+    pub blocks_operation: bool,
+    pub reason: String,
+}
+
+impl OperationConflictContract {
+    pub fn from_input(input: OperationConflictInput) -> Self {
+        let mut dialog = DialogContract::finder_default(DialogSurface::Conflict);
+        dialog.buttons = dialog
+            .buttons
+            .into_iter()
+            .map(|button| DialogButtonSpec {
+                enabled: if button.id == "stop" {
+                    input.blocks_operation
+                } else {
+                    input
+                        .available_policies
+                        .iter()
+                        .any(|policy| policy == button.id)
+                },
+                ..button
+            })
+            .collect();
+        if !input.blocks_operation {
+            dialog.blocks_parent_window = false;
+        }
+
+        Self {
+            dialog,
+            operation: input.operation,
+            target: input.target,
+            target_kind: input.target_kind,
+            selected_policy: input.selected_policy,
+            available_policies: input.available_policies,
+            blocks_operation: input.blocks_operation,
+            reason: input.reason,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "{}\noperation-conflict-ui\toperation={}\ttarget={}\tkind={}\tpolicy={}\tavailable={}\tblocks-operation={}\treason={}",
+            self.dialog.as_tsv(),
+            escape_tsv(&self.operation),
+            escape_tsv(&self.target),
+            escape_tsv(&self.target_kind),
+            escape_tsv(&self.selected_policy),
+            self.available_policies.join(","),
+            self.blocks_operation,
+            escape_tsv(&self.reason)
+        )
+    }
+}
+
 impl ProviderConflictContract {
     pub fn from_input(input: ProviderConflictInput) -> Self {
         let mut dialog = DialogContract::provider_conflict(input.reveal_enabled);
@@ -796,11 +890,12 @@ fn conflict_contract() -> DialogContract {
         surface: DialogSurface::Conflict,
         presentation: DialogPresentation::WindowSheet,
         title: "An item with the same name already exists",
-        message: "Finder-compatible conflict sheet for replace, keep both, stop, skip, and apply-to-all decisions.",
+        message: "Finder-compatible conflict sheet for replace, keep both, merge, stop, skip, and apply-to-all decisions.",
         icon: "system-alert",
         buttons: vec![
             button("replace", "Replace", DialogButtonRole::Destructive, true),
             button("keep-both", "Keep Both", DialogButtonRole::Default, true),
+            button("merge", "Merge", DialogButtonRole::Alternate, true),
             button("skip", "Skip", DialogButtonRole::Alternate, true),
             button("stop", "Stop", DialogButtonRole::Cancel, true),
         ],
@@ -913,6 +1008,9 @@ mod tests {
             .buttons
             .iter()
             .any(|button| button.id == "keep-both"));
+        assert!(contract.buttons.iter().any(|button| button.id == "merge"));
+        assert!(contract.buttons.iter().any(|button| button.id == "skip"));
+        assert!(contract.buttons.iter().any(|button| button.id == "stop"));
         assert!(contract
             .fields
             .iter()
@@ -957,6 +1055,42 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\tconflict=false\taffected=0\taffected-paths=-\treveal=false\toperations-blocked=false\t"));
+    }
+
+    #[test]
+    fn operation_conflict_contract_enables_only_available_resolutions() {
+        let contract = OperationConflictContract::from_input(OperationConflictInput::new(
+            "copy",
+            "/tmp/target",
+            "file",
+            "fail",
+            vec![
+                "replace".to_string(),
+                "keep-both".to_string(),
+                "skip".to_string(),
+            ],
+            true,
+            "destination-conflict-requires-user-resolution",
+        ));
+
+        assert!(contract
+            .dialog
+            .buttons
+            .iter()
+            .any(|button| button.id == "replace" && button.enabled));
+        assert!(contract
+            .dialog
+            .buttons
+            .iter()
+            .any(|button| button.id == "merge" && !button.enabled));
+        assert!(contract
+            .dialog
+            .buttons
+            .iter()
+            .any(|button| button.id == "stop" && button.enabled));
+        assert!(contract
+            .as_tsv()
+            .contains("\noperation-conflict-ui\toperation=copy\ttarget=/tmp/target\tkind=file\t"));
     }
 
     #[test]

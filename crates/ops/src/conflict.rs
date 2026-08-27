@@ -1,7 +1,9 @@
-use crate::target::keep_both_path;
+use crate::target::{keep_both_path, path_exists_or_symlink};
 use crate::{Operation, OperationStatus};
 use gfm_types::Result;
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,10 +15,171 @@ pub enum ConflictPolicy {
     Skip,
 }
 
+impl ConflictPolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fail => "fail",
+            Self::Replace => "replace",
+            Self::KeepBoth => "keep-both",
+            Self::Merge => "merge",
+            Self::Skip => "skip",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationConflictKind {
+    None,
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+impl OperationConflictKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::File => "file",
+            Self::Directory => "directory",
+            Self::Symlink => "symlink",
+            Self::Other => "other",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationConflictReport {
+    pub operation: &'static str,
+    pub target: Option<PathBuf>,
+    pub target_exists: bool,
+    pub target_kind: OperationConflictKind,
+    pub selected_policy: ConflictPolicy,
+    pub available_policies: Vec<ConflictPolicy>,
+    pub blocks_operation: bool,
+    pub reason: String,
+}
+
+impl OperationConflictReport {
+    pub fn evaluate(operation: &Operation, selected_policy: ConflictPolicy) -> Self {
+        let target = operation.target_path().map(Path::to_path_buf);
+        let Some(target_path) = &target else {
+            return Self {
+                operation: operation_kind(operation),
+                target,
+                target_exists: false,
+                target_kind: OperationConflictKind::None,
+                selected_policy,
+                available_policies: Vec::new(),
+                blocks_operation: false,
+                reason: "operation-has-no-conflict-target".to_string(),
+            };
+        };
+        let target_exists = path_exists_or_symlink(target_path);
+        let target_kind = conflict_kind(target_path);
+        let available_policies = if target_exists {
+            available_conflict_policies(target_kind)
+        } else {
+            Vec::new()
+        };
+        let selected_policy_available = selected_policy == ConflictPolicy::Fail
+            || available_policies.contains(&selected_policy);
+        let blocks_operation = target_exists
+            && (selected_policy == ConflictPolicy::Fail || !selected_policy_available);
+        let reason = if !target_exists {
+            "target-available".to_string()
+        } else if !selected_policy_available {
+            format!(
+                "destination-conflict-policy-unavailable-for-{}",
+                target_kind.as_str()
+            )
+        } else if blocks_operation {
+            "destination-conflict-requires-user-resolution".to_string()
+        } else {
+            format!(
+                "destination-conflict-resolved-by-{}",
+                selected_policy.as_str()
+            )
+        };
+
+        Self {
+            operation: operation_kind(operation),
+            target,
+            target_exists,
+            target_kind,
+            selected_policy,
+            available_policies,
+            blocks_operation,
+            reason,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "operation-conflict\toperation={}\ttarget={}\texists={}\tkind={}\tpolicy={}\tavailable={}\tblocks-operation={}\treason={}",
+            self.operation,
+            self.target
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.target_exists,
+            self.target_kind.as_str(),
+            self.selected_policy.as_str(),
+            self.available_policies
+                .iter()
+                .map(|policy| policy.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            self.blocks_operation,
+            self.reason
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationConflictPlan {
     pub default: ConflictPolicy,
     target_overrides: BTreeMap<PathBuf, ConflictPolicy>,
+}
+
+fn operation_kind(operation: &Operation) -> &'static str {
+    match operation {
+        Operation::Copy { .. } => "copy",
+        Operation::Move { .. } => "move",
+        Operation::Rename { .. } => "rename",
+        Operation::Delete { .. } => "delete",
+        Operation::Trash { .. } => "trash",
+        Operation::EmptyTrash { .. } => "empty-trash",
+        Operation::Restore { .. } => "restore",
+    }
+}
+
+fn conflict_kind(path: &Path) -> OperationConflictKind {
+    fs::symlink_metadata(path)
+        .map(|metadata| {
+            if metadata.file_type().is_symlink() {
+                OperationConflictKind::Symlink
+            } else if metadata.is_dir() {
+                OperationConflictKind::Directory
+            } else if metadata.is_file() {
+                OperationConflictKind::File
+            } else {
+                OperationConflictKind::Other
+            }
+        })
+        .unwrap_or(OperationConflictKind::None)
+}
+
+fn available_conflict_policies(kind: OperationConflictKind) -> Vec<ConflictPolicy> {
+    let mut policies = vec![
+        ConflictPolicy::Replace,
+        ConflictPolicy::KeepBoth,
+        ConflictPolicy::Skip,
+    ];
+    if kind == OperationConflictKind::Directory {
+        policies.insert(2, ConflictPolicy::Merge);
+    }
+    policies
 }
 
 impl Default for OperationConflictPlan {
@@ -130,5 +293,93 @@ mod tests {
             }),
             ConflictPolicy::Skip
         );
+    }
+
+    #[test]
+    fn conflict_report_requires_user_resolution_for_existing_destination() {
+        let root = std::env::temp_dir().join(format!("gfm-conflict-report-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.txt");
+        let target = root.join("target.txt");
+        std::fs::write(&source, "new").unwrap();
+        std::fs::write(&target, "old").unwrap();
+
+        let report = OperationConflictReport::evaluate(
+            &Operation::Copy {
+                from: source,
+                to: target.clone(),
+            },
+            ConflictPolicy::Fail,
+        );
+
+        assert_eq!(report.operation, "copy");
+        assert_eq!(report.target, Some(target));
+        assert_eq!(report.target_kind, OperationConflictKind::File);
+        assert!(report.blocks_operation);
+        assert_eq!(
+            report.reason,
+            "destination-conflict-requires-user-resolution"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn directory_conflict_report_includes_merge_policy() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-directory-conflict-report-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let target = root.join("target");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+
+        let report = OperationConflictReport::evaluate(
+            &Operation::Move {
+                from: source,
+                to: target,
+            },
+            ConflictPolicy::Fail,
+        );
+
+        assert_eq!(report.target_kind, OperationConflictKind::Directory);
+        assert!(report.available_policies.contains(&ConflictPolicy::Merge));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn conflict_report_blocks_unavailable_policy_for_file_destination() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-unavailable-conflict-policy-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.txt");
+        let target = root.join("target.txt");
+        std::fs::write(&source, "new").unwrap();
+        std::fs::write(&target, "old").unwrap();
+
+        let report = OperationConflictReport::evaluate(
+            &Operation::Copy {
+                from: source,
+                to: target,
+            },
+            ConflictPolicy::Merge,
+        );
+
+        assert_eq!(report.target_kind, OperationConflictKind::File);
+        assert!(!report.available_policies.contains(&ConflictPolicy::Merge));
+        assert!(report.blocks_operation);
+        assert_eq!(
+            report.reason,
+            "destination-conflict-policy-unavailable-for-file"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

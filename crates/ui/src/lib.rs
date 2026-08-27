@@ -34,9 +34,10 @@ pub use context::{
 };
 pub use dialog::{
     render as render_dialog, DialogButtonRole, DialogButtonSpec, DialogContract, DialogFieldKind,
-    DialogFieldSpec, DialogPresentation, DialogSurface, OperationProgressCommand,
-    OperationProgressCommandSpec, OperationProgressContract, OperationProgressInput,
-    OperationProgressState, PermissionPromptKind, ProviderConflictContract, ProviderConflictInput,
+    DialogFieldSpec, DialogPresentation, DialogSurface, OperationConflictContract,
+    OperationConflictInput, OperationProgressCommand, OperationProgressCommandSpec,
+    OperationProgressContract, OperationProgressInput, OperationProgressState,
+    PermissionPromptKind, ProviderConflictContract, ProviderConflictInput,
 };
 pub use gallery::{
     render as render_gallery_view, GalleryFilmstripItemSpec, GalleryKeyboardFlow,
