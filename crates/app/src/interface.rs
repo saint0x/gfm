@@ -184,7 +184,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             );
             println!(
                 "{}",
-                runtime_operation_conflict_contract(&resolved).as_tsv()
+                runtime_operation_conflict_contract(&resolved, Some(store.path())).as_tsv()
             );
         }
         "ui-titlebar-contract" => {
@@ -517,14 +517,16 @@ fn operation_conflict_contract(report: &OperationConflictReport) -> OperationCon
 
 fn runtime_operation_conflict_contract(
     conflict: &crate::runtime::RuntimeOperationConflict,
+    store_path: Option<&std::path::Path>,
 ) -> OperationConflictContract {
-    OperationConflictContract::from_input(runtime_operation_conflict_input(conflict))
+    OperationConflictContract::from_input(runtime_operation_conflict_input(conflict, store_path))
 }
 
 fn runtime_operation_conflict_input(
     conflict: &crate::runtime::RuntimeOperationConflict,
+    store_path: Option<&std::path::Path>,
 ) -> OperationConflictInput {
-    OperationConflictInput::new(
+    let input = OperationConflictInput::new(
         conflict.operation.clone(),
         OperationConflictPaths::new(conflict.source.clone(), conflict.target.clone()),
         conflict.target_kind.clone(),
@@ -532,7 +534,12 @@ fn runtime_operation_conflict_input(
         conflict.available_policies.clone(),
         conflict.blocks_operation,
         conflict.reason.clone(),
-    )
+    );
+    if let Some(path) = store_path {
+        input.with_store_path(path.display().to_string())
+    } else {
+        input
+    }
 }
 
 fn native_sidebar_volumes() -> Vec<SidebarVolumeSpec> {
@@ -571,7 +578,7 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
             .read()?
             .iter()
             .filter(|conflict| conflict.blocks_operation)
-            .map(runtime_operation_conflict_input)
+            .map(|conflict| runtime_operation_conflict_input(conflict, Some(store.path())))
             .collect::<Vec<_>>();
         if let Some(conflict) = OperationConflictContract::from_inputs(conflict_inputs) {
             spec = spec.with_operation_conflicts(vec![conflict]);

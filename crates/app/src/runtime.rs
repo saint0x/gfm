@@ -383,6 +383,10 @@ impl OperationConflictStore {
         Self { path: path.into() }
     }
 
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub(crate) fn append(&self, report: &OperationConflictReport) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;

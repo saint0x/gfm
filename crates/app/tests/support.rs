@@ -415,6 +415,24 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
         stdout.contains("button\tmerge\tMerge\talternate\tenabled=false"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains(&format!(
+            "\noperation-conflict-action\tpolicy=replace\tcommand=operation-conflict-apply-all\tstore={}\ttarget=-\tapply-to-all=true",
+            conflicts.display()
+        )),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "\noperation-conflict-action\tpolicy=keep-both\tcommand=operation-conflict-apply-all\tstore={}\ttarget=-\tapply-to-all=true",
+            conflicts.display()
+        )),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("policy=merge\tcommand=operation-conflict-apply-all"),
+        "{stdout}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

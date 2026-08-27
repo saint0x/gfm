@@ -410,6 +410,7 @@ pub struct OperationConflictInput {
     pub source: String,
     pub target: String,
     pub target_kind: String,
+    pub store_path: Option<String>,
     pub selected_policy: String,
     pub available_policies: Vec<String>,
     pub blocks_operation: bool,
@@ -431,11 +432,17 @@ impl OperationConflictInput {
             source: paths.source,
             target: paths.target,
             target_kind: target_kind.into(),
+            store_path: None,
             selected_policy: selected_policy.into(),
             available_policies,
             blocks_operation,
             reason: reason.into(),
         }
+    }
+
+    pub fn with_store_path(mut self, path: impl Into<String>) -> Self {
+        self.store_path = Some(path.into());
+        self
     }
 }
 
@@ -454,6 +461,7 @@ pub struct OperationConflictContract {
     pub cancel_action: String,
     pub keyboard_model: String,
     pub review_rows: Vec<OperationConflictReviewRow>,
+    pub actions: Vec<OperationConflictAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -465,6 +473,15 @@ pub struct OperationConflictReviewRow {
     pub target_kind: String,
     pub selected_policy: String,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationConflictAction {
+    pub policy: String,
+    pub command: String,
+    pub store: String,
+    pub target: String,
+    pub apply_to_all: bool,
 }
 
 impl OperationConflictContract {
@@ -559,6 +576,7 @@ impl OperationConflictContract {
                 reason: input.reason.clone(),
             })
             .collect();
+        let actions = operation_conflict_actions(&inputs, &available_policies, blocks_operation);
 
         Some(Self {
             dialog,
@@ -575,6 +593,7 @@ impl OperationConflictContract {
             keyboard_model: "finder-conflict-sheet-return-default-escape-cancel-tab-cycle"
                 .to_string(),
             review_rows,
+            actions,
         })
     }
 
@@ -606,8 +625,61 @@ impl OperationConflictContract {
                 escape_tsv(&row.reason)
             )
         }));
+        lines.extend(self.actions.iter().map(|action| {
+            format!(
+                "operation-conflict-action\tpolicy={}\tcommand={}\tstore={}\ttarget={}\tapply-to-all={}",
+                escape_tsv(&action.policy),
+                escape_tsv(&action.command),
+                escape_tsv(&action.store),
+                escape_tsv(&action.target),
+                action.apply_to_all
+            )
+        }));
         lines.join("\n")
     }
+}
+
+fn operation_conflict_actions(
+    inputs: &[OperationConflictInput],
+    available_policies: &[String],
+    blocks_operation: bool,
+) -> Vec<OperationConflictAction> {
+    if !blocks_operation {
+        return Vec::new();
+    }
+    let Some(first) = inputs.first() else {
+        return Vec::new();
+    };
+    let Some(store) = first.store_path.as_deref() else {
+        return Vec::new();
+    };
+    let shared_store = inputs
+        .iter()
+        .all(|input| input.store_path.as_deref() == Some(store));
+    if !shared_store {
+        return Vec::new();
+    }
+    let apply_to_all = inputs.len() > 1;
+    let command = if apply_to_all {
+        "operation-conflict-apply-all"
+    } else {
+        "operation-conflict-apply"
+    };
+    let target = if apply_to_all {
+        "-".to_string()
+    } else {
+        first.target.clone()
+    };
+    available_policies
+        .iter()
+        .map(|policy| OperationConflictAction {
+            policy: policy.clone(),
+            command: command.to_string(),
+            store: store.to_string(),
+            target: target.clone(),
+            apply_to_all,
+        })
+        .collect()
 }
 
 fn shared_available_policies(inputs: &[OperationConflictInput]) -> Vec<String> {
@@ -1231,6 +1303,7 @@ mod tests {
             .buttons
             .iter()
             .any(|button| button.id == "stop" && button.enabled));
+        assert!(contract.actions.is_empty());
         assert_eq!(contract.initial_focus, "keep-both");
         assert_eq!(contract.default_action, "keep-both");
         assert_eq!(contract.cancel_action, "stop");
@@ -1317,6 +1390,75 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\noperation-conflict-row\t1\toperation=move\tsource=/tmp/directory-source\ttarget=/tmp/directory-target\tkind=directory\t"));
+    }
+
+    #[test]
+    fn operation_conflict_contract_exposes_single_apply_actions_with_store_path() {
+        let contract = OperationConflictContract::from_input(
+            OperationConflictInput::new(
+                "copy",
+                OperationConflictPaths::new("/tmp/source", "/tmp/target"),
+                "file",
+                "fail",
+                vec![
+                    "replace".to_string(),
+                    "keep-both".to_string(),
+                    "skip".to_string(),
+                ],
+                true,
+                "destination-conflict-requires-user-resolution",
+            )
+            .with_store_path("/tmp/conflicts.tsv"),
+        );
+
+        assert_eq!(contract.actions.len(), 3);
+        assert!(contract.as_tsv().contains(
+            "\noperation-conflict-action\tpolicy=keep-both\tcommand=operation-conflict-apply\tstore=/tmp/conflicts.tsv\ttarget=/tmp/target\tapply-to-all=false"
+        ));
+    }
+
+    #[test]
+    fn operation_conflict_contract_exposes_apply_all_actions_for_batch_store() {
+        let contract = OperationConflictContract::from_inputs(vec![
+            OperationConflictInput::new(
+                "copy",
+                OperationConflictPaths::new("/tmp/file-source", "/tmp/file-target"),
+                "file",
+                "fail",
+                vec![
+                    "replace".to_string(),
+                    "keep-both".to_string(),
+                    "skip".to_string(),
+                ],
+                true,
+                "destination-conflict-requires-user-resolution",
+            )
+            .with_store_path("/tmp/conflicts.tsv"),
+            OperationConflictInput::new(
+                "move",
+                OperationConflictPaths::new("/tmp/directory-source", "/tmp/directory-target"),
+                "directory",
+                "fail",
+                vec![
+                    "replace".to_string(),
+                    "keep-both".to_string(),
+                    "merge".to_string(),
+                    "skip".to_string(),
+                ],
+                true,
+                "destination-conflict-requires-user-resolution",
+            )
+            .with_store_path("/tmp/conflicts.tsv"),
+        ])
+        .unwrap();
+
+        assert_eq!(contract.actions.len(), 3);
+        assert!(contract.as_tsv().contains(
+            "\noperation-conflict-action\tpolicy=replace\tcommand=operation-conflict-apply-all\tstore=/tmp/conflicts.tsv\ttarget=-\tapply-to-all=true"
+        ));
+        assert!(!contract
+            .as_tsv()
+            .contains("policy=merge\tcommand=operation-conflict-apply-all"));
     }
 
     #[test]
