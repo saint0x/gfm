@@ -2692,6 +2692,52 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "derived-sidecar-rebuild",
+        "tmp/gfm-fozzy-offline-volume/records.gfmidx",
+        "prefixes",
+        "tmp/gfm-fozzy-offline-volume/prefixes.gfmprefix",
+        "tmp/gfm-fozzy-offline-volume/backup"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "sidecar-recovery-plan",
+        "tmp/gfm-fozzy-offline-volume/records.gfmidx",
+        "-",
+        "-",
+        "tmp/gfm-fozzy-offline-volume/prefixes.gfmprefix",
+        "-",
+        "-",
+        "tmp/gfm-fozzy-offline-volume/dictionary.gfmdict"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "sidecar-recover",
+        "tmp/gfm-fozzy-offline-volume/records.gfmidx",
+        "tmp/gfm-fozzy-offline-volume/quarantine",
+        "-",
+        "-",
+        "tmp/gfm-fozzy-offline-volume/prefixes.gfmprefix",
+        "-",
+        "-",
+        "tmp/gfm-fozzy-offline-volume/dictionary.gfmdict"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "thumbnail-generation",
         "tmp/gfm-fozzy-offline-volume/Project/Preview.png"
       ],
@@ -2719,6 +2765,22 @@
       ],
       "exit_code": 0,
       "stdout": "thumbnail-generation\tstatus=cancelled\treason=cancelled-before-plan\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "extract-worker-cancel-adaptive",
+        "tmp/gfm-fozzy-offline-volume/Visible.txt",
+        "nominal",
+        "nominal",
+        "ac",
+        "idle"
+      ],
+      "exit_code": 0,
+      "stdout": "extract-worker\tstatus=cancelled\treason=cancelled-before-launch\n",
       "stderr": "",
       "times": 1
     },

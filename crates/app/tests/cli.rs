@@ -1112,6 +1112,53 @@ fn rebuilds_derived_sidecars_from_binary() {
 }
 
 #[test]
+fn derived_sidecar_rebuild_refuses_unreachable_volume_before_repair_from_binary() {
+    let root = unique_temp_dir("gfm-cli-derived-rebuild-unreachable-root");
+    let records = root.join("records.gfmidx");
+    let prefixes = root.join("prefixes.gfmprefix");
+    let backup = root.join("backup");
+    fs::create_dir_all(&backup).unwrap();
+    fs::write(root.join("DerivedNeedle.md"), "alpha").unwrap();
+
+    let index = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index.stderr)
+    );
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "derived-sidecar-rebuild",
+            records.to_str().unwrap(),
+            "prefixes",
+            prefixes.to_str().unwrap(),
+            backup.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("derived-sidecar-rebuild\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "derived sidecar rebuild records volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!prefixes.exists());
+    assert!(fs::read_dir(&backup).unwrap().next().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn persists_volume_index_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-index-state-root");
     let index = unique_temp_path("gfm-cli-index-state-records", "gfmidx");
@@ -2775,6 +2822,58 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
 }
 
 #[test]
+fn sidecar_recover_refuses_unreachable_volume_before_repair_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-recovery-unreachable-root");
+    let records = root.join("records.gfmidx");
+    let prefixes = root.join("prefixes.gfmprefix");
+    let dictionary = root.join("dictionary.gfmdict");
+    let quarantine = root.join("quarantine");
+    fs::create_dir_all(&quarantine).unwrap();
+    fs::write(root.join("ProjectPlan.md"), "sidecar").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+    fs::write(&dictionary, "not-a-dictionary").unwrap();
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "sidecar-recover",
+            records.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            "-",
+            dictionary.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("sidecar-recovery\t"), "{stdout}");
+    assert!(
+        stderr.contains("sidecar repair records volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!prefixes.exists());
+    assert_eq!(fs::read_to_string(&dictionary).unwrap(), "not-a-dictionary");
+    assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_with_scope_prefixes_from_binary() {
     let root = unique_temp_dir("gfm-cli-scope-root");
     fs::create_dir_all(root.join("Desktop")).unwrap();
@@ -4098,6 +4197,39 @@ fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
 #[test]
 fn cancellable_adaptive_extraction_worker_stops_before_launch_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-worker-cancel-root");
+    let path = root.join("document.txt");
+    fs::write(&path, "cancel worker marker").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "extract-worker-cancel-adaptive",
+            path.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout.trim(),
+        "extract-worker\tstatus=cancelled\treason=cancelled-before-launch"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cancellable_adaptive_extraction_worker_stops_before_unreachable_volume_read_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-worker-cancel-unreachable");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     let path = root.join("document.txt");
     fs::write(&path, "cancel worker marker").unwrap();
 
