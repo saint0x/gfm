@@ -816,7 +816,11 @@ fn preflight_content_index_set_search_access(
         AccessIntent::Read,
         &format!("{worker} records"),
     )?];
-    guards.extend(preflight_content_archives_access(content_paths, worker)?);
+    let content_worker = format!("{worker} content");
+    guards.extend(preflight_content_archives_access(
+        content_paths,
+        &content_worker,
+    )?);
     Ok(guards)
 }
 
