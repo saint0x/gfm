@@ -473,9 +473,19 @@ impl CloudTransferProgress {
             } else {
                 "state"
             },
-            reason: percent_milli
-                .is_none()
-                .then(|| "provider-progress-unavailable".to_string()),
+            reason: if percent_milli.is_some() {
+                Some(
+                    match direction {
+                        CloudTransferDirection::Download => "native-download-progress",
+                        CloudTransferDirection::Upload => "native-upload-progress",
+                        CloudTransferDirection::Materialize => "native-materialize-progress",
+                        CloudTransferDirection::Idle => "native-progress",
+                    }
+                    .to_string(),
+                )
+            } else {
+                Some("provider-progress-unavailable".to_string())
+            },
         }
     }
 
@@ -1459,6 +1469,19 @@ fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<Clo
                 Some(CloudStorageState::Downloaded)
             }
             Some(NativeUbiquitousDownloadingStatus::Other) => Some(CloudStorageState::Unknown),
+            None if values.percent_downloaded_milli == Some(100_000) => {
+                Some(CloudStorageState::Downloaded)
+            }
+            None if values.percent_downloaded_milli == Some(0) => Some(CloudStorageState::Evicted),
+            None if values.percent_downloaded_milli.is_some() => {
+                Some(CloudStorageState::Downloading)
+            }
+            None if values
+                .percent_uploaded_milli
+                .is_some_and(|percent| percent < 100_000) =>
+            {
+                Some(CloudStorageState::Uploading)
+            }
             None if values.is_uploaded == Some(false) => Some(CloudStorageState::Waiting),
             None if values.is_uploaded == Some(true) => Some(CloudStorageState::Downloaded),
             None => None,
@@ -2674,6 +2697,164 @@ mod tests {
     }
 
     #[test]
+    fn native_zero_download_percent_without_status_marks_remote_placeholder() {
+        let path = PathBuf::from("/tmp/Document.pdf");
+        let mut native = native_values();
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.download_requested = Some(false);
+        native.percent_downloaded_milli = Some(0);
+        native.downloading_status = None;
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+
+        assert_eq!(domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(state, CloudStorageState::Evicted);
+        assert_eq!(
+            materialization_for_state(state),
+            CloudMaterialization::RemotePlaceholder
+        );
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(progress_for_state(state, &hints).percent_milli, Some(0));
+    }
+
+    #[test]
+    fn native_partial_download_percent_without_status_marks_downloading() {
+        let path = PathBuf::from("/tmp/Document.pdf");
+        let mut native = native_values();
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.download_requested = Some(true);
+        native.percent_downloaded_milli = Some(42_500);
+        native.downloading_status = None;
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+        let progress = progress_for_state(state, &hints);
+
+        assert_eq!(domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(state, CloudStorageState::Downloading);
+        assert_eq!(
+            materialization_for_state(state),
+            CloudMaterialization::InFlight
+        );
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(progress.direction, CloudTransferDirection::Download);
+        assert_eq!(progress.percent_milli, Some(42_500));
+        assert!(progress.requested);
+    }
+
+    #[test]
+    fn native_complete_download_percent_without_status_marks_materialized() {
+        let path = PathBuf::from("/tmp/Document.pdf");
+        let mut native = native_values();
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.percent_downloaded_milli = Some(100_000);
+        native.downloading_status = None;
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+
+        assert_eq!(domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(state, CloudStorageState::Downloaded);
+        assert_eq!(
+            materialization_for_state(state),
+            CloudMaterialization::Materialized
+        );
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            CloudMaterializationSource::NativeUrlResource
+        );
+    }
+
+    #[test]
+    fn native_partial_upload_percent_without_status_marks_uploading() {
+        let path = PathBuf::from("/tmp/Document.pdf");
+        let mut native = native_values();
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.percent_uploaded_milli = Some(62_500);
+        native.downloading_status = None;
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+        let progress = progress_for_state(state, &hints);
+
+        assert_eq!(domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(state, CloudStorageState::Uploading);
+        assert_eq!(
+            materialization_for_state(state),
+            CloudMaterialization::InFlight
+        );
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(progress.direction, CloudTransferDirection::Upload);
+        assert_eq!(progress.percent_milli, Some(62_500));
+    }
+
+    #[test]
     fn native_downloaded_boolean_without_identity_marks_materialized() {
         let path = PathBuf::from("/tmp/Document.pdf");
         let mut native = native_values();
@@ -2776,6 +2957,116 @@ mod tests {
         assert_eq!(
             report.materialization_source,
             CloudMaterializationSource::NativeUrlResource
+        );
+    }
+
+    #[test]
+    fn native_partial_download_percent_without_boolean_marks_downloading() {
+        let path = PathBuf::from("/tmp/Remote.dat");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.percent_downloaded_milli = Some(37_500);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.storage_state, CloudStorageState::Downloading);
+        assert_eq!(report.materialization, CloudMaterialization::InFlight);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(report.progress.percent_milli, Some(37_500));
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("native-download-progress")
+        );
+    }
+
+    #[test]
+    fn native_zero_download_percent_without_boolean_marks_remote_placeholder() {
+        let path = PathBuf::from("/tmp/Remote.dat");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.percent_downloaded_milli = Some(0);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::RemotePlaceholder
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(report.progress.percent_milli, Some(0));
+    }
+
+    #[test]
+    fn native_partial_upload_percent_without_boolean_marks_uploading() {
+        let path = PathBuf::from("/tmp/Local.dat");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.percent_uploaded_milli = Some(25_000);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.storage_state, CloudStorageState::Uploading);
+        assert_eq!(report.materialization, CloudMaterialization::InFlight);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(report.progress.percent_milli, Some(25_000));
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("native-upload-progress")
         );
     }
 
