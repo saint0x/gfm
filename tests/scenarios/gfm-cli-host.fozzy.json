@@ -2470,7 +2470,7 @@
     },
     {
       "type": "fs_write",
-      "path": "tmp/gfm-fozzy-local-notes.txt",
+      "path": "tmp/gfm-fozzy-local.fileprovider",
       "data": "ordinary local file\n"
     },
     {
@@ -2485,7 +2485,7 @@
         "fileprovider-invalidation-event",
         "tmp/gfm-fozzy-fileprovider-local-event-state.tsv",
         "modify",
-        "tmp/gfm-fozzy-local-notes.txt"
+        "tmp/gfm-fozzy-local.fileprovider"
       ],
       "exit_code": 0,
       "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=0\nfileprovider-state-invalidation\tinitialized=false\tchanged=0\ticon=false\tpreview-memory=false\tpreview-disk=false\tsidebar=false\treindex-metadata=false\n",
