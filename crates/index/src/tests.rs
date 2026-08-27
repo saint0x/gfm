@@ -1749,7 +1749,7 @@ fn volume_invalidation_rescans_admission_when_mount_state_changes() {
     assert_eq!(report.reason, "mount-state-changed");
     assert!(report
         .as_tsv()
-        .contains("\tcurrent-mount=mounted\tcurrent-reachable=true\t"));
+        .contains("\tcurrent-mount=mounted\tcurrent-reachable=true\tcurrent-read-only=-\t"));
     assert!(report
         .as_tsv()
         .contains("\tcancel-index-jobs=false\tclear-fsevents-cursor=true\t"));
@@ -1828,7 +1828,9 @@ fn volume_invalidation_cancels_index_jobs_when_reachability_changes() {
     assert!(report.clear_fsevents_cursor);
     assert_eq!(report.reason, "volume-reachability-changed");
     assert!(report.as_tsv().contains("\tprevious-reachable=true\t"));
-    assert!(report.as_tsv().contains("\tcurrent-reachable=false\t"));
+    assert!(report
+        .as_tsv()
+        .contains("\tcurrent-reachable=false\tcurrent-read-only=-\t"));
 }
 
 #[test]
@@ -1860,7 +1862,7 @@ fn volume_event_index_invalidation_rescans_connected_volume_without_cancelling_j
     assert_eq!(report.reason, "volume-event-connected");
     assert!(report
         .as_tsv()
-        .contains("\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tcurrent-volume=7\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\t"));
+        .contains("\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tprevious-read-only=-\tcurrent-volume=7\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tcurrent-read-only=-\t"));
 }
 
 #[test]
@@ -1908,7 +1910,157 @@ fn volume_event_index_invalidation_cancels_jobs_for_disconnect_and_unavailable_e
     assert_eq!(unavailable.reason, "volume-event-native-unavailable");
     assert!(unavailable
         .as_tsv()
-        .contains("\tpath=-\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tcurrent-volume=-\tcurrent-class=-\t"));
+        .contains("\tpath=-\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tprevious-read-only=-\tcurrent-volume=-\tcurrent-class=-\t"));
+}
+
+#[test]
+fn volume_invalidation_rescans_policy_when_read_only_state_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_read_only(Some(false));
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_read_only(Some(true));
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+    assert!(report.invalidate_sidebar);
+    assert!(report.invalidate_operation_policy);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.previous_read_only, Some(false));
+    assert_eq!(report.current_read_only, Some(true));
+    assert_eq!(report.reason, "volume-read-only-changed");
+    assert!(report
+        .as_tsv()
+        .contains("\tprevious-read-only=false\tcurrent-class=external\t"));
+    assert!(report
+        .as_tsv()
+        .contains("\tcurrent-read-only=true\tsidebar=true\t"));
+}
+
+#[test]
+fn volume_event_index_invalidation_cancels_jobs_when_identity_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:OLD");
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:NEW");
+
+    let report = VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/Work")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    );
+
+    assert!(report.stable_identity_changed);
+    assert!(!report.filesystem_signature_changed);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-event-identity-changed");
+    assert!(report.as_tsv().contains("\tidentity-changed=true\t"));
+    assert!(report.as_tsv().contains("\tfilesystem-changed=false\t"));
+}
+
+#[test]
+fn volume_event_index_invalidation_cancels_jobs_when_read_only_state_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_read_only(Some(false));
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_read_only(Some(true));
+
+    let report = VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/Work")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    );
+
+    assert!(report.read_only_changed);
+    assert!(!report.stable_identity_changed);
+    assert!(!report.filesystem_signature_changed);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-event-read-only-changed");
+    assert!(report.as_tsv().contains("\tread-only-changed=true\t"));
+    assert!(report.as_tsv().contains("\tidentity-changed=false\t"));
+}
+
+#[test]
+fn volume_event_index_invalidation_cancels_jobs_when_filesystem_signature_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:WORK")
+    .with_filesystem_signature("fs=apfs|media-uuid=OLD");
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:WORK")
+    .with_filesystem_signature("fs=apfs|media-uuid=NEW");
+
+    let report = VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/Work")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    );
+
+    assert!(!report.stable_identity_changed);
+    assert!(report.filesystem_signature_changed);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-event-filesystem-changed");
+    assert!(report.as_tsv().contains("\tidentity-changed=false\t"));
+    assert!(report.as_tsv().contains("\tfilesystem-changed=true\t"));
 }
 
 #[test]

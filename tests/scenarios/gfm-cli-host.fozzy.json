@@ -2603,7 +2603,7 @@
         "tmp/gfm-fozzy-dist"
       ],
       "exit_code": 0,
-      "stdout": "volume-event-index-invalidation\tkind=appeared\tpath=tmp/gfm-fozzy-dist\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tcurrent-volume=16777230\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tindex-admission=true\trescan-index=true\tcancel-index-jobs=false\tclear-fsevents-cursor=true\treason=volume-event-connected\n",
+      "stdout": "volume-event-index-invalidation\tkind=appeared\tpath=tmp/gfm-fozzy-dist\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tprevious-read-only=-\tcurrent-volume=16777230\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tcurrent-read-only=false\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=false\tindex-admission=true\trescan-index=true\tcancel-index-jobs=false\tclear-fsevents-cursor=true\treason=volume-event-connected\n",
       "stderr": "",
       "times": 1
     },
@@ -2628,7 +2628,7 @@
         "tmp/gfm-fozzy-dist"
       ],
       "exit_code": 0,
-      "stdout": "volume-event-index-invalidation\tkind=description-changed\tpath=tmp/gfm-fozzy-dist\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tcurrent-volume=16777230\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-descriptor-changed\nvolume-job-cancellation\tvolume=16777230\tclass=background\tcancelled=1\ncancelled-job\t1\tbackground\tbackground\tindex invalidated volume\n",
+      "stdout": "volume-event-index-invalidation\tkind=description-changed\tpath=tmp/gfm-fozzy-dist\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tprevious-read-only=-\tcurrent-volume=16777230\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tcurrent-read-only=false\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=false\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-descriptor-changed\nvolume-job-cancellation\tvolume=16777230\tclass=background\tcancelled=1\ncancelled-job\t1\tbackground\tbackground\tindex invalidated volume\n",
       "stderr": "",
       "times": 1
     },
@@ -2641,7 +2641,7 @@
         "tmp/gfm-fozzy-dist"
       ],
       "exit_code": 0,
-      "stdout": "volume-event-index-invalidation\tkind=disappeared\tpath=tmp/gfm-fozzy-dist\tprevious-volume=16777230\tprevious-class=external\tprevious-mount=mounted\tprevious-reachable=true\tcurrent-volume=-\tcurrent-class=-\tcurrent-mount=-\tcurrent-reachable=-\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-disconnected\n",
+      "stdout": "volume-event-index-invalidation\tkind=disappeared\tpath=tmp/gfm-fozzy-dist\tprevious-volume=16777230\tprevious-class=external\tprevious-mount=mounted\tprevious-reachable=true\tprevious-read-only=false\tcurrent-volume=-\tcurrent-class=-\tcurrent-mount=-\tcurrent-reachable=-\tcurrent-read-only=-\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=false\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-disconnected\n",
       "stderr": "",
       "times": 1
     },
@@ -2654,7 +2654,7 @@
         "tmp/gfm-fozzy-dist"
       ],
       "exit_code": 0,
-      "stdout": "volume-event-index-invalidation\tkind=disappeared\tpath=tmp/gfm-fozzy-dist\tprevious-volume=16777230\tprevious-class=external\tprevious-mount=mounted\tprevious-reachable=true\tcurrent-volume=-\tcurrent-class=-\tcurrent-mount=-\tcurrent-reachable=-\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-disconnected\nvolume-job-cancellation\tvolume=16777230\tclass=background\tcancelled=1\ncancelled-job\t1\tbackground\tbackground\tindex invalidated volume\n",
+      "stdout": "volume-event-index-invalidation\tkind=disappeared\tpath=tmp/gfm-fozzy-dist\tprevious-volume=16777230\tprevious-class=external\tprevious-mount=mounted\tprevious-reachable=true\tprevious-read-only=false\tcurrent-volume=-\tcurrent-class=-\tcurrent-mount=-\tcurrent-reachable=-\tcurrent-read-only=-\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=false\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-disconnected\nvolume-job-cancellation\tvolume=16777230\tclass=background\tcancelled=1\ncancelled-job\t1\tbackground\tbackground\tindex invalidated volume\n",
       "stderr": "",
       "times": 1
     },
@@ -2666,7 +2666,7 @@
         "unavailable"
       ],
       "exit_code": 0,
-      "stdout": "volume-event-index-invalidation\tkind=unavailable\tpath=-\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tcurrent-volume=-\tcurrent-class=-\tcurrent-mount=-\tcurrent-reachable=-\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-native-unavailable\n",
+      "stdout": "volume-event-index-invalidation\tkind=unavailable\tpath=-\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tprevious-read-only=-\tcurrent-volume=-\tcurrent-class=-\tcurrent-mount=-\tcurrent-reachable=-\tcurrent-read-only=-\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=false\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-native-unavailable\n",
       "stderr": "",
       "times": 1
     },
@@ -2679,7 +2679,7 @@
         "tmp/gfm-fozzy-dist"
       ],
       "exit_code": 0,
-      "stdout": "volume-event-index-invalidation\tkind=appeared\tpath=tmp/gfm-fozzy-dist\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tcurrent-volume=16777230\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tindex-admission=true\trescan-index=true\tcancel-index-jobs=false\tclear-fsevents-cursor=true\treason=volume-event-connected\n",
+      "stdout": "volume-event-index-invalidation\tkind=appeared\tpath=tmp/gfm-fozzy-dist\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tprevious-read-only=-\tcurrent-volume=16777230\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tcurrent-read-only=false\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=false\tindex-admission=true\trescan-index=true\tcancel-index-jobs=false\tclear-fsevents-cursor=true\treason=volume-event-connected\n",
       "stderr": "",
       "times": 1
     },
@@ -2691,7 +2691,7 @@
         "unavailable"
       ],
       "exit_code": 0,
-      "stdout": "volume-event-index-invalidation\tkind=unavailable\tpath=-\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tcurrent-volume=-\tcurrent-class=-\tcurrent-mount=-\tcurrent-reachable=-\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-native-unavailable\n",
+      "stdout": "volume-event-index-invalidation\tkind=unavailable\tpath=-\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tprevious-read-only=-\tcurrent-volume=-\tcurrent-class=-\tcurrent-mount=-\tcurrent-reachable=-\tcurrent-read-only=-\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=false\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-native-unavailable\n",
       "stderr": "",
       "times": 1
     },

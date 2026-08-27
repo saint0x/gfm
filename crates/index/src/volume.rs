@@ -199,6 +199,7 @@ pub struct IndexVolumeDescriptor {
     pub class: IndexVolumeClass,
     pub mount_state: IndexMountState,
     pub reachable: Option<bool>,
+    pub read_only: Option<bool>,
     pub stable_identity: Option<String>,
     pub filesystem_signature: Option<String>,
 }
@@ -217,6 +218,7 @@ impl IndexVolumeDescriptor {
             class,
             mount_state,
             reachable: Some(mount_state == IndexMountState::Mounted),
+            read_only: None,
             stable_identity: None,
             filesystem_signature: None,
         }
@@ -234,6 +236,11 @@ impl IndexVolumeDescriptor {
 
     pub fn with_reachable(mut self, reachable: Option<bool>) -> Self {
         self.reachable = reachable;
+        self
+    }
+
+    pub fn with_read_only(mut self, read_only: Option<bool>) -> Self {
+        self.read_only = read_only;
         self
     }
 
@@ -423,9 +430,11 @@ pub struct VolumeInvalidationReport {
     pub previous_class: Option<IndexVolumeClass>,
     pub previous_mount_state: Option<IndexMountState>,
     pub previous_reachable: Option<bool>,
+    pub previous_read_only: Option<bool>,
     pub current_class: Option<IndexVolumeClass>,
     pub current_mount_state: Option<IndexMountState>,
     pub current_reachable: Option<bool>,
+    pub current_read_only: Option<bool>,
     pub invalidate_sidebar: bool,
     pub invalidate_operation_policy: bool,
     pub invalidate_index_admission: bool,
@@ -443,10 +452,15 @@ pub struct VolumeEventIndexInvalidationReport {
     pub previous_class: Option<IndexVolumeClass>,
     pub previous_mount_state: Option<IndexMountState>,
     pub previous_reachable: Option<bool>,
+    pub previous_read_only: Option<bool>,
     pub current_volume_id: Option<VolumeId>,
     pub current_class: Option<IndexVolumeClass>,
     pub current_mount_state: Option<IndexMountState>,
     pub current_reachable: Option<bool>,
+    pub current_read_only: Option<bool>,
+    pub read_only_changed: bool,
+    pub stable_identity_changed: bool,
+    pub filesystem_signature_changed: bool,
     pub invalidate_index_admission: bool,
     pub rescan_index: bool,
     pub cancel_index_jobs: bool,
@@ -466,9 +480,11 @@ impl VolumeInvalidationReport {
         let previous_class = previous.map(|volume| volume.class);
         let previous_mount_state = previous.map(|volume| volume.mount_state);
         let previous_reachable = previous.and_then(|volume| volume.reachable);
+        let previous_read_only = previous.and_then(|volume| volume.read_only);
         let current_class = current.map(|volume| volume.class);
         let current_mount_state = current.map(|volume| volume.mount_state);
         let current_reachable = current.and_then(|volume| volume.reachable);
+        let current_read_only = current.and_then(|volume| volume.read_only);
 
         let (
             invalidate_sidebar,
@@ -516,6 +532,19 @@ impl VolumeInvalidationReport {
                     previous.mount_state == IndexMountState::Mounted,
                     true,
                     "volume-reachability-changed",
+                )
+            }
+            (Some(previous), Some(current))
+                if known_optional_value_changed(&previous.read_only, &current.read_only) =>
+            {
+                (
+                    true,
+                    true,
+                    true,
+                    true,
+                    previous.mount_state == IndexMountState::Mounted,
+                    true,
+                    "volume-read-only-changed",
                 )
             }
             (Some(previous), Some(current))
@@ -567,9 +596,11 @@ impl VolumeInvalidationReport {
             previous_class,
             previous_mount_state,
             previous_reachable,
+            previous_read_only,
             current_class,
             current_mount_state,
             current_reachable,
+            current_read_only,
             invalidate_sidebar,
             invalidate_operation_policy,
             invalidate_index_admission,
@@ -582,7 +613,7 @@ impl VolumeInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
+            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
             self.path.display(),
             self.previous_class
                 .map(IndexVolumeClass::as_str)
@@ -593,11 +624,17 @@ impl VolumeInvalidationReport {
             self.previous_reachable
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            self.previous_read_only
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             self.current_class.map(IndexVolumeClass::as_str).unwrap_or("-"),
             self.current_mount_state
                 .map(IndexMountState::as_str)
                 .unwrap_or("-"),
             self.current_reachable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.current_read_only
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.invalidate_sidebar,
@@ -620,23 +657,48 @@ impl VolumeEventIndexInvalidationReport {
         source_invalidates_index_admission: bool,
         source_rescans_index: bool,
     ) -> Self {
+        let stable_identity_changed = known_optional_value_changed(
+            &previous.and_then(|volume| volume.stable_identity.clone()),
+            &current.and_then(|volume| volume.stable_identity.clone()),
+        );
+        let filesystem_signature_changed = known_optional_value_changed(
+            &previous.and_then(|volume| volume.filesystem_signature.clone()),
+            &current.and_then(|volume| volume.filesystem_signature.clone()),
+        );
+        let read_only_changed = known_optional_value_changed(
+            &previous.and_then(|volume| volume.read_only),
+            &current.and_then(|volume| volume.read_only),
+        );
         let event_visible = path.is_some()
             || previous.is_some()
             || current.is_some()
             || source_invalidates_index_admission;
-        let invalidate_index_admission = event_visible && source_invalidates_index_admission;
-        let rescan_index = event_visible && source_rescans_index;
+        let descriptor_changed =
+            stable_identity_changed || filesystem_signature_changed || read_only_changed;
+        let invalidate_index_admission =
+            event_visible && (source_invalidates_index_admission || descriptor_changed);
+        let rescan_index = event_visible && (source_rescans_index || descriptor_changed);
         let cancel_index_jobs = event_visible
-            && matches!(
-                kind,
-                IndexVolumeEventKind::DescriptionChanged
-                    | IndexVolumeEventKind::Disappeared
-                    | IndexVolumeEventKind::Unavailable
-            );
+            && (descriptor_changed
+                || matches!(
+                    kind,
+                    IndexVolumeEventKind::DescriptionChanged
+                        | IndexVolumeEventKind::Disappeared
+                        | IndexVolumeEventKind::Unavailable
+                ));
         let clear_fsevents_cursor = invalidate_index_admission || rescan_index || cancel_index_jobs;
         let reason = match kind {
             IndexVolumeEventKind::Appeared if current.is_some() => "volume-event-connected",
             IndexVolumeEventKind::Appeared => "volume-event-appeared-unclassified",
+            IndexVolumeEventKind::DescriptionChanged if stable_identity_changed => {
+                "volume-event-identity-changed"
+            }
+            IndexVolumeEventKind::DescriptionChanged if filesystem_signature_changed => {
+                "volume-event-filesystem-changed"
+            }
+            IndexVolumeEventKind::DescriptionChanged if read_only_changed => {
+                "volume-event-read-only-changed"
+            }
             IndexVolumeEventKind::DescriptionChanged if current.is_some() => {
                 "volume-event-descriptor-changed"
             }
@@ -652,10 +714,15 @@ impl VolumeEventIndexInvalidationReport {
             previous_class: previous.map(|volume| volume.class),
             previous_mount_state: previous.map(|volume| volume.mount_state),
             previous_reachable: previous.and_then(|volume| volume.reachable),
+            previous_read_only: previous.and_then(|volume| volume.read_only),
             current_volume_id: current.and_then(|volume| volume.id),
             current_class: current.map(|volume| volume.class),
             current_mount_state: current.map(|volume| volume.mount_state),
             current_reachable: current.and_then(|volume| volume.reachable),
+            current_read_only: current.and_then(|volume| volume.read_only),
+            read_only_changed,
+            stable_identity_changed,
+            filesystem_signature_changed,
             invalidate_index_admission,
             rescan_index,
             cancel_index_jobs,
@@ -666,7 +733,7 @@ impl VolumeEventIndexInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
+            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tread-only-changed={}\tidentity-changed={}\tfilesystem-changed={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\treason={}",
             self.kind.as_str(),
             self.path
                 .as_ref()
@@ -684,6 +751,9 @@ impl VolumeEventIndexInvalidationReport {
             self.previous_reachable
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            self.previous_read_only
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             self.current_volume_id
                 .map(|id| id.0.to_string())
                 .unwrap_or_else(|| "-".to_string()),
@@ -694,6 +764,12 @@ impl VolumeEventIndexInvalidationReport {
             self.current_reachable
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            self.current_read_only
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.read_only_changed,
+            self.stable_identity_changed,
+            self.filesystem_signature_changed,
             self.invalidate_index_admission,
             self.rescan_index,
             self.cancel_index_jobs,
