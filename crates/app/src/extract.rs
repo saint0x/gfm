@@ -653,12 +653,11 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_worker_refuses_unreachable_input_before_scratch_setup() {
-        let offline = unique_temp_dir("gfm-extract-worker-input-offline");
-        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
-        let input = offline.join("document.txt");
-        fs::write(&input, "worker should not launch").unwrap();
+    fn adaptive_worker_refuses_missing_input_before_scratch_setup() {
+        let root = unique_temp_dir("gfm-extract-worker-input-missing");
+        let input = root.join("missing.txt");
         let cancellation = Cancellation::default();
+        let scratch_before = worker_scratch_entries();
 
         let err = run_adaptive_extraction_worker_cancellable(
             &input,
@@ -671,10 +670,11 @@ mod tests {
         assert!(matches!(err, GfmError::Permission { .. }));
         assert!(err
             .to_string()
-            .contains("adaptive extraction worker volume access blocked"));
-        assert!(err.to_string().contains("unreachable volume network"));
+            .contains("adaptive extraction worker access blocked"));
+        assert!(err.to_string().contains("path is not present on this host"));
+        assert_eq!(scratch_before, worker_scratch_entries());
 
-        fs::remove_dir_all(offline).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     struct SandboxProfileFixture {
@@ -741,5 +741,20 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn worker_scratch_entries() -> Vec<PathBuf> {
+        let prefix = format!("gfm-extract-worker-{}-", std::process::id());
+        let mut entries = fs::read_dir(env::temp_dir())
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(&prefix))
+            })
+            .collect::<Vec<_>>();
+        entries.sort();
+        entries
     }
 }
