@@ -2057,6 +2057,40 @@ fn volume_event_index_invalidation_cancels_jobs_when_identity_changes() {
 }
 
 #[test]
+fn volume_event_index_invalidation_keeps_label_only_description_change_out_of_index_jobs() {
+    let previous = IndexVolumeDescriptor::new(
+        "Backup",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    );
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    );
+
+    let report = VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/Work")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    );
+
+    assert!(!report.read_only_changed);
+    assert!(!report.stable_identity_changed);
+    assert!(!report.filesystem_signature_changed);
+    assert!(!report.invalidate_index_admission);
+    assert!(!report.rescan_index);
+    assert!(!report.cancel_index_jobs);
+    assert!(!report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-event-description-sidebar-only");
+}
+
+#[test]
 fn volume_event_index_invalidation_reports_operation_capability_drift() {
     let previous = IndexVolumeDescriptor::new(
         "Work Drive",

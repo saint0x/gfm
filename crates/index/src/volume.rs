@@ -845,13 +845,13 @@ impl VolumeEventIndexInvalidationReport {
             event_visible && (source_invalidates_index_admission || descriptor_changed);
         let rescan_index = event_visible && (source_rescans_index || descriptor_changed);
         let cancel_index_jobs = event_visible
-            && (descriptor_changed
-                || matches!(
-                    kind,
-                    IndexVolumeEventKind::DescriptionChanged
-                        | IndexVolumeEventKind::Disappeared
-                        | IndexVolumeEventKind::Unavailable
-                ));
+            && match kind {
+                IndexVolumeEventKind::Appeared => false,
+                IndexVolumeEventKind::DescriptionChanged => {
+                    descriptor_changed || source_invalidates_index_admission || source_rescans_index
+                }
+                IndexVolumeEventKind::Disappeared | IndexVolumeEventKind::Unavailable => true,
+            };
         let clear_fsevents_cursor = invalidate_index_admission || rescan_index || cancel_index_jobs;
         let reason = match kind {
             IndexVolumeEventKind::Appeared if current.is_some() => "volume-event-connected",
@@ -877,8 +877,16 @@ impl VolumeEventIndexInvalidationReport {
             IndexVolumeEventKind::DescriptionChanged if filesystem_signature_changed => {
                 "volume-event-filesystem-changed"
             }
-            IndexVolumeEventKind::DescriptionChanged if current.is_some() => {
+            IndexVolumeEventKind::DescriptionChanged
+                if current.is_some()
+                    && (source_invalidates_index_admission
+                        || source_rescans_index
+                        || descriptor_changed) =>
+            {
                 "volume-event-descriptor-changed"
+            }
+            IndexVolumeEventKind::DescriptionChanged if current.is_some() => {
+                "volume-event-description-sidebar-only"
             }
             IndexVolumeEventKind::DescriptionChanged => "volume-event-description-unavailable",
             IndexVolumeEventKind::Disappeared => "volume-event-disconnected",

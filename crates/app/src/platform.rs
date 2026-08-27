@@ -25,7 +25,7 @@ use gfm_mac::{
     SecurityScopedBookmarkStore, SpotlightMetadataReader, SpotlightReconciliationReport,
     VolumeDescriptor, VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind,
     VolumeEventStream, VolumeMountIdentityReport, VolumeOperation, VolumeOperationReport,
-    VolumeTopologyDiff, WatchRoot,
+    VolumeTopologyChangeKind, VolumeTopologyDiff, WatchRoot,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
@@ -673,6 +673,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 VolumeTopologyDiff::evaluate(&previous, &current).as_tsv()
             );
         }
+        "volume-topology-index-invalidation" => {
+            let (previous_paths, current_paths) = split_topology_paths(args)?;
+            let previous = VolumeDiscoveryReport::from_paths(previous_paths);
+            let current = VolumeDiscoveryReport::from_paths(current_paths);
+            println!(
+                "{}",
+                volume_topology_index_invalidation_tsv(&previous, &current)
+            );
+        }
         "volume-topology-case-sensitivity" => {
             let previous_case_sensitive = parse_platform_bool(
                 &required_string(
@@ -1121,6 +1130,43 @@ fn topology_api_status_diff() -> Result<VolumeTopologyDiff> {
             volumes: vec![current],
         },
     ))
+}
+
+fn volume_topology_index_invalidation_tsv(
+    previous: &VolumeDiscoveryReport,
+    current: &VolumeDiscoveryReport,
+) -> String {
+    let diff = VolumeTopologyDiff::evaluate(previous, current);
+    let mut lines = vec![diff.as_tsv()];
+    for change in &diff.changes {
+        let previous = previous
+            .volumes
+            .iter()
+            .find(|volume| volume.stable_identity == change.stable_identity)
+            .map(index_volume_descriptor);
+        let current = current
+            .volumes
+            .iter()
+            .find(|volume| volume.stable_identity == change.stable_identity)
+            .map(index_volume_descriptor);
+        let kind = match change.kind {
+            VolumeTopologyChangeKind::Connected => IndexVolumeEventKind::Appeared,
+            VolumeTopologyChangeKind::Disconnected => IndexVolumeEventKind::Disappeared,
+            VolumeTopologyChangeKind::Changed => IndexVolumeEventKind::DescriptionChanged,
+        };
+        lines.push(
+            VolumeEventIndexInvalidationReport::from_event(
+                kind,
+                Some(change.path.clone()),
+                previous.as_ref(),
+                current.as_ref(),
+                change.invalidate_index_admission,
+                change.rescan_index,
+            )
+            .as_tsv(),
+        );
+    }
+    lines.join("\n")
 }
 
 fn publish_fileprovider_progress_job(path: PathBuf) -> Result<FileProviderProgressReport> {

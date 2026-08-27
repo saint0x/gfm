@@ -4061,6 +4061,18 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-topology-index-invalidation",
+        "tmp/gfm-fozzy-dist",
+        "--",
+        "tmp/gfm-fozzy-network"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

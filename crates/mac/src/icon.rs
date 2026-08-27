@@ -563,6 +563,7 @@ mod tests {
     fn evicted_icloud_placeholders_carry_cloud_badge() {
         let path = temp_path("gfm-native-evicted-icon", "icloud-placeholder");
         fs::write(&path, "placeholder").unwrap();
+        xattr::set(&path, "com.apple.icloud.placeholder", b"1").unwrap();
         let mut record = record("Remote.icloud-placeholder", FileKind::File);
         record.path = path.clone();
 
