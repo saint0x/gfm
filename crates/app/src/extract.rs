@@ -149,6 +149,9 @@ pub(crate) fn run_quarantined_adaptive_extraction_worker_cancellable(
     cancellation: &Cancellation,
 ) -> Result<String> {
     cancellation.check()?;
+    let _access =
+        retain_extraction_quarantine_worker_access(path, store, "quarantined extraction worker")?;
+    cancellation.check()?;
     let fingerprint = ExtractionFingerprint::for_path(path)?;
     cancellation.check()?;
     let mut quarantine = read_extraction_quarantine(store, threshold)?;
@@ -203,6 +206,17 @@ fn worker_failure_reason(kind: QuarantineFailureKind) -> &'static str {
         QuarantineFailureKind::Corrupt => "worker-corrupt",
         QuarantineFailureKind::Encrypted => "worker-encrypted",
     }
+}
+
+fn retain_extraction_quarantine_worker_access(
+    path: &Path,
+    store: &Path,
+    worker: &str,
+) -> Result<Vec<ScopedAccessGuard>> {
+    Ok(vec![
+        preflight_access_scope(path, AccessIntent::Read, worker)?,
+        preflight_access_scope(write_probe_path(store), AccessIntent::Write, worker)?,
+    ])
 }
 
 struct WorkerSandbox {
@@ -602,6 +616,37 @@ mod tests {
             )),
             "{profile}"
         );
+    }
+
+    #[test]
+    fn quarantined_worker_refuses_unreachable_store_before_fingerprinting() {
+        let source = unique_temp_dir("gfm-extract-quarantine-worker-source");
+        let offline = unique_temp_dir("gfm-extract-quarantine-worker-offline");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let input = source.join("document.txt");
+        let store = offline.join("quarantine.gfmquarantine");
+        fs::write(&input, "worker should not launch").unwrap();
+        let cancellation = Cancellation::default();
+
+        let err = run_quarantined_adaptive_extraction_worker_cancellable(
+            &input,
+            &store,
+            SchedulingPressure::default(),
+            Duration::from_millis(0),
+            2,
+            &cancellation,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err
+            .to_string()
+            .contains("quarantined extraction worker volume access blocked"));
+        assert!(err.to_string().contains("unreachable volume network"));
+        assert!(!store.exists());
+
+        fs::remove_dir_all(source).unwrap();
+        fs::remove_dir_all(offline).unwrap();
     }
 
     struct SandboxProfileFixture {
