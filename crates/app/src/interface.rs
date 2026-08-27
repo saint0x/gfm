@@ -166,8 +166,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "ui-fileprovider-conflict-contract requires a FileProvider path",
             )?;
-            let _access = preflight_ui_fileprovider_read(&path, "ui fileprovider conflict")?;
-            let report = FileProviderConflictReport::read_path(&path)?;
+            let report = read_ui_fileprovider_conflict(path)?;
             let contract = ProviderConflictContract::from_input(ProviderConflictInput::new(
                 report.path.display().to_string(),
                 report.has_unresolved_conflict,
@@ -910,7 +909,7 @@ fn write_probe_path(path: &Path) -> &Path {
     if path.is_dir() {
         return path;
     }
-    path.parent().unwrap_or(path)
+    crate::parent_or_cwd(path)
 }
 
 fn write_probe_existing_ancestor(path: &Path) -> PathBuf {
@@ -1117,6 +1116,25 @@ fn read_ui_fileprovider_sidebar_invalidation(
             let _access = preflight_ui_fileprovider_read(&path, WORKER)?;
             cancellation.check()?;
             FileProviderInvalidationReport::evaluate(&path, previous)
+        },
+    )
+}
+
+fn read_ui_fileprovider_conflict(path: PathBuf) -> Result<FileProviderConflictReport> {
+    const WORKER: &str = "ui fileprovider conflict";
+    crate::access::preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
+    let volume = crate::detect_volume_id(&path)
+        .ok()
+        .or_else(|| crate::parent_volume(&path));
+    crate::runtime::run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        WORKER,
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = preflight_ui_fileprovider_read(&path, WORKER)?;
+            cancellation.check()?;
+            FileProviderConflictReport::read_path(&path)
         },
     )
 }

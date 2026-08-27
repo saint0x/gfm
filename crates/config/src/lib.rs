@@ -500,7 +500,7 @@ impl ConfigStore {
 
     pub fn save(&self, config: &GfmConfig) -> Result<()> {
         let encoded = config.to_toml()?;
-        if let Some(parent) = self.path.parent() {
+        if let Some(parent) = real_parent(&self.path) {
             fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         }
 
@@ -540,12 +540,16 @@ fn default_config_path() -> Result<PathBuf> {
 }
 
 fn sync_parent(path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        File::open(parent)
-            .and_then(|file| file.sync_all())
-            .map_err(|err| GfmError::io(parent, err))?;
-    }
+    let parent = real_parent(path).unwrap_or_else(|| Path::new("."));
+    File::open(parent)
+        .and_then(|file| file.sync_all())
+        .map_err(|err| GfmError::io(parent, err))?;
     Ok(())
+}
+
+fn real_parent(path: &Path) -> Option<&Path> {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
 }
 
 fn migrate_legacy_to_current(value: &mut toml::Value) -> Result<()> {
@@ -700,6 +704,23 @@ unexpected = true
         assert!(loaded.features.internal_power_mode);
         assert!(loaded.performance.enabled);
         assert_eq!(loaded.performance.profile, PerformanceProfile::Aggressive);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn store_saves_relative_leaf_path_in_current_directory() {
+        let root = unique_temp_dir("gfm-config-relative-save");
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&root).unwrap();
+        let store = ConfigStore::new("config.toml");
+        let config = GfmConfig::default();
+
+        store.save(&config).unwrap();
+        let loaded = store.load().unwrap();
+
+        assert_eq!(loaded, config);
+        assert!(root.join("config.toml").exists());
+        std::env::set_current_dir(previous).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

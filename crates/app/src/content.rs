@@ -1103,7 +1103,7 @@ fn preflight_background_content_recovery_volumes(journal: &JobJournal) -> Result
 }
 
 fn preflight_optional_recovery_store_volumes(path: &Path, worker: &str) -> Result<()> {
-    let parent = path.parent().unwrap_or(path);
+    let parent = crate::parent_or_cwd(path);
     preflight_volume_access_scope(parent, AccessIntent::Read, worker)?;
     if path.exists() {
         preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
@@ -1116,7 +1116,7 @@ fn retain_optional_recovery_store_access(
     worker: &str,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::with_capacity(2);
-    let parent = path.parent().unwrap_or(path);
+    let parent = crate::parent_or_cwd(path);
     guards.push(preflight_access_scope(parent, AccessIntent::Read, worker)?);
     if path.exists() {
         guards.push(preflight_access_scope(path, AccessIntent::Read, worker)?);
@@ -1332,7 +1332,7 @@ fn write_probe_path(path: &Path) -> &Path {
     if path.is_dir() {
         return path;
     }
-    path.parent().unwrap_or(path)
+    crate::parent_or_cwd(path)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

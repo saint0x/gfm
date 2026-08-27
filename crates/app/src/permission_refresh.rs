@@ -95,7 +95,7 @@ fn write_probe_path(path: &Path) -> &Path {
     if path.is_dir() {
         return path;
     }
-    path.parent().unwrap_or(path)
+    crate::parent_or_cwd(path)
 }
 
 fn write_probe_existing_ancestor(path: &Path) -> std::path::PathBuf {

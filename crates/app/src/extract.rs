@@ -489,7 +489,7 @@ fn write_probe_path(path: &Path) -> &Path {
     if path.exists() {
         return path;
     }
-    path.parent().unwrap_or(path)
+    crate::parent_or_cwd(path)
 }
 
 fn sandbox_exec_path() -> Option<PathBuf> {

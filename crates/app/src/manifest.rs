@@ -847,7 +847,7 @@ fn write_probe_path(path: &Path) -> &Path {
     if path.is_dir() {
         return path;
     }
-    path.parent().unwrap_or(path)
+    crate::parent_or_cwd(path)
 }
 
 fn existing_read_probe_path(path: &Path) -> &Path {

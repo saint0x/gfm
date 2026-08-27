@@ -1014,11 +1014,11 @@ fn write_probe_path(path: &Path) -> &Path {
     if path.is_dir() {
         return path;
     }
-    path.parent().unwrap_or(path)
+    crate::parent_or_cwd(path)
 }
 
 fn archive_probe_path(path: &Path) -> &Path {
-    path.parent().unwrap_or(path)
+    crate::parent_or_cwd(path)
 }
 
 fn parse_content_manifest_archive_spec(value: &str) -> Result<ContentArchiveManifestEntry> {

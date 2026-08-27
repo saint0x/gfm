@@ -527,19 +527,33 @@ pub(crate) fn existing_read_probe_path(path: &Path) -> &Path {
     if path.exists() {
         return path;
     }
-    path.parent().unwrap_or(path)
+    parent_or_cwd(path)
 }
 
-fn config_write_probe_path(path: &Path) -> &Path {
+pub(crate) fn write_probe_path(path: &Path) -> &Path {
     if path.is_dir() {
         return path;
     }
-    path.parent().unwrap_or(path)
+    parent_or_cwd(path)
+}
+
+fn config_write_probe_path(path: &Path) -> &Path {
+    write_probe_path(path)
+}
+
+pub(crate) fn parent_or_cwd(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
 }
 
 pub(crate) fn parent_volume(path: &Path) -> Option<VolumeId> {
-    path.parent()
-        .and_then(|parent| detect_volume_id(parent).ok())
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => detect_volume_id(parent).ok(),
+        Some(_) => detect_volume_id(Path::new(".")).ok(),
+        None => None,
+    }
 }
 
 pub(crate) fn path_volume(path: &Path) -> Option<VolumeId> {

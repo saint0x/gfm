@@ -534,7 +534,7 @@ fn write_probe_path(path: &Path) -> &Path {
     if path.exists() {
         return path;
     }
-    path.parent().unwrap_or(path)
+    crate::parent_or_cwd(path)
 }
 
 fn control_file_volume(path: &Path) -> Option<VolumeId> {

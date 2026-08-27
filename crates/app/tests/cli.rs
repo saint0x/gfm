@@ -9817,6 +9817,41 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
 }
 
 #[test]
+fn content_manifest_write_uses_cwd_write_probe_for_relative_manifest_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-relative-root");
+    fs::write(root.join("content.gfmcontent"), b"archive bytes").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .args([
+            "content-manifest-write",
+            "content.gfmmanifest",
+            "hot:content.gfmcontent",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(root.join("content.gfmmanifest").exists());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "content manifest write", Path::new("."));
+    assert_worker_admitted(
+        &stderr,
+        "content manifest write archive",
+        Path::new("content.gfmcontent"),
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=content manifest write\tpath=\t"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn content_manifest_write_refuses_unreachable_archive_before_publishing_from_binary() {
     let root = unique_temp_dir("gfm-cli-content-manifest-write-unreachable");
     let local = root.join("local");

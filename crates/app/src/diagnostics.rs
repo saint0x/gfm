@@ -460,7 +460,7 @@ fn write_probe_path(path: &Path) -> &Path {
     if path.is_dir() {
         return path;
     }
-    path.parent().unwrap_or(path)
+    crate::parent_or_cwd(path)
 }
 
 fn print_index_rebuild_report(report: gfm_diagnostics::RebuildReport) {

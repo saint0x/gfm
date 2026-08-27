@@ -75,6 +75,31 @@ fn creates_checks_and_dumps_config_from_binary() {
 }
 
 #[test]
+fn config_init_uses_cwd_write_probe_for_relative_store_from_binary() {
+    let root = unique_temp_dir("gfm-cli-config-relative-root");
+
+    let init_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .args(["config-init", "config.toml"])
+        .output()
+        .unwrap();
+    assert!(
+        init_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init_output.stderr)
+    );
+    assert!(root.join("config.toml").exists());
+    let init_stderr = String::from_utf8_lossy(&init_output.stderr);
+    assert_worker_admitted(&init_stderr, "config init", PathBuf::from(".").as_path());
+    assert!(
+        !init_stderr.contains("security-worker-admission\tworker=config init\tpath=\t"),
+        "{init_stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn config_routes_refuse_unreachable_volume_before_loading_or_persisting_from_binary() {
     let root = unique_temp_dir("gfm-cli-config-preflight-root");
     let offline = unique_temp_dir("gfm-cli-config-preflight-offline");
@@ -153,4 +178,17 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
+    let expected_worker = format!("worker={worker}");
+    let expected_path = format!("path={}", path.display());
+    assert!(
+        stderr.lines().any(|line| {
+            line.starts_with("security-worker-admission\t")
+                && line.split('\t').any(|field| field == expected_worker)
+                && line.split('\t').any(|field| field == expected_path)
+        }),
+        "{stderr}"
+    );
 }
