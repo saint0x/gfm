@@ -110,6 +110,7 @@ pub struct PermissionAccessContract {
     pub mode: String,
     pub access_action: String,
     pub worker_action: String,
+    pub can_touch_filesystem: bool,
     pub bookmark_required: bool,
     pub bookmark_access: bool,
     pub refresh_on_permission_change: bool,
@@ -131,7 +132,7 @@ impl PermissionAccessContract {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "permission-access\tpath={}\tintent={}\tscope={}\tprobe={}\tmode={}\taccess-action={}\tworker-action={}\tbookmark-required={}\tbookmark-access={}\trefresh-on-permission-change={}\tprompt-kind={}\treason={}",
+            "permission-access\tpath={}\tintent={}\tscope={}\tprobe={}\tmode={}\taccess-action={}\tworker-action={}\tcan-touch-filesystem={}\tbookmark-required={}\tbookmark-access={}\trefresh-on-permission-change={}\tprompt-kind={}\treason={}",
             escape_contract_field(&self.path),
             escape_contract_field(&self.intent),
             escape_contract_field(&self.scope),
@@ -139,6 +140,7 @@ impl PermissionAccessContract {
             escape_contract_field(&self.mode),
             escape_contract_field(&self.access_action),
             escape_contract_field(&self.worker_action),
+            self.can_touch_filesystem,
             self.bookmark_required,
             self.bookmark_access,
             self.refresh_on_permission_change,
@@ -675,6 +677,7 @@ mod tests {
             mode: "security-scoped-bookmark".to_string(),
             access_action: "allow".to_string(),
             worker_action: "start".to_string(),
+            can_touch_filesystem: true,
             bookmark_required: false,
             bookmark_access: false,
             refresh_on_permission_change: false,
@@ -697,9 +700,9 @@ mod tests {
         assert!(contract.as_tsv().contains(
             "\npermission-access\tpath=/Users/me/Documents/Plan.md\tintent=read\tscope=documents\t"
         ));
-        assert!(contract
-            .as_tsv()
-            .contains("\tbookmark-required=true\tbookmark-access=true\t"));
+        assert!(contract.as_tsv().contains(
+            "\tcan-touch-filesystem=true\tbookmark-required=true\tbookmark-access=true\t"
+        ));
     }
 
     #[test]
@@ -713,6 +716,7 @@ mod tests {
             mode: "denied".to_string(),
             access_action: "deny".to_string(),
             worker_action: "deny".to_string(),
+            can_touch_filesystem: false,
             bookmark_required: false,
             bookmark_access: false,
             refresh_on_permission_change: false,

@@ -274,7 +274,9 @@ fn permission_access_contract_refuses_unreachable_volume_from_binary() {
     assert!(stdout.contains("\taccess-action=allow\t"), "{stdout}");
     assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
     assert!(
-        stdout.contains("\tbookmark-required=false\tbookmark-access=false\t"),
+        stdout.contains(
+            "\tcan-touch-filesystem=false\tbookmark-required=false\tbookmark-access=false\t"
+        ),
         "{stdout}"
     );
     assert!(
@@ -547,7 +549,9 @@ fn permission_access_contract_uses_bookmark_prompt_for_protected_locations_from_
     );
     assert!(stdout.contains("\tworker-action=start\t"), "{stdout}");
     assert!(
-        stdout.contains("\tbookmark-required=true\tbookmark-access=true\t"),
+        stdout.contains(
+            "\tcan-touch-filesystem=true\tbookmark-required=true\tbookmark-access=true\t"
+        ),
         "{stdout}"
     );
     assert!(
@@ -738,7 +742,9 @@ fn lifecycle_contract_carries_initial_path_permission_access_from_binary() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("\tbookmark-required=true\tbookmark-access=true\t"),
+        stdout.contains(
+            "\tcan-touch-filesystem=true\tbookmark-required=true\tbookmark-access=true\t"
+        ),
         "{stdout}"
     );
 

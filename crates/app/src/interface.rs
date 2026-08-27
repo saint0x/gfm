@@ -617,6 +617,7 @@ fn permission_access_contract(
         mode: admission.access.mode.as_str().to_string(),
         access_action: admission.access.action.as_str().to_string(),
         worker_action: admission.worker_action.as_str().to_string(),
+        can_touch_filesystem: admission.can_touch_filesystem,
         bookmark_required: false,
         bookmark_access: false,
         refresh_on_permission_change: false,
