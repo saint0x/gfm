@@ -4,7 +4,7 @@ use crate::{
 };
 use gfm_mac::{
     AccessIntent, SecurityDecisionAction, SecurityScopedAccessReport, SecurityScopedBookmarkAccess,
-    SecurityScopedBookmarkStore,
+    SecurityScopedBookmarkStore, SecurityWorkerAction,
 };
 use gfm_types::{GfmError, Result};
 use std::path::Path;
@@ -26,19 +26,23 @@ pub(crate) fn preflight_access_scope(
     let _ = refresh_permission_state(PermissionRefreshAudience::Workers, worker)?;
     let report = SecurityScopedAccessReport::evaluate(path, intent);
     eprintln!("{}", report.as_tsv());
-    match report.action {
-        SecurityDecisionAction::Allow | SecurityDecisionAction::Degrade => {
+    let admission = report.worker_admission(worker);
+    eprintln!("{}", admission.as_tsv());
+    match admission.worker_action {
+        SecurityWorkerAction::Start => {
             let accesses = retained_security_accesses(&report)?;
             Ok(ScopedAccessGuard {
                 _accesses: accesses,
             })
         }
-        SecurityDecisionAction::Prompt | SecurityDecisionAction::Deny => {
-            Err(GfmError::Permission {
-                path: path.to_path_buf(),
-                message: format!("{worker} access blocked: {}", report.reason),
-            })
-        }
+        SecurityWorkerAction::MetadataOnly => Err(GfmError::Permission {
+            path: path.to_path_buf(),
+            message: format!("{worker} access degraded: {}", report.reason),
+        }),
+        SecurityWorkerAction::Prompt | SecurityWorkerAction::Deny => Err(GfmError::Permission {
+            path: path.to_path_buf(),
+            message: format!("{worker} access blocked: {}", report.reason),
+        }),
     }
 }
 

@@ -551,6 +551,7 @@ fn print_usage() {
   gfm permission-onboarding
   gfm permission-invalidation [permission-state.tsv]
   gfm security-scope <path> [read|write|index|preview|operate]
+  gfm security-worker-admission <worker-label> <path> [read|write|index|preview|operate]
   gfm security-bookmark-create <path> [read|write|index|preview|operate]
   gfm mac-bridges
   gfm native-icon <path>
@@ -566,6 +567,7 @@ fn print_usage() {
   gfm fileprovider-operation <download|evict> <path>
   gfm fileprovider-invalidation <previous-state> <path>
   gfm fileprovider-metadata-invalidation <previous-state> <path>
+  gfm preview-cache-fileprovider-invalidation <cache-root> <previous-state> <path> [icon|thumbnail|quick-look|text]
   gfm fileprovider-invalidation-scan <state.tsv> <paths...>
   gfm fileprovider-invalidation-event <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
   gfm volume-discovery [paths...]

@@ -134,6 +134,29 @@ impl SecurityDecisionAction {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityWorkerAction {
+    Start,
+    MetadataOnly,
+    Prompt,
+    Deny,
+}
+
+impl SecurityWorkerAction {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::MetadataOnly => "metadata-only",
+            Self::Prompt => "prompt",
+            Self::Deny => "deny",
+        }
+    }
+
+    pub const fn can_touch_filesystem(self) -> bool {
+        matches!(self, Self::Start)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecurityScopedAccessReport {
     pub path: PathBuf,
@@ -146,6 +169,17 @@ pub struct SecurityScopedAccessReport {
     pub can_read: bool,
     pub can_write: bool,
     pub least_privilege: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecurityWorkerAdmissionReport {
+    pub worker: String,
+    pub access: SecurityScopedAccessReport,
+    pub worker_action: SecurityWorkerAction,
+    pub can_touch_filesystem: bool,
+    pub needs_bookmark_access: bool,
+    pub refresh_on_permission_change: bool,
     pub reason: String,
 }
 
@@ -188,6 +222,83 @@ impl SecurityScopedAccessReport {
             self.can_read,
             self.can_write,
             self.least_privilege,
+            escape_field(&self.reason),
+        )
+    }
+
+    pub fn worker_admission(&self, worker: impl Into<String>) -> SecurityWorkerAdmissionReport {
+        SecurityWorkerAdmissionReport::from_access_report(worker, self.clone())
+    }
+}
+
+impl SecurityWorkerAdmissionReport {
+    pub fn evaluate(
+        path: impl AsRef<Path>,
+        intent: AccessIntent,
+        worker: impl Into<String>,
+    ) -> Self {
+        SecurityScopedAccessReport::evaluate(path, intent).worker_admission(worker)
+    }
+
+    pub fn from_access_report(
+        worker: impl Into<String>,
+        access: SecurityScopedAccessReport,
+    ) -> Self {
+        let worker = worker.into();
+        let worker_action = match access.action {
+            SecurityDecisionAction::Allow => SecurityWorkerAction::Start,
+            SecurityDecisionAction::Degrade => SecurityWorkerAction::MetadataOnly,
+            SecurityDecisionAction::Prompt => SecurityWorkerAction::Prompt,
+            SecurityDecisionAction::Deny => SecurityWorkerAction::Deny,
+        };
+        let can_touch_filesystem = worker_action.can_touch_filesystem();
+        let needs_bookmark_access = can_touch_filesystem && access.bookmark_required;
+        let refresh_on_permission_change = matches!(
+            worker_action,
+            SecurityWorkerAction::MetadataOnly | SecurityWorkerAction::Prompt
+        ) || matches!(
+            access.probe,
+            AccessProbeState::Denied | AccessProbeState::Unknown
+        );
+        let reason = match worker_action {
+            SecurityWorkerAction::Start if needs_bookmark_access => {
+                format!("{worker} may start after retained security-scoped bookmark access")
+            }
+            SecurityWorkerAction::Start => format!("{worker} may start with filesystem access"),
+            SecurityWorkerAction::MetadataOnly => {
+                format!("{worker} must avoid file IO and publish metadata-only state")
+            }
+            SecurityWorkerAction::Prompt => {
+                format!("{worker} must wait for permission prompt orchestration")
+            }
+            SecurityWorkerAction::Deny => format!("{worker} access is denied"),
+        };
+
+        Self {
+            worker,
+            access,
+            worker_action,
+            can_touch_filesystem,
+            needs_bookmark_access,
+            refresh_on_permission_change,
+            reason,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "security-worker-admission\tworker={}\tpath={}\tintent={}\tscope={}\tprobe={}\tmode={}\taccess-action={}\tworker-action={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}\treason={}",
+            escape_field(&self.worker),
+            self.access.path.display(),
+            self.access.intent.as_str(),
+            self.access.scope.as_str(),
+            self.access.probe.as_str(),
+            self.access.mode.as_str(),
+            self.access.action.as_str(),
+            self.worker_action.as_str(),
+            self.can_touch_filesystem,
+            self.needs_bookmark_access,
+            self.refresh_on_permission_change,
             escape_field(&self.reason),
         )
     }
@@ -511,6 +622,72 @@ mod tests {
         assert_eq!(report.mode, SecurityAccessMode::FullDiskAccess);
         assert!(!report.least_privilege);
         assert!(report.as_tsv().contains("scope=full-disk-access"));
+    }
+
+    #[test]
+    fn worker_admission_allows_only_start_to_touch_filesystem() {
+        let root = temp_root("security-worker-allow");
+        let path = root.join("index.md");
+        fs::write(&path, "index").unwrap();
+
+        let admission =
+            SecurityWorkerAdmissionReport::evaluate(&path, AccessIntent::Index, "index worker");
+
+        assert_eq!(admission.worker_action, SecurityWorkerAction::Start);
+        assert!(admission.can_touch_filesystem);
+        assert!(!admission.refresh_on_permission_change);
+        assert!(admission.as_tsv().contains("worker-action=start"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_degrades_without_filesystem_touch() {
+        let report = SecurityScopedAccessReport {
+            path: PathBuf::from("/Users/me/Documents/Private.md"),
+            intent: AccessIntent::Preview,
+            scope: ProtectedScope::Documents,
+            probe: AccessProbeState::Denied,
+            mode: SecurityAccessMode::DegradedMetadataOnly,
+            action: SecurityDecisionAction::Degrade,
+            bookmark_required: true,
+            can_read: false,
+            can_write: false,
+            least_privilege: true,
+            reason: "access denied; continue with metadata-only degraded mode".to_string(),
+        };
+
+        let admission = report.worker_admission("preview worker");
+
+        assert_eq!(admission.worker_action, SecurityWorkerAction::MetadataOnly);
+        assert!(!admission.can_touch_filesystem);
+        assert!(!admission.needs_bookmark_access);
+        assert!(admission.refresh_on_permission_change);
+        assert!(admission.as_tsv().contains("worker-action=metadata-only"));
+    }
+
+    #[test]
+    fn worker_admission_prompts_without_starting_full_disk_worker() {
+        let report = SecurityScopedAccessReport {
+            path: PathBuf::from("/Users/me/Library/Mail"),
+            intent: AccessIntent::Index,
+            scope: ProtectedScope::FullDiskAccess,
+            probe: AccessProbeState::Denied,
+            mode: SecurityAccessMode::FullDiskAccess,
+            action: SecurityDecisionAction::Prompt,
+            bookmark_required: false,
+            can_read: false,
+            can_write: false,
+            least_privilege: false,
+            reason: "protected root requires Full Disk Access guidance".to_string(),
+        };
+
+        let admission = report.worker_admission("index worker");
+
+        assert_eq!(admission.worker_action, SecurityWorkerAction::Prompt);
+        assert!(!admission.can_touch_filesystem);
+        assert!(admission.refresh_on_permission_change);
+        assert!(admission.as_tsv().contains("scope=full-disk-access"));
     }
 
     fn temp_root(name: &str) -> PathBuf {

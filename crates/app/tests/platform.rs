@@ -158,6 +158,53 @@ fn reports_security_scoped_access_from_binary() {
 }
 
 #[test]
+fn reports_security_worker_admission_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-security-worker-{}", std::process::id()));
+    let path = root.join("plain.md");
+    let missing = root.join("missing.md");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(&path, "plain").unwrap();
+
+    let allowed = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("security-worker-admission")
+        .arg("index worker")
+        .arg(&path)
+        .arg("index")
+        .output()
+        .unwrap();
+    assert!(
+        allowed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+    let allowed_stdout = String::from_utf8(allowed.stdout).unwrap();
+    assert!(allowed_stdout.starts_with("security-worker-admission\t"));
+    assert!(allowed_stdout.contains("\tintent=index\tscope=none\tprobe=granted\t"));
+    assert!(allowed_stdout.contains("\tworker-action=start\t"));
+    assert!(allowed_stdout.contains("\tcan-touch-filesystem=true\t"));
+
+    let denied = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("security-worker-admission")
+        .arg("preview worker")
+        .arg(&missing)
+        .arg("preview")
+        .output()
+        .unwrap();
+    assert!(
+        denied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&denied.stderr)
+    );
+    let denied_stdout = String::from_utf8(denied.stdout).unwrap();
+    assert!(denied_stdout.contains("\tintent=preview\tscope=none\tprobe=missing\t"));
+    assert!(denied_stdout.contains("\tworker-action=deny\t"));
+    assert!(denied_stdout.contains("\tcan-touch-filesystem=false\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn quicklook_refuses_missing_path_before_preview_from_binary() {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -891,6 +938,40 @@ fn reports_fileprovider_metadata_invalidation_from_binary() {
     assert!(stdout.contains("\treindex-metadata=true\tschedule-metadata-update=true\t"));
     assert!(stdout.contains("\tinvalidate-query-cache=true\t"));
     assert!(stdout.ends_with("reason=provider-metadata-state-changed\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn reports_preview_cache_fileprovider_invalidation_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-preview-cache-fileprovider-invalidation-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let cache = root.join("cache");
+    let evicted = root.join("Remote.icloud-placeholder");
+    std::fs::write(&evicted, "placeholder").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("preview-cache-fileprovider-invalidation")
+        .arg(&cache)
+        .arg("downloaded")
+        .arg(&evicted)
+        .arg("thumbnail")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("preview-cache-invalidation\t"));
+    assert!(stdout.contains("\tkind=thumbnail\treason=content-or-icloud\t"));
+    assert!(stdout.contains("\tinvalidate-memory=true\tinvalidate-disk=true\t"));
+    assert!(stdout.contains("\tremoved-memory=false\tremoved-disk=false\n"));
 
     let _ = std::fs::remove_dir_all(root);
 }

@@ -42,7 +42,8 @@ pub use security::{
     SecurityScopedAccessReport, SecurityScopedBookmark, SecurityScopedBookmarkAccess,
     SecurityScopedBookmarkAccessLookup, SecurityScopedBookmarkLookup, SecurityScopedBookmarkRecord,
     SecurityScopedBookmarkReport, SecurityScopedBookmarkResolution, SecurityScopedBookmarkStatus,
-    SecurityScopedBookmarkStore, SecurityScopedBookmarkStoreReport,
+    SecurityScopedBookmarkStore, SecurityScopedBookmarkStoreReport, SecurityWorkerAction,
+    SecurityWorkerAdmissionReport,
 };
 pub use spotlight::{
     parse_spotlight_fixture, SpotlightField, SpotlightFieldDecision, SpotlightFieldReconciliation,

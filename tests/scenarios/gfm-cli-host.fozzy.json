@@ -2251,6 +2251,21 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "preview-cache-fileprovider-invalidation",
+        "tmp/gfm-fozzy-preview-cache",
+        "downloaded",
+        "tmp/gfm-fozzy-fileprovider-scan.icloud-placeholder",
+        "thumbnail"
+      ],
+      "exit_code": 0,
+      "stdout": "preview-cache-invalidation\ttmp/gfm-fozzy-fileprovider-scan.icloud-placeholder\tkind=thumbnail\treason=content-or-icloud\tinvalidate-memory=true\tinvalidate-disk=true\tremoved-memory=false\tremoved-disk=false\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-fileprovider-event.icloud-placeholder",
       "data": "placeholder\n"
@@ -2652,6 +2667,56 @@
         "security-scope",
         "tmp/gfm-fozzy-security.md",
         "read"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "security-worker-admission",
+        "index worker",
+        "tmp/gfm-fozzy-security.md",
+        "index"
+      ],
+      "exit_code": 0,
+      "stdout": "security-worker-admission\tworker=index worker\tpath=tmp/gfm-fozzy-security.md\tintent=index\tscope=none\tprobe=granted\tmode=plain-filesystem\taccess-action=allow\tworker-action=start\tcan-touch-filesystem=true\tbookmark-access=false\trefresh-on-permission-change=false\treason=index worker may start with filesystem access\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "security-worker-admission",
+        "index worker",
+        "tmp/gfm-fozzy-security.md",
+        "index"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "security-worker-admission",
+        "preview worker",
+        "tmp/gfm-fozzy-security-missing.md",
+        "preview"
+      ],
+      "exit_code": 0,
+      "stdout": "security-worker-admission\tworker=preview worker\tpath=tmp/gfm-fozzy-security-missing.md\tintent=preview\tscope=none\tprobe=missing\tmode=denied\taccess-action=deny\tworker-action=deny\tcan-touch-filesystem=false\tbookmark-access=false\trefresh-on-permission-change=false\treason=preview worker access is denied\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "security-worker-admission",
+        "preview worker",
+        "tmp/gfm-fozzy-security-missing.md",
+        "preview"
       ],
       "expect_exit": 0
     },

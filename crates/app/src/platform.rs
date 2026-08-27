@@ -19,13 +19,15 @@ use gfm_mac::{
     FileProviderStateInvalidationReport, FileProviderStateReport, FileProviderStateSnapshot,
     MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor,
     NativeIconInvalidationReport, SecurityScopedAccessReport, SecurityScopedBookmarkStatus,
-    SecurityScopedBookmarkStore, SpotlightMetadataReader, SpotlightReconciliationReport,
-    VolumeDescriptor, VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind,
-    VolumeEventStream, VolumeOperation, VolumeOperationReport, VolumeTopologyDiff,
+    SecurityScopedBookmarkStore, SecurityWorkerAdmissionReport, SpotlightMetadataReader,
+    SpotlightReconciliationReport, VolumeDescriptor, VolumeDiscoveryReport,
+    VolumeEventInvalidationReport, VolumeEventKind, VolumeEventStream, VolumeOperation,
+    VolumeOperationReport, VolumeTopologyDiff,
 };
 use gfm_preview::{
-    decide_invalidation, decide_preview_security, security_input_for_path, IconPreviewContract,
-    IconPreviewInput, PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
+    decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
+    security_input_for_path, IconPreviewContract, IconPreviewInput, PreviewCache,
+    PreviewCacheConfig, PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
     PreviewSchedulingPolicy, PreviewSecurityPolicy, PreviewTask, QuickLookSessionContract,
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
@@ -44,6 +46,22 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             println!(
                 "{}",
                 SecurityScopedAccessReport::evaluate(path, intent).as_tsv()
+            );
+        }
+        "security-worker-admission" => {
+            let worker = required_string(
+                args.next(),
+                "security-worker-admission requires a worker label",
+            )?;
+            let path = required_path(args.next(), "security-worker-admission requires a path")?;
+            let intent = args
+                .next()
+                .map(|value| AccessIntent::parse(&value))
+                .transpose()?
+                .unwrap_or(AccessIntent::Read);
+            println!(
+                "{}",
+                SecurityWorkerAdmissionReport::evaluate(path, intent, worker).as_tsv()
             );
         }
         "security-bookmark-create" => {
@@ -180,6 +198,31 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     report.reason,
                 )
                 .as_tsv()
+            );
+        }
+        "preview-cache-fileprovider-invalidation" => {
+            let cache_root = required_path(
+                args.next(),
+                "preview-cache-fileprovider-invalidation requires a cache root",
+            )?;
+            let previous = CloudStorageState::parse(&required_string(
+                args.next(),
+                "preview-cache-fileprovider-invalidation requires a previous state",
+            )?)?;
+            let path = required_path(
+                args.next(),
+                "preview-cache-fileprovider-invalidation requires a path",
+            )?;
+            let kind = parse_preview_kind(args.next())?;
+            let record = record_for_path(&path, None, false)?;
+            let report = FileProviderInvalidationReport::evaluate(path.clone(), previous)?;
+            let key = PreviewRequestKey::new(record.id, path, kind);
+            let mut cache = PreviewCache::new(PreviewCacheConfig::new(cache_root))?;
+            println!(
+                "{}",
+                cache
+                    .apply_invalidation(&key, preview_invalidation_for_fileprovider(&report))?
+                    .as_tsv()
             );
         }
         "fileprovider-invalidation-scan" => {

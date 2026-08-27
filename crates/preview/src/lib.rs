@@ -189,8 +189,54 @@ impl PreviewCache {
         Ok(())
     }
 
+    pub fn apply_invalidation(
+        &mut self,
+        key: &PreviewRequestKey,
+        event: PreviewInvalidationEvent,
+    ) -> Result<PreviewCacheInvalidationReport> {
+        let decision = decide_invalidation(event);
+        let removed_memory = if decision.invalidate_memory {
+            self.remove_memory(key)
+        } else {
+            false
+        };
+        let removed_disk = if decision.invalidate_disk {
+            self.remove_disk(key)?
+        } else {
+            false
+        };
+
+        Ok(PreviewCacheInvalidationReport {
+            key: key.clone(),
+            decision,
+            removed_memory,
+            removed_disk,
+        })
+    }
+
     pub fn memory_bytes(&self) -> usize {
         self.memory_bytes
+    }
+
+    fn remove_memory(&mut self, key: &PreviewRequestKey) -> bool {
+        let Some(entry) = self.memory.remove(key) else {
+            return false;
+        };
+        self.memory_bytes = self.memory_bytes.saturating_sub(entry.byte_len());
+        self.order.retain(|candidate| candidate != key);
+        true
+    }
+
+    fn remove_disk(&self, key: &PreviewRequestKey) -> Result<bool> {
+        if !self.config.disk_enabled {
+            return Ok(false);
+        }
+        let path = self.disk_path(key);
+        if !path.exists() {
+            return Ok(false);
+        }
+        fs::remove_file(&path).map_err(|err| GfmError::io(&path, err))?;
+        Ok(true)
     }
 
     fn insert_memory(&mut self, entry: PreviewEntry) {
@@ -478,6 +524,29 @@ pub struct PreviewInvalidationDecision {
     pub reason: &'static str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewCacheInvalidationReport {
+    pub key: PreviewRequestKey,
+    pub decision: PreviewInvalidationDecision,
+    pub removed_memory: bool,
+    pub removed_disk: bool,
+}
+
+impl PreviewCacheInvalidationReport {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "preview-cache-invalidation\t{}\tkind={}\treason={}\tinvalidate-memory={}\tinvalidate-disk={}\tremoved-memory={}\tremoved-disk={}",
+            self.key.path.display(),
+            self.key.kind.as_str(),
+            self.decision.reason,
+            self.decision.invalidate_memory,
+            self.decision.invalidate_disk,
+            self.removed_memory,
+            self.removed_disk
+        )
+    }
+}
+
 pub fn decide_invalidation(event: PreviewInvalidationEvent) -> PreviewInvalidationDecision {
     if event.removed {
         return PreviewInvalidationDecision {
@@ -664,6 +733,72 @@ mod tests {
                 reason: "content-or-icloud"
             }
         );
+    }
+
+    #[test]
+    fn cache_metadata_invalidation_removes_memory_without_dropping_disk() {
+        let root = temp_root("metadata-invalidation");
+        let key = key("metadata.png", PreviewKind::Thumbnail);
+        let mut cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root,
+            disk_enabled: true,
+        })
+        .unwrap();
+        cache
+            .insert(PreviewEntry::new(key.clone(), b"metadata".to_vec()))
+            .unwrap();
+
+        let report = cache
+            .apply_invalidation(
+                &key,
+                PreviewInvalidationEvent {
+                    metadata_changed: true,
+                    ..PreviewInvalidationEvent::default()
+                },
+            )
+            .unwrap();
+
+        assert!(report.removed_memory);
+        assert!(!report.removed_disk);
+        assert_eq!(report.decision.reason, "metadata-or-tags");
+        assert_eq!(cache.memory_bytes(), 0);
+        assert!(matches!(
+            cache.get(&key).unwrap(),
+            Some(CacheHit::Disk(entry)) if entry.bytes == b"metadata"
+        ));
+    }
+
+    #[test]
+    fn cache_icloud_invalidation_removes_memory_and_disk() {
+        let root = temp_root("icloud-invalidation");
+        let key = key("remote.icloud", PreviewKind::QuickLook);
+        let mut cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root,
+            disk_enabled: true,
+        })
+        .unwrap();
+        cache
+            .insert(PreviewEntry::new(key.clone(), b"cloud".to_vec()))
+            .unwrap();
+
+        let report = cache
+            .apply_invalidation(
+                &key,
+                PreviewInvalidationEvent {
+                    icloud_state_changed: true,
+                    ..PreviewInvalidationEvent::default()
+                },
+            )
+            .unwrap();
+
+        assert!(report.removed_memory);
+        assert!(report.removed_disk);
+        assert_eq!(report.decision.reason, "content-or-icloud");
+        assert_eq!(cache.get(&key).unwrap(), None);
     }
 
     #[test]
