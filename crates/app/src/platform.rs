@@ -15,7 +15,7 @@ use gfm_index::{
 };
 use gfm_jobs::{
     Cancellation, JobClass, JobIoPressure, JobPayloadKind, JobProgressState, Priority, Scheduler,
-    SchedulingAction, SchedulingPressure,
+    SchedulingAction, SchedulingPressure, Task, TaskStatus, VolumeConcurrencyPolicy, WorkerPool,
 };
 use gfm_mac::{
     current_host_profile, parse_spotlight_fixture, AccessIntent, CloudStorageState,
@@ -194,9 +194,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "fileprovider-progress-job" => {
             let path = required_path(args.next(), "fileprovider-progress-job requires a path")?;
             let _runtime_access = preflight_runtime_job_state("fileprovider progress job")?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Read, "fileprovider progress job")?;
-            println!("{}", publish_fileprovider_progress_job(path)?.as_tsv());
+            let report = run_fileprovider_progress_job(path)?;
+            println!("{}", report.as_tsv());
         }
         "fileprovider-operation" => {
             let operation = FileProviderOperation::parse(&required_string(
@@ -204,12 +203,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "fileprovider-operation requires an operation",
             )?)?;
             let path = required_path(args.next(), "fileprovider-operation requires a path")?;
-            let _access =
-                preflight_access_scope(&path, AccessIntent::Operate, "fileprovider operation")?;
-            println!(
-                "{}",
-                FileProviderOperationReport::execute(path, operation)?.as_tsv()
-            );
+            let report = run_fileprovider_operation(path, operation)?;
+            println!("{}", report.as_tsv());
         }
         "fileprovider-invalidation" => {
             let previous = CloudStorageState::parse(&required_string(
@@ -1489,6 +1484,80 @@ where
         cancellation.check()?;
         read(path)
     })
+}
+
+fn run_fileprovider_progress_job(path: PathBuf) -> Result<FileProviderProgressReport> {
+    const WORKER: &str = "fileprovider progress job";
+    preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
+    let volume = detect_volume_id(&path).ok();
+    run_fileprovider_worker_without_runtime_progress(volume, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
+        cancellation.check()?;
+        publish_fileprovider_progress_job(path)
+    })
+}
+
+fn run_fileprovider_operation(
+    path: PathBuf,
+    operation: FileProviderOperation,
+) -> Result<FileProviderOperationReport> {
+    const WORKER: &str = "fileprovider operation";
+    preflight_volume_access_scope(&path, AccessIntent::Operate, WORKER)?;
+    let volume = detect_volume_id(&path).ok();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = preflight_access_scope(&path, AccessIntent::Operate, WORKER)?;
+        cancellation.check()?;
+        FileProviderOperationReport::execute(path, operation)
+    })
+}
+
+fn run_fileprovider_worker_without_runtime_progress<T>(
+    volume: Option<VolumeId>,
+    worker: &'static str,
+    work: impl FnOnce(Cancellation) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    let result_slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let result_slot_task = std::sync::Arc::clone(&result_slot);
+    let mut scheduler = Scheduler::new();
+    let job = if let Some(volume) = volume {
+        scheduler.schedule_on_volume_in_class(Priority::Visible, JobClass::Visible, worker, volume)
+    } else {
+        scheduler.schedule_in_class(Priority::Visible, JobClass::Visible, worker)
+    };
+    let task = Task::new(job.clone(), move |cancellation| {
+        let result = work(cancellation)?;
+        *result_slot_task
+            .lock()
+            .expect("fileprovider worker result lock poisoned") = Some(result);
+        Ok(())
+    });
+    let report = WorkerPool::new(1).run_isolated(vec![task], VolumeConcurrencyPolicy::new(1));
+    let outcome = report
+        .outcomes
+        .iter()
+        .find(|outcome| outcome.id == job.id)
+        .ok_or_else(|| GfmError::Format(format!("{worker} job did not run")))?;
+    match &outcome.status {
+        TaskStatus::Completed => {}
+        TaskStatus::Started => {
+            return Err(GfmError::Format(format!("{worker} job is still running")))
+        }
+        TaskStatus::Cancelled => return Err(GfmError::Cancelled),
+        TaskStatus::Failed(message) => {
+            return Err(GfmError::Format(format!("{worker} job failed: {message}")))
+        }
+    }
+    let result = result_slot
+        .lock()
+        .expect("fileprovider worker result lock poisoned")
+        .take()
+        .ok_or_else(|| GfmError::Format(format!("{worker} job completed without a result")))?;
+    Ok(result)
 }
 
 fn run_fileprovider_observer_probe(

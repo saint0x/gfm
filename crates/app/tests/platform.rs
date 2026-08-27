@@ -1149,6 +1149,8 @@ fn publishes_fileprovider_progress_to_runtime_job_store_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "fileprovider progress job", &downloading);
     assert!(stdout.starts_with("fileprovider-progress\t"));
     assert!(stdout.contains("\tstate=downloading\t"));
 
@@ -1336,6 +1338,8 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
         String::from_utf8_lossy(&download_output.stderr)
     );
     let download_stdout = String::from_utf8(download_output.stdout).unwrap();
+    let download_stderr = String::from_utf8_lossy(&download_output.stderr);
+    assert_worker_admitted(&download_stderr, "fileprovider operation", &evicted);
     assert!(download_stdout.starts_with("fileprovider-operation\t"));
     assert!(download_stdout.contains("\toperation=download\tdisposition=refused\t"));
     assert!(download_stdout.contains("\tbefore-state=evicted\tafter-state=-\t"));
@@ -1353,6 +1357,8 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
         String::from_utf8_lossy(&evict_output.stderr)
     );
     let evict_stdout = String::from_utf8(evict_output.stdout).unwrap();
+    let evict_stderr = String::from_utf8_lossy(&evict_output.stderr);
+    assert_worker_admitted(&evict_stderr, "fileprovider operation", &downloaded);
     assert!(evict_stdout.contains("\toperation=evict\tdisposition=refused\t"));
     assert!(evict_stdout.contains("\tbefore-state=unknown\tafter-state=-\t"));
     assert!(evict_stdout.ends_with("reason=operation-disabled-for-current-state\n"));
@@ -1371,6 +1377,8 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
         String::from_utf8_lossy(&conflict_output.stderr)
     );
     let conflict_stdout = String::from_utf8(conflict_output.stdout).unwrap();
+    let conflict_stderr = String::from_utf8_lossy(&conflict_output.stderr);
+    assert_worker_admitted(&conflict_stderr, "fileprovider operation", &conflict);
     assert!(conflict_stdout.contains("\toperation=evict\tdisposition=refused\t"));
     assert!(conflict_stdout.contains("\tbefore-state=conflict\tafter-state=-\t"));
     assert!(conflict_stdout.ends_with("reason=provider-conflict-requires-resolution\n"));
@@ -1721,7 +1729,7 @@ fn fileprovider_state_routes_refuse_unreachable_volume_before_native_read_from_b
                 "download".to_string(),
                 item.display().to_string(),
             ],
-            None,
+            Some("fileprovider operation"),
         ),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
