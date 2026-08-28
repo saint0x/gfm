@@ -1145,6 +1145,9 @@ fn paths_for_fileprovider_event(
         FileEventKind::Rename { from, to } => {
             let mut paths = BTreeSet::new();
             paths.extend(observed_fileprovider_paths_for_root(previous, from));
+            if to.exists() && snapshot_contains_path_or_descendant(previous, from) {
+                paths.insert(to.clone());
+            }
             paths.extend(observed_fileprovider_paths_for_root(previous, to));
             paths.extend(remapped_tracked_fileprovider_paths(previous, from, to));
             paths.into_iter().collect()
@@ -1176,6 +1179,18 @@ fn observed_fileprovider_paths_for_root(
         paths.extend(snapshot.tracked_descendants_of(root));
     }
     paths.into_iter().collect()
+}
+
+fn snapshot_contains_path_or_descendant(
+    previous: Option<&FileProviderStateSnapshot>,
+    path: &Path,
+) -> bool {
+    previous.is_some_and(|snapshot| {
+        snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.path == path || entry.path.starts_with(path))
+    })
 }
 
 fn remapped_tracked_fileprovider_paths(
@@ -1218,7 +1233,9 @@ fn is_observable_fileprovider_path(
         return false;
     }
     let hints = CloudHints::read(path);
-    strong_provider_path_hint(path) && !native_proves_local_only(&hints)
+    strong_provider_path_hint(path)
+        && !native_proves_local_only(&hints)
+        && !weak_path_hint_without_provider_evidence(&hints)
         || observable_fileprovider_path_from_hints(path, &hints)
 }
 

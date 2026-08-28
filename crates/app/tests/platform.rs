@@ -2256,6 +2256,42 @@ fn fileprovider_invalidation_scan_skips_name_only_local_paths_from_binary() {
 }
 
 #[test]
+fn fileprovider_invalidation_scan_skips_native_local_icloud_extension_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-invalidation-scan-local-extension-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let local = root.join("Remote.icloud");
+    std::fs::write(&local, "ordinary local file with provider-shaped extension").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&local)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("fileprovider-state-invalidation\tinitialized=true\tchanged=0\t"));
+    assert!(stdout.contains("\ticon=false\tpreview-memory=false\tpreview-disk=false\t"));
+    assert!(stdout.ends_with("sidebar=false\treindex-metadata=false\n"));
+    assert_eq!(
+        std::fs::read_to_string(&state).unwrap(),
+        "gfm-fileprovider-state-v1\n"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_invalidation_scan_removes_tracked_entry_without_provider_evidence_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-invalidation-scan-untracked-{}",
@@ -2640,6 +2676,58 @@ fn fileprovider_invalidation_event_ignores_existing_local_file_from_binary() {
     std::fs::write(&tracked, "placeholder").unwrap();
     mark_evicted_fixture(&tracked);
     std::fs::write(&local, "ordinary local file").unwrap();
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v1\nevicted\t{}\n",
+            tracked.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-event")
+        .arg(&state)
+        .arg("modify")
+        .arg(&local)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=0\nfileprovider-state-invalidation\tinitialized=false\tchanged=0\ticon=false\tpreview-memory=false\tpreview-disk=false\tsidebar=false\treindex-metadata=false\n"
+    );
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert_eq!(
+        state_text,
+        format!(
+            "gfm-fileprovider-state-v1\nevicted\t{}\n",
+            tracked.display()
+        )
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn fileprovider_invalidation_event_ignores_native_local_icloud_extension_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-invalidation-local-extension-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let tracked = root.join("Remote.icloud-placeholder");
+    let local = root.join("Local.icloud");
+    std::fs::write(&tracked, "placeholder").unwrap();
+    mark_evicted_fixture(&tracked);
+    std::fs::write(&local, "ordinary local file with provider-shaped extension").unwrap();
     std::fs::write(
         &state,
         format!(
