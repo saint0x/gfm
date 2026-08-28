@@ -1520,6 +1520,7 @@ fn disposition_for_native_operation(
     match status {
         NativeVolumeOperationStatus::Succeeded => VolumeOperationDisposition::Completed,
         NativeVolumeOperationStatus::Submitted => VolumeOperationDisposition::Submitted,
+        NativeVolumeOperationStatus::Error => VolumeOperationDisposition::Failed,
         NativeVolumeOperationStatus::Busy
         | NativeVolumeOperationStatus::ExclusiveAccess
         | NativeVolumeOperationStatus::NoResources
@@ -3407,6 +3408,10 @@ mod tests {
         assert_eq!(
             disposition_for_native_operation(NativeVolumeOperationStatus::Busy),
             VolumeOperationDisposition::Busy
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::Error),
+            VolumeOperationDisposition::Failed
         );
         assert_eq!(
             disposition_for_native_operation(NativeVolumeOperationStatus::ExclusiveAccess),

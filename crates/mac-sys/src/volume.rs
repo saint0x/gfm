@@ -40,6 +40,7 @@ type DADiskMountCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef
 type DADiskUnmountCallback = Option<unsafe extern "C" fn(DADiskRef, DADissenterRef, *mut c_void)>;
 
 const DA_RETURN_BUSY: u32 = 0xF8DA0002;
+const DA_RETURN_ERROR: u32 = 0xF8DA0001;
 const DA_RETURN_BAD_ARGUMENT: u32 = 0xF8DA0003;
 const DA_RETURN_EXCLUSIVE_ACCESS: u32 = 0xF8DA0004;
 const DA_RETURN_NO_RESOURCES: u32 = 0xF8DA0005;
@@ -311,6 +312,7 @@ impl NativeVolumeOperation {
 pub enum NativeVolumeOperationStatus {
     Succeeded,
     Submitted,
+    Error,
     Busy,
     BadArgument,
     ExclusiveAccess,
@@ -332,6 +334,7 @@ impl NativeVolumeOperationStatus {
         match self {
             Self::Succeeded => "succeeded",
             Self::Submitted => "submitted",
+            Self::Error => "error",
             Self::Busy => "busy",
             Self::BadArgument => "bad-argument",
             Self::ExclusiveAccess => "exclusive-access",
@@ -828,6 +831,7 @@ unsafe extern "C" fn volume_operation_callback(
 
 fn native_operation_status_for_dissenter(code: u32) -> NativeVolumeOperationStatus {
     match code {
+        DA_RETURN_ERROR => NativeVolumeOperationStatus::Error,
         DA_RETURN_BUSY => NativeVolumeOperationStatus::Busy,
         DA_RETURN_BAD_ARGUMENT => NativeVolumeOperationStatus::BadArgument,
         DA_RETURN_EXCLUSIVE_ACCESS => NativeVolumeOperationStatus::ExclusiveAccess,
@@ -1473,8 +1477,8 @@ mod tests {
             NativeVolumeOperationStatus::Unsupported
         );
         assert_eq!(
-            native_operation_status_for_dissenter(0xF8DA0001),
-            NativeVolumeOperationStatus::Failed
+            native_operation_status_for_dissenter(DA_RETURN_ERROR),
+            NativeVolumeOperationStatus::Error
         );
     }
 
