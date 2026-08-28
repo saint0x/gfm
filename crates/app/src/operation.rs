@@ -642,7 +642,10 @@ fn operation_access_gate(
                 .unwrap_or_else(|| "unknown".to_string()),
             requirement.role.as_str()
         );
-        gate = gate.with_decision(requirement.path, OperationAccessDecision::deny(reason));
+        gate = gate.with_decision(
+            requirement.path,
+            OperationAccessDecision::deny(reason).with_refresh_on_permission_change(true),
+        );
     }
     for requirement in operation.access_requirements() {
         let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
@@ -1398,6 +1401,9 @@ mod tests {
         assert!(err.to_string().contains("unmounted volume network"));
         assert!(err.to_string().contains("mount=stale"));
         assert!(err.to_string().contains("role=source"));
+        assert!(err
+            .to_string()
+            .contains("refresh-on-permission-change=true"));
         assert!(!destination.exists());
         let journal_entries = read_journal(&journal).unwrap();
         assert_eq!(journal_entries.len(), 2);
@@ -1441,6 +1447,9 @@ mod tests {
         assert!(err.to_string().contains("unmounted volume external"));
         assert!(err.to_string().contains("mount=unmounted"));
         assert!(err.to_string().contains("role=destination-parent"));
+        assert!(err
+            .to_string()
+            .contains("refresh-on-permission-change=true"));
         assert!(!destination.exists());
         let journal_entries = read_journal(&journal).unwrap();
         assert_eq!(journal_entries.len(), 2);
