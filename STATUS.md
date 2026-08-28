@@ -69,24 +69,23 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Jobs And Runtime
 
-43. Complete automatic durable job payload catalog integration across remaining specialized extraction, thumbnail, preview, and repair producers.
-44. Complete automatic dependency-aware fair scheduling integration across foreground, visible, background, maintenance, and repair queues.
-45. Complete automatic persistent job progress restoration and GPUI progress-surface integration across remaining specialized producers.
-46. Bind thermal, battery, IO pressure, and user-activity adaptive scheduling into remaining foreground, preview, and thumbnail producers.
-47. Complete automatic structured cancellation propagation across remaining indexing, extraction, thumbnail, preview, and repair producers.
-48. Complete retry/backoff integration across remaining operation, indexing, extraction, thumbnail, preview, and repair producers.
+43. Complete automatic dependency-aware fair scheduling integration across foreground, visible, background, maintenance, and repair queues.
+44. Complete automatic persistent job progress restoration and GPUI progress-surface integration across remaining specialized producers.
+45. Bind thermal, battery, IO pressure, and user-activity adaptive scheduling into remaining foreground, preview, and thumbnail producers.
+46. Complete automatic structured cancellation propagation across remaining indexing, extraction, thumbnail, preview, and repair producers.
+47. Complete retry/backoff integration across remaining operation, indexing, extraction, thumbnail, preview, and repair producers.
 
 ## Preview And Thumbnails
 
-49. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
+48. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
 
 ## Packaging
 
-50. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
+49. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
 
 ## Documentation
 
-51. Expand `PLAN.md` when architectural decisions change materially.
-52. Keep `README.md` written as the completed product contract.
-53. Keep this file limited to unfinished work only.
-54. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+50. Expand `PLAN.md` when architectural decisions change materially.
+51. Keep `README.md` written as the completed product contract.
+52. Keep this file limited to unfinished work only.
+53. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
