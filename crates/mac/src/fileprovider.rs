@@ -1211,16 +1211,15 @@ fn is_observable_fileprovider_path(
     previous: Option<&FileProviderStateSnapshot>,
     path: &Path,
 ) -> bool {
-    if previous.is_some_and(|snapshot| snapshot.contains_path(path))
-        || strong_provider_path_hint(path)
-    {
+    if previous.is_some_and(|snapshot| snapshot.contains_path(path)) {
         return true;
     }
     if !path.exists() {
         return false;
     }
     let hints = CloudHints::read(path);
-    observable_fileprovider_path_from_hints(path, &hints)
+    strong_provider_path_hint(path) && !native_proves_local_only(&hints)
+        || observable_fileprovider_path_from_hints(path, &hints)
 }
 
 fn observable_fileprovider_path_from_hints(path: &Path, hints: &CloudHints) -> bool {
@@ -1574,6 +1573,9 @@ fn should_read_provider_xattrs(
     native_identity: &NativeFileProviderIdentity,
     has_path_hint: bool,
 ) -> bool {
+    if native_resource_proves_local_only(native, native_identity) {
+        return false;
+    }
     has_path_hint
         || native_identity.status == NativeFileProviderIdentityStatus::Available
         || native.status != gfm_mac_sys::NativeFileProviderStatus::Available
@@ -1635,10 +1637,17 @@ fn evidence_backed_icloud_name_hint(path: &Path, hints: &CloudHints) -> bool {
 }
 
 fn native_proves_local_only(hints: &CloudHints) -> bool {
-    hints.native.status == gfm_mac_sys::NativeFileProviderStatus::Available
-        && hints.native.is_ubiquitous == Some(false)
-        && !native_has_ubiquitous_materialization_evidence(&hints.native)
-        && hints.native_identity.status != NativeFileProviderIdentityStatus::Available
+    native_resource_proves_local_only(&hints.native, &hints.native_identity)
+}
+
+fn native_resource_proves_local_only(
+    native: &NativeFileProviderResourceValues,
+    native_identity: &NativeFileProviderIdentity,
+) -> bool {
+    native.status == gfm_mac_sys::NativeFileProviderStatus::Available
+        && native.is_ubiquitous == Some(false)
+        && !native_has_ubiquitous_materialization_evidence(native)
+        && native_identity.status != NativeFileProviderIdentityStatus::Available
 }
 
 fn native_provider_state_unavailable(hints: &CloudHints) -> bool {
@@ -3023,6 +3032,29 @@ mod tests {
         let path = PathBuf::from("/tmp/Remote.icloud");
 
         assert!(strong_provider_path_hint(&path));
+    }
+
+    #[test]
+    fn observable_strong_provider_hint_is_suppressed_by_native_local_false() {
+        let path = PathBuf::from("/tmp/Remote.icloud");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(false);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "icloud-extension+native-url-resource".to_string(),
+        };
+
+        assert!(strong_provider_path_hint(&path));
+        assert!(!observable_fileprovider_path_from_hints(&path, &hints));
     }
 
     #[test]
@@ -4726,6 +4758,11 @@ mod tests {
             &native,
             &identity_not_queried(),
             false
+        ));
+        assert!(!should_read_provider_xattrs(
+            &native,
+            &identity_not_queried(),
+            true
         ));
     }
 
