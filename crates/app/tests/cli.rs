@@ -4925,7 +4925,7 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
     assert!(catalog_text.contains("\trepair\t"), "{catalog_text}");
     assert!(catalog_text.contains("sidecar repair"), "{catalog_text}");
     assert!(
-        catalog_text.contains("runtime/repair/sidecar-repair.gfmjob"),
+        catalog_text.contains(&records.display().to_string()),
         "{catalog_text}"
     );
     let progress_text = fs::read_to_string(&progress).unwrap();

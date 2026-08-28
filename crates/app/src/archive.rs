@@ -1,6 +1,6 @@
 use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
 use crate::runtime::{
-    run_scheduled_volume_task_cancellable_with_volume, run_volume_task_cancellable,
+    run_scheduled_volume_task_cancellable_with_volume_and_payload_path, run_volume_task_cancellable,
 };
 use crate::{
     detect_volume_id, optional_path_arg, parent_volume, parse_required_scheduling_pressure,
@@ -405,7 +405,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume_records = records.clone();
             let volume_quarantine = quarantine.clone();
             let volume_sidecars = sidecars.clone();
-            let outcome = run_scheduled_volume_task_cancellable_with_volume(
+            let outcome = run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                 Priority::Background,
                 "sidecar repair",
                 pressure,
@@ -419,6 +419,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         .ok()
                         .or_else(|| parent_volume(&volume_records)))
                 },
+                records.clone(),
                 move |cancellation| {
                     let _access = retain_sidecar_recovery_access(&records, &sidecars, &quarantine)?;
                     recover_sidecars_checked(&records, &sidecars, &quarantine, || {
