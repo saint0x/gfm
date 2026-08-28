@@ -723,6 +723,8 @@ impl VolumeTopologyChange {
                 | "volume-identity-changed"
                 | "volume-case-sensitivity-changed"
                 | "volume-api-status-changed"
+                | "volume-apfs-metadata-changed"
+                | "volume-mount-table-changed"
                 | "volume-filesystem-changed"
         );
         let rescan_index = matches!(
@@ -735,6 +737,8 @@ impl VolumeTopologyChange {
                 | "volume-identity-changed"
                 | "volume-case-sensitivity-changed"
                 | "volume-api-status-changed"
+                | "volume-apfs-metadata-changed"
+                | "volume-mount-table-changed"
                 | "volume-filesystem-changed"
         );
         Some(Self {
@@ -1578,7 +1582,6 @@ fn topology_change_reason(
         Some("volume-ejectability-changed")
     } else if previous.volume_uuid != current.volume_uuid
         || previous.media_uuid != current.media_uuid
-        || previous.apfs_container_uuid != current.apfs_container_uuid
         || previous.resource_uuid != current.resource_uuid
         || previous.bsd_name != current.bsd_name
         || previous.mount_from != current.mount_from
@@ -1594,8 +1597,17 @@ fn topology_change_reason(
         || previous.mount_table_status != current.mount_table_status
     {
         Some("volume-api-status-changed")
-    } else if previous.filesystem != current.filesystem
+    } else if previous.apfs_container_uuid != current.apfs_container_uuid
         || previous.apfs_role != current.apfs_role
+    {
+        Some("volume-apfs-metadata-changed")
+    } else if previous.mount_filesystem != current.mount_filesystem
+        || previous.mount_flags != current.mount_flags
+        || previous.mount_local != current.mount_local
+        || previous.mount_read_only != current.mount_read_only
+    {
+        Some("volume-mount-table-changed")
+    } else if previous.filesystem != current.filesystem
         || previous.volume_type != current.volume_type
         || previous.media_kind != current.media_kind
         || previous.media_type != current.media_type
@@ -1604,9 +1616,6 @@ fn topology_change_reason(
         || previous.media_encrypted != current.media_encrypted
         || previous.media_block_size_bytes != current.media_block_size_bytes
         || previous.media_size_bytes != current.media_size_bytes
-        || previous.mount_filesystem != current.mount_filesystem
-        || previous.mount_flags != current.mount_flags
-        || previous.mount_local != current.mount_local
         || previous.case_preserving != current.case_preserving
         || previous.resource_automounted != current.resource_automounted
         || previous.resource_browsable != current.resource_browsable
@@ -2866,13 +2875,13 @@ mod tests {
     fn topology_diff_invalidates_policy_for_filesystem_trait_changes() {
         let root = unique_temp_dir("gfm-volume-topology-filesystem");
         fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
-        let previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        let mut previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        previous_volume.apfs_role = Some(ApfsVolumeRole::Data);
+        previous_volume.mount_filesystem = Some("apfs".to_string());
+        previous_volume.mount_flags = Some(0x0000_1000);
+        previous_volume.mount_local = Some(true);
         let mut current_volume = previous_volume.clone();
         current_volume.filesystem = Some("apfs".to_string());
-        current_volume.mount_filesystem = Some("apfs".to_string());
-        current_volume.apfs_role = Some(ApfsVolumeRole::Data);
-        current_volume.mount_flags = Some(0x0000_1000);
-        current_volume.mount_local = Some(true);
         current_volume.case_preserving = Some(true);
         current_volume.resource_reachable = Some(true);
         current_volume.device_protocol = Some("USB".to_string());
@@ -2899,6 +2908,66 @@ mod tests {
 
         assert_eq!(diff.changes.len(), 1);
         assert_eq!(diff.changes[0].reason, "volume-filesystem-changed");
+        assert!(diff.changes[0].invalidate_sidebar);
+        assert!(diff.changes[0].invalidate_operation_policy);
+        assert!(diff.changes[0].invalidate_index_admission);
+        assert!(diff.changes[0].rescan_index);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_reports_native_apfs_metadata_changes() {
+        let root = unique_temp_dir("gfm-volume-topology-apfs-metadata");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        previous_volume.apfs_container_uuid = Some("APFS-CONTAINER-OLD".to_string());
+        previous_volume.apfs_role = Some(ApfsVolumeRole::Data);
+        let mut current_volume = previous_volume.clone();
+        current_volume.apfs_container_uuid = Some("APFS-CONTAINER-NEW".to_string());
+        current_volume.apfs_role = Some(ApfsVolumeRole::System);
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].reason, "volume-apfs-metadata-changed");
+        assert!(diff.changes[0].invalidate_sidebar);
+        assert!(diff.changes[0].invalidate_operation_policy);
+        assert!(diff.changes[0].invalidate_index_admission);
+        assert!(diff.changes[0].rescan_index);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_reports_native_mount_table_trait_changes() {
+        let root = unique_temp_dir("gfm-volume-topology-mount-table");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        previous_volume.mount_filesystem = Some("apfs".to_string());
+        previous_volume.mount_flags = Some(0);
+        previous_volume.mount_local = Some(true);
+        previous_volume.mount_read_only = Some(false);
+        let mut current_volume = previous_volume.clone();
+        current_volume.mount_flags = Some(0x0000_1000);
+        current_volume.mount_read_only = Some(true);
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].reason, "volume-mount-table-changed");
         assert!(diff.changes[0].invalidate_sidebar);
         assert!(diff.changes[0].invalidate_operation_policy);
         assert!(diff.changes[0].invalidate_index_admission);
