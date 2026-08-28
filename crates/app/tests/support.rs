@@ -245,6 +245,10 @@ fn reports_permission_access_contract_for_allowed_path_from_binary() {
     assert!(stdout.contains("\tbookmark-required=false\t"), "{stdout}");
     assert!(stdout.contains("\tprompt-kind=general\t"), "{stdout}");
     assert!(stdout.contains("\tprompt-action=none\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tpromptable=false\tprompt-source=none\t"),
+        "{stdout}"
+    );
     assert!(stdout.contains("\nsecurity-worker-admission\tworker=ui list view\t"));
 
     let _ = std::fs::remove_dir_all(root);
@@ -307,6 +311,10 @@ fn permission_access_contract_refuses_unreachable_volume_from_binary() {
     );
     assert!(
         stdout.contains("\tprompt-action=blocked-volume\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tpromptable=false\tprompt-source=volume\t"),
         "{stdout}"
     );
     assert!(
@@ -377,6 +385,10 @@ fn permission_access_contract_honors_read_only_volume_marker_from_binary() {
         "{stdout}"
     );
     assert!(
+        stdout.contains("\tpromptable=false\tprompt-source=volume\t"),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains("\nsecurity-worker-admission\tworker=export worker\t"),
         "{stdout}"
     );
@@ -434,6 +446,10 @@ fn reports_permission_access_contract_for_protected_missing_path_from_binary() {
     assert!(stdout.contains("\tprompt-kind=blocked\t"), "{stdout}");
     assert!(
         stdout.contains("\tprompt-action=blocked-missing-path\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tpromptable=false\tprompt-source=missing-path\t"),
         "{stdout}"
     );
     assert!(stdout.contains("\nsecurity-worker-admission\tworker=index worker\t"));
@@ -634,6 +650,10 @@ fn permission_access_contract_uses_bookmark_prompt_for_protected_locations_from_
         "{stdout}"
     );
     assert!(
+        stdout.contains("\tpromptable=true\tprompt-source=security-scoped-bookmark\t"),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains("\nsecurity-worker-admission\tworker=preview worker\t"),
         "{stdout}"
     );
@@ -691,6 +711,10 @@ fn permission_access_contract_uses_degraded_prompt_for_metadata_only_from_binary
         stdout.contains("\tprompt-action=continue-metadata-only\t"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("\tpromptable=true\tprompt-source=metadata-only\t"),
+        "{stdout}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -734,6 +758,10 @@ fn permission_access_contract_uses_blocked_prompt_for_missing_paths_from_binary(
     assert!(stdout.contains("\tprompt-kind=blocked\t"), "{stdout}");
     assert!(
         stdout.contains("\tprompt-action=blocked-missing-path\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tpromptable=false\tprompt-source=missing-path\t"),
         "{stdout}"
     );
 
@@ -784,6 +812,10 @@ fn permission_access_contract_uses_full_disk_access_prompt_from_binary() {
     );
     assert!(
         stdout.contains("\tprompt-action=open-settings\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tpromptable=true\tprompt-source=full-disk-access\t"),
         "{stdout}"
     );
 
@@ -842,6 +874,10 @@ fn lifecycle_contract_carries_initial_path_permission_access_from_binary() {
         stdout.contains("\tprompt-action=choose-location\t"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("\tpromptable=true\tprompt-source=security-scoped-bookmark\t"),
+        "{stdout}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -888,6 +924,10 @@ fn lifecycle_contract_carries_missing_initial_path_permission_denial_from_binary
     assert!(stdout.contains("\tprompt-kind=blocked\t"), "{stdout}");
     assert!(
         stdout.contains("\tprompt-action=blocked-missing-path\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tpromptable=false\tprompt-source=missing-path\t"),
         "{stdout}"
     );
     assert!(

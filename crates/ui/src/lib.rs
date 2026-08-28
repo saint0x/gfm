@@ -117,6 +117,8 @@ pub struct PermissionAccessContract {
     pub refresh_on_permission_change: bool,
     pub prompt_kind: PermissionPromptKind,
     pub prompt_action: String,
+    pub promptable: bool,
+    pub prompt_source: String,
     pub reason: String,
 }
 
@@ -132,9 +134,19 @@ impl PermissionAccessContract {
         self
     }
 
+    pub fn with_prompt_orchestration(
+        mut self,
+        promptable: bool,
+        source: impl Into<String>,
+    ) -> Self {
+        self.promptable = promptable;
+        self.prompt_source = source.into();
+        self
+    }
+
     pub fn as_tsv(&self) -> String {
         format!(
-            "permission-access\tpath={}\tintent={}\tscope={}\tprobe={}\tmode={}\taccess-action={}\tworker-action={}\tcan-touch-filesystem={}\tbookmark-required={}\tbookmark-access={}\trefresh-on-permission-change={}\tprompt-kind={}\tprompt-action={}\treason={}",
+            "permission-access\tpath={}\tintent={}\tscope={}\tprobe={}\tmode={}\taccess-action={}\tworker-action={}\tcan-touch-filesystem={}\tbookmark-required={}\tbookmark-access={}\trefresh-on-permission-change={}\tprompt-kind={}\tprompt-action={}\tpromptable={}\tprompt-source={}\treason={}",
             escape_contract_field(&self.path),
             escape_contract_field(&self.intent),
             escape_contract_field(&self.scope),
@@ -148,6 +160,8 @@ impl PermissionAccessContract {
             self.refresh_on_permission_change,
             self.prompt_kind.as_str(),
             escape_contract_field(&self.prompt_action),
+            self.promptable,
+            escape_contract_field(&self.prompt_source),
             escape_contract_field(&self.reason)
         )
     }
@@ -727,11 +741,14 @@ mod tests {
             refresh_on_permission_change: false,
             prompt_kind: PermissionPromptKind::BookmarkAcquisition,
             prompt_action: "choose-location".to_string(),
+            promptable: false,
+            prompt_source: "none".to_string(),
             reason: "window initial path may start after retained security-scoped bookmark access"
                 .to_string(),
         }
         .with_bookmark_state(true, true)
-        .with_refresh_on_permission_change(false);
+        .with_refresh_on_permission_change(false)
+        .with_prompt_orchestration(true, "security-scoped-bookmark");
         let spec = AppLaunchSpec::new("/Users/me/Documents/Plan.md")
             .with_permission_access(access.clone());
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
@@ -750,7 +767,7 @@ mod tests {
         ));
         assert!(contract
             .as_tsv()
-            .contains("\tprompt-kind=bookmark-acquisition\tprompt-action=choose-location\t"));
+            .contains("\tprompt-kind=bookmark-acquisition\tprompt-action=choose-location\tpromptable=true\tprompt-source=security-scoped-bookmark\t"));
     }
 
     #[test]
@@ -769,6 +786,8 @@ mod tests {
             refresh_on_permission_change: false,
             prompt_kind: PermissionPromptKind::BookmarkAcquisition,
             prompt_action: "choose-location".to_string(),
+            promptable: true,
+            prompt_source: "security-scoped-bookmark".to_string(),
             reason: "preview worker may start after retained bookmark access".to_string(),
         };
         let dialog = DialogContract::permission_prompt(PermissionPromptKind::BookmarkAcquisition);
@@ -777,7 +796,7 @@ mod tests {
 
         assert!(access
             .as_tsv()
-            .contains("\tprompt-action=choose-location\t"));
+            .contains("\tprompt-action=choose-location\tpromptable=true\tprompt-source=security-scoped-bookmark\t"));
     }
 
     #[test]
@@ -797,6 +816,8 @@ mod tests {
             refresh_on_permission_change: false,
             prompt_kind: PermissionPromptKind::Blocked,
             prompt_action: "blocked-missing-path".to_string(),
+            promptable: false,
+            prompt_source: "missing-path".to_string(),
             reason: "path is not present on this host".to_string(),
         });
 

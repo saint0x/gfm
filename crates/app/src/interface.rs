@@ -610,6 +610,8 @@ fn print_permission_access_contract(
 fn permission_access_contract(
     admission: &SecurityWorkerAdmissionReport,
 ) -> PermissionAccessContract {
+    let prompt_action = permission_prompt_action_for_admission(admission);
+    let (promptable, prompt_source) = permission_prompt_orchestration_for_admission(admission);
     PermissionAccessContract {
         path: admission.access.path.display().to_string(),
         intent: admission.access.intent.as_str().to_string(),
@@ -623,7 +625,9 @@ fn permission_access_contract(
         bookmark_access: false,
         refresh_on_permission_change: false,
         prompt_kind: permission_prompt_kind_for_admission(admission),
-        prompt_action: permission_prompt_action_for_admission(admission).to_string(),
+        prompt_action: prompt_action.to_string(),
+        promptable,
+        prompt_source: prompt_source.to_string(),
         reason: admission.reason.clone(),
     }
     .with_bookmark_state(
@@ -1323,6 +1327,42 @@ fn permission_prompt_action_for_admission(
         return "blocked-unavailable";
     }
     "none"
+}
+
+fn permission_prompt_orchestration_for_admission(
+    admission: &SecurityWorkerAdmissionReport,
+) -> (bool, &'static str) {
+    if matches!(admission.access.mode, SecurityAccessMode::FullDiskAccess)
+        || matches!(admission.access.action, SecurityDecisionAction::Prompt)
+            && admission.access.scope == gfm_mac::ProtectedScope::FullDiskAccess
+    {
+        return (true, "full-disk-access");
+    }
+    if admission.access.bookmark_required
+        && (admission.needs_bookmark_access
+            || matches!(admission.access.action, SecurityDecisionAction::Prompt))
+    {
+        return (true, "security-scoped-bookmark");
+    }
+    if matches!(admission.worker_action, SecurityWorkerAction::MetadataOnly) {
+        return (true, "metadata-only");
+    }
+    if admission.reason.contains("volume access blocked") {
+        return (false, "volume");
+    }
+    if matches!(admission.access.probe, AccessProbeState::Missing) {
+        return (false, "missing-path");
+    }
+    if matches!(admission.access.probe, AccessProbeState::Denied) {
+        return (false, "denied-path");
+    }
+    if matches!(
+        admission.worker_action,
+        SecurityWorkerAction::Prompt | SecurityWorkerAction::Deny
+    ) {
+        return (false, "unavailable");
+    }
+    (false, "none")
 }
 
 fn permission_access_requires_surface(access: &PermissionAccessContract) -> bool {
