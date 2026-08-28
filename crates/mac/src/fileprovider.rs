@@ -817,8 +817,13 @@ impl FileProviderStateSnapshot {
     pub fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Result<Self> {
         let mut entries = Vec::new();
         for path in paths {
-            let state = FileProviderStateReport::read_path(&path)?.storage_state;
-            entries.push(FileProviderStateSnapshotEntry { path, state });
+            let report = FileProviderStateReport::read_path(&path)?;
+            if should_persist_fileprovider_snapshot_entry(&report) {
+                entries.push(FileProviderStateSnapshotEntry {
+                    path,
+                    state: report.storage_state,
+                });
+            }
         }
         entries.sort_by(|left, right| left.path.cmp(&right.path));
         entries.dedup_by(|left, right| left.path == right.path);
@@ -929,13 +934,17 @@ impl FileProviderStateInvalidationReport {
                 .unwrap_or(CloudStorageState::LocalOnly);
             let change =
                 FileProviderInvalidationReport::from_current(path.clone(), previous_state, current);
-            if change.current.storage_state != CloudStorageState::Removed {
+            if change.current.storage_state != CloudStorageState::Removed
+                && should_persist_fileprovider_snapshot_entry(&change.current)
+            {
                 current_entries.push(FileProviderStateSnapshotEntry {
                     path,
                     state: change.current.storage_state,
                 });
             }
-            if initialized || change.state_changed {
+            if (initialized || change.state_changed)
+                && fileprovider_invalidation_change_is_visible(&change)
+            {
                 changes.push(change);
             }
         }
@@ -977,6 +986,16 @@ impl FileProviderStateInvalidationReport {
         );
         lines.join("\n")
     }
+}
+
+fn should_persist_fileprovider_snapshot_entry(report: &FileProviderStateReport) -> bool {
+    report.domain != FileProviderDomain::Local
+        || report.storage_state != CloudStorageState::LocalOnly
+        || !report.badges.is_empty()
+}
+
+fn fileprovider_invalidation_change_is_visible(change: &FileProviderInvalidationReport) -> bool {
+    change.reason != "not-provider-visible"
 }
 
 impl FileProviderObservedInvalidation {
@@ -2673,6 +2692,84 @@ mod tests {
         let reloaded = FileProviderStateSnapshot::read(&path).unwrap();
 
         assert_eq!(reloaded, snapshot);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_state_snapshot_skips_name_only_local_paths() {
+        let root = unique_temp_dir();
+        let local = root.join("Downloaded.icloud.md");
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&local, "local").unwrap();
+        fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
+
+        let snapshot =
+            FileProviderStateSnapshot::from_paths([local.clone(), evicted.clone()]).unwrap();
+
+        assert_eq!(
+            snapshot.entries,
+            vec![FileProviderStateSnapshotEntry {
+                path: evicted,
+                state: CloudStorageState::Evicted,
+            }]
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn initial_state_invalidation_skips_name_only_local_paths() {
+        let root = unique_temp_dir();
+        let local = root.join("Downloaded.icloud.md");
+        fs::write(&local, "local").unwrap();
+
+        let (report, snapshot) =
+            FileProviderStateInvalidationReport::evaluate(None, [local]).unwrap();
+
+        assert!(report.initialized);
+        assert!(report.changes.is_empty());
+        assert!(!report.invalidate_icon);
+        assert!(!report.invalidate_preview_memory);
+        assert!(!report.invalidate_preview_disk);
+        assert!(!report.invalidate_sidebar);
+        assert!(!report.reindex_metadata);
+        assert!(snapshot.entries.is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn state_invalidation_removes_tracked_entry_when_provider_evidence_disappears() {
+        let root = unique_temp_dir();
+        let local = root.join("Downloaded.icloud.md");
+        fs::write(&local, "local").unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: local.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+
+        let (report, snapshot) =
+            FileProviderStateInvalidationReport::evaluate(Some(&previous), [local.clone()])
+                .unwrap();
+
+        assert!(!report.initialized);
+        assert_eq!(report.changes.len(), 1);
+        assert!(report.invalidate_icon);
+        assert!(report.invalidate_preview_memory);
+        assert!(report.invalidate_preview_disk);
+        assert!(report.invalidate_sidebar);
+        assert!(report.reindex_metadata);
+        let change = &report.changes[0];
+        assert_eq!(change.path, local);
+        assert_eq!(change.previous, CloudStorageState::Downloaded);
+        assert_eq!(change.current.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(change.current.domain, FileProviderDomain::Local);
+        assert_eq!(change.reason, "fileprovider-state-changed");
+        assert!(snapshot.entries.is_empty());
+
         fs::remove_dir_all(root).unwrap();
     }
 

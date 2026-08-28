@@ -2215,6 +2215,88 @@ fn fileprovider_invalidation_scan_creates_nested_state_parent_from_binary() {
 }
 
 #[test]
+fn fileprovider_invalidation_scan_skips_name_only_local_paths_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-invalidation-scan-local-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let local = root.join("Downloaded.icloud.md");
+    std::fs::write(&local, "local").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&local)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("fileprovider-state-invalidation\tinitialized=true\tchanged=0\t"));
+    assert!(stdout.contains("\ticon=false\tpreview-memory=false\tpreview-disk=false\t"));
+    assert!(stdout.ends_with("sidebar=false\treindex-metadata=false\n"));
+    assert_eq!(
+        std::fs::read_to_string(&state).unwrap(),
+        "gfm-fileprovider-state-v1\n"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn fileprovider_invalidation_scan_removes_tracked_entry_without_provider_evidence_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-invalidation-scan-untracked-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let local = root.join("Downloaded.icloud.md");
+    std::fs::write(&local, "local").unwrap();
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v1\ndownloaded\t{}\n",
+            local.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&local)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("fileprovider-state-invalidation\tinitialized=false\tchanged=1\t"));
+    assert!(stdout.contains("\tprevious=downloaded\tcurrent=local-only\tchanged=true\t"));
+    assert!(stdout.contains("\ticon=true\tpreview-memory=true\tpreview-disk=true\t"));
+    assert!(stdout
+        .ends_with("sidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n"));
+    assert_eq!(
+        std::fs::read_to_string(&state).unwrap(),
+        "gfm-fileprovider-state-v1\n"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_fileprovider_invalidation_scan_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-invalidation-scan-{}",
