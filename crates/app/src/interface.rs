@@ -1216,6 +1216,7 @@ fn permission_refresh_contract(
             .iter()
             .map(|change| PermissionRefreshChangeContract {
                 scope: change.scope.as_str().to_string(),
+                kind: change.kind.as_str().to_string(),
                 previous: change
                     .previous
                     .map(|state| state.as_str().to_string())

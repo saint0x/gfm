@@ -86,7 +86,7 @@ fn persists_permission_invalidation_state_from_binary() {
         "{first_stdout}"
     );
     assert!(
-        first_stdout.contains("\npermission-change\tdesktop\t"),
+        first_stdout.contains("\npermission-change\tdesktop\tkind=initialized\t"),
         "{first_stdout}"
     );
     assert!(state.is_file());
@@ -210,9 +210,9 @@ fn permission_invalidation_compare_reports_removed_scope_as_unavailable_from_bin
     assert!(stdout.starts_with(
         "permission-invalidation\tinitialized=false\tchanged=1\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\n"
     ));
-    assert!(
-        stdout.contains("\npermission-change\tdocuments\tprevious=granted\tcurrent=unavailable\t")
-    );
+    assert!(stdout.contains(
+        "\npermission-change\tdocuments\tkind=removed\tprevious=granted\tcurrent=unavailable\t"
+    ));
     assert!(
         stdout.contains("\treason=permission scope no longer reported by permission onboarding\n")
     );

@@ -166,6 +166,7 @@ pub struct PermissionRefreshContract {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionRefreshChangeContract {
     pub scope: String,
+    pub kind: String,
     pub previous: String,
     pub current: String,
     pub path: String,
@@ -217,8 +218,9 @@ impl PermissionRefreshContract {
 impl PermissionRefreshChangeContract {
     pub fn as_tsv(&self) -> String {
         format!(
-            "permission-refresh-change\tscope={}\tprevious={}\tcurrent={}\tpath={}\treason={}",
+            "permission-refresh-change\tscope={}\tkind={}\tprevious={}\tcurrent={}\tpath={}\treason={}",
             escape_contract_field(&self.scope),
+            escape_contract_field(&self.kind),
             escape_contract_field(&self.previous),
             escape_contract_field(&self.current),
             escape_contract_field(&self.path),
@@ -917,6 +919,7 @@ mod tests {
             PermissionRefreshContract::new(false, 1, true, true, true).with_changes(vec![
                 PermissionRefreshChangeContract {
                     scope: "desktop".to_string(),
+                    kind: "granted".to_string(),
                     previous: "denied".to_string(),
                     current: "granted".to_string(),
                     path: "/Users/me/Desktop".to_string(),
@@ -931,7 +934,7 @@ mod tests {
             .as_tsv()
             .contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"));
         assert!(contract.as_tsv().contains(
-            "\npermission-refresh-change\tscope=desktop\tprevious=denied\tcurrent=granted\t"
+            "\npermission-refresh-change\tscope=desktop\tkind=granted\tprevious=denied\tcurrent=granted\t"
         ));
     }
 }

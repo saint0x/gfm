@@ -155,9 +155,35 @@ pub struct PermissionStateSnapshot {
     pub readiness: Vec<PermissionReadiness>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionScopeChangeKind {
+    Initialized,
+    Granted,
+    Revoked,
+    StateChanged,
+    PathChanged,
+    ReasonChanged,
+    Removed,
+}
+
+impl PermissionScopeChangeKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Initialized => "initialized",
+            Self::Granted => "granted",
+            Self::Revoked => "revoked",
+            Self::StateChanged => "state-changed",
+            Self::PathChanged => "path-changed",
+            Self::ReasonChanged => "reason-changed",
+            Self::Removed => "removed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionScopeChange {
     pub scope: PermissionScope,
+    pub kind: PermissionScopeChangeKind,
     pub path: PathBuf,
     pub previous: Option<PermissionState>,
     pub current: PermissionState,
@@ -273,8 +299,10 @@ impl PermissionStateInvalidationReport {
                     || previous_item.reason != current_item.reason
             });
             if initialized || changed_scope {
+                let kind = permission_change_kind(previous_item, current_item);
                 changed.push(PermissionScopeChange {
                     scope: current_item.scope,
+                    kind,
                     path: current_item.path.clone(),
                     previous: previous_item.map(|item| item.state),
                     current: current_item.state,
@@ -293,6 +321,7 @@ impl PermissionStateInvalidationReport {
                 }
                 changed.push(PermissionScopeChange {
                     scope: previous_item.scope,
+                    kind: PermissionScopeChangeKind::Removed,
                     path: previous_item.path.clone(),
                     previous: Some(previous_item.state),
                     current: PermissionState::Unavailable,
@@ -322,8 +351,9 @@ impl PermissionStateInvalidationReport {
         )];
         lines.extend(self.changed.iter().map(|change| {
             format!(
-                "permission-change\t{}\tprevious={}\tcurrent={}\tpath={}\treason={}",
+                "permission-change\t{}\tkind={}\tprevious={}\tcurrent={}\tpath={}\treason={}",
                 change.scope.as_str(),
+                change.kind.as_str(),
                 change.previous.map(PermissionState::as_str).unwrap_or("-"),
                 change.current.as_str(),
                 escape_field(&change.path.to_string_lossy()),
@@ -332,6 +362,28 @@ impl PermissionStateInvalidationReport {
         }));
         lines.join("\n")
     }
+}
+
+fn permission_change_kind(
+    previous: Option<&PermissionReadiness>,
+    current: &PermissionReadiness,
+) -> PermissionScopeChangeKind {
+    let Some(previous) = previous else {
+        return PermissionScopeChangeKind::Initialized;
+    };
+    if previous.state != current.state {
+        return match (previous.state, current.state) {
+            (_, PermissionState::Granted) => PermissionScopeChangeKind::Granted,
+            (PermissionState::Granted, PermissionState::Denied | PermissionState::Unavailable) => {
+                PermissionScopeChangeKind::Revoked
+            }
+            _ => PermissionScopeChangeKind::StateChanged,
+        };
+    }
+    if previous.path != current.path {
+        return PermissionScopeChangeKind::PathChanged;
+    }
+    PermissionScopeChangeKind::ReasonChanged
 }
 
 pub fn current_permission_onboarding() -> Result<PermissionOnboardingPlan> {
@@ -715,7 +767,10 @@ mod tests {
         assert!(report.refresh_ui);
         assert!(report.refresh_workers);
         assert!(report.refresh_operations);
-        assert!(report.as_tsv().contains("previous=granted\tcurrent=denied"));
+        assert_eq!(report.changed[0].kind, PermissionScopeChangeKind::Revoked);
+        assert!(report
+            .as_tsv()
+            .contains("kind=revoked\tprevious=granted\tcurrent=denied"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -748,9 +803,13 @@ mod tests {
         assert!(report.refresh_ui);
         assert!(report.refresh_workers);
         assert!(report.refresh_operations);
-        assert!(report
-            .as_tsv()
-            .contains("permission-change\tdocuments\tprevious=granted\tcurrent=granted\t"));
+        assert_eq!(
+            report.changed[0].kind,
+            PermissionScopeChangeKind::PathChanged
+        );
+        assert!(report.as_tsv().contains(
+            "permission-change\tdocuments\tkind=path-changed\tprevious=granted\tcurrent=granted\t"
+        ));
         assert!(report.as_tsv().contains("New Documents"));
         fs::remove_dir_all(root).unwrap();
     }
@@ -782,10 +841,51 @@ mod tests {
         assert_eq!(report.changed[0].previous, Some(PermissionState::Granted));
         assert_eq!(report.changed[0].current, PermissionState::Granted);
         assert_eq!(report.changed[0].reason, "readable via fresh grant");
+        assert_eq!(
+            report.changed[0].kind,
+            PermissionScopeChangeKind::ReasonChanged
+        );
         assert!(report.refresh_ui);
         assert!(report.refresh_workers);
         assert!(report.refresh_operations);
         assert!(report.as_tsv().contains("readable via fresh grant"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permission_invalidation_marks_non_grant_state_changes() {
+        let root = temp_root("permissions-state-change");
+        let path = root.join("Documents");
+        let previous = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: path.clone(),
+                state: PermissionState::Denied,
+                reason: "macOS denied read access".to_string(),
+            }],
+        };
+        let current = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path,
+                state: PermissionState::Unavailable,
+                reason: "permission API unavailable".to_string(),
+            }],
+        };
+
+        let report = PermissionStateInvalidationReport::evaluate(Some(&previous), &current);
+
+        assert_eq!(report.changed.len(), 1);
+        assert_eq!(report.changed[0].previous, Some(PermissionState::Denied));
+        assert_eq!(report.changed[0].current, PermissionState::Unavailable);
+        assert_eq!(
+            report.changed[0].kind,
+            PermissionScopeChangeKind::StateChanged
+        );
+        assert!(report
+            .as_tsv()
+            .contains("kind=state-changed\tprevious=denied\tcurrent=unavailable"));
+
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -811,12 +911,13 @@ mod tests {
         assert_eq!(report.changed[0].scope, PermissionScope::Documents);
         assert_eq!(report.changed[0].previous, Some(PermissionState::Granted));
         assert_eq!(report.changed[0].current, PermissionState::Unavailable);
+        assert_eq!(report.changed[0].kind, PermissionScopeChangeKind::Removed);
         assert!(report.refresh_ui);
         assert!(report.refresh_workers);
         assert!(report.refresh_operations);
-        assert!(report
-            .as_tsv()
-            .contains("permission-change\tdocuments\tprevious=granted\tcurrent=unavailable\t"));
+        assert!(report.as_tsv().contains(
+            "permission-change\tdocuments\tkind=removed\tprevious=granted\tcurrent=unavailable\t"
+        ));
         assert!(report
             .as_tsv()
             .contains("permission scope no longer reported by permission onboarding"));

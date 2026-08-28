@@ -472,6 +472,7 @@ fn reports_permission_ui_refresh_in_onboarding_contract_from_binary() {
     );
     assert!(
         stdout.contains("\npermission-refresh-change\tscope=")
+            && stdout.contains("\tkind=")
             && stdout.contains("\tprevious=")
             && stdout.contains("\tcurrent=")
             && stdout.contains("\tpath=")
@@ -518,6 +519,7 @@ fn reports_permission_ui_refresh_in_lifecycle_contract_from_binary() {
     );
     assert!(
         stdout.contains("\npermission-refresh-change\tscope=")
+            && stdout.contains("\tkind=")
             && stdout.contains("\tprevious=")
             && stdout.contains("\tcurrent=")
             && stdout.contains("\tpath=")
@@ -563,6 +565,7 @@ fn reports_permission_ui_refresh_in_access_contract_from_binary() {
     );
     assert!(
         stdout.contains("\npermission-refresh-change\tscope=")
+            && stdout.contains("\tkind=")
             && stdout.contains("\tprevious=")
             && stdout.contains("\tcurrent=")
             && stdout.contains("\tpath=")
