@@ -654,6 +654,7 @@ fn reports_icloud_badges_in_native_icon_descriptor_from_binary() {
     std::fs::write(&evicted, "placeholder").unwrap();
     mark_evicted_fixture(&evicted);
     std::fs::write(&downloading, "downloading").unwrap();
+    xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
 
     let evicted_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("native-icon")
@@ -1260,6 +1261,10 @@ fn publishes_fileprovider_progress_to_runtime_job_store_from_binary() {
     let catalog_text = std::fs::read_to_string(&catalog).unwrap();
     assert!(
         catalog_text.contains("payload\t1\toperation\tfileprovider download"),
+        "{catalog_text}"
+    );
+    assert!(
+        catalog_text.contains(&downloading.display().to_string()),
         "{catalog_text}"
     );
 

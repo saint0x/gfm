@@ -37,6 +37,25 @@ pub(crate) fn run_volume_task_cancellable<T>(
 where
     T: Send + 'static,
 {
+    run_volume_task_cancellable_with_payload_path(
+        volume,
+        priority,
+        label,
+        runtime_payload_path(payload_kind_for_label(label), label),
+        work,
+    )
+}
+
+pub(crate) fn run_volume_task_cancellable_with_payload_path<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    label: &'static str,
+    payload_path: impl Into<PathBuf>,
+    work: impl FnOnce(Cancellation) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
     let job = if let Some(volume) = volume {
@@ -45,10 +64,11 @@ where
         scheduler.schedule(priority, label)
     };
     let job = drain_single_runtime_job(&mut scheduler, job, label)?;
-    let runtime = RuntimeJobHandle::begin(
+    let runtime = RuntimeJobHandle::begin_with_payload_path(
         &job,
         payload_kind_for_label(label),
         label,
+        payload_path,
         1,
         format!("{}:{label}", priority.as_str()),
     )?;
@@ -177,15 +197,38 @@ pub(crate) fn run_scheduled_volume_task_cancellable_with_volume<T>(
 where
     T: Send + 'static,
 {
+    run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
+        priority,
+        label,
+        pressure,
+        volume,
+        runtime_payload_path(payload_kind_for_label(label), label),
+        work,
+    )
+}
+
+pub(crate) fn run_scheduled_volume_task_cancellable_with_volume_and_payload_path<T>(
+    priority: Priority,
+    label: &'static str,
+    pressure: SchedulingPressure,
+    volume: impl FnOnce() -> Result<Option<VolumeId>>,
+    payload_path: impl Into<PathBuf>,
+    work: impl Fn(Cancellation) -> Result<T> + Send + Sync + 'static,
+) -> Result<ScheduledTaskOutcome<T>>
+where
+    T: Send + 'static,
+{
+    let payload_path = payload_path.into();
     let scheduling = pressure.decide(priority, 1, 1);
     let mut scheduler = Scheduler::new();
     let mut job = scheduler.schedule(priority, label);
     let journal = JobJournal::new(default_job_journal_path());
     if scheduling.action == SchedulingAction::Defer {
-        let runtime = RuntimeJobHandle::begin(
+        let runtime = RuntimeJobHandle::begin_with_payload_path(
             &job,
             payload_kind_for_label(label),
             label,
+            payload_path,
             1,
             format!("{}:{label}:adaptive", priority.as_str()),
         )?;
@@ -205,10 +248,11 @@ where
     let _journal_access = (scheduling.action != SchedulingAction::Defer)
         .then(|| preflight_runtime_write(journal.path(), label))
         .transpose()?;
-    let runtime = RuntimeJobHandle::begin(
+    let runtime = RuntimeJobHandle::begin_with_payload_path(
         &job,
         payload_kind_for_label(label),
         label,
+        payload_path,
         1,
         format!("{}:{label}:adaptive", priority.as_str()),
     )?;
@@ -281,23 +325,6 @@ pub(crate) struct RuntimeJobHandle {
 }
 
 impl RuntimeJobHandle {
-    pub(crate) fn begin(
-        job: &Job,
-        kind: JobPayloadKind,
-        label: &str,
-        total_units: u64,
-        summary: String,
-    ) -> Result<Self> {
-        Self::begin_with_payload_path(
-            job,
-            kind,
-            label,
-            runtime_payload_path(kind, label),
-            total_units,
-            summary,
-        )
-    }
-
     pub(crate) fn begin_with_payload_path(
         job: &Job,
         kind: JobPayloadKind,

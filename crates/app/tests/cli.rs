@@ -7610,6 +7610,7 @@ fn fileprovider_progress_job_persists_runtime_payload_and_progress_from_binary()
     let root = unique_temp_dir("gfm-cli-fileprovider-progress-runtime-root");
     let item = root.join("Remote.icloud-downloading");
     fs::write(&item, "downloading").unwrap();
+    xattr::set(&item, "com.apple.fileprovider.state", b"downloading").unwrap();
     let catalog = unique_temp_path("gfm-cli-fileprovider-progress-runtime", "gfmjobs");
     let progress = unique_temp_path("gfm-cli-fileprovider-progress-runtime", "gfmprogress");
 
@@ -7641,7 +7642,7 @@ fn fileprovider_progress_job_persists_runtime_payload_and_progress_from_binary()
         "{catalog_text}"
     );
     assert!(
-        catalog_text.contains("runtime/operation/fileprovider-download.gfmjob"),
+        catalog_text.contains(&item.display().to_string()),
         "{catalog_text}"
     );
     assert!(
@@ -13226,7 +13227,7 @@ fn volume_producers_persist_runtime_payload_and_progress_from_binary() {
         "{catalog_text}"
     );
     assert!(
-        catalog_text.contains("runtime/thumbnail/thumbnail-generation.gfmjob"),
+        catalog_text.contains(&image.display().to_string()),
         "{catalog_text}"
     );
 
@@ -13278,7 +13279,11 @@ fn repeated_runtime_producers_replace_stale_payload_for_same_job_id_from_binary(
         "{catalog_text}"
     );
     assert!(
-        catalog_text.contains("runtime/thumbnail/thumbnail-generation.gfmjob"),
+        catalog_text.contains(&second.display().to_string()),
+        "{catalog_text}"
+    );
+    assert!(
+        !catalog_text.contains(&first.display().to_string()),
         "{catalog_text}"
     );
 
@@ -13465,7 +13470,7 @@ fn deferred_adaptive_thumbnail_persists_runtime_payload_and_progress_from_binary
         "{catalog_text}"
     );
     assert!(
-        catalog_text.contains("runtime/thumbnail/thumbnail-generation.gfmjob"),
+        catalog_text.contains(&image.display().to_string()),
         "{catalog_text}"
     );
     let progress_text = fs::read_to_string(&progress).unwrap();
@@ -13531,6 +13536,11 @@ fn deferred_adaptive_thumbnail_does_not_touch_unreachable_target_from_binary() {
         progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
         "{progress_text}"
     );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&image.display().to_string()),
+        "{catalog_text}"
+    );
 
     fs::remove_file(catalog).unwrap();
     fs::remove_file(progress).unwrap();
@@ -13574,7 +13584,7 @@ fn visible_adaptive_quicklook_persists_runtime_payload_and_progress_under_pressu
     assert!(catalog_text.contains("\tpreview\t"), "{catalog_text}");
     assert!(catalog_text.contains("quicklook preview"), "{catalog_text}");
     assert!(
-        catalog_text.contains("runtime/preview/quicklook-preview.gfmjob"),
+        catalog_text.contains(&document.display().to_string()),
         "{catalog_text}"
     );
     let progress_text = fs::read_to_string(&progress).unwrap();

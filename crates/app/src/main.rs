@@ -566,29 +566,42 @@ pub(crate) fn first_path_volume<'a>(
     paths.into_iter().find_map(|path| path_volume(path))
 }
 
-pub(crate) fn run_preview_contract_cancellable<T>(
+pub(crate) fn run_preview_contract_cancellable_with_payload_path<T>(
     volume: Option<VolumeId>,
     label: &'static str,
+    payload_path: impl Into<PathBuf>,
     build: impl FnOnce(gfm_jobs::Cancellation) -> Result<T> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
 {
-    runtime::run_volume_task_cancellable(volume, Priority::Visible, label, build)
+    runtime::run_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        label,
+        payload_path,
+        build,
+    )
 }
 
-pub(crate) fn run_preview_contract_adaptive_with_volume<T>(
+pub(crate) fn run_preview_contract_adaptive_with_volume_and_payload_path<T>(
     priority: Priority,
     label: &'static str,
     pressure: SchedulingPressure,
     volume: impl FnOnce() -> Result<Option<VolumeId>>,
+    payload_path: impl Into<PathBuf>,
     build: impl Fn(gfm_jobs::Cancellation) -> Result<T> + Send + Sync + 'static,
 ) -> Result<runtime::ScheduledTaskOutcome<T>>
 where
     T: Send + 'static,
 {
-    runtime::run_scheduled_volume_task_cancellable_with_volume(
-        priority, label, pressure, volume, build,
+    runtime::run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
+        priority,
+        label,
+        pressure,
+        volume,
+        payload_path,
+        build,
     )
 }
 
