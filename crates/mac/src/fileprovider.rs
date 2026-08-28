@@ -644,6 +644,7 @@ impl FileProviderOperation {
 pub enum FileProviderOperationDisposition {
     Completed,
     Refused,
+    Denied,
     Failed,
 }
 
@@ -652,6 +653,7 @@ impl FileProviderOperationDisposition {
         match self {
             Self::Completed => "completed",
             Self::Refused => "refused",
+            Self::Denied => "denied",
             Self::Failed => "failed",
         }
     }
@@ -1319,11 +1321,12 @@ impl FileProviderOperationReport {
                 })
             }
             NativeFileProviderOperationStatus::Missing
+            | NativeFileProviderOperationStatus::PermissionDenied
             | NativeFileProviderOperationStatus::UnsupportedPath
             | NativeFileProviderOperationStatus::Failed => Ok(Self {
                 path,
                 operation,
-                disposition: FileProviderOperationDisposition::Failed,
+                disposition: disposition_for_native_fileprovider_operation(result.status),
                 before,
                 after: None,
                 reason: result.reason,
@@ -1363,6 +1366,20 @@ impl FileProviderOperationReport {
             after: None,
             reason: Some(reason.into()),
         }
+    }
+}
+
+fn disposition_for_native_fileprovider_operation(
+    status: NativeFileProviderOperationStatus,
+) -> FileProviderOperationDisposition {
+    match status {
+        NativeFileProviderOperationStatus::Completed => FileProviderOperationDisposition::Completed,
+        NativeFileProviderOperationStatus::PermissionDenied => {
+            FileProviderOperationDisposition::Denied
+        }
+        NativeFileProviderOperationStatus::Missing
+        | NativeFileProviderOperationStatus::UnsupportedPath
+        | NativeFileProviderOperationStatus::Failed => FileProviderOperationDisposition::Failed,
     }
 }
 
@@ -3626,6 +3643,22 @@ mod tests {
         assert_eq!(evict.before.storage_state, CloudStorageState::LocalOnly);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_fileprovider_permission_failure_maps_to_denied_disposition() {
+        assert_eq!(
+            disposition_for_native_fileprovider_operation(
+                NativeFileProviderOperationStatus::PermissionDenied
+            ),
+            FileProviderOperationDisposition::Denied
+        );
+        assert_eq!(
+            disposition_for_native_fileprovider_operation(
+                NativeFileProviderOperationStatus::Failed
+            ),
+            FileProviderOperationDisposition::Failed
+        );
     }
 
     #[test]

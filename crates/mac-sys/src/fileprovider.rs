@@ -198,6 +198,7 @@ pub struct NativeFileProviderOperationResult {
 pub enum NativeFileProviderOperationStatus {
     Completed,
     Missing,
+    PermissionDenied,
     Failed,
     UnsupportedPath,
 }
@@ -795,8 +796,9 @@ fn run_filemanager_url_operation(
         let error = error as *mut Object;
         let error_code = unsafe { ns_error_code(error) };
         let error_description = unsafe { ns_error_description(error) };
+        let status = operation_failure_status(error_code, error_description.as_deref());
         operation_result(
-            NativeFileProviderOperationStatus::Failed,
+            status,
             operation_failure_reason(label, path, error_code, error_description.as_deref()),
         )
     }
@@ -848,6 +850,23 @@ fn operation_failure_reason(
             format!("{base}: {description}")
         }
         _ => base,
+    }
+}
+
+fn operation_failure_status(
+    error_code: Option<i64>,
+    error_description: Option<&str>,
+) -> NativeFileProviderOperationStatus {
+    let permission_description = error_description.is_some_and(|description| {
+        let description = description.to_ascii_lowercase();
+        description.contains("permission")
+            || description.contains("denied")
+            || description.contains("not permitted")
+    });
+    if error_code == Some(257) || permission_description {
+        NativeFileProviderOperationStatus::PermissionDenied
+    } else {
+        NativeFileProviderOperationStatus::Failed
     }
 }
 
@@ -1070,6 +1089,22 @@ mod tests {
         assert_eq!(
             reason,
             "start downloading ubiquitous item returned false for /tmp/Remote.icloud: NSError 257: Operation not permitted"
+        );
+    }
+
+    #[test]
+    fn classifies_native_fileprovider_permission_failures() {
+        assert_eq!(
+            operation_failure_status(Some(257), Some("Operation not permitted")),
+            NativeFileProviderOperationStatus::PermissionDenied
+        );
+        assert_eq!(
+            operation_failure_status(None, Some("Permission denied")),
+            NativeFileProviderOperationStatus::PermissionDenied
+        );
+        assert_eq!(
+            operation_failure_status(Some(5), Some("Input/output error")),
+            NativeFileProviderOperationStatus::Failed
         );
     }
 

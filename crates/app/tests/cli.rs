@@ -5643,6 +5643,49 @@ fn operation_volume_copy_policy_refuses_unreachable_destination_from_binary() {
 }
 
 #[test]
+fn operation_volume_copy_policy_refuses_read_only_destination_from_binary() {
+    let root = unique_temp_dir("gfm-cli-operation-copy-policy-read-only");
+    let source_root = root.join("Source");
+    let read_only = root.join("Camera Card");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&read_only).unwrap();
+    fs::write(
+        read_only.join(".gfm-volume-kind"),
+        "external-removable-read-only\n",
+    )
+    .unwrap();
+    let source = source_root.join("source.bin");
+    let destination = read_only.join("destination.bin");
+    fs::write(&source, "policy only").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "operation-volume-copy-policy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("operation-volume-copy-policy\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(
+            "operation volume copy policy destination volume access blocked: read-only volume external"
+        ),
+        "{stderr}"
+    );
+    assert!(!destination.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn operation_refuses_read_only_destination_volume_before_copying_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-readonly-destination-root");
     let journal = root.join("ops.journal");
