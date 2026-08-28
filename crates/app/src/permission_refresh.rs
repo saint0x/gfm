@@ -182,7 +182,11 @@ mod tests {
     #[test]
     fn refresh_state_refuses_nested_read_only_volume_before_parent_creation() {
         let root = unique_temp_dir("gfm-permission-refresh-nested-read-only");
-        fs::write(root.join(".gfm-volume-kind"), "external-removable-read-only\n").unwrap();
+        fs::write(
+            root.join(".gfm-volume-kind"),
+            "external-removable-read-only\n",
+        )
+        .unwrap();
         let state = root.join("runtime").join("permission-state.tsv");
 
         let err = refresh_permission_state_at_path(&state).unwrap_err();

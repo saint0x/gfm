@@ -686,7 +686,10 @@ fn operation_access_gate(
             volume.stable_identity,
             requirement.role.as_str()
         );
-        gate = gate.with_decision(requirement.path, OperationAccessDecision::deny(reason));
+        gate = gate.with_decision(
+            requirement.path,
+            OperationAccessDecision::deny(reason).with_refresh_on_permission_change(true),
+        );
     }
     gate
 }
@@ -1269,6 +1272,9 @@ mod tests {
 
         assert!(matches!(err, GfmError::Permission { .. }));
         assert!(err.to_string().contains("read-only volume external"));
+        assert!(err
+            .to_string()
+            .contains("refresh-on-permission-change=true"));
         assert!(!destination.exists());
         let journal_entries = read_journal(&journal).unwrap();
         assert_eq!(journal_entries.len(), 2);

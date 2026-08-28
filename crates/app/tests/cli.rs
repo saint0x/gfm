@@ -5681,6 +5681,10 @@ fn operation_refuses_read_only_destination_volume_before_copying_from_binary() {
         stderr.contains("read-only volume external") && stderr.contains("role=destination-parent"),
         "{stderr}"
     );
+    assert!(
+        stderr.contains("refresh-on-permission-change=true"),
+        "{stderr}"
+    );
     assert_eq!(
         fs::read_to_string(&source).unwrap(),
         "do not copy onto read-only storage"
@@ -5692,6 +5696,10 @@ fn operation_refuses_read_only_destination_volume_before_copying_from_binary() {
     assert!(journal_text.contains("\tcopy\t"), "{journal_text}");
     assert!(
         journal_text.contains("read-only volume external"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("refresh-on-permission-change=true"),
         "{journal_text}"
     );
     assert!(!journal_text.contains("\tcompleted\t"), "{journal_text}");
