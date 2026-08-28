@@ -79,7 +79,20 @@ fn preflight_permission_state_volume(path: &Path) -> Result<()> {
         return Ok(());
     };
     if volume.reachable != Some(false) {
-        return Ok(());
+        if !volume.read_only || volume.path == Path::new("/") {
+            return Ok(());
+        }
+        return Err(GfmError::Permission {
+            path: path.to_path_buf(),
+            message: format!(
+                "permission state volume access blocked: read-only volume {}; label={}; root={}; stable-id={}; mount={}",
+                volume.kind.as_str(),
+                volume.label,
+                volume.path.display(),
+                volume.stable_identity,
+                volume.mount_state.as_str()
+            ),
+        });
     }
     Err(GfmError::Permission {
         path: path.to_path_buf(),
@@ -160,6 +173,24 @@ mod tests {
         assert!(err
             .to_string()
             .contains("permission state volume access blocked"));
+        assert!(!state.exists());
+        assert!(!state.parent().unwrap().exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_state_refuses_nested_read_only_volume_before_parent_creation() {
+        let root = unique_temp_dir("gfm-permission-refresh-nested-read-only");
+        fs::write(root.join(".gfm-volume-kind"), "external-removable-read-only\n").unwrap();
+        let state = root.join("runtime").join("permission-state.tsv");
+
+        let err = refresh_permission_state_at_path(&state).unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err
+            .to_string()
+            .contains("permission state volume access blocked: read-only volume external"));
         assert!(!state.exists());
         assert!(!state.parent().unwrap().exists());
 
