@@ -134,8 +134,15 @@ fn diagnostics_rebuild_adaptive_defers_before_unreachable_volume_from_binary() {
     fs::write(root.join("needle.md"), "diagnostic needle").unwrap();
     let records = root.join("records.gfmidx");
     let content = root.join("content.gfmcontent");
+    let catalog = unique_temp_path("gfm-cli-diagnostics-rebuild-adaptive-runtime", "gfmjobs");
+    let progress = unique_temp_path(
+        "gfm-cli-diagnostics-rebuild-adaptive-runtime",
+        "gfmprogress",
+    );
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "diagnostics-index-rebuild-adaptive",
             root.to_str().unwrap(),
@@ -167,7 +174,25 @@ fn diagnostics_rebuild_adaptive_defers_before_unreachable_volume_from_binary() {
     );
     assert!(!records.exists());
     assert!(!content.exists());
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(catalog_text.contains("\tindexing\t"), "{catalog_text}");
+    assert!(catalog_text.contains("index rebuild"), "{catalog_text}");
+    assert!(
+        catalog_text.contains(&records.display().to_string()),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tbackground\tbackground\tindex rebuild"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
+        "{progress_text}"
+    );
 
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -439,11 +464,18 @@ fn diagnostics_recover_adaptive_defers_before_unreachable_volume_from_binary() {
     let records = root.join("records.gfmidx");
     let state = root.join("state.gfmstate");
     let quarantine = root.join("quarantine");
+    let catalog = unique_temp_path("gfm-cli-diagnostics-recovery-adaptive-runtime", "gfmjobs");
+    let progress = unique_temp_path(
+        "gfm-cli-diagnostics-recovery-adaptive-runtime",
+        "gfmprogress",
+    );
     fs::write(&records, "not-records").unwrap();
     fs::write(&state, "not-state").unwrap();
     fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "diagnostics-index-recover-adaptive",
             root.to_str().unwrap(),
@@ -477,7 +509,28 @@ fn diagnostics_recover_adaptive_defers_before_unreachable_volume_from_binary() {
     assert_eq!(fs::read_to_string(&records).unwrap(), "not-records");
     assert_eq!(fs::read_to_string(&state).unwrap(), "not-state");
     assert!(!quarantine.exists());
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(catalog_text.contains("\trepair\t"), "{catalog_text}");
+    assert!(
+        catalog_text.contains("persistent index repair"),
+        "{catalog_text}"
+    );
+    assert!(
+        catalog_text.contains(&state.display().to_string()),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tbackground\tbackground\tpersistent index repair"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tpaused\t0\t1\tdeferred:Defer\t"),
+        "{progress_text}"
+    );
 
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -656,4 +709,15 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn unique_temp_path(prefix: &str, extension: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "{prefix}-{}-{nanos}.{extension}",
+        std::process::id()
+    ))
 }

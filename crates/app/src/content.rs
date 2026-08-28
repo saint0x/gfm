@@ -6,7 +6,8 @@ use crate::extract::{
 };
 use crate::runtime::{
     default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
-    run_scheduled_volume_task_cancellable, run_scheduled_volume_task_cancellable_with_volume,
+    run_scheduled_volume_task_cancellable,
+    run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
     run_volume_task_cancellable, run_volume_task_cancellable_without_progress,
     runtime_progress_store, RuntimeJobHandle,
 };
@@ -96,7 +97,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = required_path(args.next(), "extract-worker-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(args, "extract worker")?;
             let volume_path = path.clone();
-            let outcome = run_scheduled_volume_task_cancellable_with_volume(
+            let outcome = run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                 Priority::Background,
                 "adaptive extraction",
                 pressure,
@@ -110,6 +111,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         .ok()
                         .or_else(|| parent_volume(&volume_path)))
                 },
+                path.clone(),
                 move |cancellation| {
                     let _access = preflight_access_scope(
                         &path,
@@ -184,7 +186,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .unwrap_or(2);
             let volume_path = path.clone();
             let volume_store = store.clone();
-            let outcome = run_scheduled_volume_task_cancellable_with_volume(
+            let outcome = run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                 Priority::Background,
                 "quarantined adaptive extraction",
                 pressure,
@@ -203,6 +205,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         .ok()
                         .or_else(|| parent_volume(&volume_path)))
                 },
+                path.clone(),
                 move |cancellation| {
                     let _access = retain_extraction_quarantine_access(
                         &path,
@@ -367,7 +370,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume_output = output_archive.clone();
             let volume_segments = segments.clone();
             let worker = BackgroundContentIndexer::default();
-            let outcome = run_scheduled_volume_task_cancellable_with_volume(
+            let outcome = run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                 Priority::Background,
                 "content maintenance",
                 pressure,
@@ -382,6 +385,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         .ok()
                         .or_else(|| parent_volume(&volume_output)))
                 },
+                output_archive.clone(),
                 move |cancellation| {
                     let _access = retain_content_segments_access(
                         Some(&manifest_path),

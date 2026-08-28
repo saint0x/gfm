@@ -7402,7 +7402,7 @@ fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
         "{catalog_text}"
     );
     assert!(
-        catalog_text.contains("runtime/extraction/adaptive-extraction.gfmjob"),
+        catalog_text.contains(&path.display().to_string()),
         "{catalog_text}"
     );
     let progress_text = fs::read_to_string(&progress).unwrap();
@@ -7531,7 +7531,7 @@ fn deferred_adaptive_extraction_worker_does_not_touch_unreachable_target_from_bi
         "{catalog_text}"
     );
     assert!(
-        catalog_text.contains("runtime/extraction/adaptive-extraction.gfmjob"),
+        catalog_text.contains(&path.display().to_string()),
         "{catalog_text}"
     );
     let progress_text = fs::read_to_string(&progress).unwrap();
@@ -8356,7 +8356,7 @@ fn deferred_quarantined_adaptive_extraction_worker_does_not_touch_unreachable_st
         "{catalog_text}"
     );
     assert!(
-        catalog_text.contains("runtime/extraction/quarantined-adaptive-extraction.gfmjob"),
+        catalog_text.contains(&path.display().to_string()),
         "{catalog_text}"
     );
     let progress_text = fs::read_to_string(&progress).unwrap();

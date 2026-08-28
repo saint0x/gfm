@@ -1,7 +1,7 @@
 use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
 use crate::runtime::{
-    run_scheduled_volume_task_cancellable, run_scheduled_volume_task_cancellable_with_volume,
-    run_volume_task_cancellable,
+    run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
+    run_volume_task_cancellable, run_volume_task_cancellable_with_payload_path,
 };
 use crate::{
     config_store, detect_volume_id, existing_read_probe_path, parent_volume,
@@ -38,10 +38,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .ok()
                 .or_else(|| parent_volume(&spec.records_path));
             preflight_rebuild_volumes(&spec)?;
-            let report = run_volume_task_cancellable(
+            let report = run_volume_task_cancellable_with_payload_path(
                 volume,
                 Priority::Visible,
                 "index rebuild",
+                spec.records_path.clone(),
                 move |cancellation| {
                     cancellation.check()?;
                     let _access = retain_rebuild_access(&spec)?;
@@ -67,16 +68,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             };
             let outcome =
                 if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
-                    run_scheduled_volume_task_cancellable(
-                        None,
+                    run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                         Priority::Background,
                         "index rebuild",
                         pressure,
+                        || Ok(None),
+                        spec.records_path.clone(),
                         move |cancellation| rebuild_index_cancellable(&spec, &cancellation),
                     )?
                 } else {
                     let volume_spec = spec.clone();
-                    run_scheduled_volume_task_cancellable_with_volume(
+                    run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                         Priority::Background,
                         "index rebuild",
                         pressure,
@@ -86,6 +88,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                                 .ok()
                                 .or_else(|| parent_volume(&volume_spec.records_path)))
                         },
+                        spec.records_path.clone(),
                         move |cancellation| {
                             let _access = retain_rebuild_access(&spec)?;
                             rebuild_index_cancellable(&spec, &cancellation)
@@ -147,10 +150,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .ok()
                 .or_else(|| parent_volume(&spec.records_path));
             preflight_recovery_volumes(&spec)?;
-            let report = run_volume_task_cancellable(
+            let report = run_volume_task_cancellable_with_payload_path(
                 volume,
                 Priority::Visible,
                 "persistent index repair",
+                spec.state_path.clone(),
                 move |cancellation| {
                     cancellation.check()?;
                     let _access = retain_recovery_access(&spec)?;
@@ -181,16 +185,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let spec = PersistentIndexRecoverySpec::new(root, records, state, quarantine);
             let outcome =
                 if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
-                    run_scheduled_volume_task_cancellable(
-                        None,
+                    run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                         Priority::Background,
                         "persistent index repair",
                         pressure,
+                        || Ok(None),
+                        spec.state_path.clone(),
                         move |cancellation| recover_index_cancellable(&spec, &cancellation),
                     )?
                 } else {
                     let volume_spec = spec.clone();
-                    run_scheduled_volume_task_cancellable_with_volume(
+                    run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                         Priority::Background,
                         "persistent index repair",
                         pressure,
@@ -200,6 +205,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                                 .ok()
                                 .or_else(|| parent_volume(&volume_spec.records_path)))
                         },
+                        spec.state_path.clone(),
                         move |cancellation| {
                             let _access = retain_recovery_access(&spec)?;
                             recover_index_cancellable(&spec, &cancellation)
