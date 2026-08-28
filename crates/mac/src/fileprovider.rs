@@ -1639,7 +1639,6 @@ fn native_proves_local_only(hints: &CloudHints) -> bool {
         && hints.native.is_ubiquitous == Some(false)
         && !native_has_ubiquitous_materialization_evidence(&hints.native)
         && hints.native_identity.status != NativeFileProviderIdentityStatus::Available
-        && hints.xattrs.is_empty()
 }
 
 fn native_provider_state_unavailable(hints: &CloudHints) -> bool {
@@ -2443,7 +2442,7 @@ mod tests {
     }
 
     #[test]
-    fn native_local_false_does_not_make_xattr_placeholder_command_capable() {
+    fn native_local_false_overrides_xattr_placeholder_fallback() {
         let path = PathBuf::from("/tmp/Evicted.icloud-placeholder");
         let mut native = native_values();
         native.is_ubiquitous = Some(false);
@@ -2463,21 +2462,29 @@ mod tests {
 
         let report = FileProviderStateReport::from_hints(path, hints);
 
-        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
-        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_eq!(report.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::NotProviderBacked
+        );
         assert_eq!(
             report.materialization_source,
-            CloudMaterializationSource::XattrFallback
+            CloudMaterializationSource::NativeUrlResource
         );
         assert_eq!(
             report.materialization_confidence,
-            CloudMaterializationConfidence::XattrFallback
+            CloudMaterializationConfidence::Native
         );
-        assert_eq!(report.commands.download, CloudCommandState::Disabled);
-        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-not-provider-backed")
+        );
+        assert_eq!(report.commands.download, CloudCommandState::Hidden);
+        assert_eq!(report.commands.evict, CloudCommandState::Hidden);
         assert_eq!(
             report.commands.reason.as_deref(),
-            Some("not-native-provider-backed")
+            Some("not-fileprovider-backed")
         );
     }
 
