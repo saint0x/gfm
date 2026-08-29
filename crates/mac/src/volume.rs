@@ -2125,12 +2125,20 @@ fn fallback_volume_paths() -> Vec<PathBuf> {
     if let Ok(entries) = fs::read_dir("/Volumes") {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.try_exists().ok() == Some(true) && path.is_dir() {
+            if fallback_volume_path_is_directory(&path) == Some(true) {
                 paths.push(path);
             }
         }
     }
     paths
+}
+
+fn fallback_volume_path_is_directory(path: &Path) -> Option<bool> {
+    match fs::metadata(path) {
+        Ok(metadata) => Some(metadata.is_dir()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(false),
+        Err(_) => None,
+    }
 }
 
 fn finder_visible_mount_path(path: &Path) -> bool {
@@ -2838,6 +2846,22 @@ mod tests {
 
         fs::remove_dir_all(first).unwrap();
         fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
+    fn fallback_volume_path_directory_probe_preserves_unavailable_state() {
+        let root = unique_temp_dir("gfm-volume-fallback-dir-probe");
+        let file = root.join("plain.txt");
+        let missing = root.join("missing");
+        let unprobeable = root.join("volume-fallback-unavailable".repeat(16));
+        fs::write(&file, "plain").unwrap();
+
+        assert_eq!(fallback_volume_path_is_directory(&root), Some(true));
+        assert_eq!(fallback_volume_path_is_directory(&file), Some(false));
+        assert_eq!(fallback_volume_path_is_directory(&missing), Some(false));
+        assert_eq!(fallback_volume_path_is_directory(&unprobeable), None);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
