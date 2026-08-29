@@ -368,11 +368,20 @@ fn object_responds_to_selector(object: *mut Object, selector: Sel) -> bool {
 }
 
 pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResourceValues {
-    if !path.exists() {
-        return missing_values(format!(
-            "fileprovider path does not exist: {}",
-            path.display()
-        ));
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => {
+            return missing_values(format!(
+                "fileprovider path does not exist: {}",
+                path.display()
+            ));
+        }
+        Err(err) => {
+            return unavailable_values(format!(
+                "fileprovider path existence unavailable: {}: {err}",
+                path.display()
+            ));
+        }
     }
     let Some(url) = CFURL::from_path(path, path.is_dir()) else {
         return unsupported(format!("invalid path URL: {}", path.display()));
@@ -1001,6 +1010,26 @@ fn missing_values(reason: String) -> NativeFileProviderResourceValues {
     }
 }
 
+fn unavailable_values(reason: String) -> NativeFileProviderResourceValues {
+    NativeFileProviderResourceValues {
+        is_ubiquitous: None,
+        has_unresolved_conflicts: None,
+        is_downloaded: None,
+        is_downloading: None,
+        is_uploading: None,
+        is_uploaded: None,
+        download_requested: None,
+        percent_downloaded_milli: None,
+        percent_uploaded_milli: None,
+        downloading_status: None,
+        downloading_error: None,
+        uploading_error: None,
+        is_excluded_from_sync: None,
+        status: NativeFileProviderStatus::Unavailable,
+        reason: Some(reason),
+    }
+}
+
 fn unsupported(reason: String) -> NativeFileProviderResourceValues {
     NativeFileProviderResourceValues {
         is_ubiquitous: None,
@@ -1024,7 +1053,11 @@ fn unsupported(reason: String) -> NativeFileProviderResourceValues {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::ffi::OsString;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -1070,6 +1103,23 @@ mod tests {
         assert!(identity.domain_identifier.is_none());
         assert!(identity.reason.is_some());
         fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resource_values_surface_path_probe_errors_as_unavailable() {
+        let path = std::path::PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-native-fileprovider-invalid\0path".to_vec(),
+        ));
+
+        let values = copy_fileprovider_resource_values(&path);
+
+        assert_eq!(values.status, NativeFileProviderStatus::Unavailable);
+        assert!(values
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("path existence unavailable"));
     }
 
     #[test]
