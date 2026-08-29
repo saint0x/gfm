@@ -996,6 +996,67 @@ fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
 }
 
 #[test]
+fn copy_operation_publishes_runtime_progress_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-copy-operation-runtime-progress-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let source = root.join("source.txt");
+    let destination = root.join("destination.txt");
+    let progress = root.join("runtime.gfmprogress");
+    let journal = root.join("ops.journal");
+    std::fs::write(&source, "hello world").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_OPS_JOURNAL", &journal)
+        .arg("copy")
+        .arg(&source)
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&destination).unwrap(),
+        "hello world"
+    );
+
+    let raw_progress = std::fs::read_to_string(&progress).unwrap();
+    assert!(raw_progress.contains("\tcopy\t"), "{raw_progress}");
+    assert!(
+        raw_progress.contains("\tcompleted\t11\t11\tcompleted\t"),
+        "{raw_progress}"
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-progress-job-contract")
+        .arg(&progress)
+        .arg("1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(
+            "\noperation-progress\tjob=1\tlabel=copy\tstate=completed\tcompleted=11\ttotal=11\tpercent=100\tdetail=completed"
+        ),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-lifecycle-operation-conflict-{}",

@@ -16,18 +16,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(crate) fn run_volume_task<T>(
-    volume: Option<VolumeId>,
-    priority: Priority,
-    label: &'static str,
-    work: impl FnOnce() -> Result<T> + Send + 'static,
-) -> Result<T>
-where
-    T: Send + 'static,
-{
-    run_volume_task_cancellable(volume, priority, label, move |_| work())
-}
-
 pub(crate) fn run_volume_task_cancellable<T>(
     volume: Option<VolumeId>,
     priority: Priority,
@@ -56,6 +44,43 @@ pub(crate) fn run_volume_task_cancellable_with_payload_path<T>(
 where
     T: Send + 'static,
 {
+    run_volume_task_cancellable_with_runtime_payload_path(
+        volume,
+        priority,
+        label,
+        payload_path,
+        move |cancellation, _runtime| work(cancellation),
+    )
+}
+
+pub(crate) fn run_volume_task_cancellable_with_runtime<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    label: &'static str,
+    work: impl FnOnce(Cancellation, RuntimeJobHandle) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    run_volume_task_cancellable_with_runtime_payload_path(
+        volume,
+        priority,
+        label,
+        runtime_payload_path(payload_kind_for_label(label), label),
+        work,
+    )
+}
+
+fn run_volume_task_cancellable_with_runtime_payload_path<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    label: &'static str,
+    payload_path: impl Into<PathBuf>,
+    work: impl FnOnce(Cancellation, RuntimeJobHandle) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
     let job = if let Some(volume) = volume {
@@ -75,7 +100,7 @@ where
     let runtime_task = runtime.clone();
     let task = Task::new(job.clone(), move |cancellation| {
         runtime_task.running()?;
-        let result = work(cancellation)?;
+        let result = work(cancellation, runtime_task.clone())?;
         result_tx
             .send(result)
             .map_err(|_| GfmError::Format(format!("{label} result receiver dropped")))?;
@@ -322,6 +347,7 @@ fn runtime_progress_lock_error() -> GfmError {
 pub(crate) struct RuntimeJobHandle {
     progress_store: Option<JobProgressStore>,
     last_progress: Arc<Mutex<JobProgressSnapshot>>,
+    completion_detail: Arc<Mutex<Option<String>>>,
 }
 
 impl RuntimeJobHandle {
@@ -362,6 +388,7 @@ impl RuntimeJobHandle {
         Ok(Self {
             progress_store,
             last_progress: Arc::new(Mutex::new(snapshot)),
+            completion_detail: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -390,6 +417,14 @@ impl RuntimeJobHandle {
         detail: impl Into<String>,
     ) -> Result<()> {
         self.persist_progress(state, completed_units, detail)
+    }
+
+    pub(crate) fn remember_completion_detail(&self, detail: impl Into<String>) -> Result<()> {
+        *self
+            .completion_detail
+            .lock()
+            .map_err(|_| runtime_progress_lock_error())? = Some(detail.into());
+        Ok(())
     }
 
     pub(crate) fn resize(&self, total_units: u64, detail: impl Into<String>) -> Result<()> {
@@ -423,7 +458,14 @@ impl RuntimeJobHandle {
             .total_units;
         let (completed_units, detail) = match status {
             TaskStatus::Started => (0, "still-running".to_string()),
-            TaskStatus::Completed => (total_units, "completed".to_string()),
+            TaskStatus::Completed => (
+                total_units,
+                self.completion_detail
+                    .lock()
+                    .map_err(|_| runtime_progress_lock_error())?
+                    .clone()
+                    .unwrap_or_else(|| "completed".to_string()),
+            ),
             TaskStatus::Cancelled => (0, "cancelled".to_string()),
             TaskStatus::Failed(message) => (0, message.clone()),
         };
@@ -509,6 +551,7 @@ mod tests {
         let handle = RuntimeJobHandle {
             progress_store: Some(store.clone()),
             last_progress: Arc::new(Mutex::new(initial)),
+            completion_detail: Arc::new(Mutex::new(None)),
         };
         let cloned = handle.clone();
 
@@ -540,6 +583,7 @@ mod tests {
         let handle = RuntimeJobHandle {
             progress_store: Some(store.clone()),
             last_progress: Arc::new(Mutex::new(initial)),
+            completion_detail: Arc::new(Mutex::new(None)),
         };
 
         handle.resize(42, "index:/workspace").unwrap();
@@ -550,6 +594,39 @@ mod tests {
         assert_eq!(snapshots[0].state, JobProgressState::Completed);
         assert_eq!(snapshots[0].completed_units, 42);
         assert_eq!(snapshots[0].total_units, 42);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn runtime_progress_finish_preserves_remembered_completion_detail() {
+        let path = temp_path("gfm-runtime-progress-completion-detail", "gfmprogress");
+        let store = JobProgressStore::new(&path);
+        let initial = sample_progress_snapshot(JobId::from_raw(13)).with_progress(
+            JobProgressState::Running,
+            1,
+            "copying",
+            10,
+        );
+        store.write_all(std::slice::from_ref(&initial)).unwrap();
+        let handle = RuntimeJobHandle {
+            progress_store: Some(store.clone()),
+            last_progress: Arc::new(Mutex::new(initial)),
+            completion_detail: Arc::new(Mutex::new(None)),
+        };
+
+        handle
+            .remember_completion_detail("operation-metadata-degradation\tkind=ownership")
+            .unwrap();
+        handle.finish(&TaskStatus::Completed).unwrap();
+
+        let snapshots = store.read().unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].state, JobProgressState::Completed);
+        assert_eq!(
+            snapshots[0].detail,
+            "operation-metadata-degradation\tkind=ownership"
+        );
 
         std::fs::remove_file(path).unwrap();
     }

@@ -5,11 +5,12 @@ use crate::access::{
 use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
 use crate::runtime::{
     default_journal_path, default_security_bookmarks_path, default_trash_metadata_path,
-    run_volume_task, run_volume_task_cancellable, runtime_operation_conflict_store,
-    OperationConflictStore, RuntimeOperationConflict,
+    run_volume_task_cancellable, run_volume_task_cancellable_with_runtime,
+    runtime_operation_conflict_store, OperationConflictStore, RuntimeJobHandle,
+    RuntimeOperationConflict,
 };
 use crate::{detect_volume_id, parent_volume, required_path};
-use gfm_jobs::Priority;
+use gfm_jobs::{JobProgressState, Priority};
 use gfm_mac::{
     AccessIntent, MountState, SecurityDecisionAction, SecurityScopedAccessReport,
     SecurityScopedBookmarkAccess, SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore,
@@ -17,7 +18,9 @@ use gfm_mac::{
 };
 use gfm_ops::{
     read_trash_metadata, ConflictPolicy, Operation, OperationAccessDecision, OperationAccessGate,
-    OperationAccessRole, OperationConflictReport, OperationContext, OperationRecoveryPolicy,
+    OperationAccessRole, OperationConflictReport, OperationContext, OperationMetadataDegradation,
+    OperationMetadataDegradationKind, OperationProgress, OperationProgressEvent,
+    OperationProgressPhase, OperationRecoveryPolicy, OperationThroughputClass,
     OperationVolumeClass, OperationVolumeCopyPolicy, Operator,
 };
 use gfm_types::{GfmError, Result, VolumeId};
@@ -424,14 +427,27 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
         retain_operation_trash_metadata_access(&operation, &trash_metadata)?;
     let volume_copy_policy = operation_volume_copy_policy_from_report(&operation, &volume_report);
     let volume = operation_volume(&operation);
-    let entry = run_volume_task(volume, Priority::Interactive, label, move || {
-        if access_gate.check(&operation).is_ok() {
-            let _security_scope = operation_security_accesses(&operation)?;
-            let conflict_report = OperationConflictReport::evaluate(&operation, conflict);
-            if conflict_report.blocks_operation {
-                if let Some(store) = runtime_operation_conflict_store() {
-                    store.append(&conflict_report)?;
+    let entry = run_volume_task_cancellable_with_runtime(
+        volume,
+        Priority::Interactive,
+        label,
+        move |_, runtime| {
+            if access_gate.check(&operation).is_ok() {
+                let _security_scope = operation_security_accesses(&operation)?;
+                let conflict_report = OperationConflictReport::evaluate(&operation, conflict);
+                if conflict_report.blocks_operation {
+                    if let Some(store) = runtime_operation_conflict_store() {
+                        store.append(&conflict_report)?;
+                    }
                 }
+                let operator = Operator::new(
+                    OperationContext::new(journal)
+                        .with_conflict(conflict)
+                        .with_trash_metadata_path(trash_metadata)
+                        .with_access_gate(access_gate)
+                        .with_volume_copy_policy(volume_copy_policy),
+                );
+                return execute_with_runtime_progress(operator, operation, runtime);
             }
             let operator = Operator::new(
                 OperationContext::new(journal)
@@ -440,19 +456,141 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
                     .with_access_gate(access_gate)
                     .with_volume_copy_policy(volume_copy_policy),
             );
-            return operator.execute(operation);
-        }
-        let operator = Operator::new(
-            OperationContext::new(journal)
-                .with_conflict(conflict)
-                .with_trash_metadata_path(trash_metadata)
-                .with_access_gate(access_gate)
-                .with_volume_copy_policy(volume_copy_policy),
-        );
-        operator.execute(operation)
-    })?;
+            execute_with_runtime_progress(operator, operation, runtime)
+        },
+    )?;
     println!("{}\t{}", entry.id, operation_status(entry.status));
     Ok(())
+}
+
+fn execute_with_runtime_progress(
+    operator: Operator,
+    operation: Operation,
+    runtime: RuntimeJobHandle,
+) -> Result<gfm_ops::JournalEntry> {
+    let mut progress_error = None;
+    let entry = operator.execute_with_progress(operation, |event| {
+        emit_operation_progress_event(event.clone());
+        if progress_error.is_none() {
+            if let Err(err) = publish_runtime_operation_progress(&runtime, &event) {
+                progress_error = Some(err);
+            }
+        }
+    })?;
+    if let Some(err) = progress_error {
+        return Err(err);
+    }
+    Ok(entry)
+}
+
+fn emit_operation_progress_event(event: OperationProgressEvent) {
+    if let Some(line) = operation_progress_event_line(&event) {
+        println!("{line}");
+    }
+}
+
+fn publish_runtime_operation_progress(
+    runtime: &RuntimeJobHandle,
+    event: &OperationProgressEvent,
+) -> Result<()> {
+    let total_units = operation_progress_total_units(&event.progress);
+    let completed_units = operation_progress_completed_units(&event.progress);
+    let detail = operation_progress_detail(event);
+    runtime.resize(total_units, detail.clone())?;
+    if event.phase == OperationProgressPhase::MetadataDegraded {
+        runtime.remember_completion_detail(detail.clone())?;
+    }
+    runtime.progress(JobProgressState::Running, completed_units, detail)
+}
+
+fn operation_progress_total_units(progress: &OperationProgress) -> u64 {
+    if progress.total_bytes > 0 {
+        progress.total_bytes
+    } else {
+        progress.total_items.max(1)
+    }
+}
+
+fn operation_progress_completed_units(progress: &OperationProgress) -> u64 {
+    if progress.total_bytes > 0 {
+        progress.completed_bytes
+    } else {
+        progress.completed_items
+    }
+}
+
+fn operation_progress_detail(event: &OperationProgressEvent) -> String {
+    if let Some(degradation) = event.metadata_degradation.as_ref() {
+        return operation_metadata_degradation_line(degradation);
+    }
+    match event.phase {
+        OperationProgressPhase::Planned => format!(
+            "planned:items={}:bytes={}",
+            event.progress.total_items, event.progress.total_bytes
+        ),
+        OperationProgressPhase::Advanced => {
+            let throughput = event.throughput.map(|snapshot| {
+                format!(
+                    ":throughput={}Bps:{}",
+                    snapshot.bytes_per_second,
+                    operation_throughput_class_name(snapshot.class)
+                )
+            });
+            format!(
+                "advanced:items={}/{}:bytes={}/{}{}",
+                event.progress.completed_items,
+                event.progress.total_items,
+                event.progress.completed_bytes,
+                event.progress.total_bytes,
+                throughput.as_deref().unwrap_or("")
+            )
+        }
+        OperationProgressPhase::MetadataDegraded => "metadata-degraded".to_string(),
+    }
+}
+
+fn operation_throughput_class_name(class: OperationThroughputClass) -> &'static str {
+    match class {
+        OperationThroughputClass::FullSpeed => "full-speed",
+        OperationThroughputClass::Constrained => "constrained",
+        OperationThroughputClass::Slow => "slow",
+    }
+}
+
+fn operation_progress_event_line(event: &OperationProgressEvent) -> Option<String> {
+    if event.phase != OperationProgressPhase::MetadataDegraded {
+        return None;
+    }
+    let degradation = event.metadata_degradation.as_ref()?;
+    Some(operation_metadata_degradation_line(degradation))
+}
+
+fn operation_metadata_degradation_line(degradation: &OperationMetadataDegradation) -> String {
+    format!(
+        "operation-metadata-degradation\tpath={}\tkind={}\tdetail={}",
+        escape_operation_field(&degradation.path.display().to_string()),
+        metadata_degradation_kind_name(degradation.kind),
+        escape_operation_field(&degradation.detail)
+    )
+}
+
+fn metadata_degradation_kind_name(kind: OperationMetadataDegradationKind) -> &'static str {
+    match kind {
+        OperationMetadataDegradationKind::Ownership => "ownership",
+        OperationMetadataDegradationKind::CreatedTime => "created-time",
+        OperationMetadataDegradationKind::ExtendedAttribute => "extended-attribute",
+        OperationMetadataDegradationKind::AccessControlList => "access-control-list",
+        OperationMetadataDegradationKind::FileFlags => "file-flags",
+        OperationMetadataDegradationKind::SymlinkTimes => "symlink-times",
+        OperationMetadataDegradationKind::HardLinkTopology => "hard-link-topology",
+    }
+}
+
+fn escape_operation_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
 }
 
 fn operation_volume_copy_policy_report(operation: &Operation) -> String {
@@ -1046,11 +1184,54 @@ fn operation_volume_class_name(class: OperationVolumeClass) -> &'static str {
 mod tests {
     use super::*;
     use gfm_mac::VolumeDescriptor;
-    use gfm_ops::{read_journal, OperationStatus};
+    use gfm_ops::{read_journal, OperationProgress, OperationStatus};
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn operation_progress_event_reports_metadata_degradation() {
+        let event = OperationProgressEvent {
+            phase: OperationProgressPhase::MetadataDegraded,
+            progress: OperationProgress {
+                total_items: 2,
+                total_bytes: 0,
+                completed_items: 1,
+                completed_bytes: 0,
+            },
+            throughput: None,
+            metadata_degradation: Some(OperationMetadataDegradation {
+                path: PathBuf::from("/Volumes/Backup/dir\talias.txt"),
+                kind: OperationMetadataDegradationKind::HardLinkTopology,
+                detail: "hard-link topology was not preserved\nvolume lacks links".to_string(),
+            }),
+        };
+
+        assert_eq!(
+            operation_progress_event_line(&event).as_deref(),
+            Some(
+                "operation-metadata-degradation\tpath=/Volumes/Backup/dir\\talias.txt\tkind=hard-link-topology\tdetail=hard-link topology was not preserved\\nvolume lacks links"
+            )
+        );
+    }
+
+    #[test]
+    fn operation_progress_event_ignores_non_degradation_progress() {
+        let event = OperationProgressEvent {
+            phase: OperationProgressPhase::Advanced,
+            progress: OperationProgress {
+                total_items: 1,
+                total_bytes: 4,
+                completed_items: 1,
+                completed_bytes: 4,
+            },
+            throughput: None,
+            metadata_degradation: None,
+        };
+
+        assert!(operation_progress_event_line(&event).is_none());
+    }
 
     #[test]
     fn operation_volume_policy_maps_discovered_network_and_external_roots() {
