@@ -938,6 +938,17 @@ fn write_probe_existing_ancestor(path: &Path) -> Result<PathBuf> {
     Ok(candidate)
 }
 
+fn ui_fileprovider_state_file_exists(path: &Path, worker: &str) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("{worker} state metadata unavailable: {err}"),
+        )),
+    }
+}
+
 fn read_directory_with_access(path: &Path, worker: &'static str) -> Result<DirectoryPage> {
     crate::access::preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
     let volume = crate::detect_volume_id(path)
@@ -1073,7 +1084,7 @@ fn run_ui_fileprovider_observed_invalidation(
                 WORKER,
             )?];
             cancellation.check()?;
-            let previous = if state_path.is_file() {
+            let previous = if ui_fileprovider_state_file_exists(&state_path, WORKER)? {
                 Some(FileProviderStateSnapshot::read(&state_path)?)
             } else {
                 None
@@ -1691,5 +1702,29 @@ mod tests {
         assert_eq!(access_path, root);
         assert!(!tracked.exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ui_fileprovider_state_file_probe_preserves_unavailable_metadata() {
+        let root = env::temp_dir().join(format!(
+            "gfm-interface-fileprovider-state-probe-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let state = root.join("fileprovider-state.tsv");
+        fs::write(&state, b"gfm-fileprovider-state-v1\n").unwrap();
+        let missing = root.join("missing-state.tsv");
+        let unprobeable = root.join("fileprovider-state-unavailable".repeat(16));
+
+        assert!(ui_fileprovider_state_file_exists(&state, "ui test").unwrap());
+        assert!(!ui_fileprovider_state_file_exists(&root, "ui test").unwrap());
+        assert!(!ui_fileprovider_state_file_exists(&missing, "ui test").unwrap());
+        let err = ui_fileprovider_state_file_exists(&unprobeable, "ui test").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("ui test state metadata unavailable"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 }
