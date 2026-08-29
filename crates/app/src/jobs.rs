@@ -14,6 +14,8 @@ use gfm_jobs::{
 use gfm_mac::AccessIntent;
 use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::HashMap;
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -156,18 +158,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let pressure = parse_optional_scheduling_pressure(args)?;
             preflight_volume_access_scope(
-                write_probe_path(&state),
+                write_probe_path(&state)?,
                 AccessIntent::Write,
                 "runtime retry probe",
             )?;
             let outcome = run_scheduled_volume_task(
-                path_volume(write_probe_path(&state)),
+                path_volume(write_probe_path(&state)?),
                 Priority::Background,
                 "runtime retry probe",
                 pressure,
                 move || {
                     let _access = preflight_access_scope(
-                        write_probe_path(&state),
+                        write_probe_path(&state)?,
                         AccessIntent::Write,
                         "runtime retry probe",
                     )?;
@@ -219,11 +221,13 @@ fn run_jobs_recover(journal: PathBuf) -> Result<Vec<String>> {
 
 fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
     const WORKER: &str = "jobs payload catalog";
-    preflight_volume_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
-    let volume = parent_volume(write_probe_path(&path));
+    let probe = write_probe_path(&path)?.to_path_buf();
+    preflight_volume_access_scope(&probe, AccessIntent::Write, WORKER)?;
+    let volume = parent_volume(&probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
+        let _access =
+            preflight_access_scope(write_probe_path(&path)?, AccessIntent::Write, WORKER)?;
         cancellation.check()?;
         let catalog = JobPayloadCatalog::new(&path);
         let records = sample_payload_catalog_records();
@@ -239,11 +243,13 @@ fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
 
 fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
     const WORKER: &str = "jobs progress snapshot";
-    preflight_volume_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
-    let volume = parent_volume(write_probe_path(&path));
+    let probe = write_probe_path(&path)?.to_path_buf();
+    preflight_volume_access_scope(&probe, AccessIntent::Write, WORKER)?;
+    let volume = parent_volume(&probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
+        let _access =
+            preflight_access_scope(write_probe_path(&path)?, AccessIntent::Write, WORKER)?;
         cancellation.check()?;
         let store = JobProgressStore::new(&path);
         for snapshot in sample_progress_snapshots() {
@@ -260,11 +266,13 @@ fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
 
 fn run_jobs_progress_restore(path: PathBuf, updated_ms: u64) -> Result<Vec<String>> {
     const WORKER: &str = "jobs progress restore";
-    preflight_volume_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
-    let volume = parent_volume(write_probe_path(&path));
+    let probe = write_probe_path(&path)?.to_path_buf();
+    preflight_volume_access_scope(&probe, AccessIntent::Write, WORKER)?;
+    let volume = parent_volume(&probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
+        let _access =
+            preflight_access_scope(write_probe_path(&path)?, AccessIntent::Write, WORKER)?;
         cancellation.check()?;
         let lines = JobProgressStore::new(&path)
             .restore_interrupted(updated_ms)?
@@ -282,11 +290,13 @@ fn run_jobs_progress_control(
     updated_ms: u64,
 ) -> Result<Vec<String>> {
     const WORKER: &str = "jobs progress control";
-    preflight_volume_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
-    let volume = parent_volume(write_probe_path(&path));
+    let probe = write_probe_path(&path)?.to_path_buf();
+    preflight_volume_access_scope(&probe, AccessIntent::Write, WORKER)?;
+    let volume = parent_volume(&probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope(write_probe_path(&path), AccessIntent::Write, WORKER)?;
+        let _access =
+            preflight_access_scope(write_probe_path(&path)?, AccessIntent::Write, WORKER)?;
         cancellation.check()?;
         let snapshot = JobProgressStore::new(&path).apply_command(
             gfm_jobs::JobId::from_raw(job_id),
@@ -313,8 +323,8 @@ fn run_jobs_payload_restore_plan(
 ) -> Result<Vec<String>> {
     const WORKER: &str = "jobs payload restore plan";
     preflight_payload_restore_volumes(&catalog_path, &progress_path)?;
-    let volume =
-        parent_volume(write_probe_path(&progress_path)).or_else(|| parent_volume(&catalog_path));
+    let progress_probe = write_probe_path(&progress_path)?.to_path_buf();
+    let volume = parent_volume(&progress_probe).or_else(|| parent_volume(&catalog_path));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_payload_restore_access(&catalog_path, &progress_path)?;
@@ -352,7 +362,7 @@ fn preflight_payload_restore_volumes(catalog_path: &Path, progress_path: &Path) 
         "jobs payload restore plan",
     )?;
     preflight_volume_access_scope(
-        write_probe_path(progress_path),
+        write_probe_path(progress_path)?,
         AccessIntent::Write,
         "jobs payload restore plan",
     )
@@ -369,20 +379,22 @@ fn retain_payload_restore_access(
             "jobs payload restore plan",
         )?,
         preflight_access_scope(
-            write_probe_path(progress_path),
+            write_probe_path(progress_path)?,
             AccessIntent::Write,
             "jobs payload restore plan",
         )?,
     ])
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
-    }
-    match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("jobs write path metadata unavailable: {err}"),
+        )),
     }
 }
 

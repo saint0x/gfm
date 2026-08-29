@@ -1756,6 +1756,36 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "jobs-payload-catalog",
+        "tmp/jobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailablejobs-unavailable.gfmjobs"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-progress-snapshot",
+        "tmp/progress-unavailableprogress-unavailableprogress-unavailableprogress-unavailableprogress-unavailableprogress-unavailableprogress-unavailableprogress-unavailableprogress-unavailableprogress-unavailableprogress-unavailableprogress-unavailableprogress-unavailableprogress-unavailableprogress-unavailableprogress-unavailable.gfmprogress"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-runtime-retry-probe",
+        "tmp/retry-unavailableretry-unavailableretry-unavailableretry-unavailableretry-unavailableretry-unavailableretry-unavailableretry-unavailableretry-unavailableretry-unavailableretry-unavailableretry-unavailableretry-unavailableretry-unavailableretry-unavailableretry-unavailable.state"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "ui-progress-job-contract",
         "/tmp/gfm-fozzy-jobs.gfmprogress",
         "2"

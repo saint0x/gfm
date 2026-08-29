@@ -11,7 +11,7 @@ use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::BTreeSet;
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -703,7 +703,7 @@ mod tests {
 }
 
 fn preflight_runtime_write(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(write_probe_path(path), AccessIntent::Write, worker)
+    preflight_access_scope(write_probe_path(path)?, AccessIntent::Write, worker)
 }
 
 pub(crate) fn default_journal_path() -> PathBuf {
@@ -896,7 +896,7 @@ fn preflight_operation_conflict_read(path: &Path) -> Result<ScopedAccessGuard> {
 
 fn preflight_operation_conflict_write(path: &Path) -> Result<ScopedAccessGuard> {
     preflight_access_scope(
-        write_probe_path(path),
+        write_probe_path(path)?,
         AccessIntent::Write,
         "operation conflict store",
     )
@@ -987,11 +987,16 @@ fn runtime_payload_path(kind: JobPayloadKind, label: &str) -> PathBuf {
         .join(format!("{}.gfmjob", label_slug(label)))
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("runtime write path metadata unavailable: {err}"),
+        )),
     }
-    crate::parent_or_cwd(path)
 }
 
 fn label_slug(label: &str) -> String {
