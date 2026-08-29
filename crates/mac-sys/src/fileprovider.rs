@@ -3,7 +3,6 @@ use block::ConcreteBlock;
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::{CFBoolean, CFBooleanRef};
 use core_foundation::string::{CFString, CFStringRef};
-use core_foundation::url::CFURL;
 use core_foundation_sys::base::{Boolean, CFGetTypeID, CFTypeRef};
 use core_foundation_sys::error::CFErrorRef;
 use core_foundation_sys::number::{
