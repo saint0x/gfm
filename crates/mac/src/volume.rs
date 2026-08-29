@@ -156,6 +156,7 @@ pub struct VolumeDescriptor {
     pub resource_encrypted: Option<bool>,
     pub resource_reachable: Option<bool>,
     pub resource_root_file_system: Option<bool>,
+    pub resource_supports_file_cloning: Option<bool>,
     pub resource_remount_url: Option<String>,
     pub mount_table_status: Option<NativeVolumeStatus>,
     pub mount_from: Option<String>,
@@ -316,6 +317,9 @@ impl VolumeDescriptor {
             resource_root_file_system: resource
                 .as_ref()
                 .and_then(|resource| resource.is_root_file_system),
+            resource_supports_file_cloning: resource
+                .as_ref()
+                .and_then(|resource| resource.supports_file_cloning),
             resource_remount_url: resource
                 .as_ref()
                 .and_then(|resource| resource.remount_url.clone()),
@@ -396,7 +400,7 @@ impl VolumeDescriptor {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tapfs-container-uuid={}\tapfs-role={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-encrypted={}\tresource-reachable={}\tresource-root-filesystem={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tapfs-container-uuid={}\tapfs-role={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-encrypted={}\tresource-reachable={}\tresource-root-filesystem={}\tresource-supports-file-cloning={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -499,6 +503,9 @@ impl VolumeDescriptor {
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.resource_root_file_system
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.resource_supports_file_cloning
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.resource_remount_url
@@ -1643,6 +1650,7 @@ fn topology_change_reason(
         || previous.resource_browsable != current.resource_browsable
         || previous.resource_encrypted != current.resource_encrypted
         || previous.resource_reachable != current.resource_reachable
+        || previous.resource_supports_file_cloning != current.resource_supports_file_cloning
         || previous.resource_remount_url != current.resource_remount_url
         || previous.device_protocol != current.device_protocol
         || previous.device_path != current.device_path
@@ -2350,6 +2358,9 @@ mod tests {
         assert!(descriptor
             .as_tsv()
             .contains("\tresource-root-filesystem=true\t"));
+        assert!(descriptor
+            .as_tsv()
+            .contains("\tresource-supports-file-cloning="));
         assert!(descriptor.as_tsv().contains("\tresource-remount-url="));
         assert!(descriptor.as_tsv().contains("\tmount-status=available\t"));
         assert!(descriptor.as_tsv().contains("\tapfs-container-uuid="));
@@ -2928,6 +2939,7 @@ mod tests {
         current_volume.case_preserving = Some(true);
         current_volume.resource_encrypted = Some(true);
         current_volume.resource_reachable = Some(true);
+        current_volume.resource_supports_file_cloning = Some(true);
         current_volume.device_protocol = Some("USB".to_string());
         current_volume.device_model = Some("External SSD".to_string());
         current_volume.device_vendor = Some("Samsung".to_string());
@@ -3598,6 +3610,7 @@ mod tests {
             remount_url: None,
             supports_case_preserved_names: None,
             supports_case_sensitive_names: None,
+            supports_file_cloning: None,
             volume_uuid: None,
             reason: None,
         };

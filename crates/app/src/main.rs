@@ -321,6 +321,11 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
     push_signature_bool(&mut tokens, "browsable", volume.resource_browsable);
     push_signature_bool(&mut tokens, "resource-encrypted", volume.resource_encrypted);
     push_signature_bool(&mut tokens, "resource-reachable", volume.resource_reachable);
+    push_signature_bool(
+        &mut tokens,
+        "resource-cloning",
+        volume.resource_supports_file_cloning,
+    );
     push_signature_bool(&mut tokens, "local", volume.local);
     push_signature_bool(&mut tokens, "mount-local", volume.mount_local);
     push_signature_bool(&mut tokens, "internal", volume.internal);
@@ -913,6 +918,7 @@ mod tests {
         descriptor.resource_browsable = Some(true);
         descriptor.resource_encrypted = Some(true);
         descriptor.resource_reachable = Some(true);
+        descriptor.resource_supports_file_cloning = Some(false);
         descriptor.local = Some(true);
         descriptor.mount_local = Some(true);
         descriptor.internal = Some(false);
@@ -955,6 +961,7 @@ mod tests {
             "browsable=1",
             "resource-encrypted=1",
             "resource-reachable=1",
+            "resource-cloning=0",
             "local=1",
             "mount-local=1",
             "internal=0",

@@ -460,15 +460,16 @@ fn operation_volume_copy_policy_report(operation: &Operation) -> String {
     let policy = operation_volume_copy_policy_from_report(operation, &report);
     match operation {
         Operation::Copy { from, to } | Operation::Move { from, to } => format!(
-            "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tbuffer-bytes={}\tvolumes={}",
+            "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tbuffer-bytes={}\tfile-cloning={}\tvolumes={}",
             from.display(),
             to.display(),
             operation_volume_class_name(policy.class_for_path(from)),
             operation_volume_class_name(policy.class_for_path(to)),
             policy.copy_buffer_bytes_for_paths(from, to),
+            policy.file_cloning_supported_for_paths(from, to),
             report.volumes.len()
         ),
-        _ => "operation-volume-copy-policy\tsource=-\tdestination=-\tsource-class=-\tdestination-class=-\tbuffer-bytes=0\tvolumes=0".to_string(),
+        _ => "operation-volume-copy-policy\tsource=-\tdestination=-\tsource-class=-\tdestination-class=-\tbuffer-bytes=0\tfile-cloning=false\tvolumes=0".to_string(),
     }
 }
 
@@ -875,6 +876,9 @@ fn operation_volume_copy_policy_from_report(
                 volume.path.clone(),
                 operation_volume_class_for_descriptor(volume),
             );
+            if let Some(supported) = volume.resource_supports_file_cloning {
+                policy = policy.with_root_file_cloning_support(volume.path.clone(), supported);
+            }
         }
     }
     policy
@@ -1092,7 +1096,36 @@ mod tests {
         assert!(report.contains("\tsource-class=network\t"));
         assert!(report.contains("\tdestination-class=external\t"));
         assert!(report.contains("\tbuffer-bytes=65536\t"));
+        assert!(report.contains("\tfile-cloning=true\t"));
         assert!(report.contains("\tvolumes="));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_policy_uses_descriptor_file_cloning_support() {
+        let root = unique_temp_dir("gfm-app-op-volume-policy-clone-support");
+        let source_root = root.join("Source");
+        let destination_root = root.join("LegacyBackup");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&destination_root).unwrap();
+        fs::write(
+            destination_root.join(".gfm-volume-kind"),
+            "external-removable\n",
+        )
+        .unwrap();
+        let source = source_root.join("source.bin");
+        let destination = destination_root.join("destination.bin");
+        let mut report = VolumeDiscoveryReport::from_paths(vec![destination_root.clone()]);
+        report.volumes[0].resource_supports_file_cloning = Some(false);
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert!(!policy.file_cloning_supported_for_paths(&source, &destination));
 
         fs::remove_dir_all(root).unwrap();
     }

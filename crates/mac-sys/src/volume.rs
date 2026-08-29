@@ -177,6 +177,7 @@ extern "C" {
     static NSURLVolumeUUIDStringKey: CFStringRef;
     static NSURLVolumeSupportsCasePreservedNamesKey: CFStringRef;
     static NSURLVolumeSupportsCaseSensitiveNamesKey: CFStringRef;
+    static NSURLVolumeSupportsFileCloningKey: CFStringRef;
 
     fn CFURLCopyResourcePropertyForKey(
         url: CFURLRef,
@@ -249,6 +250,7 @@ pub struct NativeVolumeResourceValues {
     pub remount_url: Option<String>,
     pub supports_case_preserved_names: Option<bool>,
     pub supports_case_sensitive_names: Option<bool>,
+    pub supports_file_cloning: Option<bool>,
     pub volume_uuid: Option<String>,
     pub reason: Option<String>,
 }
@@ -1012,6 +1014,12 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
         "NSURLVolumeSupportsCaseSensitiveNamesKey",
         &mut errors,
     );
+    let supports_file_cloning = copy_resource_bool(
+        url,
+        unsafe { NSURLVolumeSupportsFileCloningKey },
+        "NSURLVolumeSupportsFileCloningKey",
+        &mut errors,
+    );
     let volume_uuid = copy_resource_string(
         url,
         unsafe { NSURLVolumeUUIDStringKey },
@@ -1031,6 +1039,7 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
         || remount_url.is_some()
         || supports_case_preserved_names.is_some()
         || supports_case_sensitive_names.is_some()
+        || supports_file_cloning.is_some()
         || volume_uuid.is_some();
     let status = volume_resource_status_for_values(has_values, &errors);
     let reason = (status == NativeVolumeStatus::Unavailable)
@@ -1050,6 +1059,7 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
         remount_url,
         supports_case_preserved_names,
         supports_case_sensitive_names,
+        supports_file_cloning,
         volume_uuid,
         reason,
     }
@@ -1401,6 +1411,7 @@ fn unavailable_resource_values(
         remount_url: None,
         supports_case_preserved_names: None,
         supports_case_sensitive_names: None,
+        supports_file_cloning: None,
         volume_uuid: None,
         reason: Some(reason.into()),
     }
@@ -1457,6 +1468,7 @@ mod tests {
         assert!(values.is_local.is_some() || values.is_read_only.is_some());
         assert_eq!(values.is_reachable, Some(true));
         assert_eq!(values.is_root_file_system, Some(true));
+        assert!(values.supports_file_cloning.is_some());
         assert!(values.is_browsable.is_some() || values.volume_uuid.is_some());
     }
 

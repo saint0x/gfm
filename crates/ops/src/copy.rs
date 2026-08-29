@@ -524,6 +524,13 @@ fn copy_file_tracked(
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
+    if !volume_copy_policy.file_cloning_supported_for_paths(from, to) {
+        copy_file_bytes_tracked(from, to, volume_copy_policy, progress)?;
+        crate::preserve::preserve_metadata(from, to, &metadata)?;
+        verify_copy_with_progress(from, to, verification, progress)?;
+        progress.finish_current_item()?;
+        return Ok(CopyMethod::ByteCopy);
+    }
     match clone_file(from, to) {
         Ok(()) => {
             crate::preserve::preserve_metadata(from, to, &metadata)?;
@@ -604,5 +611,75 @@ fn create_symlink(target: &Path, link: &Path) -> Result<()> {
         std::os::windows::fs::symlink_dir(target, link).map_err(|err| GfmError::io(link, err))
     } else {
         std::os::windows::fs::symlink_file(target, link).map_err(|err| GfmError::io(link, err))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        OperationCancellation, OperationPause, OperationProgress, OperationProgressPhase,
+        OperationVolumeClass,
+    };
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn tracked_copy_skips_clone_when_volume_policy_disallows_it() {
+        let root = unique_temp_dir("gfm-ops-copy-no-clone");
+        let source_root = root.join("source-volume");
+        let destination_root = root.join("destination-volume");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&destination_root).unwrap();
+        let source = source_root.join("source.txt");
+        let destination = destination_root.join("destination.txt");
+        fs::write(&source, "clone unsupported").unwrap();
+        let policy = OperationVolumeCopyPolicy::default()
+            .with_root(&source_root, OperationVolumeClass::Local)
+            .with_root_file_cloning_support(&destination_root, false);
+        let cancellation = OperationCancellation::default();
+        let pause = OperationPause::default();
+        let plan = OperationProgress {
+            total_items: 1,
+            total_bytes: "clone unsupported".len() as u64,
+            completed_items: 0,
+            completed_bytes: 0,
+        };
+        let mut events = Vec::new();
+        let mut callback = |event| events.push(event);
+        let mut progress = ProgressTracker::new(plan, &cancellation, &pause, &mut callback);
+
+        let method = copy_file_tracked(
+            &source,
+            &destination,
+            VerificationPolicy::Bytes,
+            &policy,
+            &mut progress,
+        )
+        .unwrap();
+
+        assert_eq!(method, CopyMethod::ByteCopy);
+        assert_eq!(
+            fs::read_to_string(&destination).unwrap(),
+            "clone unsupported"
+        );
+        let last = events.last().unwrap();
+        assert_eq!(last.phase, OperationProgressPhase::Advanced);
+        assert_eq!(last.progress.completed_items, 1);
+        assert_eq!(
+            last.progress.completed_bytes,
+            "clone unsupported".len() as u64
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let unique = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 }

@@ -27,6 +27,7 @@ impl OperationVolumeClass {
 pub struct OperationVolumeCopyPolicy {
     default_class: OperationVolumeClass,
     root_classes: BTreeMap<PathBuf, OperationVolumeClass>,
+    root_file_cloning_support: BTreeMap<PathBuf, bool>,
 }
 
 impl Default for OperationVolumeCopyPolicy {
@@ -34,6 +35,7 @@ impl Default for OperationVolumeCopyPolicy {
         Self {
             default_class: OperationVolumeClass::Local,
             root_classes: BTreeMap::new(),
+            root_file_cloning_support: BTreeMap::new(),
         }
     }
 }
@@ -43,11 +45,22 @@ impl OperationVolumeCopyPolicy {
         Self {
             default_class,
             root_classes: BTreeMap::new(),
+            root_file_cloning_support: BTreeMap::new(),
         }
     }
 
     pub fn with_root(mut self, root: impl Into<PathBuf>, class: OperationVolumeClass) -> Self {
         self.root_classes.insert(root.into(), class);
+        self
+    }
+
+    pub fn with_root_file_cloning_support(
+        mut self,
+        root: impl Into<PathBuf>,
+        supported: bool,
+    ) -> Self {
+        self.root_file_cloning_support
+            .insert(root.into(), supported);
         self
     }
 
@@ -58,6 +71,19 @@ impl OperationVolumeCopyPolicy {
             .max_by_key(|(root, _)| root.components().count())
             .map(|(_, class)| *class)
             .unwrap_or(self.default_class)
+    }
+
+    fn file_cloning_support_for_path(&self, path: &Path) -> Option<bool> {
+        self.root_file_cloning_support
+            .iter()
+            .filter(|(root, _)| path.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .map(|(_, supported)| *supported)
+    }
+
+    pub fn file_cloning_supported_for_paths(&self, from: &Path, to: &Path) -> bool {
+        self.file_cloning_support_for_path(from) != Some(false)
+            && self.file_cloning_support_for_path(to) != Some(false)
     }
 
     pub fn copy_buffer_bytes_for_paths(&self, from: &Path, to: &Path) -> usize {
@@ -121,5 +147,25 @@ mod tests {
             ),
             COPY_BUFFER_BYTES
         );
+    }
+
+    #[test]
+    fn file_cloning_support_uses_the_most_specific_root() {
+        let policy = OperationVolumeCopyPolicy::default()
+            .with_root_file_cloning_support("/Volumes/Media", false)
+            .with_root_file_cloning_support("/Volumes/Media/Fast", true);
+
+        assert!(!policy.file_cloning_supported_for_paths(
+            Path::new("/Volumes/Media/source.bin"),
+            Path::new("/Users/deepsaint/copy.bin")
+        ));
+        assert!(policy.file_cloning_supported_for_paths(
+            Path::new("/Volumes/Media/Fast/source.bin"),
+            Path::new("/Users/deepsaint/copy.bin")
+        ));
+        assert!(policy.file_cloning_supported_for_paths(
+            Path::new("/Users/deepsaint/source.bin"),
+            Path::new("/Users/deepsaint/copy.bin")
+        ));
     }
 }
