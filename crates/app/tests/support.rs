@@ -769,6 +769,54 @@ fn permission_access_contract_uses_blocked_prompt_for_missing_paths_from_binary(
 }
 
 #[test]
+fn permission_access_contract_reports_unavailable_probe_failures_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-unavailable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let unavailable = root.join("permission-probe-unavailable".repeat(64));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-permission-access-contract",
+            unavailable.to_str().unwrap(),
+            "preview",
+            "preview worker",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("\ttitle=Permission Unavailable\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tprobe=unavailable\tmode=denied\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tprompt-action=blocked-unavailable\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tpromptable=false\tprompt-source=unavailable\t"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("\tprobe=unknown\t"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn permission_access_contract_uses_full_disk_access_prompt_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-permission-access-fda-{}",

@@ -1303,6 +1303,9 @@ fn permission_prompt_action_for_admission(
     if matches!(admission.access.probe, AccessProbeState::Denied) {
         return "blocked-denied-path";
     }
+    if matches!(admission.access.probe, AccessProbeState::Unavailable) {
+        return "blocked-unavailable";
+    }
     if matches!(
         admission.worker_action,
         SecurityWorkerAction::Prompt | SecurityWorkerAction::Deny
@@ -1339,6 +1342,9 @@ fn permission_prompt_orchestration_for_admission(
     if matches!(admission.access.probe, AccessProbeState::Denied) {
         return (false, "denied-path");
     }
+    if matches!(admission.access.probe, AccessProbeState::Unavailable) {
+        return (false, "unavailable");
+    }
     if matches!(
         admission.worker_action,
         SecurityWorkerAction::Prompt | SecurityWorkerAction::Deny
@@ -1357,6 +1363,7 @@ fn permission_access_requires_surface(access: &PermissionAccessContract) -> bool
         || matches!(access.access_action.as_str(), "deny" | "prompt")
         || matches!(access.worker_action.as_str(), "deny" | "prompt")
         || access.probe == "denied"
+        || access.probe == "unavailable"
 }
 
 fn default_current_path(path: Option<String>) -> PathBuf {

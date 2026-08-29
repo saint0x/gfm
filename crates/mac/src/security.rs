@@ -81,6 +81,7 @@ pub enum AccessProbeState {
     Granted,
     Missing,
     Denied,
+    Unavailable,
     Unknown,
 }
 
@@ -90,6 +91,7 @@ impl AccessProbeState {
             Self::Granted => "granted",
             Self::Missing => "missing",
             Self::Denied => "denied",
+            Self::Unavailable => "unavailable",
             Self::Unknown => "unknown",
         }
     }
@@ -281,7 +283,7 @@ impl SecurityWorkerAdmissionReport {
             SecurityWorkerAction::MetadataOnly | SecurityWorkerAction::Prompt
         ) || matches!(
             access.probe,
-            AccessProbeState::Denied | AccessProbeState::Unknown
+            AccessProbeState::Denied | AccessProbeState::Unavailable | AccessProbeState::Unknown
         );
         let reason = match worker_action {
             SecurityWorkerAction::Start if needs_bookmark_access => {
@@ -373,6 +375,12 @@ fn decide(
             SecurityAccessMode::Denied,
             SecurityDecisionAction::Deny,
             "access denied and no lower-privilege fallback is valid".to_string(),
+        ),
+        AccessProbeState::Unavailable => (
+            SecurityAccessMode::Denied,
+            SecurityDecisionAction::Deny,
+            "access probe failed because the host filesystem or permission API was unavailable"
+                .to_string(),
         ),
         AccessProbeState::Unknown => (
             SecurityAccessMode::DegradedMetadataOnly,
@@ -576,7 +584,7 @@ fn probe_error(kind: ErrorKind) -> AccessProbeState {
     match kind {
         ErrorKind::NotFound => AccessProbeState::Missing,
         ErrorKind::PermissionDenied => AccessProbeState::Denied,
-        _ => AccessProbeState::Unknown,
+        _ => AccessProbeState::Unavailable,
     }
 }
 
@@ -761,6 +769,28 @@ mod tests {
         assert_eq!(report.mode, SecurityAccessMode::Denied);
         assert_eq!(report.action, SecurityDecisionAction::Deny);
         assert!(report.least_privilege);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unavailable_probe_failures_deny_without_claiming_unknown_state() {
+        let root = temp_root("security-unavailable-probe");
+        let path = root.join("permission-probe-unavailable".repeat(64));
+
+        let report = SecurityScopedAccessReport::evaluate(&path, AccessIntent::Preview);
+        let admission = report.worker_admission("preview worker");
+
+        assert_eq!(report.probe, AccessProbeState::Unavailable);
+        assert_eq!(report.mode, SecurityAccessMode::Denied);
+        assert_eq!(report.action, SecurityDecisionAction::Deny);
+        assert!(!report.can_read);
+        assert!(!report.can_write);
+        assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
+        assert!(!admission.can_touch_filesystem);
+        assert!(admission.refresh_on_permission_change);
+        assert!(report.as_tsv().contains("\tprobe=unavailable\t"));
+        assert!(!report.as_tsv().contains("\tprobe=unknown\t"));
 
         fs::remove_dir_all(root).unwrap();
     }
