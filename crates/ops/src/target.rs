@@ -47,7 +47,7 @@ fn allocate_hidden_sibling_path(to: &Path, label: &str) -> Result<PathBuf> {
     let nonce = now_nanos();
     for attempt in 0..100_u32 {
         let candidate = parent.join(format!(".{}.{}-{}-{}", file_name, label, nonce, attempt));
-        if !path_exists_or_symlink(&candidate) {
+        if !path_exists_or_symlink(&candidate)? {
             return Ok(candidate);
         }
     }
@@ -124,13 +124,16 @@ pub(crate) fn same_canonical_path(left: &Path, right: &Path) -> bool {
 }
 
 pub(crate) fn ensure_source_exists(path: &Path) -> Result<()> {
-    if path.exists() || fs::symlink_metadata(path).is_ok() {
-        Ok(())
-    } else {
-        Err(GfmError::Io {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(GfmError::Io {
             path: path.to_path_buf(),
             message: "source does not exist".to_string(),
-        })
+        }),
+        Err(err) => Err(GfmError::Io {
+            path: path.to_path_buf(),
+            message: format!("source existence unavailable: {err}"),
+        }),
     }
 }
 
@@ -139,7 +142,7 @@ pub(crate) fn prepare_destination(
     conflict: ConflictPolicy,
     delete_existing: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
-    if !path_exists_or_symlink(path) {
+    if !path_exists_or_symlink(path)? {
         return Ok(());
     }
 
@@ -165,7 +168,7 @@ pub(crate) fn prepare_destination(
 }
 
 pub(crate) fn keep_both_path(path: &Path) -> Result<PathBuf> {
-    if !path_exists_or_symlink(path) {
+    if !path_exists_or_symlink(path)? {
         return Ok(path.to_path_buf());
     }
     let parent = path.parent().unwrap_or_else(|| Path::new(""));
@@ -194,7 +197,7 @@ pub(crate) fn keep_both_path(path: &Path) -> Result<PathBuf> {
             _ => format!("{stem}{suffix}"),
         };
         let candidate = parent.join(candidate_name);
-        if !path_exists_or_symlink(&candidate) {
+        if !path_exists_or_symlink(&candidate)? {
             return Ok(candidate);
         }
     }
@@ -204,6 +207,13 @@ pub(crate) fn keep_both_path(path: &Path) -> Result<PathBuf> {
     })
 }
 
-pub(crate) fn path_exists_or_symlink(path: &Path) -> bool {
-    path.exists() || fs::symlink_metadata(path).is_ok()
+pub(crate) fn path_exists_or_symlink(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::Io {
+            path: path.to_path_buf(),
+            message: format!("path existence unavailable: {err}"),
+        }),
+    }
 }

@@ -434,7 +434,7 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
         move |_, runtime| {
             if access_gate.check(&operation).is_ok() {
                 let _security_scope = operation_security_accesses(&operation)?;
-                let conflict_report = OperationConflictReport::evaluate(&operation, conflict);
+                let conflict_report = OperationConflictReport::evaluate(&operation, conflict)?;
                 if conflict_report.blocks_operation {
                     if let Some(store) = runtime_operation_conflict_store() {
                         store.append(&conflict_report)?;

@@ -185,7 +185,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "ui-operation-conflict-contract" => {
             let operation = parse_conflict_contract_operation(args)?;
             let conflict = parse_optional_conflict_policy(args.next().as_deref())?;
-            let report = OperationConflictReport::evaluate(&operation, conflict);
+            let report = OperationConflictReport::evaluate(&operation, conflict)?;
             println!("{}", operation_conflict_contract(&report).as_tsv());
         }
         "ui-operation-conflict-resolve" => {

@@ -62,11 +62,11 @@ pub struct OperationConflictReport {
 }
 
 impl OperationConflictReport {
-    pub fn evaluate(operation: &Operation, selected_policy: ConflictPolicy) -> Self {
+    pub fn evaluate(operation: &Operation, selected_policy: ConflictPolicy) -> Result<Self> {
         let source = operation.source_path().map(Path::to_path_buf);
         let target = operation.target_path().map(Path::to_path_buf);
         let Some(target_path) = &target else {
-            return Self {
+            return Ok(Self {
                 operation: operation_kind(operation),
                 source,
                 target,
@@ -76,9 +76,9 @@ impl OperationConflictReport {
                 available_policies: Vec::new(),
                 blocks_operation: false,
                 reason: "operation-has-no-conflict-target".to_string(),
-            };
+            });
         };
-        let target_exists = path_exists_or_symlink(target_path);
+        let target_exists = path_exists_or_symlink(target_path)?;
         let target_kind = conflict_kind(target_path);
         let available_policies = if target_exists {
             available_conflict_policies(target_kind)
@@ -105,7 +105,7 @@ impl OperationConflictReport {
             )
         };
 
-        Self {
+        Ok(Self {
             operation: operation_kind(operation),
             source,
             target,
@@ -115,7 +115,7 @@ impl OperationConflictReport {
             available_policies,
             blocks_operation,
             reason,
-        }
+        })
     }
 
     pub fn as_tsv(&self) -> String {
@@ -319,7 +319,8 @@ mod tests {
                 to: target.clone(),
             },
             ConflictPolicy::Fail,
-        );
+        )
+        .unwrap();
 
         assert_eq!(report.operation, "copy");
         assert_eq!(report.source, Some(source));
@@ -352,7 +353,8 @@ mod tests {
                 to: target,
             },
             ConflictPolicy::Fail,
-        );
+        )
+        .unwrap();
 
         assert_eq!(report.target_kind, OperationConflictKind::Directory);
         assert!(report.available_policies.contains(&ConflictPolicy::Merge));
@@ -379,7 +381,8 @@ mod tests {
                 to: target,
             },
             ConflictPolicy::Merge,
-        );
+        )
+        .unwrap();
 
         assert_eq!(report.target_kind, OperationConflictKind::File);
         assert!(!report.available_policies.contains(&ConflictPolicy::Merge));
@@ -389,6 +392,29 @@ mod tests {
             "destination-conflict-policy-unavailable-for-file"
         );
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn conflict_report_surfaces_target_path_probe_failures() {
+        let root =
+            std::env::temp_dir().join(format!("gfm-conflict-target-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.txt");
+        let target = root.join("conflict-target-unavailable".repeat(64));
+        std::fs::write(&source, "new").unwrap();
+
+        let err = OperationConflictReport::evaluate(
+            &Operation::Copy {
+                from: source,
+                to: target,
+            },
+            ConflictPolicy::Fail,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("path existence unavailable"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

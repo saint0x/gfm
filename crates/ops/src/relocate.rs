@@ -27,7 +27,7 @@ pub(crate) fn move_path(
     progress.check_cancelled()?;
     ensure_source_exists(from)?;
     crate::locked::ensure_unlocked_tree(from, "move")?;
-    if resuming && path_exists_or_symlink(to) {
+    if resuming && path_exists_or_symlink(to)? {
         copy_path(
             from,
             to,
@@ -40,7 +40,7 @@ pub(crate) fn move_path(
         delete_path_untracked(from)?;
         return Ok(());
     }
-    if conflict == ConflictPolicy::Merge && path_exists_or_symlink(to) {
+    if conflict == ConflictPolicy::Merge && path_exists_or_symlink(to)? {
         copy_path(
             from,
             to,

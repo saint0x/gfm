@@ -127,7 +127,7 @@ fn copy_path_with_session(
     progress.check_cancelled()?;
     ensure_source_exists(from)?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
-    if resuming && path_exists_or_symlink(to) {
+    if resuming && path_exists_or_symlink(to)? {
         return copy_path_existing(
             from,
             to,
@@ -138,7 +138,7 @@ fn copy_path_with_session(
             session,
         );
     }
-    if conflict == ConflictPolicy::Merge && metadata.is_dir() && path_exists_or_symlink(to) {
+    if conflict == ConflictPolicy::Merge && metadata.is_dir() && path_exists_or_symlink(to)? {
         return copy_path_existing(
             from,
             to,
@@ -210,7 +210,7 @@ fn copy_file_replacing_existing(
         )?;
         rename_replacing_file(&stage, to)
     })();
-    if result.is_err() && path_exists_or_symlink(&stage) {
+    if result.is_err() && path_exists_or_symlink(&stage).unwrap_or(false) {
         let _ = delete_path_untracked(&stage);
     }
     result
@@ -243,7 +243,7 @@ fn copy_directory_replacing_existing(
         )?;
         commit_staged_directory_replace(&stage, to, &backup, delete_path_untracked)
     })();
-    if result.is_err() && path_exists_or_symlink(&stage) {
+    if result.is_err() && path_exists_or_symlink(&stage).unwrap_or(false) {
         let _ = delete_path_untracked(&stage);
     }
     result
@@ -266,7 +266,7 @@ fn copy_symlink_replacing_existing(
         copy_symlink(from, &stage, progress)?;
         rename_replacing_file(&stage, to)
     })();
-    if result.is_err() && path_exists_or_symlink(&stage) {
+    if result.is_err() && path_exists_or_symlink(&stage).unwrap_or(false) {
         let _ = delete_path_untracked(&stage);
     }
     result
@@ -286,7 +286,7 @@ fn copy_directory(
         mode == CopyExistingMode::Fresh && metadata.is_dir();
     let mut created_destination = false;
     let result = (|| {
-        if mode != CopyExistingMode::Fresh && path_exists_or_symlink(to) {
+        if mode != CopyExistingMode::Fresh && path_exists_or_symlink(to)? {
             let destination_metadata =
                 fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
             if !destination_metadata.is_dir() {
@@ -312,7 +312,7 @@ fn copy_directory(
             let child_metadata =
                 fs::symlink_metadata(&source).map_err(|err| GfmError::io(&source, err))?;
             if child_metadata.file_type().is_symlink() {
-                if mode == CopyExistingMode::Resume && path_exists_or_symlink(&destination) {
+                if mode == CopyExistingMode::Resume && path_exists_or_symlink(&destination)? {
                     copy_path_existing(
                         &source,
                         &destination,
@@ -322,7 +322,7 @@ fn copy_directory(
                         progress,
                         session,
                     )?;
-                } else if mode == CopyExistingMode::Merge && path_exists_or_symlink(&destination) {
+                } else if mode == CopyExistingMode::Merge && path_exists_or_symlink(&destination)? {
                     copy_path_existing(
                         &source,
                         &destination,
@@ -337,7 +337,7 @@ fn copy_directory(
                 }
             } else if child_metadata.is_dir() {
                 copy_directory(&source, &destination, execution, mode, progress, session)?;
-            } else if mode == CopyExistingMode::Resume && path_exists_or_symlink(&destination) {
+            } else if mode == CopyExistingMode::Resume && path_exists_or_symlink(&destination)? {
                 copy_path_existing(
                     &source,
                     &destination,
@@ -347,7 +347,7 @@ fn copy_directory(
                     progress,
                     session,
                 )?;
-            } else if mode == CopyExistingMode::Merge && path_exists_or_symlink(&destination) {
+            } else if mode == CopyExistingMode::Merge && path_exists_or_symlink(&destination)? {
                 copy_path_existing(
                     &source,
                     &destination,

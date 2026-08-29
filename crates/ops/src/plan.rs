@@ -25,7 +25,13 @@ pub(crate) fn plan_operation_checked(
 
 fn plan_path(path: &Path, cancellation: &OperationCancellation) -> Result<OperationProgress> {
     cancellation.check()?;
-    let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
+    let metadata = fs::symlink_metadata(path).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            GfmError::io(path, err)
+        } else {
+            GfmError::io(path, format!("operation path metadata unavailable: {err}"))
+        }
+    })?;
     let mut progress = OperationProgress {
         total_items: 1,
         total_bytes: item_bytes(&metadata),
@@ -49,7 +55,13 @@ fn plan_empty_trash(
     cancellation: &OperationCancellation,
 ) -> Result<OperationProgress> {
     cancellation.check()?;
-    let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
+    let metadata = fs::symlink_metadata(path).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            GfmError::io(path, err)
+        } else {
+            GfmError::io(path, format!("operation path metadata unavailable: {err}"))
+        }
+    })?;
     if !metadata.is_dir() {
         return Err(GfmError::Format(format!(
             "empty trash requires a directory: {}",

@@ -65,6 +65,47 @@ fn read_journal_surfaces_path_probe_failures() {
 }
 
 #[test]
+fn copy_surfaces_source_path_probe_failures_before_mutation() {
+    let root = unique_temp_dir("gfm-ops-source-probe");
+    let journal = root.join("journal.log");
+    let source = root.join("source-unavailable".repeat(64));
+    let destination = root.join("destination");
+
+    let err = Operator::new(OperationContext::new(&journal))
+        .execute(Operation::Copy {
+            from: source,
+            to: destination.clone(),
+        })
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("operation path metadata unavailable"));
+    assert!(!destination.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn copy_surfaces_destination_path_probe_failures_before_mutation() {
+    let root = unique_temp_dir("gfm-ops-destination-probe");
+    let journal = root.join("journal.log");
+    let source = root.join("source.txt");
+    let destination = root.join("destination-unavailable".repeat(64));
+    fs::write(&source, "source").unwrap();
+
+    let err = Operator::new(OperationContext::new(&journal))
+        .execute(Operation::Copy {
+            from: source.clone(),
+            to: destination,
+        })
+        .unwrap_err();
+
+    assert!(err.to_string().contains("path existence unavailable"));
+    assert_eq!(fs::read_to_string(source).unwrap(), "source");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn plans_recursive_copy_totals_before_execution() {
     let root = unique_temp_dir("gfm-ops-plan-copy");
     let source = root.join("source");
@@ -215,7 +256,7 @@ fn recursive_copy_stops_after_cancellation_checkpoint() {
         .unwrap_err();
 
     assert!(matches!(err, GfmError::Cancelled));
-    assert!(!path_exists_or_symlink(&destination));
+    assert!(!path_exists_or_symlink(&destination).unwrap());
     assert_eq!(
         events
             .iter()
@@ -1770,7 +1811,7 @@ fn cancelled_fresh_directory_copy_removes_incomplete_destination() {
         .unwrap_err();
 
     assert!(matches!(err, GfmError::Cancelled));
-    assert!(!path_exists_or_symlink(&destination));
+    assert!(!path_exists_or_symlink(&destination).unwrap());
     let entries = read_journal(&journal).unwrap();
     assert_eq!(entries[1].status, OperationStatus::Cancelled);
 
@@ -1810,7 +1851,7 @@ fn cancelled_fresh_package_copy_removes_incomplete_bundle() {
         .unwrap_err();
 
     assert!(matches!(err, GfmError::Cancelled));
-    assert!(!path_exists_or_symlink(&destination));
+    assert!(!path_exists_or_symlink(&destination).unwrap());
     let entries = read_journal(&journal).unwrap();
     assert_eq!(entries[1].status, OperationStatus::Cancelled);
 
@@ -2809,7 +2850,7 @@ fn move_replace_symlink_uses_final_rename_without_predelete() {
         })
         .unwrap();
 
-    assert!(!path_exists_or_symlink(&source));
+    assert!(!path_exists_or_symlink(&source).unwrap());
     assert_eq!(fs::read_link(&destination).unwrap(), new_target);
 
     fs::remove_dir_all(root).unwrap();
@@ -2874,7 +2915,7 @@ fn move_replace_directory_uses_final_rename_without_predelete() {
         })
         .unwrap();
 
-    assert!(!path_exists_or_symlink(&source));
+    assert!(!path_exists_or_symlink(&source).unwrap());
     assert_eq!(
         fs::read_to_string(destination.join("nested").join("new.txt")).unwrap(),
         "new"

@@ -144,7 +144,7 @@ impl Operator {
             let _ = self.append(entry);
             return Err(err);
         }
-        if should_skip_operation(&operation, self.context.conflict) {
+        if should_skip_operation(&operation, self.context.conflict)? {
             let entry = JournalEntry::skipped(id, operation);
             self.append(entry.clone())?;
             return Ok(entry);
@@ -231,6 +231,12 @@ impl Operator {
     }
 }
 
-fn should_skip_operation(operation: &Operation, conflict: ConflictPolicy) -> bool {
-    conflict == ConflictPolicy::Skip && operation.target_path().is_some_and(path_exists_or_symlink)
+fn should_skip_operation(operation: &Operation, conflict: ConflictPolicy) -> Result<bool> {
+    if conflict != ConflictPolicy::Skip {
+        return Ok(false);
+    }
+    operation
+        .target_path()
+        .map(path_exists_or_symlink)
+        .unwrap_or(Ok(false))
 }
