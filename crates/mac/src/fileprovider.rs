@@ -1565,7 +1565,9 @@ impl CloudHints {
             }
         }
 
-        sources.extend(path_sources);
+        if should_include_provider_path_sources(&native, &native_identity) {
+            sources.extend(path_sources);
+        }
 
         Self {
             native,
@@ -1615,6 +1617,13 @@ fn should_read_provider_xattrs(
         || native.status != gfm_mac_sys::NativeFileProviderStatus::Available
         || native.is_ubiquitous == Some(true)
         || native_has_ubiquitous_materialization_evidence(native)
+}
+
+fn should_include_provider_path_sources(
+    native: &NativeFileProviderResourceValues,
+    native_identity: &NativeFileProviderIdentity,
+) -> bool {
+    !native_resource_proves_local_only(native, native_identity)
 }
 
 fn identity_not_queried() -> NativeFileProviderIdentity {
@@ -4817,6 +4826,43 @@ mod tests {
     }
 
     #[test]
+    fn native_local_only_resource_suppresses_provider_path_hints() {
+        let path = PathBuf::from("/tmp/Downloaded.icloud.md");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(false);
+        assert!(!should_include_provider_path_sources(
+            &native,
+            &identity_not_queried()
+        ));
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_eq!(report.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-not-provider-backed")
+        );
+        assert_eq!(report.source, "native-url-resource");
+        assert!(!report
+            .source
+            .split('+')
+            .any(|source| source == "fixture-name"));
+    }
+
+    #[test]
     fn provider_xattr_gate_keeps_fallback_paths_for_provider_uncertainty() {
         let mut missing_native = native_values();
         missing_native.status = NativeFileProviderStatus::Missing;
@@ -4829,6 +4875,10 @@ mod tests {
             reason: None,
         };
 
+        assert!(should_include_provider_path_sources(
+            &missing_native,
+            &identity_not_queried()
+        ));
         assert!(should_read_provider_xattrs(
             &native_values(),
             &identity_not_queried(),
