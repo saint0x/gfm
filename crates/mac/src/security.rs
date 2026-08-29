@@ -550,24 +550,41 @@ fn probe_path(path: &Path, intent: AccessIntent) -> AccessProbeState {
 
 fn probe_write(path: &Path) -> AccessProbeState {
     match fs::metadata(path) {
-        Ok(metadata) if metadata.is_dir() => {
-            let probe = path.join(write_probe_file_name());
-            match fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&probe)
-            {
-                Ok(_) => {
-                    let _ = fs::remove_file(probe);
-                    AccessProbeState::Granted
-                }
-                Err(err) => probe_error(err.kind()),
-            }
-        }
+        Ok(metadata) if metadata.is_dir() => probe_create_in_directory(path),
         Ok(_) => match fs::OpenOptions::new().append(true).open(path) {
             Ok(_) => AccessProbeState::Granted,
             Err(err) => probe_error(err.kind()),
         },
+        Err(err) if err.kind() == ErrorKind::NotFound => probe_create_in_parent(path),
+        Err(err) => probe_error(err.kind()),
+    }
+}
+
+fn probe_create_in_parent(path: &Path) -> AccessProbeState {
+    let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return AccessProbeState::Missing;
+    };
+    match fs::metadata(parent) {
+        Ok(metadata) if metadata.is_dir() => probe_create_in_directory(parent),
+        Ok(_) => AccessProbeState::Denied,
+        Err(err) => probe_error(err.kind()),
+    }
+}
+
+fn probe_create_in_directory(path: &Path) -> AccessProbeState {
+    let probe = path.join(write_probe_file_name());
+    match fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = fs::remove_file(probe);
+            AccessProbeState::Granted
+        }
         Err(err) => probe_error(err.kind()),
     }
 }
@@ -809,6 +826,58 @@ mod tests {
         assert_eq!(report.action, SecurityDecisionAction::Deny);
         assert!(!report.can_write);
         assert!(report.as_tsv().contains("\tprobe=unavailable\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn write_probe_allows_missing_file_when_parent_is_writable() {
+        let root = temp_root("security-write-missing-creatable");
+        let path = root.join("New.md");
+
+        let report = SecurityScopedAccessReport::evaluate(&path, AccessIntent::Write);
+
+        assert_eq!(report.probe, AccessProbeState::Granted);
+        assert_eq!(report.mode, SecurityAccessMode::PlainFilesystem);
+        assert_eq!(report.action, SecurityDecisionAction::Allow);
+        assert!(report.can_write);
+        assert!(!path.exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn protected_write_probe_allows_missing_file_with_retained_bookmark_requirement() {
+        let home = temp_root("security-write-missing-protected-home");
+        let documents = home.join("Documents");
+        fs::create_dir_all(&documents).unwrap();
+        let path = documents.join("New.md");
+
+        let report = evaluate_for_home(&path, AccessIntent::Write, &home);
+
+        assert_eq!(report.scope, ProtectedScope::Documents);
+        assert_eq!(report.probe, AccessProbeState::Granted);
+        assert_eq!(report.mode, SecurityAccessMode::SecurityScopedBookmark);
+        assert_eq!(report.action, SecurityDecisionAction::Allow);
+        assert!(report.bookmark_required);
+        assert!(report.can_write);
+        assert!(!path.exists());
+
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn write_probe_keeps_missing_state_when_parent_is_missing() {
+        let root = temp_root("security-write-missing-parent");
+        let path = root.join("Missing").join("New.md");
+
+        let report = SecurityScopedAccessReport::evaluate(&path, AccessIntent::Write);
+
+        assert_eq!(report.probe, AccessProbeState::Missing);
+        assert_eq!(report.mode, SecurityAccessMode::Denied);
+        assert_eq!(report.action, SecurityDecisionAction::Deny);
+        assert!(!report.can_write);
+        assert!(!path.exists());
 
         fs::remove_dir_all(root).unwrap();
     }

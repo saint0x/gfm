@@ -416,6 +416,36 @@ fn reports_security_scoped_access_from_binary() {
 }
 
 #[test]
+fn security_scope_allows_missing_write_target_when_parent_is_writable_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-security-write-{}", std::process::id()));
+    let path = root.join("New.md");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("security-scope")
+        .arg(&path)
+        .arg("write")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("security-scope\t"));
+    assert!(stdout.contains("\tintent=write\tscope=none\tprobe=granted\t"));
+    assert!(stdout.contains("\tmode=plain-filesystem\taction=allow\t"));
+    assert!(stdout.contains("\tbookmark-required=false\t"));
+    assert!(stdout.contains("\tcan-write=true\t"));
+    assert!(!path.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_security_worker_admission_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-security-worker-{}", std::process::id()));
     let path = root.join("plain.md");
