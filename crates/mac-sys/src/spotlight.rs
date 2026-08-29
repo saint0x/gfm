@@ -11,6 +11,7 @@ use core_foundation_sys::base::CFTypeID;
 use core_foundation_sys::base::CFTypeRef;
 use libc::c_void;
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
 use std::ptr::NonNull;
 
@@ -80,18 +81,27 @@ pub fn read_spotlight_attributes_batch(
 }
 
 fn path_to_url(path: &Path) -> Result<PathUrl, String> {
-    let path_string = path
-        .to_str()
+    path.to_str()
         .ok_or_else(|| format!("path is not valid UTF-8: {}", path.display()))?;
-    if !path.exists() {
-        return Ok(PathUrl::Missing(format!(
-            "path does not exist: {}",
-            path.display()
-        )));
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => {
+            return Ok(PathUrl::Missing(format!(
+                "path does not exist: {}",
+                path.display()
+            )));
+        }
+        Err(error) => {
+            return Err(format!(
+                "path existence unavailable: {error}: {}",
+                path.display()
+            ));
+        }
     }
-    let url = CFURL::from_path(path, path.is_dir())
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("path metadata unavailable: {error}: {}", path.display()))?;
+    let url = CFURL::from_path(path, metadata.is_dir())
         .ok_or_else(|| format!("invalid path URL: {}", path.display()))?;
-    let _ = path_string;
     Ok(PathUrl::Ready(url))
 }
 
@@ -276,5 +286,22 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("path does not exist"));
+    }
+
+    #[test]
+    fn path_probe_errors_are_unavailable_not_missing() {
+        let path = std::env::temp_dir().join("s".repeat(300));
+
+        let snapshot =
+            read_spotlight_attributes(&path, &["kMDItemDisplayName", "kMDItemContentType"])
+                .unwrap();
+
+        assert_eq!(snapshot.status, NativeSpotlightStatus::Unavailable);
+        assert!(snapshot.attributes.is_empty());
+        assert!(snapshot
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("path existence unavailable"));
     }
 }

@@ -4,6 +4,7 @@ use core_foundation::url::CFURL;
 use core_foundation_sys::base::{Boolean, CFAllocatorRef, CFOptionFlags};
 use core_foundation_sys::error::CFErrorRef;
 use core_foundation_sys::url::CFURLRef;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
@@ -73,10 +74,28 @@ pub enum NativeBookmarkStatus {
 }
 
 pub fn create_security_scoped_bookmark(path: &Path, read_only: bool) -> NativeBookmarkData {
-    if !path.exists() {
-        return missing_data(format!("bookmark path does not exist: {}", path.display()));
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => {
+            return missing_data(format!("bookmark path does not exist: {}", path.display()));
+        }
+        Err(error) => {
+            return unavailable_data(format!(
+                "bookmark path existence unavailable: {error}: {}",
+                path.display()
+            ));
+        }
     }
-    let Some(url) = CFURL::from_path(path, path.is_dir()) else {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return unavailable_data(format!(
+                "bookmark path metadata unavailable: {error}: {}",
+                path.display()
+            ));
+        }
+    };
+    let Some(url) = CFURL::from_path(path, metadata.is_dir()) else {
         return unavailable_data(format!("invalid bookmark path URL: {}", path.display()));
     };
 
@@ -249,6 +268,20 @@ mod tests {
 
         assert_eq!(bookmark.status, NativeBookmarkStatus::Missing);
         assert!(bookmark.data.is_empty());
+    }
+
+    #[test]
+    fn reports_unavailable_bookmark_targets_when_path_probe_fails() {
+        let path = std::env::temp_dir().join("b".repeat(300));
+        let bookmark = create_security_scoped_bookmark(&path, true);
+
+        assert_eq!(bookmark.status, NativeBookmarkStatus::Unavailable);
+        assert!(bookmark.data.is_empty());
+        assert!(bookmark
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("bookmark path existence unavailable"));
     }
 
     #[test]
