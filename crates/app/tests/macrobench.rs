@@ -296,6 +296,39 @@ fn pixel_threshold_rejects_ungoverned_mask_from_binary() {
 }
 
 #[test]
+fn pixel_threshold_rejects_loose_governed_mask_from_binary() {
+    let root = unique_temp_dir("gfm-cli-pixel-threshold-loose-mask");
+    let expected = root.join("expected.rgba");
+    let actual = root.join("actual.rgba");
+    let mask = root.join("mask.tsv");
+    fs::write(&expected, [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
+    fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
+    fs::write(&mask, "0\t0\t1\t1\tOS-owned toolbar repaint\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "pixel-threshold-check",
+            "toolbar",
+            expected.to_str().unwrap(),
+            actual.to_str().unwrap(),
+            "2",
+            "1",
+            mask.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("threshold\ttoolbar\t"), "{stdout}");
+    assert!(stderr.contains("governed mask 0,0,1,1"), "{stderr}");
+    assert!(stderr.contains("loose or stale"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn pixel_routes_refuse_unreachable_inputs_before_reading_from_binary() {
     let root = unique_temp_dir("gfm-cli-pixel-preflight-root");
     let offline = unique_temp_dir("gfm-cli-pixel-preflight-offline");

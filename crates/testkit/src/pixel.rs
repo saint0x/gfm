@@ -83,6 +83,7 @@ pub struct PixelDiffOptions {
     pub size: PixelSize,
     pub masks: Vec<PixelMaskRegion>,
     pub fail_on_masked_mismatch: bool,
+    pub require_masked_drift: bool,
 }
 
 impl PixelDiffOptions {
@@ -91,6 +92,7 @@ impl PixelDiffOptions {
             size,
             masks: Vec::new(),
             fail_on_masked_mismatch: false,
+            require_masked_drift: false,
         }
     }
 
@@ -104,6 +106,7 @@ impl PixelDiffOptions {
 
     pub fn with_governed_masks(mut self, masks: Vec<PixelMaskRegion>) -> Self {
         self.masks = masks;
+        self.require_masked_drift = true;
         self
     }
 }
@@ -399,6 +402,20 @@ pub fn diff_rgba(
 
     if options.fail_on_masked_mismatch && masked_mismatches > 0 {
         unmasked_mismatches += masked_mismatches;
+    }
+    if options.require_masked_drift {
+        for region in &regions {
+            if region.mismatched_pixels == 0 {
+                return Err(GfmError::Format(format!(
+                    "governed mask {},{},{},{} is loose or stale: no drift covered for `{}`",
+                    region.rect.x,
+                    region.rect.y,
+                    region.rect.width,
+                    region.rect.height,
+                    region.name
+                )));
+            }
+        }
     }
 
     Ok(PixelDiffReport {
@@ -773,6 +790,33 @@ mod tests {
 
         assert_eq!(masks[0].rect, PixelMaskRect::new(1, 2, 3, 4));
         assert_eq!(masks[0].reason, "clock glyph blink");
+    }
+
+    #[test]
+    fn governed_masks_reject_loose_regions_without_drift() {
+        let expected = vec![0, 0, 0, 255, 10, 10, 10, 255];
+        let actual = vec![0, 0, 0, 255, 9, 10, 10, 255];
+        let options = PixelDiffOptions::strict(PixelSize::new(2, 1)).with_governed_masks(vec![
+            PixelMaskRegion::new(PixelMaskRect::new(0, 0, 1, 1), "stale clock mask"),
+        ]);
+
+        let err = diff_rgba(&expected, &actual, &options).unwrap_err();
+
+        assert!(err.to_string().contains("loose or stale"));
+        assert!(err.to_string().contains("stale clock mask"));
+    }
+
+    #[test]
+    fn legacy_masks_may_cover_zero_drift_for_raw_pixel_diff() {
+        let expected = vec![0, 0, 0, 255, 10, 10, 10, 255];
+        let actual = vec![0, 0, 0, 255, 9, 10, 10, 255];
+        let options = PixelDiffOptions::strict(PixelSize::new(2, 1))
+            .with_masks(vec![PixelMaskRect::new(0, 0, 1, 1)]);
+
+        let report = diff_rgba(&expected, &actual, &options).unwrap();
+
+        assert_eq!(report.unmasked_mismatches, 1);
+        assert_eq!(report.masked_mismatches, 0);
     }
 
     #[test]
