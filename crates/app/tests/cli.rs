@@ -374,6 +374,42 @@ fn index_routes_refuse_unreachable_outputs_before_writing_from_binary() {
 }
 
 #[test]
+fn index_reports_output_path_probe_failure_before_scanning_from_binary() {
+    let root = unique_temp_dir("gfm-cli-index-output-probe-root");
+    let index = root.join(format!("{}.gfmidx", "records-unavailable".repeat(16)));
+    fs::write(root.join("Visible.txt"), "must not be indexed").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), index.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("index write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("records-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=index records\t"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=index\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!index.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn index_routes_refuse_unreachable_state_inputs_before_reading_from_binary() {
     let offline = unique_temp_dir("gfm-cli-index-route-input-unreachable");
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
@@ -2634,6 +2670,44 @@ fn persists_fsevents_cursor_from_binary() {
 }
 
 #[test]
+fn fsevents_cursor_checkpoint_surfaces_cursor_probe_failure_before_state_read_from_binary() {
+    let root = unique_temp_dir("gfm-cli-fsevents-cursor-probe-root");
+    let state = root.join("state.gfmstate");
+    let cursor = root.join(format!("{}.gfmcursor", "cursor-unavailable".repeat(16)));
+    fs::write(&state, "state is not parsed after cursor probe failure\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-cursor-checkpoint",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "123",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("index write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("cursor-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=fsevents cursor checkpoint state\t"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&state).unwrap(),
+        "state is not parsed after cursor probe failure\n"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn schedules_fsevents_repair_from_binary() {
     let root = unique_temp_dir("gfm-cli-repair-root");
     let index = unique_temp_path("gfm-cli-repair-records", "gfmidx");
@@ -2803,6 +2877,60 @@ fn fsevents_repair_schedule_refuses_unreachable_dropped_root_before_reading_stat
 
     fs::remove_dir_all(local).unwrap();
     fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn fsevents_repair_schedule_surfaces_dropped_root_probe_failure_before_reading_state_from_binary() {
+    let local = unique_temp_dir("gfm-cli-fsevents-repair-dropped-probe-local");
+    let state = local.join("state.gfmstate");
+    let cursor = local.join("cursor.gfmcursor");
+    let dropped = local.join("dropped-root-unavailable".repeat(16));
+    fs::write(
+        &state,
+        "state is not parsed after dropped root probe failure\n",
+    )
+    .unwrap();
+    fs::write(
+        &cursor,
+        "cursor is not parsed after dropped root probe failure\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-repair-schedule",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "201",
+            "kernel-dropped",
+            dropped.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("fsevents repair dropped root existence unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("dropped-root-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=fsevents repair schedule state\t"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&state).unwrap(),
+        "state is not parsed after dropped root probe failure\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&cursor).unwrap(),
+        "cursor is not parsed after dropped root probe failure\n"
+    );
+
+    fs::remove_dir_all(local).unwrap();
 }
 
 #[test]

@@ -11,7 +11,8 @@ use gfm_index::{
 use gfm_jobs::Priority;
 use gfm_mac::{AccessIntent, FileEventStream, WatchRoot};
 use gfm_types::{FileEvent, FileEventKind, FileKind, GfmError, Result};
-use std::io::Write;
+use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -51,7 +52,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let output = required_path(args.next(), "index requires an output path")?;
             preflight_index_volume_access(&root)?;
             let _output_access = preflight_index_write(&output, "index records")?;
-            let volume = path_volume(&root).or_else(|| path_volume(write_probe_path(&output)));
+            let output_probe = write_probe_path(&output)?.to_path_buf();
+            let volume = path_volume(&root).or_else(|| path_volume(&output_probe));
             let (record_count, inaccessible_count) = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -74,9 +76,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             preflight_index_volume_access(&root)?;
             let _records_access = preflight_index_write(&records, "index records")?;
             let _state_access = preflight_index_write(&state, "index state")?;
+            let records_probe = write_probe_path(&records)?.to_path_buf();
+            let state_probe = write_probe_path(&state)?.to_path_buf();
             let volume = path_volume(&root)
-                .or_else(|| path_volume(write_probe_path(&records)))
-                .or_else(|| path_volume(write_probe_path(&state)));
+                .or_else(|| path_volume(&records_probe))
+                .or_else(|| path_volume(&state_probe));
             let state = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -110,9 +114,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             preflight_index_volume_access(&root)?;
             let _records_access = preflight_index_write(&records, "scan progress records")?;
             let _progress_access = preflight_index_write(&progress, "scan progress checkpoint")?;
+            let records_probe = write_probe_path(&records)?.to_path_buf();
+            let progress_probe = write_probe_path(&progress)?.to_path_buf();
             let volume = path_volume(&root)
-                .or_else(|| path_volume(write_probe_path(&records)))
-                .or_else(|| path_volume(write_probe_path(&progress)));
+                .or_else(|| path_volume(&records_probe))
+                .or_else(|| path_volume(&progress_probe));
             let checkpoint = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -181,9 +187,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             preflight_index_volume_access(&root)?;
             preflight_index_write_volume(&from, "rename correlation source")?;
             preflight_index_write_volume(&to, "rename correlation destination")?;
+            let from_probe = write_probe_path(&from)?.to_path_buf();
+            let to_probe = write_probe_path(&to)?.to_path_buf();
             let volume = path_volume(&root)
-                .or_else(|| path_volume(write_probe_path(&from)))
-                .or_else(|| path_volume(write_probe_path(&to)));
+                .or_else(|| path_volume(&from_probe))
+                .or_else(|| path_volume(&to_probe));
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
@@ -396,7 +404,8 @@ fn run_fsevents_cursor_checkpoint(
         "fsevents cursor checkpoint state",
     )?;
     preflight_index_write_volume(&cursor, "fsevents cursor checkpoint")?;
-    let volume = path_volume(&state).or_else(|| path_volume(write_probe_path(&cursor)));
+    let cursor_probe = write_probe_path(&cursor)?.to_path_buf();
+    let volume = path_volume(&state).or_else(|| path_volume(&cursor_probe));
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
@@ -480,14 +489,20 @@ fn run_fsevents_repair_schedule(
 fn existing_dropped_roots(dropped_roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut existing = Vec::new();
     for root in dropped_roots {
+        if !root.try_exists().map_err(|err| {
+            GfmError::io(
+                root,
+                format!("fsevents repair dropped root existence unavailable: {err}"),
+            )
+        })? {
+            continue;
+        }
         preflight_volume_access_scope(
             root,
             AccessIntent::Read,
             "fsevents repair schedule dropped root",
         )?;
-        if root.exists() {
-            existing.push(root.clone());
-        }
+        existing.push(root.clone());
     }
     Ok(existing)
 }
@@ -523,18 +538,23 @@ fn preflight_index_read(path: &Path, worker: &str) -> Result<ScopedAccessGuard> 
 }
 
 fn preflight_index_write(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(write_probe_path(path), AccessIntent::Write, worker)
+    preflight_access_scope(write_probe_path(path)?, AccessIntent::Write, worker)
 }
 
 fn preflight_index_write_volume(path: &Path, worker: &str) -> Result<()> {
-    preflight_volume_access_scope(write_probe_path(path), AccessIntent::Write, worker)
+    preflight_volume_access_scope(write_probe_path(path)?, AccessIntent::Write, worker)
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("index write path metadata unavailable: {err}"),
+        )),
     }
-    crate::parent_or_cwd(path)
 }
 
 fn parse_usize(value: &str, message: &str) -> Result<usize> {
