@@ -947,12 +947,10 @@ impl From<gfm_mac_sys::NativeVolumeEventKind> for VolumeEventKind {
 impl VolumeEventReport {
     fn from_native(event: gfm_mac_sys::NativeVolumeEvent) -> Self {
         let path = event.description.volume_path.clone();
-        let descriptor = path
-            .as_ref()
-            .filter(|path| path.exists())
-            .and_then(|path| VolumeDescriptor::for_path(path).ok());
+        let kind = event.kind.into();
+        let descriptor = native_event_descriptor(kind, path.as_deref());
         Self {
-            kind: event.kind.into(),
+            kind,
             native_status: event.description.status,
             path,
             descriptor,
@@ -980,6 +978,17 @@ impl VolumeEventReport {
                 .unwrap_or_else(|| "-".to_string()),
             descriptor
         )
+    }
+}
+
+fn native_event_descriptor(kind: VolumeEventKind, path: Option<&Path>) -> Option<VolumeDescriptor> {
+    if kind == VolumeEventKind::Unavailable {
+        return None;
+    }
+    let path = path?;
+    match path.try_exists() {
+        Ok(true) => VolumeDescriptor::for_path(path).ok(),
+        Ok(false) | Err(_) => None,
     }
 }
 
@@ -3315,6 +3324,71 @@ mod tests {
         assert!(report
             .as_tsv()
             .contains("\tcurrent-kind=-\tcurrent-mount=unmounted\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_disappeared_event_for_missing_path_does_not_synthesize_descriptor() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-native-volume-event-missing-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let mut description = native_description(|description| {
+            description.status = NativeVolumeStatus::Missing;
+            description.volume_path = Some(root.clone());
+            description.reason = Some("volume path does not exist".to_string());
+        });
+        description.volume_name = Some("Gone Drive".to_string());
+        let event = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Disappeared,
+            description,
+        };
+
+        let report = VolumeEventReport::from_native(event);
+        let invalidation = VolumeEventInvalidationReport::from_event(&report);
+
+        assert_eq!(report.kind, VolumeEventKind::Disappeared);
+        assert_eq!(report.native_status, NativeVolumeStatus::Missing);
+        assert_eq!(report.path.as_deref(), Some(root.as_path()));
+        assert!(report.descriptor.is_none());
+        assert_eq!(
+            invalidation.current_mount_state,
+            Some(MountState::Unmounted)
+        );
+        assert!(invalidation.invalidate_sidebar);
+        assert!(invalidation.invalidate_operation_policy);
+        assert!(invalidation.invalidate_index_admission);
+    }
+
+    #[test]
+    fn native_unavailable_event_does_not_publish_current_descriptor() {
+        let root = unique_temp_dir("gfm-native-volume-event-unavailable");
+        fs::write(root.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        let description = native_description(|description| {
+            description.status = NativeVolumeStatus::Unavailable;
+            description.volume_path = Some(root.clone());
+            description.reason = Some("diskarbitration session unavailable".to_string());
+        });
+        let event = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Unavailable,
+            description,
+        };
+
+        let report = VolumeEventReport::from_native(event);
+        let invalidation = VolumeEventInvalidationReport::from_event(&report);
+
+        assert_eq!(report.kind, VolumeEventKind::Unavailable);
+        assert_eq!(report.native_status, NativeVolumeStatus::Unavailable);
+        assert_eq!(report.path.as_deref(), Some(root.as_path()));
+        assert!(report.descriptor.is_none());
+        assert_eq!(invalidation.previous_kind, None);
+        assert_eq!(invalidation.current_kind, None);
+        assert!(invalidation.invalidate_sidebar);
+        assert!(invalidation.invalidate_operation_policy);
+        assert!(invalidation.invalidate_index_admission);
 
         fs::remove_dir_all(root).unwrap();
     }
