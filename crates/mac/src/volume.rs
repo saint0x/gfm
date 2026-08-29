@@ -153,6 +153,7 @@ pub struct VolumeDescriptor {
     pub resource_uuid: Option<String>,
     pub resource_automounted: Option<bool>,
     pub resource_browsable: Option<bool>,
+    pub resource_encrypted: Option<bool>,
     pub resource_reachable: Option<bool>,
     pub resource_root_file_system: Option<bool>,
     pub resource_remount_url: Option<String>,
@@ -310,6 +311,7 @@ impl VolumeDescriptor {
                 .as_ref()
                 .and_then(|resource| resource.is_automounted),
             resource_browsable: resource.as_ref().and_then(|resource| resource.is_browsable),
+            resource_encrypted: resource.as_ref().and_then(|resource| resource.is_encrypted),
             resource_reachable: resource.as_ref().and_then(|resource| resource.is_reachable),
             resource_root_file_system: resource
                 .as_ref()
@@ -394,7 +396,7 @@ impl VolumeDescriptor {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tapfs-container-uuid={}\tapfs-role={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-reachable={}\tresource-root-filesystem={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tapfs-container-uuid={}\tapfs-role={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-encrypted={}\tresource-reachable={}\tresource-root-filesystem={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -488,6 +490,9 @@ impl VolumeDescriptor {
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.resource_browsable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.resource_encrypted
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.resource_reachable
@@ -1627,6 +1632,7 @@ fn topology_change_reason(
         || previous.case_preserving != current.case_preserving
         || previous.resource_automounted != current.resource_automounted
         || previous.resource_browsable != current.resource_browsable
+        || previous.resource_encrypted != current.resource_encrypted
         || previous.resource_reachable != current.resource_reachable
         || previous.resource_remount_url != current.resource_remount_url
         || previous.device_protocol != current.device_protocol
@@ -2330,6 +2336,7 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tresource-uuid="));
         assert!(descriptor.as_tsv().contains("\tresource-automounted="));
         assert!(descriptor.as_tsv().contains("\tresource-browsable="));
+        assert!(descriptor.as_tsv().contains("\tresource-encrypted="));
         assert!(descriptor.as_tsv().contains("\tresource-reachable=true\t"));
         assert!(descriptor
             .as_tsv()
@@ -2910,6 +2917,7 @@ mod tests {
         let mut current_volume = previous_volume.clone();
         current_volume.filesystem = Some("apfs".to_string());
         current_volume.case_preserving = Some(true);
+        current_volume.resource_encrypted = Some(true);
         current_volume.resource_reachable = Some(true);
         current_volume.device_protocol = Some("USB".to_string());
         current_volume.device_model = Some("External SSD".to_string());
@@ -3506,6 +3514,7 @@ mod tests {
             is_automounted: None,
             is_browsable: None,
             is_ejectable: None,
+            is_encrypted: None,
             is_internal: None,
             is_local: None,
             is_read_only: None,

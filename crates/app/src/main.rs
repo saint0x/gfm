@@ -319,6 +319,7 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
     push_signature_bool(&mut tokens, "case-preserving", volume.case_preserving);
     push_signature_bool(&mut tokens, "automounted", volume.resource_automounted);
     push_signature_bool(&mut tokens, "browsable", volume.resource_browsable);
+    push_signature_bool(&mut tokens, "resource-encrypted", volume.resource_encrypted);
     push_signature_bool(&mut tokens, "resource-reachable", volume.resource_reachable);
     push_signature_bool(&mut tokens, "local", volume.local);
     push_signature_bool(&mut tokens, "mount-local", volume.mount_local);
@@ -337,7 +338,11 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
     push_signature_str(&mut tokens, "model", volume.device_model.as_deref());
     push_signature_str(&mut tokens, "vendor", volume.device_vendor.as_deref());
     push_signature_str(&mut tokens, "device-path", volume.device_path.as_deref());
-    push_signature_bool(&mut tokens, "encrypted", volume.media_encrypted);
+    push_signature_bool(
+        &mut tokens,
+        "encrypted",
+        volume.media_encrypted.or(volume.resource_encrypted),
+    );
     push_signature_u64(&mut tokens, "block-size", volume.media_block_size_bytes);
     push_signature_u64(&mut tokens, "media-size", volume.media_size_bytes);
     tokens.join("|")
@@ -906,6 +911,7 @@ mod tests {
         descriptor.case_preserving = Some(true);
         descriptor.resource_automounted = Some(false);
         descriptor.resource_browsable = Some(true);
+        descriptor.resource_encrypted = Some(true);
         descriptor.resource_reachable = Some(true);
         descriptor.local = Some(true);
         descriptor.mount_local = Some(true);
@@ -920,7 +926,7 @@ mod tests {
         descriptor.device_model = Some("External SSD".to_string());
         descriptor.device_vendor = Some("Samsung".to_string());
         descriptor.device_path = Some("IODeviceTree:/PCI0@0".to_string());
-        descriptor.media_encrypted = Some(true);
+        descriptor.media_encrypted = None;
         descriptor.media_block_size_bytes = Some(4096);
         descriptor.media_size_bytes = Some(1024 * 1024 * 1024);
 
@@ -947,6 +953,7 @@ mod tests {
             "case-preserving=1",
             "automounted=0",
             "browsable=1",
+            "resource-encrypted=1",
             "resource-reachable=1",
             "local=1",
             "mount-local=1",

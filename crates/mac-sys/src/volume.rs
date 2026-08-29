@@ -167,6 +167,7 @@ extern "C" {
     static NSURLVolumeIsAutomountedKey: CFStringRef;
     static NSURLVolumeIsBrowsableKey: CFStringRef;
     static NSURLVolumeIsEjectableKey: CFStringRef;
+    static NSURLVolumeIsEncryptedKey: CFStringRef;
     static NSURLVolumeIsInternalKey: CFStringRef;
     static NSURLVolumeIsLocalKey: CFStringRef;
     static NSURLVolumeIsReadOnlyKey: CFStringRef;
@@ -238,6 +239,7 @@ pub struct NativeVolumeResourceValues {
     pub is_automounted: Option<bool>,
     pub is_browsable: Option<bool>,
     pub is_ejectable: Option<bool>,
+    pub is_encrypted: Option<bool>,
     pub is_internal: Option<bool>,
     pub is_local: Option<bool>,
     pub is_read_only: Option<bool>,
@@ -955,6 +957,12 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
         "NSURLVolumeIsEjectableKey",
         &mut errors,
     );
+    let is_encrypted = copy_resource_bool(
+        url,
+        unsafe { NSURLVolumeIsEncryptedKey },
+        "NSURLVolumeIsEncryptedKey",
+        &mut errors,
+    );
     let is_internal = copy_resource_bool(
         url,
         unsafe { NSURLVolumeIsInternalKey },
@@ -1013,6 +1021,7 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
     let has_values = is_automounted.is_some()
         || is_browsable.is_some()
         || is_ejectable.is_some()
+        || is_encrypted.is_some()
         || is_internal.is_some()
         || is_local.is_some()
         || is_read_only.is_some()
@@ -1031,6 +1040,7 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
         is_automounted,
         is_browsable,
         is_ejectable,
+        is_encrypted,
         is_internal,
         is_local,
         is_read_only,
@@ -1381,6 +1391,7 @@ fn unavailable_resource_values(
         is_automounted: None,
         is_browsable: None,
         is_ejectable: None,
+        is_encrypted: None,
         is_internal: None,
         is_local: None,
         is_read_only: None,
