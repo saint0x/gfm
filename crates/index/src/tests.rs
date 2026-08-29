@@ -1,4 +1,5 @@
 use super::*;
+use crate::content::read_previous_content_postings;
 use gfm_content::ExtractionQuarantine;
 use gfm_fs::FinderMetadataReport;
 use gfm_jobs::Cancellation;
@@ -3187,6 +3188,35 @@ fn background_content_indexer_incrementally_updates_existing_archive() {
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(segments).unwrap();
     fs::remove_file(content).unwrap();
+}
+
+#[test]
+fn previous_content_postings_probe_reports_unavailable_metadata() {
+    let root = unique_temp_dir("gfm-background-content-previous-probe-root");
+    let unavailable = unprobeable_child_path(&root, "content-postings-unavailable", "gfmcontent");
+
+    let err = read_previous_content_postings(Some(&unavailable)).unwrap_err();
+
+    assert!(format!("{err}").contains("content postings metadata unavailable"));
+    assert!(format!("{err}").contains("content-postings-unavailable"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn previous_content_postings_probe_skips_missing_and_non_file_paths() {
+    let root = unique_temp_dir("gfm-background-content-previous-empty-root");
+    let missing = root.join("missing.gfmcontent");
+
+    assert!(read_previous_content_postings(None).unwrap().is_empty());
+    assert!(read_previous_content_postings(Some(&missing))
+        .unwrap()
+        .is_empty());
+    assert!(read_previous_content_postings(Some(&root))
+        .unwrap()
+        .is_empty());
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

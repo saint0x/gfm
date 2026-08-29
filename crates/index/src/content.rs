@@ -10,7 +10,9 @@ use gfm_store::{
     ContentArchiveCleanupPolicy, ContentArchiveManifest, ContentArchiveManifestEntry,
     ContentMergePolicy, ContentMergeTier,
 };
-use gfm_types::{ContentSegment, FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
+use gfm_types::{
+    ContentPosting, ContentSegment, FileId, FileKind, FileRecord, GfmError, Result, VolumeId,
+};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -506,10 +508,7 @@ impl BackgroundContentIndexer {
             cancellation,
         )?;
         cancellation.check()?;
-        let base_postings = match previous_content_path {
-            Some(path) if path.is_file() => read_content_postings(path)?,
-            _ => Vec::new(),
-        };
+        let base_postings = read_previous_content_postings(previous_content_path)?;
         report.terms = compact_content_postings_with_segments_checked(
             content_path,
             base_postings,
@@ -533,10 +532,7 @@ impl BackgroundContentIndexer {
             Some(quarantine),
         )?;
         request.cancellation.check()?;
-        let base_postings = match request.previous_content_path {
-            Some(path) if path.is_file() => read_content_postings(path)?,
-            _ => Vec::new(),
-        };
+        let base_postings = read_previous_content_postings(request.previous_content_path)?;
         report.terms = compact_content_postings_with_segments_checked(
             request.content_path,
             base_postings,
@@ -655,6 +651,21 @@ impl BackgroundContentIndexer {
 impl Default for BackgroundContentIndexer {
     fn default() -> Self {
         Self::new(Extractor::default(), ContentIndexOptions::default())
+    }
+}
+
+pub(crate) fn read_previous_content_postings(path: Option<&Path>) -> Result<Vec<ContentPosting>> {
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => read_content_postings(path),
+        Ok(_) => Ok(Vec::new()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("content postings metadata unavailable: {err}"),
+        )),
     }
 }
 
