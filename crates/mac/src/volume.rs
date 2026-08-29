@@ -1380,7 +1380,7 @@ impl VolumeOperationReport {
             }
         }
 
-        let volume = VolumeDescriptor::for_path(&path)?;
+        let volume = operation_volume_for_path(&path)?;
         if operation == VolumeOperation::Mount {
             return Ok(Self::with_volume(
                 operation,
@@ -1389,6 +1389,17 @@ impl VolumeOperationReport {
                 None,
                 volume,
                 "native-mount-requires-unmounted-disk-identity",
+            ));
+        }
+        if !operation_targets_volume_root(&path, &volume.path) {
+            return Ok(Self::with_volume_path(
+                path,
+                operation,
+                VolumeOperationDisposition::Refused,
+                None,
+                None,
+                volume,
+                "native-volume-operation-requires-volume-root",
             ));
         }
         if volume.source.starts_with("fixture-marker:") {
@@ -1495,6 +1506,26 @@ impl VolumeOperationReport {
         }
     }
 
+    fn with_volume_path(
+        path: PathBuf,
+        operation: VolumeOperation,
+        disposition: VolumeOperationDisposition,
+        native_status: Option<NativeVolumeOperationStatus>,
+        dissenter_status: Option<u32>,
+        volume: VolumeDescriptor,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            path,
+            operation,
+            disposition,
+            native_status,
+            dissenter_status,
+            volume: Some(volume),
+            reason: reason.into(),
+        }
+    }
+
     pub fn as_tsv(&self) -> String {
         let (kind, mount, stable_identity) = self
             .volume
@@ -1523,6 +1554,27 @@ impl VolumeOperationReport {
             stable_identity,
             escape_field(&self.reason)
         )
+    }
+}
+
+fn operation_volume_for_path(path: &Path) -> Result<VolumeDescriptor> {
+    VolumeDiscoveryReport::for_containing_path(path)
+        .volume_for_path(path)
+        .cloned()
+        .map(Ok)
+        .unwrap_or_else(|| VolumeDescriptor::for_path(path))
+}
+
+fn operation_targets_volume_root(path: &Path, volume_path: &Path) -> bool {
+    if path == volume_path {
+        return true;
+    }
+    match (
+        normalized_lookup_path(path),
+        normalized_lookup_path(volume_path),
+    ) {
+        (Some(path), Some(volume_path)) => path == volume_path,
+        _ => false,
     }
 }
 
@@ -2772,6 +2824,33 @@ mod tests {
         assert!(report
             .as_tsv()
             .contains("\tvolume-kind=external\tmount=mounted\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_operation_refuses_nested_path_before_native_call() {
+        let root = unique_temp_dir("gfm-volume-operation-nested");
+        let nested = root.join("Project").join("Preview.pdf");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        fs::write(&nested, "%PDF-1.7\n").unwrap();
+
+        let report = VolumeOperationReport::execute(&nested, VolumeOperation::Eject).unwrap();
+
+        assert_eq!(report.path, nested);
+        assert_eq!(report.disposition, VolumeOperationDisposition::Refused);
+        assert_eq!(report.native_status, None);
+        assert_eq!(report.dissenter_status, None);
+        assert_eq!(
+            report.reason,
+            "native-volume-operation-requires-volume-root"
+        );
+        assert_eq!(
+            report.volume.as_ref().map(|volume| volume.path.as_path()),
+            Some(root.as_path())
+        );
+        assert!(report.as_tsv().contains("\tvolume-kind=external\t"));
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -4008,6 +4008,40 @@ fn reports_volume_operation_refusal_from_binary() {
 }
 
 #[test]
+fn volume_operation_refuses_nested_volume_path_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-operation-nested-{}",
+        std::process::id()
+    ));
+    let nested = root.join("Project").join("Preview.pdf");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+    std::fs::write(&nested, "%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-operation")
+        .arg("eject")
+        .arg(&nested)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-operation\teject\t"));
+    assert!(stdout.contains(&format!("path={}", nested.display())));
+    assert!(stdout.contains("\tdisposition=refused\tnative-status=-\tdissenter-status=-\t"));
+    assert!(stdout.contains("\tvolume-kind=external\tmount=mounted\t"));
+    assert!(stdout.contains("\treason=native-volume-operation-requires-volume-root\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn volume_operation_reports_missing_path_from_binary() {
     let missing = std::env::temp_dir().join(format!(
         "gfm-volume-operation-missing-{}",
