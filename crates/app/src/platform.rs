@@ -265,6 +265,35 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 )?
             );
         }
+        "preview-cache-fileprovider-observer-probe" => {
+            let cache_root = required_path(
+                args.next(),
+                "preview-cache-fileprovider-observer-probe requires a cache root",
+            )?;
+            let state_path = required_path(
+                args.next(),
+                "preview-cache-fileprovider-observer-probe requires a state path",
+            )?;
+            let kind = parse_preview_kind(args.next())?;
+            let root = required_path(
+                args.next(),
+                "preview-cache-fileprovider-observer-probe requires a root",
+            )?;
+            let target = required_path(
+                args.next(),
+                "preview-cache-fileprovider-observer-probe requires a FileProvider target path",
+            )?;
+            let observed = run_fileprovider_observer_probe(
+                &state_path,
+                &root,
+                &target,
+                "preview cache fileprovider observer",
+            )?;
+            println!(
+                "{}",
+                observed_preview_cache_invalidation_tsv(&observed, &cache_root, kind)?
+            );
+        }
         "fileprovider-invalidation-scan" => {
             let state_path = required_path(
                 args.next(),

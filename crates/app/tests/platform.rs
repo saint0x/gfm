@@ -3124,6 +3124,74 @@ fn reports_fileprovider_observer_metadata_probe_from_binary() {
 }
 
 #[test]
+fn reports_preview_cache_fileprovider_observer_probe_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-preview-cache-fileprovider-observer-probe-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let cache = root.join("cache");
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v1\ndownloaded\t{}\n",
+            item.display()
+        ),
+    )
+    .unwrap();
+    let mut seeded_cache = PreviewCache::new(PreviewCacheConfig::new(&cache)).unwrap();
+    let seeded_key = PreviewRequestKey::new(
+        FileId::new(VolumeId(42), 9001),
+        item.clone(),
+        PreviewKind::Thumbnail,
+    );
+    seeded_cache
+        .insert(PreviewEntry::new(seeded_key, b"cached thumbnail".to_vec()))
+        .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("preview-cache-fileprovider-observer-probe")
+        .arg(&cache)
+        .arg(&state)
+        .arg("thumbnail")
+        .arg(&root)
+        .arg(&item)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "preview cache fileprovider observer root", &root);
+    assert_worker_admitted(&stderr, "preview cache fileprovider observer target", &root);
+    assert_worker_admitted(&stderr, "preview cache fileprovider observer state", &root);
+    assert_worker_admitted(&stderr, "preview cache fileprovider observer state", &item);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("fileprovider-observed-invalidation\t"));
+    assert!(stdout.contains("\tevent-kinds="));
+    assert!(stdout.contains("\tpaths=1\n"));
+    assert!(stdout.contains(
+        "fileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\t"
+    ));
+    assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\tchanged=true\t"));
+    assert!(stdout.contains("preview-cache-invalidation\t"));
+    assert!(stdout.contains("\tkind=thumbnail\treason=content-or-icloud\t"));
+    assert!(stdout.contains("\tinvalidate-memory=true\tinvalidate-disk=true\t"));
+    assert!(stdout.contains("\tremoved-memory=false\tremoved-disk=true\n"));
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert!(state_text.contains(&format!("evicted\t{}\n", item.display())));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_sidebar_observed_rename_updates_snapshot_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-sidebar-rename-{}",

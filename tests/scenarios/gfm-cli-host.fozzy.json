@@ -2874,6 +2874,46 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-observer-preview.icloud-placeholder",
+      "data": "observer preview placeholder\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/usr/bin/xattr",
+      "args": [
+        "-w",
+        "com.apple.icloud.placeholder",
+        "1",
+        "tmp/gfm-fozzy-fileprovider-observer-preview.icloud-placeholder"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-observer-preview-state.tsv",
+      "data": "gfm-fileprovider-state-v1\ndownloaded\ttmp/gfm-fozzy-fileprovider-observer-preview.icloud-placeholder\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "preview-cache-fileprovider-observer-probe",
+        "tmp/gfm-fozzy-preview-observer-cache",
+        "tmp/gfm-fozzy-fileprovider-observer-preview-state.tsv",
+        "thumbnail",
+        "tmp",
+        "tmp/gfm-fozzy-fileprovider-observer-preview.icloud-placeholder"
+      ],
+      "exit_code": 0,
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer-preview.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\npreview-cache-invalidation\ttmp/gfm-fozzy-fileprovider-observer-preview.icloud-placeholder\tkind=thumbnail\treason=content-or-icloud\tinvalidate-memory=true\tinvalidate-disk=true\tremoved-memory=false\tremoved-disk=false\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -4371,6 +4411,20 @@
       "args": [
         "fileprovider-observer-probe",
         "tmp/gfm-fozzy-offline-volume/fileprovider-observer-state.tsv",
+        "tmp",
+        "tmp/gfm-fozzy-fileprovider-observer-local.icloud-placeholder"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "preview-cache-fileprovider-observer-probe",
+        "tmp/gfm-fozzy-offline-volume/cache",
+        "tmp/gfm-fozzy-offline-volume/fileprovider-preview-observer-state.tsv",
+        "thumbnail",
         "tmp",
         "tmp/gfm-fozzy-fileprovider-observer-local.icloud-placeholder"
       ],
