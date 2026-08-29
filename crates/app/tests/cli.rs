@@ -374,6 +374,41 @@ fn index_routes_refuse_unreachable_outputs_before_writing_from_binary() {
 }
 
 #[test]
+fn content_index_reports_output_path_probe_failure_before_scanning_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-index-output-probe-root");
+    let records = unique_temp_path("gfm-cli-content-index-output-probe", "gfmidx");
+    let content = root.join(format!("{}.gfmcontent", "content-unavailable".repeat(16)));
+    fs::write(root.join("Visible.txt"), "must not be content indexed").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-content",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("content write"), "{stderr}");
+    assert!(stderr.contains("content-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=content index\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!records.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn index_reports_output_path_probe_failure_before_scanning_from_binary() {
     let root = unique_temp_dir("gfm-cli-index-output-probe-root");
     let index = root.join(format!("{}.gfmidx", "records-unavailable".repeat(16)));
@@ -11978,6 +12013,59 @@ fn background_content_indexer_refuses_unreachable_outputs_before_job_state_from_
 }
 
 #[test]
+fn background_content_indexer_reports_output_probe_failure_before_job_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-background-content-output-probe-root");
+    let segments = unique_temp_path(
+        "gfm-cli-background-content-output-probe-segments",
+        "segments",
+    );
+    let records = unique_temp_path("gfm-cli-background-content-output-probe-records", "gfmidx");
+    let content = root.join(format!("{}.gfmcontent", "content-unavailable".repeat(16)));
+    let journal = unique_temp_path("gfm-cli-background-content-output-probe", "journal");
+    let spec = unique_temp_path("gfm-cli-background-content-output-probe", "job");
+    let catalog = unique_temp_path("gfm-cli-background-content-output-probe", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-background-content-output-probe", "gfmprogress");
+    fs::write(root.join("worker.md"), "blocked worker marker").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_CONTENT_JOB", &spec)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "index-content-background",
+            root.to_str().unwrap(),
+            segments.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("content write"), "{stderr}");
+    assert!(stderr.contains("content-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=background content index\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!segments.exists());
+    assert!(!records.exists());
+    assert!(!journal.exists());
+    assert!(!spec.exists());
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn deferred_background_content_indexer_does_not_touch_unreachable_outputs_from_binary() {
     let root = unique_temp_dir("gfm-cli-background-content-deferred-output-root");
     let output_root = unique_temp_dir("gfm-cli-background-content-deferred-output-unreachable");
@@ -13585,6 +13673,96 @@ fn jobs_file_store_routes_refuse_unreachable_volume_before_persisting_from_binar
     assert!(!catalog.exists());
     assert!(!progress.exists());
     assert!(!retry_state.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn jobs_file_store_routes_report_path_probe_failure_before_worker_admission_from_binary() {
+    let root = unique_temp_dir("gfm-cli-jobs-store-probe-root");
+    let bad_catalog = root.join(format!("{}.gfmjobs", "jobs-unavailable".repeat(16)));
+    let bad_progress = root.join(format!("{}.gfmprogress", "progress-unavailable".repeat(16)));
+    let retry_state = root.join(format!("{}.state", "retry-unavailable".repeat(16)));
+
+    for (args, token) in [
+        (
+            vec![
+                "jobs-payload-catalog".to_string(),
+                bad_catalog.display().to_string(),
+            ],
+            "jobs-unavailable",
+        ),
+        (
+            vec![
+                "jobs-progress-snapshot".to_string(),
+                bad_progress.display().to_string(),
+            ],
+            "progress-unavailable",
+        ),
+        (
+            vec![
+                "jobs-runtime-retry-probe".to_string(),
+                retry_state.display().to_string(),
+            ],
+            "retry-unavailable",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(&args)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{args:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stdout.is_empty(), "{args:?}: {stdout}");
+        assert!(
+            stderr.contains("jobs write path metadata unavailable"),
+            "{args:?}: {stderr}"
+        );
+        assert!(stderr.contains(token), "{args:?}: {stderr}");
+        assert!(
+            !stderr.contains("security-worker-admission\tworker="),
+            "{args:?}: {stderr}"
+        );
+    }
+
+    assert!(!bad_catalog.exists());
+    assert!(!bad_progress.exists());
+    assert!(!retry_state.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn scheduled_runtime_reports_journal_probe_failure_before_attempt_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-journal-probe-root");
+    let state = root.join("retry.state");
+    let journal = root.join(format!("{}.journal", "journal-unavailable".repeat(16)));
+    let catalog = root.join("runtime.gfmjobs");
+    let progress = root.join("runtime.gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["jobs-runtime-retry-probe", state.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("runtime write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("journal-unavailable"), "{stderr}");
+    assert!(!state.exists());
+    assert!(!journal.exists());
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
 
     fs::remove_dir_all(root).unwrap();
 }

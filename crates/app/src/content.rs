@@ -199,7 +199,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         "quarantined adaptive extraction",
                     )?;
                     preflight_volume_access_scope(
-                        write_probe_path(&volume_store),
+                        write_probe_path(&volume_store)?,
                         AccessIntent::Write,
                         "quarantined adaptive extraction",
                     )?;
@@ -440,7 +440,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let spec_path = default_content_job_path();
             if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
                 let _access = preflight_access_scope(
-                    write_probe_path(&spec_path),
+                    write_probe_path(&spec_path)?,
                     AccessIntent::Write,
                     "background content index",
                 )?;
@@ -814,7 +814,8 @@ fn run_extraction_cache(path: PathBuf) -> Result<String> {
 fn run_content_compaction(output: PathBuf, segments: Vec<PathBuf>) -> Result<usize> {
     const WORKER: &str = "content compaction";
     preflight_content_segments_volumes(None, &output, &segments, WORKER)?;
-    let volume = path_volume(write_probe_path(&output));
+    let output_probe = write_probe_path(&output)?.to_path_buf();
+    let volume = path_volume(&output_probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_content_segments_access(None, &output, &segments, WORKER)?;
@@ -831,7 +832,8 @@ fn run_tiered_content_compaction(
 ) -> Result<gfm_index::ContentMergeOutcome> {
     const WORKER: &str = "tiered content compaction";
     preflight_content_segments_volumes(None, &output, &segments, WORKER)?;
-    let volume = path_volume(write_probe_path(&output));
+    let output_probe = write_probe_path(&output)?.to_path_buf();
+    let volume = path_volume(&output_probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_content_segments_access(None, &output, &segments, WORKER)?;
@@ -853,8 +855,8 @@ fn run_content_segment_maintenance(
 ) -> Result<ContentMaintenanceReport> {
     const WORKER: &str = "content maintenance";
     preflight_content_segments_volumes(Some(&manifest_path), &output_archive, &segments, WORKER)?;
-    let volume =
-        path_volume(&manifest_path).or_else(|| path_volume(write_probe_path(&output_archive)));
+    let output_probe = write_probe_path(&output_archive)?.to_path_buf();
+    let volume = path_volume(&manifest_path).or_else(|| path_volume(&output_probe));
     let worker = BackgroundContentIndexer::default();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
@@ -1205,8 +1207,8 @@ fn retain_foreground_content_index_access(
 ) -> Result<Vec<ScopedAccessGuard>> {
     Ok(vec![
         preflight_access_scope(root, AccessIntent::Index, worker)?,
-        preflight_access_scope(write_probe_path(records), AccessIntent::Write, worker)?,
-        preflight_access_scope(write_probe_path(content), AccessIntent::Write, worker)?,
+        preflight_access_scope(write_probe_path(records)?, AccessIntent::Write, worker)?,
+        preflight_access_scope(write_probe_path(content)?, AccessIntent::Write, worker)?,
     ])
 }
 
@@ -1217,8 +1219,8 @@ fn preflight_foreground_content_index_volumes(
     worker: &str,
 ) -> Result<()> {
     preflight_volume_access_scope(root, AccessIntent::Index, worker)?;
-    preflight_volume_access_scope(write_probe_path(records), AccessIntent::Write, worker)?;
-    preflight_volume_access_scope(write_probe_path(content), AccessIntent::Write, worker)
+    preflight_volume_access_scope(write_probe_path(records)?, AccessIntent::Write, worker)?;
+    preflight_volume_access_scope(write_probe_path(content)?, AccessIntent::Write, worker)
 }
 
 fn retain_content_segment_index_access(
@@ -1228,13 +1230,13 @@ fn retain_content_segment_index_access(
 ) -> Result<Vec<ScopedAccessGuard>> {
     Ok(vec![
         preflight_access_scope(root, AccessIntent::Index, worker)?,
-        preflight_access_scope(write_probe_path(output), AccessIntent::Write, worker)?,
+        preflight_access_scope(write_probe_path(output)?, AccessIntent::Write, worker)?,
     ])
 }
 
 fn preflight_content_segment_index_volumes(root: &Path, output: &Path, worker: &str) -> Result<()> {
     preflight_volume_access_scope(root, AccessIntent::Index, worker)?;
-    preflight_volume_access_scope(write_probe_path(output), AccessIntent::Write, worker)
+    preflight_volume_access_scope(write_probe_path(output)?, AccessIntent::Write, worker)
 }
 
 fn retain_content_segments_access(
@@ -1252,7 +1254,7 @@ fn retain_content_segments_access(
         )?);
     }
     guards.push(preflight_access_scope(
-        write_probe_path(output_archive),
+        write_probe_path(output_archive)?,
         AccessIntent::Write,
         worker,
     )?);
@@ -1272,7 +1274,7 @@ fn preflight_content_segments_volumes(
         preflight_volume_access_scope(manifest_path, AccessIntent::Read, worker)?;
     }
     preflight_volume_access_scope(
-        write_probe_path(output_archive),
+        write_probe_path(output_archive)?,
         AccessIntent::Write,
         worker,
     )?;
@@ -1291,23 +1293,23 @@ fn retain_content_job_access(
     Ok(vec![
         preflight_access_scope(&spec.root, AccessIntent::Index, worker)?,
         preflight_access_scope(
-            write_probe_path(&spec.segment_dir),
+            write_probe_path(&spec.segment_dir)?,
             AccessIntent::Write,
             worker,
         )?,
         preflight_access_scope(
-            write_probe_path(&spec.records_path),
+            write_probe_path(&spec.records_path)?,
             AccessIntent::Write,
             worker,
         )?,
         preflight_access_scope(
-            write_probe_path(&spec.content_path),
+            write_probe_path(&spec.content_path)?,
             AccessIntent::Write,
             worker,
         )?,
-        preflight_access_scope(write_probe_path(spec_path), AccessIntent::Write, worker)?,
+        preflight_access_scope(write_probe_path(spec_path)?, AccessIntent::Write, worker)?,
         preflight_access_scope(
-            write_probe_path(&default_extraction_quarantine_path()),
+            write_probe_path(&default_extraction_quarantine_path())?,
             AccessIntent::Write,
             worker,
         )?,
@@ -1322,40 +1324,37 @@ fn preflight_content_job_volumes(
 ) -> Result<()> {
     preflight_volume_access_scope(&spec.root, AccessIntent::Index, worker)?;
     preflight_volume_access_scope(
-        write_probe_path(&spec.segment_dir),
+        write_probe_path(&spec.segment_dir)?,
         AccessIntent::Write,
         worker,
     )?;
     preflight_volume_access_scope(
-        write_probe_path(&spec.records_path),
+        write_probe_path(&spec.records_path)?,
         AccessIntent::Write,
         worker,
     )?;
     preflight_volume_access_scope(
-        write_probe_path(&spec.content_path),
+        write_probe_path(&spec.content_path)?,
         AccessIntent::Write,
         worker,
     )?;
-    preflight_volume_access_scope(write_probe_path(spec_path), AccessIntent::Write, worker)?;
+    preflight_volume_access_scope(write_probe_path(spec_path)?, AccessIntent::Write, worker)?;
     preflight_volume_access_scope(
-        write_probe_path(&default_extraction_quarantine_path()),
+        write_probe_path(&default_extraction_quarantine_path())?,
         AccessIntent::Write,
         worker,
     )?;
     if let Some(journal_path) = journal_path {
-        preflight_volume_access_scope(write_probe_path(journal_path), AccessIntent::Write, worker)?;
+        preflight_volume_access_scope(
+            write_probe_path(journal_path)?,
+            AccessIntent::Write,
+            worker,
+        )?;
     }
     Ok(())
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
-    }
-    crate::parent_or_cwd(path)
-}
-
-fn checked_write_probe_path(path: &Path) -> Result<&Path> {
+fn write_probe_path(path: &Path) -> Result<&Path> {
     match fs::metadata(path) {
         Ok(metadata) if metadata.is_dir() => Ok(path),
         Ok(_) => validate_write_file_name(path).map(|()| crate::parent_or_cwd(path)),
@@ -1367,6 +1366,10 @@ fn checked_write_probe_path(path: &Path) -> Result<&Path> {
             format!("content write path metadata unavailable: {err}"),
         )),
     }
+}
+
+fn checked_write_probe_path(path: &Path) -> Result<&Path> {
+    write_probe_path(path)
 }
 
 fn validate_write_file_name(path: &Path) -> Result<()> {
@@ -1384,6 +1387,17 @@ fn validate_write_file_name(path: &Path) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn content_input_file_exists(path: &Path, worker: &str) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("{worker} previous index metadata unavailable: {err}"),
+        )),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1479,12 +1493,17 @@ pub(crate) fn run_content_job(
                     snapshot.records.len().max(1) as u64,
                     format!("index:{}", job_spec.root.display()),
                 )?;
-                let previous_records =
-                    if job_spec.records_path.is_file() && job_spec.content_path.is_file() {
-                        read_records(&job_spec.records_path)?
-                    } else {
-                        Vec::new()
-                    };
+                let previous_records = if content_input_file_exists(
+                    &job_spec.records_path,
+                    "background content index",
+                )? && content_input_file_exists(
+                    &job_spec.content_path,
+                    "background content index",
+                )? {
+                    read_records(&job_spec.records_path)?
+                } else {
+                    Vec::new()
+                };
                 snapshot.save(&job_spec.records_path)?;
                 let extractor = Extractor::with_budget_profile(extraction_budget_profile(
                     &job_spec.root,
