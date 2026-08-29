@@ -2593,6 +2593,36 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "/bin/mkdir",
+      "args": [
+        "-p",
+        "tmp/gfm-fozzy-preview-cache-index-corrupt"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-preview-cache-index-corrupt/preview-cache-index.tsv",
+      "data": "not-a-valid-index-row\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "preview-cache-fileprovider-invalidation",
+        "tmp/gfm-fozzy-preview-cache-index-corrupt",
+        "downloaded",
+        "tmp/gfm-fozzy-fileprovider-scan.icloud-placeholder",
+        "thumbnail"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-fileprovider-event.icloud-placeholder",
       "data": "placeholder\n"

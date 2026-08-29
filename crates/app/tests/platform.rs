@@ -2032,6 +2032,46 @@ fn preview_cache_surfaces_unreadable_disk_index_from_binary() {
 }
 
 #[test]
+fn preview_cache_surfaces_corrupt_disk_index_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-preview-cache-index-corrupt-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let cache = root.join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(
+        cache.join("preview-cache-index.tsv"),
+        "not-a-valid-index-row\n",
+    )
+    .unwrap();
+    let evicted = root.join("Remote.icloud-placeholder");
+    std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("preview-cache-fileprovider-invalidation")
+        .arg(&cache)
+        .arg("downloaded")
+        .arg(&evicted)
+        .arg("thumbnail")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("preview-cache-invalidation\t"), "{stdout}");
+    assert!(
+        stderr.contains("preview disk cache index corrupt at line 1"),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_state_routes_refuse_unreachable_volume_before_native_read_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-state-unreachable-{}",

@@ -381,10 +381,16 @@ fn load_disk_index(
         }
     };
     let mut index = HashMap::new();
-    for line in contents.lines() {
-        let Some(key) = parse_disk_index_line(line) else {
+    for (line_index, line) in contents.lines().enumerate() {
+        if line.is_empty() {
             continue;
-        };
+        }
+        let key = parse_disk_index_line(line).ok_or_else(|| {
+            GfmError::Format(format!(
+                "preview disk cache index corrupt at line {}",
+                line_index + 1
+            ))
+        })?;
         if disk_cache_file_exists(&config.disk_root.join(key.stable_name()))? {
             index.insert((key.path.clone(), key.kind), key);
         }
@@ -1036,6 +1042,32 @@ mod tests {
         assert!(err
             .to_string()
             .contains("preview disk cache index unavailable"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_disk_index_corruption_surfaces_line_number() {
+        let root = temp_root("disk-index-corrupt");
+        fs::write(
+            preview_cache_index_path(&PreviewCacheConfig::new(&root)),
+            "thumbnail\t1\t2\t256\t2000\t0\t72656d6f74652e69636c6f7564\nnot-a-valid-index-row\n",
+        )
+        .unwrap();
+
+        let err = match PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        }) {
+            Ok(_) => panic!("preview cache should reject a corrupt disk index"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "preview disk cache index corrupt at line 2"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
