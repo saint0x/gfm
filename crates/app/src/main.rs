@@ -812,6 +812,7 @@ fn print_usage() {
   gfm native-icon <path>
   gfm native-icon-bridge <path>
   gfm native-icon-fileprovider-invalidation <previous-state> <path>
+  gfm native-icon-fileprovider-observer-probe <state.tsv> <root> <target>
   gfm fileprovider-state <path>
   gfm fileprovider-state-with-identity <path>
   gfm fileprovider-domain <path>

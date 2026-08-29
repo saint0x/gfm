@@ -113,6 +113,27 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 NativeIconInvalidationReport::from_fileprovider(&report).as_tsv()
             );
         }
+        "native-icon-fileprovider-observer-probe" => {
+            let state_path = required_path(
+                args.next(),
+                "native-icon-fileprovider-observer-probe requires a state path",
+            )?;
+            let root = required_path(
+                args.next(),
+                "native-icon-fileprovider-observer-probe requires a root",
+            )?;
+            let target = required_path(
+                args.next(),
+                "native-icon-fileprovider-observer-probe requires a FileProvider target path",
+            )?;
+            let observed = run_fileprovider_observer_probe(
+                &state_path,
+                &root,
+                &target,
+                "native icon fileprovider observer",
+            )?;
+            println!("{}", observed_native_icon_invalidation_tsv(&observed));
+        }
         "fileprovider-state" => {
             let path = required_path(args.next(), "fileprovider-state requires a path")?;
             let report = run_fileprovider_read(
@@ -1231,6 +1252,19 @@ fn observed_metadata_invalidation_tsv(observed: &FileProviderObservedInvalidatio
         )
         .as_tsv()
     }));
+    lines.join("\n")
+}
+
+fn observed_native_icon_invalidation_tsv(observed: &FileProviderObservedInvalidation) -> String {
+    let mut lines = vec![observed.as_tsv()];
+    lines.extend(
+        observed
+            .report
+            .changes
+            .iter()
+            .map(NativeIconInvalidationReport::from_fileprovider)
+            .map(|report| report.as_tsv()),
+    );
     lines.join("\n")
 }
 
