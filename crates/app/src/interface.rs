@@ -1369,6 +1369,8 @@ fn permission_access_requires_surface(access: &PermissionAccessContract) -> bool
     access.bookmark_required
         || access.scope == "full-disk-access"
         || access.mode == "degraded-metadata-only"
+        || access.promptable
+        || access.prompt_source != "none"
         || matches!(access.access_action.as_str(), "deny" | "prompt")
         || matches!(access.worker_action.as_str(), "deny" | "prompt")
         || access.probe == "denied"
@@ -1604,4 +1606,58 @@ fn required_path(value: Option<String>, message: &str) -> Result<PathBuf> {
 
 fn required_string(value: Option<String>, message: &str) -> Result<String> {
     value.ok_or_else(|| GfmError::Format(message.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn allowed_permission_access() -> PermissionAccessContract {
+        PermissionAccessContract {
+            path: "/Users/me/Documents".to_string(),
+            intent: "read".to_string(),
+            scope: "none".to_string(),
+            probe: "granted".to_string(),
+            mode: "allowed".to_string(),
+            access_action: "allow".to_string(),
+            worker_action: "start".to_string(),
+            can_touch_filesystem: true,
+            bookmark_required: false,
+            bookmark_access: false,
+            refresh_on_permission_change: false,
+            prompt_kind: PermissionPromptKind::General,
+            prompt_action: "none".to_string(),
+            promptable: false,
+            prompt_source: "none".to_string(),
+            reason: "path is directly readable".to_string(),
+        }
+    }
+
+    #[test]
+    fn permission_access_surface_is_not_required_for_plain_allowed_paths() {
+        let access = allowed_permission_access();
+
+        assert!(!permission_access_requires_surface(&access));
+    }
+
+    #[test]
+    fn permission_access_surface_is_required_for_promptable_contracts() {
+        let mut access = allowed_permission_access();
+        access.prompt_kind = PermissionPromptKind::BookmarkAcquisition;
+        access.prompt_action = "choose-location".to_string();
+        access.promptable = true;
+        access.prompt_source = "security-scoped-bookmark".to_string();
+
+        assert!(permission_access_requires_surface(&access));
+    }
+
+    #[test]
+    fn permission_access_surface_is_required_for_non_promptable_failure_sources() {
+        let mut access = allowed_permission_access();
+        access.prompt_kind = PermissionPromptKind::Blocked;
+        access.prompt_action = "blocked-missing-path".to_string();
+        access.prompt_source = "missing-path".to_string();
+
+        assert!(permission_access_requires_surface(&access));
+    }
 }

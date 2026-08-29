@@ -60,6 +60,90 @@ fn reports_permission_onboarding_from_binary() {
 }
 
 #[test]
+fn ui_permission_access_contract_reports_bookmark_prompt_orchestration_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-bookmark-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let documents = root.join("Documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    let path = documents.join("Plan.md");
+    std::fs::write(&path, "plan").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &root)
+        .arg("ui-permission-access-contract")
+        .arg(&path)
+        .arg("preview")
+        .arg("preview worker")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("permission-access\t"), "{stdout}");
+    assert!(stdout.contains("\tprompt-kind=bookmark-acquisition\t"));
+    assert!(stdout.contains("\tprompt-action=choose-location\t"));
+    assert!(stdout.contains("\tpromptable=true\t"));
+    assert!(stdout.contains("\tprompt-source=security-scoped-bookmark\t"));
+    assert!(stdout.contains("\tbookmark-required=true\t"));
+    assert!(stdout.contains("security-worker-admission\tworker=preview worker\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn ui_permission_access_contract_reports_blocked_volume_orchestration_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-volume-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Preview.pdf");
+    std::fs::write(&path, "%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-permission-access-contract")
+        .arg(&path)
+        .arg("preview")
+        .arg("preview worker")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("permission-access\t"), "{stdout}");
+    assert!(stdout.contains("\tprompt-kind=blocked\t"));
+    assert!(stdout.contains("\tprompt-action=blocked-volume\t"));
+    assert!(stdout.contains("\tpromptable=false\t"));
+    assert!(stdout.contains("\tprompt-source=volume\t"));
+    assert!(stdout.contains("\trefresh-on-permission-change=true\t"));
+    assert!(stdout.contains("unreachable volume network"));
+    assert!(stdout.contains("security-worker-admission\tworker=preview worker\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn persists_permission_invalidation_state_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-permission-invalidation-{}",
