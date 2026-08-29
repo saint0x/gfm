@@ -1,6 +1,6 @@
-use crate::{content_query_terms, ContentQueryLoadReport, LiveIndex};
+use crate::{ContentQueryLoadReport, LiveIndex};
 use gfm_jobs::Cancellation;
-use gfm_search::{SearchLookupBudget, SearchLookupTelemetry, SearchQueryReport};
+use gfm_search::{SearchLookupBudget, SearchLookupTelemetry, SearchQuery, SearchQueryReport};
 use gfm_store::{MmapContentSet, MmapRecordArchive};
 use gfm_types::{ContentPosting, FileId, FileRecord, Result};
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -10,6 +10,7 @@ use std::sync::{Mutex, MutexGuard};
 
 const CONTENT_RECORD_CACHE_CAPACITY: usize = 8192;
 const CONTENT_POSTING_CACHE_CAPACITY: usize = 512;
+const CONTENT_QUERY_RESULT_CACHE_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentQuerySessionReport {
@@ -19,6 +20,8 @@ pub struct ContentQuerySessionReport {
     pub posting_cache_misses: usize,
     pub record_cache_hits: usize,
     pub record_cache_misses: usize,
+    pub result_cache_hits: usize,
+    pub result_cache_misses: usize,
 }
 
 #[derive(Debug)]
@@ -31,6 +34,9 @@ pub struct ContentIndexQuerySession {
     record_cache: Mutex<ContentRecordCache>,
     record_cache_hits: AtomicUsize,
     record_cache_misses: AtomicUsize,
+    result_cache: Mutex<ContentResultCache>,
+    result_cache_hits: AtomicUsize,
+    result_cache_misses: AtomicUsize,
 }
 
 impl ContentIndexQuerySession {
@@ -55,6 +61,9 @@ impl ContentIndexQuerySession {
             record_cache: Mutex::new(ContentRecordCache::new(CONTENT_RECORD_CACHE_CAPACITY)),
             record_cache_hits: AtomicUsize::new(0),
             record_cache_misses: AtomicUsize::new(0),
+            result_cache: Mutex::new(ContentResultCache::new(CONTENT_QUERY_RESULT_CACHE_CAPACITY)),
+            result_cache_hits: AtomicUsize::new(0),
+            result_cache_misses: AtomicUsize::new(0),
         })
     }
 
@@ -71,6 +80,9 @@ impl ContentIndexQuerySession {
             record_cache: Mutex::new(ContentRecordCache::new(CONTENT_RECORD_CACHE_CAPACITY)),
             record_cache_hits: AtomicUsize::new(0),
             record_cache_misses: AtomicUsize::new(0),
+            result_cache: Mutex::new(ContentResultCache::new(CONTENT_QUERY_RESULT_CACHE_CAPACITY)),
+            result_cache_hits: AtomicUsize::new(0),
+            result_cache_misses: AtomicUsize::new(0),
         })
     }
 
@@ -93,6 +105,13 @@ impl ContentIndexQuerySession {
         (
             self.record_cache_hits.load(Ordering::Relaxed),
             self.record_cache_misses.load(Ordering::Relaxed),
+        )
+    }
+
+    pub fn result_cache_telemetry(&self) -> (usize, usize) {
+        (
+            self.result_cache_hits.load(Ordering::Relaxed),
+            self.result_cache_misses.load(Ordering::Relaxed),
         )
     }
 
@@ -131,9 +150,23 @@ impl ContentIndexQuerySession {
         cancellation: &Cancellation,
     ) -> Result<ContentQuerySessionReport> {
         cancellation.check()?;
+        let parsed = SearchQuery::parse(query);
+        let result_cache_key = content_query_result_cache_key(&parsed, limit, budget);
+        if let Some(mut report) = self.result_cache_lock().get(&result_cache_key) {
+            self.result_cache_hits.fetch_add(1, Ordering::Relaxed);
+            report.search.lookup = SearchLookupTelemetry::default();
+            report.posting_cache_hits = 0;
+            report.posting_cache_misses = 0;
+            report.record_cache_hits = 0;
+            report.record_cache_misses = 0;
+            report.result_cache_hits = 1;
+            report.result_cache_misses = 0;
+            return Ok(report);
+        }
+        self.result_cache_misses.fetch_add(1, Ordering::Relaxed);
         let posting_hits_before = self.posting_cache_hits.load(Ordering::Relaxed);
         let posting_misses_before = self.posting_cache_misses.load(Ordering::Relaxed);
-        let content_terms = content_query_terms(query);
+        let content_terms = parsed.content_candidate_terms();
         let has_content_terms = !content_terms.is_empty();
         let postings = self.postings_for_terms(content_terms, budget, cancellation)?;
         cancellation.check()?;
@@ -141,7 +174,7 @@ impl ContentIndexQuerySession {
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
         let (live, load) = self.live_from_postings(postings, has_content_terms, cancellation)?;
         let hits = live.search_cancellable(query, limit, cancellation)?;
-        Ok(ContentQuerySessionReport {
+        let report = ContentQuerySessionReport {
             load,
             search: SearchQueryReport {
                 hits,
@@ -163,7 +196,12 @@ impl ContentIndexQuerySession {
                 .record_cache_misses
                 .load(Ordering::Relaxed)
                 .saturating_sub(cache_misses_before),
-        })
+            result_cache_hits: 0,
+            result_cache_misses: 1,
+        };
+        self.result_cache_lock()
+            .insert(result_cache_key, report.clone());
+        Ok(report)
     }
 
     fn postings_for_terms(
@@ -331,6 +369,12 @@ impl ContentIndexQuerySession {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+
+    fn result_cache_lock(&self) -> MutexGuard<'_, ContentResultCache> {
+        self.result_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 fn content_candidate_ids(postings: &[ContentPosting]) -> BTreeSet<FileId> {
@@ -344,6 +388,19 @@ fn content_candidate_ids(postings: &[ContentPosting]) -> BTreeSet<FileId> {
 
 fn posting_cache_key(term: &str, limit: usize) -> String {
     format!("{limit}:{term}")
+}
+
+fn content_query_result_cache_key(
+    query: &SearchQuery,
+    limit: usize,
+    budget: SearchLookupBudget,
+) -> String {
+    format!(
+        "{}\0{}\0{}",
+        query.canonical_cache_key(),
+        limit,
+        budget.max_content_ids_per_term
+    )
 }
 
 #[derive(Debug)]
@@ -388,6 +445,43 @@ struct ContentRecordCache {
     capacity: usize,
     order: VecDeque<FileId>,
     values: HashMap<FileId, FileRecord>,
+}
+
+#[derive(Debug)]
+struct ContentResultCache {
+    capacity: usize,
+    order: VecDeque<String>,
+    values: HashMap<String, ContentQuerySessionReport>,
+}
+
+impl ContentResultCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::with_capacity(capacity),
+            values: HashMap::new(),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<ContentQuerySessionReport> {
+        self.values.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: String, report: ContentQuerySessionReport) {
+        if self.capacity == 0 {
+            return;
+        }
+        if !self.values.contains_key(&key) {
+            self.order.push_back(key.clone());
+        }
+        self.values.insert(key, report);
+        while self.values.len() > self.capacity {
+            let Some(expired) = self.order.pop_front() else {
+                break;
+            };
+            self.values.remove(&expired);
+        }
+    }
 }
 
 impl ContentRecordCache {
@@ -453,12 +547,38 @@ mod tests {
         assert_eq!(first.search.hits.len(), 1);
 
         poison_record_cache(&session);
-        let second = session.search("needle", 5).unwrap();
+        let second = session.search("needle", 6).unwrap();
 
         assert_eq!(second.search.hits.len(), 1);
         assert_eq!(second.search.hits[0].record.name, "Needle.md");
         assert_eq!(second.posting_cache_hits, 1);
         assert_eq!(second.record_cache_hits, 1);
+        assert_eq!(second.result_cache_hits, 0);
+        assert_eq!(second.result_cache_misses, 1);
+    }
+
+    #[test]
+    fn content_session_reuses_normalized_query_results() {
+        let fixture = ContentSessionFixture::new("result-cache");
+        let session = fixture.session();
+
+        let first = session.search("  Needle  ", 5).unwrap();
+        let second = session.search("needle", 5).unwrap();
+
+        assert_eq!(first.search.hits, second.search.hits);
+        assert_eq!(first.posting_cache_hits, 0);
+        assert_eq!(first.posting_cache_misses, 1);
+        assert_eq!(first.record_cache_hits, 0);
+        assert_eq!(first.record_cache_misses, 1);
+        assert_eq!(first.result_cache_hits, 0);
+        assert_eq!(first.result_cache_misses, 1);
+        assert_eq!(second.posting_cache_hits, 0);
+        assert_eq!(second.posting_cache_misses, 0);
+        assert_eq!(second.record_cache_hits, 0);
+        assert_eq!(second.record_cache_misses, 0);
+        assert_eq!(second.result_cache_hits, 1);
+        assert_eq!(second.result_cache_misses, 0);
+        assert_eq!(session.result_cache_telemetry(), (1, 1));
     }
 
     #[test]
@@ -473,6 +593,7 @@ mod tests {
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert_eq!(session.posting_cache_telemetry(), (0, 0));
         assert_eq!(session.record_cache_telemetry(), (0, 0));
+        assert_eq!(session.result_cache_telemetry(), (0, 0));
     }
 
     fn poison_posting_cache(session: &ContentIndexQuerySession) {
