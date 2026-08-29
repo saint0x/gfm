@@ -614,6 +614,21 @@ impl VolumeDiscoveryReport {
         Self { volumes }
     }
 
+    pub fn from_paths_checked(paths: Vec<PathBuf>) -> Result<Self> {
+        let mut volumes = Vec::with_capacity(paths.len());
+        for path in paths {
+            volumes.push(VolumeDescriptor::for_path(path)?);
+        }
+        volumes.sort_by(|left, right| {
+            left.path
+                .cmp(&right.path)
+                .then(left.label.cmp(&right.label))
+                .then(left.id.cmp(&right.id))
+        });
+        volumes.dedup_by(|left, right| left.id == right.id && left.path == right.path);
+        Ok(Self { volumes })
+    }
+
     pub fn for_containing_path(path: impl AsRef<Path>) -> Self {
         let path = path.as_ref();
         let mut paths = containing_mounted_volume_paths(path);
@@ -2925,6 +2940,17 @@ mod tests {
 
         fs::remove_dir_all(first).unwrap();
         fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
+    fn checked_discovery_preserves_descriptor_probe_failures() {
+        let root = unique_temp_dir("gfm-volume-checked-discovery");
+        let invalid = root.join("volume-discovery-unavailable".repeat(16));
+
+        let err = VolumeDiscoveryReport::from_paths_checked(vec![invalid]).unwrap_err();
+
+        assert!(err.to_string().contains("File name too long"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

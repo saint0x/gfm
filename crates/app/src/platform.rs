@@ -414,7 +414,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "volume-discovery" => {
             let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
-            let report = volume_discovery_report(paths);
+            let report = volume_discovery_report(paths)?;
             println!("{}", report.as_tsv());
         }
         "volume-events-probe" => {
@@ -589,7 +589,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     paths.push(PathBuf::from(arg));
                 }
             }
-            let volumes = volume_discovery_report(paths)
+            let volumes = volume_discovery_report(paths)?
                 .volumes
                 .iter()
                 .map(index_volume_descriptor)
@@ -1205,11 +1205,11 @@ fn fileprovider_progress_detail(report: &FileProviderProgressReport) -> String {
     )
 }
 
-fn volume_discovery_report(paths: Vec<PathBuf>) -> VolumeDiscoveryReport {
+fn volume_discovery_report(paths: Vec<PathBuf>) -> Result<VolumeDiscoveryReport> {
     if paths.is_empty() {
-        VolumeDiscoveryReport::discover()
+        Ok(VolumeDiscoveryReport::discover())
     } else {
-        VolumeDiscoveryReport::from_paths(paths)
+        VolumeDiscoveryReport::from_paths_checked(paths)
     }
 }
 
