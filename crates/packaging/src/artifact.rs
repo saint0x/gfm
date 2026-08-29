@@ -332,25 +332,11 @@ fn run_command(command: &mut Command, path: &Path, label: &str) -> Result<()> {
 }
 
 fn ensure_dir(path: &Path) -> Result<()> {
-    if path.is_dir() {
-        Ok(())
-    } else {
-        Err(GfmError::Format(format!(
-            "{} is missing or is not a directory",
-            path.display()
-        )))
-    }
+    crate::path::ensure_dir(path, "release artifact")
 }
 
 fn ensure_file(path: &Path) -> Result<()> {
-    if path.is_file() {
-        Ok(())
-    } else {
-        Err(GfmError::Format(format!(
-            "{} is missing or is not a file",
-            path.display()
-        )))
-    }
+    crate::path::ensure_file(path, "release artifact")
 }
 
 #[cfg(test)]
@@ -416,6 +402,22 @@ mod tests {
             .expect_err("unsigned production artifact fails");
 
         assert!(err.to_string().contains("verify release signature"));
+    }
+
+    #[test]
+    fn rejects_unprobeable_release_artifact_directory_as_metadata_failure() {
+        let root = temp_root("artifact-probe");
+        fs::create_dir_all(&root).expect("create temp root");
+        let app = root.join("artifact-app-unavailable".repeat(16));
+
+        let err = validate_release_artifact(&ReleaseArtifactSpec::unsigned_local(&app))
+            .expect_err("unprobeable artifact path fails");
+
+        assert!(err
+            .to_string()
+            .contains("release artifact directory metadata unavailable"));
+        assert!(err.to_string().contains("artifact-app-unavailable"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn temp_root(name: &str) -> PathBuf {

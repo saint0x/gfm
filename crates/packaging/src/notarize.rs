@@ -1,6 +1,5 @@
 use gfm_types::{GfmError, Result};
 use serde_json::Value;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -132,9 +131,7 @@ fn validate_spec(spec: &NotarizationSpec) -> Result<()> {
 }
 
 fn create_archive(app_path: &Path, archive_path: &Path) -> Result<()> {
-    if archive_path.exists() {
-        fs::remove_file(archive_path).map_err(|err| GfmError::io(archive_path, err))?;
-    }
+    crate::path::remove_existing_file(archive_path, "notarization archive")?;
     let parent = app_path.parent().ok_or_else(|| {
         GfmError::Format(format!(
             "{} must have a parent directory",
@@ -299,34 +296,21 @@ fn ensure_nonempty(label: &str, value: &str) -> Result<()> {
 }
 
 fn create_dir(path: &Path) -> Result<()> {
-    fs::create_dir_all(path).map_err(|err| GfmError::io(path, err))
+    crate::path::create_dir(path)
 }
 
 fn ensure_dir(path: &Path) -> Result<()> {
-    if path.is_dir() {
-        Ok(())
-    } else {
-        Err(GfmError::Format(format!(
-            "{} is missing or is not a directory",
-            path.display()
-        )))
-    }
+    crate::path::ensure_dir(path, "notarization")
 }
 
 fn ensure_file(path: &Path) -> Result<()> {
-    if path.is_file() {
-        Ok(())
-    } else {
-        Err(GfmError::Format(format!(
-            "{} is missing or is not a file",
-            path.display()
-        )))
-    }
+    crate::path::ensure_file(path, "notarization")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -394,6 +378,44 @@ mod tests {
         let err = validate_spec(&spec).expect_err("missing key fails");
 
         assert!(err.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn rejects_unprobeable_api_key_file_as_metadata_failure() {
+        let root = temp_root("api-key-probe");
+        let app = root.join("GFM.app");
+        fs::create_dir_all(&app).expect("create app");
+
+        let spec = NotarizationSpec::new(
+            &app,
+            root.join("dist"),
+            NotarizationCredentials::ApiKey {
+                key_id: "KEYID".to_string(),
+                issuer_id: "ISSUER".to_string(),
+                key_path: root.join("api-key-unavailable".repeat(16)),
+            },
+        );
+        let err = validate_spec(&spec).expect_err("unprobeable key fails");
+
+        assert!(err
+            .to_string()
+            .contains("notarization file metadata unavailable"));
+        assert!(err.to_string().contains("api-key-unavailable"));
+    }
+
+    #[test]
+    fn create_archive_refuses_unprobeable_archive_path_before_ditto() {
+        let root = temp_root("archive-probe");
+        let app = root.join("GFM.app");
+        fs::create_dir_all(&app).expect("create app");
+        let archive = root.join("notary-archive-unavailable".repeat(16));
+
+        let err = create_archive(&app, &archive).expect_err("unprobeable archive fails");
+
+        assert!(err
+            .to_string()
+            .contains("notarization archive probe unavailable"));
+        assert!(err.to_string().contains("notary-archive-unavailable"));
     }
 
     fn temp_root(name: &str) -> PathBuf {

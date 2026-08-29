@@ -5,6 +5,7 @@ use std::process::Command;
 
 mod artifact;
 mod notarize;
+mod path;
 mod policy;
 mod toolchain;
 
@@ -329,36 +330,19 @@ fn entitlements_plist() -> &'static str {
 }
 
 fn recreate_dir(path: &Path) -> Result<()> {
-    if path.exists() {
-        fs::remove_dir_all(path).map_err(|err| GfmError::io(path, err))?;
-    }
-    create_dir(path)
+    path::recreate_dir(path, "bundle")
 }
 
 fn create_dir(path: &Path) -> Result<()> {
-    fs::create_dir_all(path).map_err(|err| GfmError::io(path, err))
+    path::create_dir(path)
 }
 
 fn ensure_dir(path: &Path) -> Result<()> {
-    if path.is_dir() {
-        Ok(())
-    } else {
-        Err(GfmError::Format(format!(
-            "{} is missing or is not a directory",
-            path.display()
-        )))
-    }
+    path::ensure_dir(path, "bundle")
 }
 
 fn ensure_file(path: &Path) -> Result<()> {
-    if path.is_file() {
-        Ok(())
-    } else {
-        Err(GfmError::Format(format!(
-            "{} is missing or is not a file",
-            path.display()
-        )))
-    }
+    path::ensure_file(path, "bundle")
 }
 
 fn copy_file(from: &Path, to: &Path) -> Result<()> {
@@ -466,6 +450,26 @@ mod tests {
         fs::remove_file(&bundle.icon_path).expect("remove icon");
         let err = validate_app_bundle(&bundle).expect_err("missing icon fails");
         assert!(err.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn refuses_unprobeable_bundle_output_before_creating_default_layout() {
+        let root = temp_root("bundle-output-probe");
+        fs::create_dir_all(&root).expect("create temp root");
+        let icon = root.join("GFM.icns");
+        fs::write(&icon, b"icns-test").expect("write icon");
+        let executable = std::env::current_exe().expect("current test executable");
+        let output = root.join("bundle-output-unavailable".repeat(16));
+        let mut spec = AppBundleSpec::new(executable, icon, output);
+        spec.signing_identity = SigningIdentity::Unsigned;
+
+        let err = build_app_bundle(&spec).expect_err("unprobeable output fails");
+
+        assert!(err
+            .to_string()
+            .contains("bundle directory probe unavailable"));
+        assert!(err.to_string().contains("bundle-output-unavailable"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn temp_root(name: &str) -> PathBuf {
