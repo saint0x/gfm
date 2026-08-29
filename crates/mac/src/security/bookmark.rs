@@ -278,8 +278,15 @@ impl SecurityScopedBookmarkStore {
     }
 
     pub fn read(&self) -> Result<Vec<SecurityScopedBookmarkRecord>> {
-        if !self.path.exists() {
-            return Ok(Vec::new());
+        match self.path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => return Ok(Vec::new()),
+            Err(err) => {
+                return Err(GfmError::io(
+                    &self.path,
+                    format!("bookmark store existence unavailable: {err}"),
+                ));
+            }
         }
         let file = fs::File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
         let mut reader = BufReader::new(file);
@@ -697,6 +704,11 @@ mod tests {
     };
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
@@ -912,6 +924,18 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn bookmark_store_surfaces_path_probe_errors() {
+        let store = SecurityScopedBookmarkStore::new(invalid_path("gfm-security-bookmark-invalid"));
+
+        let err = store.read().unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("bookmark store existence unavailable"));
+    }
+
     fn temp_root(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "gfm-{name}-{}-{}",
@@ -920,5 +944,14 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[cfg(unix)]
+    fn invalid_path(prefix: &str) -> PathBuf {
+        let mut bytes = std::env::temp_dir().into_os_string().into_vec();
+        bytes.push(b'/');
+        bytes.extend_from_slice(prefix.as_bytes());
+        bytes.push(0);
+        PathBuf::from(OsString::from_vec(bytes))
     }
 }
