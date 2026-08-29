@@ -383,17 +383,19 @@ impl SecurityScopedBookmarkStore {
     ) -> Result<SecurityScopedBookmarkLookup> {
         let requested_path = path.as_ref().to_path_buf();
         let requested_identity = path_identity(&requested_path);
-        let resolution = self
-            .resolve_all(start_access, repair_stale)?
-            .into_iter()
-            .find(|resolution| {
-                resolution.record.read_only == read_only
-                    && same_path_identity(
-                        &requested_identity,
-                        &resolution.record.path,
-                        resolution.report.resolved_path.as_deref(),
-                    )
-            });
+        let mut resolution = None;
+        for candidate in self.resolve_all(start_access, repair_stale)? {
+            if candidate.record.read_only == read_only
+                && same_path_identity(
+                    &requested_identity,
+                    &candidate.record.path,
+                    candidate.report.resolved_path.as_deref(),
+                )?
+            {
+                resolution = Some(candidate);
+                break;
+            }
+        }
         Ok(SecurityScopedBookmarkLookup {
             requested_path,
             resolution,
@@ -576,17 +578,34 @@ fn same_path_identity(
     requested_identity: &Path,
     record_path: &Path,
     resolved_path: Option<&Path>,
-) -> bool {
-    bookmark_path_covers_requested(record_path, requested_identity)
-        || resolved_path.is_some_and(|resolved_path| {
-            bookmark_path_covers_requested(resolved_path, requested_identity)
-        })
+) -> Result<bool> {
+    if bookmark_path_covers_requested(record_path, requested_identity)? {
+        return Ok(true);
+    }
+    match resolved_path {
+        Some(resolved_path) => bookmark_path_covers_requested(resolved_path, requested_identity),
+        None => Ok(false),
+    }
 }
 
-fn bookmark_path_covers_requested(bookmark_path: &Path, requested_identity: &Path) -> bool {
+fn bookmark_path_covers_requested(bookmark_path: &Path, requested_identity: &Path) -> Result<bool> {
     let bookmark_identity = path_identity(bookmark_path);
-    bookmark_identity == requested_identity
-        || bookmark_path.is_dir() && requested_identity.starts_with(&bookmark_identity)
+    if bookmark_identity == requested_identity {
+        return Ok(true);
+    }
+    Ok(bookmark_identity_is_directory(bookmark_path)?
+        && requested_identity.starts_with(&bookmark_identity))
+}
+
+fn bookmark_identity_is_directory(path: &Path) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_dir()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("bookmark identity metadata unavailable: {err}"),
+        )),
+    }
 }
 
 fn path_identity(path: &Path) -> PathBuf {
@@ -887,6 +906,20 @@ mod tests {
         assert!(sibling_lookup.resolution.is_none());
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bookmark_lookup_surfaces_identity_probe_errors() {
+        let err = bookmark_path_covers_requested(
+            &invalid_path("gfm-security-bookmark-identity-invalid"),
+            Path::new("/tmp/gfm-security-bookmark-child"),
+        )
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("bookmark identity metadata unavailable"));
     }
 
     #[test]
