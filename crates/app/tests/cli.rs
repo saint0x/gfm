@@ -5690,6 +5690,43 @@ fn operation_refuses_unreachable_journal_before_mutating_from_binary() {
 }
 
 #[test]
+fn operation_reports_journal_probe_failure_before_mutating_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ops-journal-probe-root");
+    let journal = root.join(format!("{}.journal", "ops-journal-unavailable".repeat(16)));
+    let source = root.join("source.txt");
+    let destination = root.join("destination.txt");
+    fs::write(&source, "do not copy without probeable journal").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("\tcompleted"), "{stdout}");
+    assert!(
+        stderr.contains("operation write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("ops-journal-unavailable"), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(&source).unwrap(),
+        "do not copy without probeable journal"
+    );
+    assert!(!destination.exists());
+    assert!(!journal.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn operation_refuses_unreachable_destination_volume_before_copying_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-unreachable-destination-root");
     let journal = root.join("ops.journal");
@@ -6328,6 +6365,50 @@ fn operation_conflict_store_refuses_unreachable_writes_before_recording_from_bin
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn operation_conflict_store_reports_write_probe_failure_before_recording_from_binary() {
+    let root = unique_temp_dir("gfm-cli-operation-conflict-store-probe-root");
+    let journal = root.join("ops.journal");
+    let conflicts = root.join(format!(
+        "{}.tsv",
+        "operation-conflicts-unavailable".repeat(16)
+    ));
+    let source = root.join("report.md");
+    let destination = root.join("destination.md");
+    fs::write(&source, "new report").unwrap();
+    fs::write(&destination, "old report").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .env("GFM_OPERATION_CONFLICT_STORE", &conflicts)
+        .args([
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("\tcompleted"), "{stdout}");
+    assert!(
+        stderr.contains("runtime write path metadata unavailable")
+            || stderr.contains("operation write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("operation-conflicts-unavailable"),
+        "{stderr}"
+    );
+    assert!(!conflicts.exists());
+    assert_eq!(fs::read_to_string(&source).unwrap(), "new report");
+    assert_eq!(fs::read_to_string(&destination).unwrap(), "old report");
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

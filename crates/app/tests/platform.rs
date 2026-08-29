@@ -2146,6 +2146,80 @@ fn fileprovider_snapshot_routes_refuse_unreachable_volume_before_state_persisten
 }
 
 #[test]
+fn fileprovider_snapshot_routes_report_state_probe_failure_before_worker_io_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-snapshot-probe-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join(format!(
+        "{}.tsv",
+        "fileprovider-state-unavailable".repeat(16)
+    ));
+    let item = root.join("Remote.icloud-placeholder");
+    std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
+
+    let scan = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&item)
+        .output()
+        .unwrap();
+
+    assert!(!scan.status.success());
+    let scan_stdout = String::from_utf8_lossy(&scan.stdout);
+    let scan_stderr = String::from_utf8_lossy(&scan.stderr);
+    assert!(
+        !scan_stdout.contains("fileprovider-state-invalidation\t"),
+        "{scan_stdout}"
+    );
+    assert!(
+        scan_stderr.contains("platform write path metadata unavailable"),
+        "{scan_stderr}"
+    );
+    assert!(
+        scan_stderr.contains("fileprovider-state-unavailable"),
+        "{scan_stderr}"
+    );
+    assert!(
+        !scan_stderr.contains("security-worker-admission\tworker=fileprovider invalidation scan"),
+        "{scan_stderr}"
+    );
+
+    let event = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-event")
+        .arg(&state)
+        .arg("metadata")
+        .arg(&item)
+        .output()
+        .unwrap();
+
+    assert!(!event.status.success());
+    let event_stdout = String::from_utf8_lossy(&event.stdout);
+    let event_stderr = String::from_utf8_lossy(&event.stderr);
+    assert!(
+        !event_stdout.contains("fileprovider-observed-invalidation\t"),
+        "{event_stdout}"
+    );
+    assert!(
+        event_stderr.contains("platform write path metadata unavailable"),
+        "{event_stderr}"
+    );
+    assert!(
+        event_stderr.contains("fileprovider-state-unavailable"),
+        "{event_stderr}"
+    );
+    assert!(
+        !event_stderr.contains("security-worker-admission\tworker=fileprovider invalidation event"),
+        "{event_stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_sidebar_fileprovider_invalidation_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-sidebar-fileprovider-invalidation-{}",

@@ -24,6 +24,8 @@ use gfm_ops::{
     OperationVolumeClass, OperationVolumeCopyPolicy, Operator,
 };
 use gfm_types::{GfmError, Result, VolumeId};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -240,8 +242,9 @@ fn recover_operations_from_journal(
     policy: OperationRecoveryPolicy,
 ) -> Result<gfm_ops::OperationRecoveryReport> {
     const WORKER: &str = "operation journal";
-    preflight_volume_access_scope(write_probe_path(&journal), AccessIntent::Write, WORKER)?;
-    let volume = control_file_volume(write_probe_path(&journal));
+    let journal_probe = write_probe_path(&journal)?.to_path_buf();
+    preflight_volume_access_scope(&journal_probe, AccessIntent::Write, WORKER)?;
+    let volume = control_file_volume(&journal_probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _journal_access = preflight_operation_journal_write(&journal)?;
@@ -296,8 +299,9 @@ fn resolve_operation_conflicts(
     conflict: ConflictPolicy,
 ) -> Result<Vec<RuntimeOperationConflict>> {
     const WORKER: &str = "operation conflict store";
-    preflight_volume_access_scope(write_probe_path(store.path()), AccessIntent::Write, WORKER)?;
-    let volume = control_file_volume(write_probe_path(store.path()));
+    let store_probe = write_probe_path(store.path())?.to_path_buf();
+    preflight_volume_access_scope(&store_probe, AccessIntent::Write, WORKER)?;
+    let volume = control_file_volume(&store_probe);
     let path = store.path().to_path_buf();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
@@ -622,7 +626,7 @@ fn preflight_operation_volume_policy_access(operation: &Operation) -> Result<()>
                 "operation volume copy policy source",
             )?;
             preflight_volume_access_scope(
-                write_probe_path(to),
+                write_probe_path(to)?,
                 AccessIntent::Write,
                 "operation volume copy policy destination",
             )
@@ -653,7 +657,7 @@ fn operation_uses_trash_metadata(operation: &Operation) -> bool {
 
 fn preflight_operation_journal_write(path: &Path) -> Result<ScopedAccessGuard> {
     preflight_access_scope(
-        write_probe_path(path),
+        write_probe_path(path)?,
         AccessIntent::Write,
         "operation journal",
     )
@@ -665,17 +669,21 @@ fn preflight_trash_metadata_read(path: &Path) -> Result<ScopedAccessGuard> {
 
 fn preflight_trash_metadata_write(path: &Path) -> Result<ScopedAccessGuard> {
     preflight_access_scope(
-        write_probe_path(path),
+        write_probe_path(path)?,
         AccessIntent::Write,
         "trash metadata",
     )
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.exists() {
-        return path;
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(path),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("operation write path metadata unavailable: {err}"),
+        )),
     }
-    crate::parent_or_cwd(path)
 }
 
 fn control_file_volume(path: &Path) -> Option<VolumeId> {

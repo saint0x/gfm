@@ -1508,7 +1508,7 @@ fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<V
         return Ok(vec![report.as_tsv()]);
     }
     let store = SecurityScopedBookmarkStore::new(crate::runtime::default_security_bookmarks_path());
-    let store_probe = write_probe_path(store.path()).to_path_buf();
+    let store_probe = write_probe_path(store.path())?.to_path_buf();
     preflight_volume_access_scope(&store_probe, AccessIntent::Write, STORE_WORKER)?;
     preflight_volume_access_scope(&path, intent, WORKER)?;
     let volume = detect_volume_id(&store_probe)
@@ -1582,7 +1582,7 @@ fn run_preview_cache_fileprovider_invalidation(
 ) -> Result<String> {
     const CACHE_WORKER: &str = "preview cache root";
     const WORKER: &str = "preview cache";
-    let cache_probe = write_probe_path(&cache_root).to_path_buf();
+    let cache_probe = write_probe_path(&cache_root)?.to_path_buf();
     preflight_volume_access_scope(&cache_probe, AccessIntent::Write, CACHE_WORKER)?;
     preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
     let volume = detect_volume_id(&cache_probe)
@@ -1621,9 +1621,10 @@ fn run_preview_cache_fileprovider_observed_invalidation(
     event: FileEvent,
 ) -> Result<String> {
     const WORKER: &str = "preview cache fileprovider observed invalidation";
-    let cache_probe = write_probe_path(&cache_root).to_path_buf();
+    let cache_probe = write_probe_path(&cache_root)?.to_path_buf();
     preflight_volume_access_scope(&cache_probe, AccessIntent::Write, "preview cache root")?;
     preflight_fileprovider_observed_event_volumes(&state_path, &event, WORKER)?;
+    let state_probe = write_probe_existing_ancestor(&state_path, WORKER)?;
     let volume = detect_volume_id(&cache_probe)
         .ok()
         .or_else(|| parent_volume(&cache_probe))
@@ -1632,7 +1633,7 @@ fn run_preview_cache_fileprovider_observed_invalidation(
                 .iter()
                 .find_map(|path| parent_volume(path))
         })
-        .or_else(|| parent_volume(&write_probe_existing_ancestor(&state_path)));
+        .or_else(|| parent_volume(&state_probe));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _cache_access =
@@ -1650,14 +1651,14 @@ fn run_fileprovider_invalidation_scan(
 ) -> Result<FileProviderStateInvalidationReport> {
     const WORKER: &str = "fileprovider invalidation scan";
     preflight_fileprovider_snapshot_volumes(&state_path, &paths, WORKER)?;
-    let state_probe = write_probe_existing_ancestor(&state_path);
+    let state_probe = write_probe_existing_ancestor(&state_path, WORKER)?;
     let volume =
         parent_volume(&state_probe).or_else(|| paths.iter().find_map(|path| parent_volume(path)));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_fileprovider_snapshot_access(&state_path, &paths, WORKER)?;
         cancellation.check()?;
-        let previous = if state_path.is_file() {
+        let previous = if fileprovider_state_file_exists(&state_path, WORKER)? {
             Some(FileProviderStateSnapshot::read(&state_path)?)
         } else {
             None
@@ -1677,7 +1678,7 @@ fn run_fileprovider_observed_invalidation(
     worker: &'static str,
 ) -> Result<FileProviderObservedInvalidation> {
     preflight_fileprovider_observed_event_volumes(&state_path, &event, worker)?;
-    let state_probe = write_probe_existing_ancestor(&state_path);
+    let state_probe = write_probe_existing_ancestor(&state_path, worker)?;
     let volume = parent_volume(&state_probe).or_else(|| {
         fileprovider_raw_event_paths(&event)
             .iter()
@@ -1695,13 +1696,14 @@ fn evaluate_fileprovider_observed_invalidation(
     cancellation: &Cancellation,
 ) -> Result<FileProviderObservedInvalidation> {
     cancellation.check()?;
+    let state_probe = write_probe_existing_ancestor(state_path, worker)?;
     let mut access = vec![preflight_access_scope(
-        &write_probe_existing_ancestor(state_path),
+        &state_probe,
         AccessIntent::Write,
         worker,
     )?];
     cancellation.check()?;
-    let previous = if state_path.is_file() {
+    let previous = if fileprovider_state_file_exists(state_path, worker)? {
         Some(FileProviderStateSnapshot::read(state_path)?)
     } else {
         None
@@ -1725,11 +1727,8 @@ fn preflight_fileprovider_snapshot_volumes(
     paths: &[PathBuf],
     worker: &str,
 ) -> Result<()> {
-    preflight_volume_access_scope(
-        &write_probe_existing_ancestor(state_path),
-        AccessIntent::Write,
-        worker,
-    )?;
+    let state_probe = write_probe_existing_ancestor(state_path, worker)?;
+    preflight_volume_access_scope(&state_probe, AccessIntent::Write, worker)?;
     for path in paths {
         preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
     }
@@ -1741,11 +1740,8 @@ fn preflight_fileprovider_observed_event_volumes(
     event: &FileEvent,
     worker: &str,
 ) -> Result<()> {
-    preflight_volume_access_scope(
-        &write_probe_existing_ancestor(state_path),
-        AccessIntent::Write,
-        worker,
-    )?;
+    let state_probe = write_probe_existing_ancestor(state_path, worker)?;
+    preflight_volume_access_scope(&state_probe, AccessIntent::Write, worker)?;
     for path in fileprovider_raw_event_paths(event) {
         preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
     }
@@ -1816,20 +1812,18 @@ fn run_fileprovider_observer_probe(
     let root_worker = format!("{worker} root");
     let target_worker = format!("{worker} target");
     let state_worker = format!("{worker} state");
+    let target_probe = write_probe_existing_ancestor(target, &target_worker)?;
     preflight_volume_access_scope(root, AccessIntent::Index, &root_worker)?;
-    preflight_volume_access_scope(
-        &write_probe_existing_ancestor(target),
-        AccessIntent::Write,
-        &target_worker,
-    )?;
+    preflight_volume_access_scope(&target_probe, AccessIntent::Write, &target_worker)?;
     preflight_fileprovider_snapshot_volumes(state_path, &[target.to_path_buf()], &state_worker)?;
+    let state_probe = write_probe_existing_ancestor(state_path, &state_worker)?;
     let state_path = state_path.to_path_buf();
     let root = root.to_path_buf();
     let target = target.to_path_buf();
     let worker_name = worker.to_string();
     let volume = parent_volume(&root)
-        .or_else(|| parent_volume(&write_probe_existing_ancestor(&target)))
-        .or_else(|| parent_volume(&write_probe_existing_ancestor(&state_path)));
+        .or_else(|| parent_volume(&target_probe))
+        .or_else(|| parent_volume(&state_probe));
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
@@ -1839,19 +1833,17 @@ fn run_fileprovider_observer_probe(
             let root_worker = format!("{worker_name} root");
             let target_worker = format!("{worker_name} target");
             let state_worker = format!("{worker_name} state");
+            let target_probe = write_probe_existing_ancestor(&target, &target_worker)?;
             let _root_access = preflight_access_scope(&root, AccessIntent::Index, &root_worker)?;
-            let _target_access = preflight_access_scope(
-                &write_probe_existing_ancestor(&target),
-                AccessIntent::Write,
-                &target_worker,
-            )?;
+            let _target_access =
+                preflight_access_scope(&target_probe, AccessIntent::Write, &target_worker)?;
             let _state_access = retain_fileprovider_snapshot_access(
                 &state_path,
                 std::slice::from_ref(&target),
                 &state_worker,
             )?;
             cancellation.check()?;
-            let previous = if state_path.is_file() {
+            let previous = if fileprovider_state_file_exists(&state_path, &state_worker)? {
                 Some(FileProviderStateSnapshot::read(&state_path)?)
             } else {
                 None
@@ -1969,7 +1961,7 @@ fn retain_fileprovider_snapshot_access(
     worker: &str,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::with_capacity(paths.len() + 1);
-    let state_probe = write_probe_existing_ancestor(state_path);
+    let state_probe = write_probe_existing_ancestor(state_path, worker)?;
     guards.push(preflight_access_scope(
         &state_probe,
         AccessIntent::Write,
@@ -1987,7 +1979,7 @@ fn retain_fileprovider_event_access(
     worker: &str,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::new();
-    for path in fileprovider_event_access_paths(event, previous) {
+    for path in fileprovider_event_access_paths(event, previous, worker)? {
         guards.push(preflight_access_scope(&path, AccessIntent::Read, worker)?);
     }
     Ok(guards)
@@ -1996,29 +1988,35 @@ fn retain_fileprovider_event_access(
 fn fileprovider_event_access_paths(
     event: &FileEvent,
     previous: Option<&FileProviderStateSnapshot>,
-) -> Vec<PathBuf> {
+    worker: &str,
+) -> Result<Vec<PathBuf>> {
     match &event.kind {
-        FileEventKind::Rename { from, to } => [from, to]
+        FileEventKind::Rename { from, to } => Ok([from, to]
             .into_iter()
-            .map(|path| fileprovider_event_access_path(path, previous))
-            .collect(),
-        FileEventKind::Remove => vec![fileprovider_event_access_path(&event.path, previous)],
+            .map(|path| fileprovider_event_access_path(path, previous, worker))
+            .collect::<Result<Vec<_>>>()?),
+        FileEventKind::Remove => Ok(vec![fileprovider_event_access_path(
+            &event.path,
+            previous,
+            worker,
+        )?]),
         FileEventKind::Create
         | FileEventKind::Metadata
         | FileEventKind::Modify
         | FileEventKind::Rescan
-        | FileEventKind::Other => vec![event.path.clone()],
+        | FileEventKind::Other => Ok(vec![event.path.clone()]),
     }
 }
 
 fn fileprovider_event_access_path(
     path: &Path,
     previous: Option<&FileProviderStateSnapshot>,
-) -> PathBuf {
+    worker: &str,
+) -> Result<PathBuf> {
     if snapshot_tracks_path_or_descendant(previous, path) {
-        return write_probe_existing_ancestor(path);
+        return write_probe_existing_ancestor(path, worker);
     }
-    path.to_path_buf()
+    Ok(path.to_path_buf())
 }
 
 fn snapshot_tracks_path_or_descendant(
@@ -2065,25 +2063,51 @@ fn normalized_existing_ancestor_path(path: &Path) -> Option<PathBuf> {
     }
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("platform write path metadata unavailable: {err}"),
+        )),
     }
-    crate::parent_or_cwd(path)
 }
 
-fn write_probe_existing_ancestor(path: &Path) -> PathBuf {
-    let mut candidate = write_probe_path(path).to_path_buf();
-    while !candidate.exists() {
-        let Some(parent) = candidate.parent() else {
-            break;
-        };
-        if parent == candidate {
-            break;
+fn write_probe_existing_ancestor(path: &Path, worker: &str) -> Result<PathBuf> {
+    let mut candidate = write_probe_path(path)?.to_path_buf();
+    loop {
+        match candidate.try_exists() {
+            Ok(true) => return Ok(candidate),
+            Ok(false) => {
+                let Some(parent) = candidate.parent() else {
+                    return Ok(candidate);
+                };
+                if parent == candidate {
+                    return Ok(candidate);
+                }
+                candidate = parent.to_path_buf();
+            }
+            Err(err) => {
+                return Err(GfmError::io(
+                    &candidate,
+                    format!("{worker} write path ancestor unavailable: {err}"),
+                ))
+            }
         }
-        candidate = parent.to_path_buf();
     }
-    candidate
+}
+
+fn fileprovider_state_file_exists(path: &Path, worker: &str) -> Result<bool> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("{worker} state metadata unavailable: {err}"),
+        )),
+    }
 }
 
 fn record_for_path_with_access(
@@ -2189,7 +2213,9 @@ mod tests {
         };
         std::fs::remove_dir_all(tracked.parent().unwrap()).unwrap();
 
-        let access_path = fileprovider_event_access_path(&tracked, Some(&previous));
+        let access_path =
+            fileprovider_event_access_path(&tracked, Some(&previous), "fileprovider event")
+                .unwrap();
 
         assert_eq!(access_path, root);
         assert!(!tracked.exists());

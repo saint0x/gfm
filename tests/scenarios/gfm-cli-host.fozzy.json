@@ -1783,6 +1783,56 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-copy-source.txt",
+      "data": "copy source\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-copy-destination.txt",
+      "data": "copy destination\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_OPS_JOURNAL": "tmp/ops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailableops-journal-unavailable.journal"
+      },
+      "args": [
+        "copy",
+        "tmp/gfm-fozzy-copy-source.txt",
+        "tmp/gfm-fozzy-copy-destination.txt"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_OPS_JOURNAL": "tmp/gfm-fozzy-operation-conflict-probe.journal",
+        "GFM_OPERATION_CONFLICT_STORE": "tmp/operation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailable.tsv"
+      },
+      "args": [
+        "copy",
+        "tmp/gfm-fozzy-copy-source.txt",
+        "tmp/gfm-fozzy-copy-destination.txt"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-invalidation-scan",
+        "tmp/fileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailablefileprovider-state-unavailable.tsv",
+        "tmp/gfm-fozzy-fileprovider-item.txt"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
