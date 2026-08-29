@@ -182,6 +182,24 @@ fn hot_substring_lookup_budget_caps_local_candidates_before_archive_lookup() {
 }
 
 #[test]
+fn search_query_canonical_cache_key_normalizes_without_collapsing_filters() {
+    let first = SearchQuery::parse("  FinderLatency  ext:MD");
+    let second = SearchQuery::parse("finderlatency extension:md");
+    let different_filter = SearchQuery::parse("finderlatency extension:pdf");
+    let different_operator = SearchQuery::parse("finderlatency OR extension:md");
+
+    assert_eq!(first.canonical_cache_key(), second.canonical_cache_key());
+    assert_ne!(
+        first.canonical_cache_key(),
+        different_filter.canonical_cache_key()
+    );
+    assert_ne!(
+        first.canonical_cache_key(),
+        different_operator.canonical_cache_key()
+    );
+}
+
+#[test]
 fn short_substring_query_does_not_expand_to_all_records() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/alpha.pdf", "alpha.pdf"));

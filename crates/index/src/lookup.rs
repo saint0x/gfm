@@ -1519,7 +1519,8 @@ fn query_result_cache_key(
     budget: SearchLookupBudget,
 ) -> String {
     format!(
-        "{query:?}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        query.canonical_cache_key(),
         limit,
         search_volume_scope_cache_key(scope),
         budget.max_prefix_ids_per_term,

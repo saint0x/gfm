@@ -2,6 +2,8 @@ use gfm_types::{FileKind, FileRecord};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod cache;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SearchQuery {
     pub terms: Vec<String>,
