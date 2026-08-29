@@ -489,11 +489,18 @@ impl ConfigStore {
     pub fn load_or_create_default(&self) -> Result<GfmConfig> {
         match self.load() {
             Ok(config) => Ok(config),
-            Err(GfmError::Io { .. }) if !self.path.exists() => {
-                let config = GfmConfig::default();
-                self.save(&config)?;
-                Ok(config)
-            }
+            Err(err @ GfmError::Io { .. }) => match self.path.try_exists() {
+                Ok(false) => {
+                    let config = GfmConfig::default();
+                    self.save(&config)?;
+                    Ok(config)
+                }
+                Ok(true) => Err(err),
+                Err(err) => Err(GfmError::io(
+                    &self.path,
+                    format!("config path existence unavailable: {err}"),
+                )),
+            },
             Err(err) => Err(err),
         }
     }
@@ -684,6 +691,21 @@ unexpected = true
         assert_eq!(created, GfmConfig::default());
         assert_eq!(loaded, GfmConfig::default());
         assert!(store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn store_does_not_create_default_when_path_probe_fails() {
+        let root = unique_temp_dir("gfm-config-store-probe");
+        let path = root.join("config-path-unavailable".repeat(16));
+        let store = ConfigStore::new(&path);
+
+        let err = store.load_or_create_default().unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("config path existence unavailable"));
+        assert!(!root.join("config.toml").exists());
         fs::remove_dir_all(root).unwrap();
     }
 
