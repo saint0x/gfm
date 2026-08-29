@@ -1,7 +1,7 @@
 use crate::runtime::default_permission_state_path;
 use gfm_mac::{
-    current_permission_onboarding, PermissionStateInvalidationReport, PermissionStateSnapshot,
-    VolumeDiscoveryReport,
+    current_permission_onboarding, MountState, PermissionStateInvalidationReport,
+    PermissionStateSnapshot, VolumeDiscoveryReport,
 };
 use gfm_types::{GfmError, Result};
 use std::path::Path;
@@ -75,9 +75,30 @@ pub(crate) fn refresh_permission_state_at_path(
 fn preflight_permission_state_volume(path: &Path) -> Result<()> {
     let probe_path = write_probe_existing_ancestor(path);
     let report = VolumeDiscoveryReport::for_containing_path(&probe_path);
-    let Some(volume) = report.volume_for_path(&probe_path) else {
+    preflight_permission_state_volume_with_report(path, &probe_path, &report)
+}
+
+fn preflight_permission_state_volume_with_report(
+    path: &Path,
+    probe_path: &Path,
+    report: &VolumeDiscoveryReport,
+) -> Result<()> {
+    let Some(volume) = report.volume_for_path(probe_path) else {
         return Ok(());
     };
+    if volume.mount_state != MountState::Mounted {
+        return Err(GfmError::Permission {
+            path: path.to_path_buf(),
+            message: format!(
+                "permission state volume access blocked: unmounted volume {}; label={}; root={}; stable-id={}; mount={}",
+                volume.kind.as_str(),
+                volume.label,
+                volume.path.display(),
+                volume.stable_identity,
+                volume.mount_state.as_str()
+            ),
+        });
+    }
     if volume.reachable != Some(false) {
         if !volume.read_only || volume.path == Path::new("/") {
             return Ok(());
@@ -138,7 +159,9 @@ fn escape_field(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gfm_mac::{PermissionReadiness, PermissionScope, PermissionState};
+    use gfm_mac::{
+        PermissionReadiness, PermissionScope, PermissionState, VolumeDescriptor, VolumeKind,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -195,6 +218,32 @@ mod tests {
         assert!(err
             .to_string()
             .contains("permission state volume access blocked: read-only volume external"));
+        assert!(!state.exists());
+        assert!(!state.parent().unwrap().exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_state_refuses_stale_volume_before_state_write() {
+        let root = unique_temp_dir("gfm-permission-refresh-stale-volume");
+        let state = root.join("runtime").join("permission-state.tsv");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::Network;
+        volume.mount_state = MountState::Stale;
+        volume.reachable = Some(true);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let err =
+            preflight_permission_state_volume_with_report(&state, &root, &report).unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err
+            .to_string()
+            .contains("permission state volume access blocked: unmounted volume network"));
+        assert!(err.to_string().contains("mount=stale"));
         assert!(!state.exists());
         assert!(!state.parent().unwrap().exists());
 
