@@ -344,8 +344,7 @@ impl ShardedSearchIndex {
         let mut merged = BoundedHitMerge::new(limit);
         let mut telemetry = SearchLookupTelemetry::default();
         std::thread::scope(|thread_scope| {
-            let handles: Vec<_> = self
-                .scoped_shards(scope)
+            let handles: Vec<_> = shards
                 .into_iter()
                 .map(|(volume, shard)| {
                     thread_scope.spawn(move || {
@@ -436,8 +435,7 @@ impl ShardedSearchIndex {
         let mut hot = BoundedHitMerge::new(limit);
         let mut deep = BoundedHitMerge::new(limit.saturating_mul(2));
         std::thread::scope(|thread_scope| {
-            let handles: Vec<_> = self
-                .scoped_shards(scope)
+            let handles: Vec<_> = shards
                 .into_iter()
                 .map(|(_, shard)| {
                     thread_scope.spawn(move || {
