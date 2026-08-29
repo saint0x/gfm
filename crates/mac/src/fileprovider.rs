@@ -1789,7 +1789,7 @@ fn storage_state_for_path(
         || (path_only_provider_hint(&hints.source) && hints.xattrs.is_empty())
     {
         CloudStorageState::Unknown
-    } else if path.exists() {
+    } else if path.try_exists().ok() == Some(true) {
         CloudStorageState::Downloaded
     } else {
         CloudStorageState::Unknown
@@ -3700,6 +3700,29 @@ mod tests {
         assert_eq!(domain, FileProviderDomain::FileProvider);
         assert_eq!(state, CloudStorageState::Unknown);
         assert_eq!(progress.reason.as_deref(), Some("unknown-provider-state"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn storage_state_fallback_keeps_unavailable_path_unknown() {
+        let root = unique_temp_dir();
+        let path = root.join(format!(
+            "{}.icloud.md",
+            "downloaded-path-unavailable".repeat(16)
+        ));
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "filesystem".to_string(),
+        };
+
+        let state = storage_state_for_path(&path, FileProviderDomain::ICloudDrive, &hints);
+
+        assert_eq!(state, CloudStorageState::Unknown);
 
         fs::remove_dir_all(root).unwrap();
     }
