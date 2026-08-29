@@ -4,6 +4,7 @@ use crate::{
     PixelDriftThreshold, PixelSize, PixelThresholdEvaluation,
 };
 use gfm_types::{GfmError, Result};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -498,6 +499,7 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
     let mut appearance = None;
     let mut scale = None;
     let mut color_profile = None;
+    let mut seen_keys = BTreeSet::new();
     for field in fields.iter().skip(1) {
         let Some((key, value)) = field.split_once('=') else {
             return Err(GfmError::Format(format!(
@@ -505,6 +507,12 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
                 line_index + 1
             )));
         };
+        if !seen_keys.insert(key) {
+            return Err(GfmError::Format(format!(
+                "parity gate manifest line {} has duplicate profile key `{key}`",
+                line_index + 1
+            )));
+        }
         match key {
             "macos-build" => macos_build = Some(value.to_string()),
             "hardware-profile" => hardware_profile = Some(value.to_string()),
@@ -1112,6 +1120,23 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("missing fixture-manifest"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn versioned_parity_manifest_rejects_duplicate_capture_profile_keys() {
+        let root = unique_temp_dir("gfm-parity-gate-duplicate-profile-key");
+        let err = parse_parity_gate_manifest(
+            "manifest-version\t1\nprofile\tmacos-build=25A354\tmacos-build=25A999\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+            &root,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("line 2"));
+        assert!(err
+            .to_string()
+            .contains("duplicate profile key `macos-build`"));
 
         fs::remove_dir_all(root).unwrap();
     }
