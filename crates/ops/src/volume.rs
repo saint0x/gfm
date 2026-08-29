@@ -27,6 +27,7 @@ impl OperationVolumeClass {
 pub struct OperationVolumeCopyPolicy {
     default_class: OperationVolumeClass,
     root_classes: BTreeMap<PathBuf, OperationVolumeClass>,
+    root_volume_identities: BTreeMap<PathBuf, String>,
     root_file_cloning_support: BTreeMap<PathBuf, bool>,
     root_sparse_file_support: BTreeMap<PathBuf, bool>,
 }
@@ -36,6 +37,7 @@ impl Default for OperationVolumeCopyPolicy {
         Self {
             default_class: OperationVolumeClass::Local,
             root_classes: BTreeMap::new(),
+            root_volume_identities: BTreeMap::new(),
             root_file_cloning_support: BTreeMap::new(),
             root_sparse_file_support: BTreeMap::new(),
         }
@@ -47,6 +49,7 @@ impl OperationVolumeCopyPolicy {
         Self {
             default_class,
             root_classes: BTreeMap::new(),
+            root_volume_identities: BTreeMap::new(),
             root_file_cloning_support: BTreeMap::new(),
             root_sparse_file_support: BTreeMap::new(),
         }
@@ -54,6 +57,16 @@ impl OperationVolumeCopyPolicy {
 
     pub fn with_root(mut self, root: impl Into<PathBuf>, class: OperationVolumeClass) -> Self {
         self.root_classes.insert(root.into(), class);
+        self
+    }
+
+    pub fn with_root_volume_identity(
+        mut self,
+        root: impl Into<PathBuf>,
+        identity: impl Into<String>,
+    ) -> Self {
+        self.root_volume_identities
+            .insert(root.into(), identity.into());
         self
     }
 
@@ -93,9 +106,27 @@ impl OperationVolumeCopyPolicy {
             .map(|(_, supported)| *supported)
     }
 
+    fn volume_identity_for_path(&self, path: &Path) -> Option<&str> {
+        self.root_volume_identities
+            .iter()
+            .filter(|(root, _)| path.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .map(|(_, identity)| identity.as_str())
+    }
+
     pub fn file_cloning_supported_for_paths(&self, from: &Path, to: &Path) -> bool {
-        self.file_cloning_support_for_path(from) != Some(false)
-            && self.file_cloning_support_for_path(to) != Some(false)
+        if self.file_cloning_support_for_path(from) == Some(false)
+            || self.file_cloning_support_for_path(to) == Some(false)
+        {
+            return false;
+        }
+        match (
+            self.volume_identity_for_path(from),
+            self.volume_identity_for_path(to),
+        ) {
+            (Some(source), Some(destination)) => source == destination,
+            _ => true,
+        }
     }
 
     pub fn sparse_files_supported_for_path(&self, path: &Path) -> bool {
@@ -187,6 +218,31 @@ mod tests {
         assert!(policy.file_cloning_supported_for_paths(
             Path::new("/Users/deepsaint/source.bin"),
             Path::new("/Users/deepsaint/copy.bin")
+        ));
+    }
+
+    #[test]
+    fn file_cloning_requires_same_known_volume_identity() {
+        let policy = OperationVolumeCopyPolicy::default()
+            .with_root_volume_identity("/Volumes/Source", "diskarbitration:uuid:SOURCE")
+            .with_root_volume_identity("/Volumes/Destination", "diskarbitration:uuid:DESTINATION")
+            .with_root_volume_identity("/Volumes/Source/Subvolume", "diskarbitration:uuid:NESTED");
+
+        assert!(!policy.file_cloning_supported_for_paths(
+            Path::new("/Volumes/Source/file.bin"),
+            Path::new("/Volumes/Destination/file.bin")
+        ));
+        assert!(policy.file_cloning_supported_for_paths(
+            Path::new("/Volumes/Source/file.bin"),
+            Path::new("/Volumes/Source/copy.bin")
+        ));
+        assert!(!policy.file_cloning_supported_for_paths(
+            Path::new("/Volumes/Source/Subvolume/file.bin"),
+            Path::new("/Volumes/Source/copy.bin")
+        ));
+        assert!(policy.file_cloning_supported_for_paths(
+            Path::new("/Unknown/source.bin"),
+            Path::new("/Volumes/Destination/file.bin")
         ));
     }
 

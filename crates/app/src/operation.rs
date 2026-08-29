@@ -873,10 +873,12 @@ fn operation_volume_copy_policy_from_report(
     let mut policy = OperationVolumeCopyPolicy::default();
     for volume in &report.volumes {
         if operation_touches_volume(operation, &volume.path) {
-            policy = policy.with_root(
-                volume.path.clone(),
-                operation_volume_class_for_descriptor(volume),
-            );
+            policy = policy
+                .with_root(
+                    volume.path.clone(),
+                    operation_volume_class_for_descriptor(volume),
+                )
+                .with_root_volume_identity(volume.path.clone(), volume.stable_identity.clone());
             if let Some(supported) = volume.resource_supports_file_cloning {
                 policy = policy.with_root_file_cloning_support(volume.path.clone(), supported);
             }
@@ -1100,7 +1102,7 @@ mod tests {
         assert!(report.contains("\tsource-class=network\t"));
         assert!(report.contains("\tdestination-class=external\t"));
         assert!(report.contains("\tbuffer-bytes=65536\t"));
-        assert!(report.contains("\tfile-cloning=true\t"));
+        assert!(report.contains("\tfile-cloning=false\t"));
         assert!(report.contains("\tsparse-files=true\t"));
         assert!(report.contains("\tvolumes="));
 
@@ -1133,6 +1135,38 @@ mod tests {
 
         assert!(!policy.file_cloning_supported_for_paths(&source, &destination));
         assert!(!policy.sparse_files_supported_for_path(&destination));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_policy_skips_file_cloning_for_distinct_known_volumes() {
+        let root = unique_temp_dir("gfm-app-op-volume-policy-distinct-clone");
+        let source_root = root.join("Source");
+        let destination_root = root.join("Destination");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&destination_root).unwrap();
+        fs::write(source_root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+        fs::write(
+            destination_root.join(".gfm-volume-kind"),
+            "external-removable\n",
+        )
+        .unwrap();
+        let source = source_root.join("source.bin");
+        let destination = destination_root.join("destination.bin");
+        let mut report =
+            VolumeDiscoveryReport::from_paths(vec![source_root.clone(), destination_root.clone()]);
+        for volume in &mut report.volumes {
+            volume.resource_supports_file_cloning = Some(true);
+        }
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert!(!policy.file_cloning_supported_for_paths(&source, &destination));
 
         fs::remove_dir_all(root).unwrap();
     }
