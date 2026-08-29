@@ -2568,6 +2568,52 @@ fn persists_fileprovider_invalidation_scan_from_binary() {
 }
 
 #[test]
+fn fileprovider_invalidation_scan_refuses_invalid_persisted_state_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-invalidation-scan-corrupt-state-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let evicted = root.join("Remote.icloud-placeholder");
+    std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
+    std::fs::write(
+        &state,
+        format!("gfm-fileprovider-state-v1\nbroken\t{}\n", evicted.display()),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&evicted)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("fileprovider-state-invalidation\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("invalid FileProvider state `broken`"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("unsupported FileProvider storage state `broken`"),
+        "{stderr}"
+    );
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert!(state_text.contains("broken\t"), "{state_text}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_invalidation_scan_creates_nested_state_parent_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-invalidation-scan-parent-{}",

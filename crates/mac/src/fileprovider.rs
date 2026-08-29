@@ -864,8 +864,16 @@ impl FileProviderStateSnapshot {
                     line_index + 2
                 )));
             }
+            let state = CloudStorageState::parse(fields[0]).map_err(|err| {
+                GfmError::Format(format!(
+                    "{}:{} invalid FileProvider state `{}`: {err}",
+                    path.display(),
+                    line_index + 2,
+                    fields[0]
+                ))
+            })?;
             entries.push(FileProviderStateSnapshotEntry {
-                state: CloudStorageState::parse(fields[0])?,
+                state,
                 path: PathBuf::from(unescape_field(fields[1])),
             });
         }
@@ -2827,6 +2835,28 @@ mod tests {
         let reloaded = FileProviderStateSnapshot::read(&path).unwrap();
 
         assert_eq!(reloaded, snapshot);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_state_snapshot_reports_invalid_state_with_line_number() {
+        let root = unique_temp_dir();
+        let path = root.join("fileprovider-state.tsv");
+        fs::write(
+            &path,
+            "gfm-fileprovider-state-v1\nevicted\t/Cloud/Remote.icloud\nbroken\t/Cloud/Broken.icloud\n",
+        )
+        .unwrap();
+
+        let err = FileProviderStateSnapshot::read(&path).unwrap_err();
+
+        assert!(err.to_string().contains(&format!("{}:3", path.display())));
+        assert!(err
+            .to_string()
+            .contains("invalid FileProvider state `broken`"));
+        assert!(err
+            .to_string()
+            .contains("unsupported FileProvider storage state `broken`"));
         fs::remove_dir_all(root).unwrap();
     }
 
