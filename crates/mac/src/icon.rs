@@ -547,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn path_only_icloud_items_carry_waiting_badge_until_native_materialization_is_known() {
+    fn path_only_icloud_items_do_not_carry_cloud_badges_without_provider_evidence() {
         let path = temp_path("gfm-native-path-only-icon", "icloud.md");
         fs::write(&path, "path-only iCloud hint").unwrap();
         let mut record = record("MaybeDownloaded.icloud.md", FileKind::File);
@@ -555,8 +555,8 @@ mod tests {
 
         let descriptor = NativeIconDescriptor::for_record(&record);
 
-        assert_eq!(descriptor.badges, vec![NativeIconBadge::CloudWaiting]);
-        assert_eq!(descriptor.cache_key, "document:extension:md:cloud-waiting");
+        assert!(descriptor.badges.is_empty());
+        assert_eq!(descriptor.cache_key, "document:extension:md");
         fs::remove_file(path).unwrap();
     }
 
@@ -582,6 +582,7 @@ mod tests {
     fn in_flight_icloud_items_carry_progress_badge() {
         let path = temp_path("gfm-native-downloading-icon", "icloud-downloading.png");
         fs::write(&path, "downloading").unwrap();
+        xattr::set(&path, "com.apple.fileprovider.state", b"downloading").unwrap();
         let mut record = record("Asset.icloud-downloading.png", FileKind::File);
         record.path = path.clone();
 
