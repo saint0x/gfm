@@ -35,7 +35,8 @@ pub use operation::Operation;
 pub use operator::Operator;
 pub use plan::plan_operation;
 pub use progress::{
-    OperationProgress, OperationProgressEvent, OperationProgressPhase, OperationThroughputClass,
+    OperationMetadataDegradation, OperationMetadataDegradationKind, OperationProgress,
+    OperationProgressEvent, OperationProgressPhase, OperationThroughputClass,
     OperationThroughputSnapshot,
 };
 pub use recovery::{OperationRecoveryOutcome, OperationRecoveryPolicy, OperationRecoveryReport};

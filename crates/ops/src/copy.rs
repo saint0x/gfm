@@ -15,7 +15,8 @@ use crate::transfer::{
 use crate::verify::verify_copy;
 use crate::verify::verify_copy_checked;
 use crate::{
-    ConflictPolicy, OperationProgressEvent, OperationVolumeCopyPolicy, VerificationPolicy,
+    ConflictPolicy, OperationMetadataDegradation, OperationMetadataDegradationKind,
+    OperationProgressEvent, OperationVolumeCopyPolicy, VerificationPolicy,
 };
 use gfm_fs::PackagePolicy;
 use gfm_types::{FileKind, GfmError, Result};
@@ -367,7 +368,7 @@ fn copy_directory(
                 )?;
             }
         }
-        crate::preserve::preserve_metadata(from, to, &metadata)?;
+        preserve_metadata_with_progress(from, to, &metadata, progress)?;
         Ok(())
     })();
     if rollback_incomplete_fresh_destination
@@ -411,7 +412,7 @@ fn copy_path_existing(
         })
     } else {
         verify_copy_with_progress(from, to, execution.verification, progress)?;
-        crate::preserve::preserve_metadata(from, to, metadata)?;
+        preserve_metadata_with_progress(from, to, metadata, progress)?;
         progress.advance(metadata)
     }
 }
@@ -483,8 +484,11 @@ fn copy_symlink(
     let target = fs::read_link(from).map_err(|err| GfmError::io(from, err))?;
     create_symlink(&target, to)?;
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
-    crate::preserve::preserve_xattrs(from, to)?;
-    crate::preserve::preserve_symlink_times(to, &metadata)?;
+    emit_metadata_degradations(crate::preserve::preserve_xattrs(from, to)?, progress)?;
+    emit_metadata_degradations(
+        crate::preserve::preserve_symlink_times(to, &metadata)?,
+        progress,
+    )?;
     progress.advance(&metadata)
 }
 
@@ -500,14 +504,14 @@ pub(crate) fn copy_file(
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     match clone_file(from, to) {
         Ok(()) => {
-            crate::preserve::preserve_metadata(from, to, &metadata)?;
+            let _ = crate::preserve::preserve_metadata(from, to, &metadata)?;
             verify_copy(from, to, verification)?;
             Ok(CopyMethod::ApfsClone)
         }
         Err(err) if clone_fallback_allowed(&err) => {
             remove_failed_clone_destination(to)?;
             copy_file_bytes(from, to)?;
-            crate::preserve::preserve_metadata(from, to, &metadata)?;
+            let _ = crate::preserve::preserve_metadata(from, to, &metadata)?;
             verify_copy(from, to, verification)?;
             Ok(CopyMethod::ByteCopy)
         }
@@ -529,14 +533,14 @@ fn copy_file_tracked(
     let metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     if !volume_copy_policy.file_cloning_supported_for_paths(from, to) {
         copy_file_bytes_tracked(from, to, volume_copy_policy, progress)?;
-        crate::preserve::preserve_metadata(from, to, &metadata)?;
+        preserve_metadata_with_progress(from, to, &metadata, progress)?;
         verify_copy_with_progress(from, to, verification, progress)?;
         progress.finish_current_item()?;
         return Ok(CopyMethod::ByteCopy);
     }
     match clone_file(from, to) {
         Ok(()) => {
-            crate::preserve::preserve_metadata(from, to, &metadata)?;
+            preserve_metadata_with_progress(from, to, &metadata, progress)?;
             verify_copy_with_progress(from, to, verification, progress)?;
             progress.advance(&metadata)?;
             Ok(CopyMethod::ApfsClone)
@@ -544,7 +548,7 @@ fn copy_file_tracked(
         Err(err) if clone_fallback_allowed(&err) => {
             remove_failed_clone_destination(to)?;
             copy_file_bytes_tracked(from, to, volume_copy_policy, progress)?;
-            crate::preserve::preserve_metadata(from, to, &metadata)?;
+            preserve_metadata_with_progress(from, to, &metadata, progress)?;
             verify_copy_with_progress(from, to, verification, progress)?;
             progress.finish_current_item()?;
             Ok(CopyMethod::ByteCopy)
@@ -580,6 +584,15 @@ fn copy_file_with_session(
         {
             link_existing_hard_link(&existing, to, metadata, progress)?;
             return Ok(());
+        } else {
+            progress.metadata_degraded(OperationMetadataDegradation {
+                path: to.to_path_buf(),
+                kind: OperationMetadataDegradationKind::HardLinkTopology,
+                detail: format!(
+                    "hard-link topology was not preserved because {} is on a volume without hard-link support",
+                    to.display()
+                ),
+            })?;
         }
     }
 
@@ -590,12 +603,7 @@ fn copy_file_with_session(
         execution.volume_copy_policy,
         progress,
     )?;
-    if execution
-        .volume_copy_policy
-        .hard_links_supported_for_path(to)
-    {
-        session.remember_hard_link_destination(metadata, to);
-    }
+    session.remember_hard_link_destination(metadata, to);
     Ok(())
 }
 
@@ -611,6 +619,26 @@ fn link_existing_hard_link(
     }
     fs::hard_link(existing, to).map_err(|err| GfmError::io(to, err))?;
     progress.advance(metadata)
+}
+
+fn preserve_metadata_with_progress(
+    from: &Path,
+    to: &Path,
+    metadata: &fs::Metadata,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    let report = crate::preserve::preserve_metadata(from, to, metadata)?;
+    emit_metadata_degradations(report, progress)
+}
+
+fn emit_metadata_degradations(
+    report: crate::preserve::MetadataPreservationReport,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+) -> Result<()> {
+    for degradation in report.degradations() {
+        progress.metadata_degraded(degradation)?;
+    }
+    Ok(())
 }
 
 #[cfg(unix)]

@@ -191,12 +191,12 @@ fn recursive_copy_stops_after_cancellation_checkpoint() {
                 to: destination.clone(),
             },
             |event| {
-                events.push(event);
                 if event.phase == OperationProgressPhase::Advanced
                     && event.progress.completed_items == 1
                 {
                     cancellation_callback.cancel();
                 }
+                events.push(event);
             },
         )
         .unwrap_err();
@@ -239,12 +239,12 @@ fn paused_recursive_copy_journals_recoverable_pause() {
                 to: destination.clone(),
             },
             |event| {
-                events.push(event);
                 if event.phase == OperationProgressPhase::Advanced
                     && event.progress.completed_items == 1
                 {
                     pause_callback.pause();
                 }
+                events.push(event);
             },
         )
         .unwrap_err();
@@ -544,10 +544,10 @@ fn byte_copy_cancellation_removes_partial_destination() {
     };
     let mut events = Vec::new();
     let mut callback = |event: OperationProgressEvent| {
-        events.push(event);
         if event.phase == OperationProgressPhase::Advanced && event.progress.completed_bytes > 0 {
             cancellation_callback.cancel();
         }
+        events.push(event);
     };
     let mut tracker = ProgressTracker::new(plan, &cancellation, &pause, &mut callback);
 
@@ -1198,12 +1198,27 @@ fn recursive_copy_degrades_hard_links_when_destination_volume_disallows_them() {
         .with_root(&destination, OperationVolumeClass::Local)
         .with_root_hard_link_support(&destination, false);
 
+    let mut events = Vec::new();
     Operator::new(OperationContext::new(&journal).with_volume_copy_policy(policy))
-        .execute(Operation::Copy {
-            from: source.clone(),
-            to: destination.clone(),
-        })
+        .execute_with_progress(
+            Operation::Copy {
+                from: source.clone(),
+                to: destination.clone(),
+            },
+            |event| events.push(event),
+        )
         .unwrap();
+
+    assert!(events.iter().any(|event| {
+        event.phase == OperationProgressPhase::MetadataDegraded
+            && event
+                .metadata_degradation
+                .as_ref()
+                .is_some_and(|degradation| {
+                    degradation.kind == OperationMetadataDegradationKind::HardLinkTopology
+                        && degradation.path == destination.join("nested").join("alias.txt")
+                })
+    }));
 
     let copied_original = destination.join("original.txt");
     let copied_alias = destination.join("nested").join("alias.txt");

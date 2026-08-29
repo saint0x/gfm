@@ -1,12 +1,14 @@
 use crate::{OperationCancellation, OperationPause};
 use gfm_types::Result;
 use std::fs;
+use std::path::PathBuf;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationProgressPhase {
     Planned,
     Advanced,
+    MetadataDegraded,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -17,11 +19,30 @@ pub struct OperationProgress {
     pub completed_bytes: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationProgressEvent {
     pub phase: OperationProgressPhase,
     pub progress: OperationProgress,
     pub throughput: Option<OperationThroughputSnapshot>,
+    pub metadata_degradation: Option<OperationMetadataDegradation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationMetadataDegradation {
+    pub path: PathBuf,
+    pub kind: OperationMetadataDegradationKind,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationMetadataDegradationKind {
+    Ownership,
+    CreatedTime,
+    ExtendedAttribute,
+    AccessControlList,
+    FileFlags,
+    SymlinkTimes,
+    HardLinkTopology,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,12 +140,27 @@ impl<'a, F: FnMut(OperationProgressEvent)> ProgressTracker<'a, F> {
         self.check_control()
     }
 
+    pub(crate) fn metadata_degraded(
+        &mut self,
+        degradation: OperationMetadataDegradation,
+    ) -> Result<()> {
+        self.check_control()?;
+        (self.on_progress)(OperationProgressEvent {
+            phase: OperationProgressPhase::MetadataDegraded,
+            progress: self.progress,
+            throughput: None,
+            metadata_degradation: Some(degradation),
+        });
+        self.check_control()
+    }
+
     fn emit(&mut self, phase: OperationProgressPhase) {
         let throughput = self.throughput_snapshot(phase);
         (self.on_progress)(OperationProgressEvent {
             phase,
             progress: self.progress,
             throughput,
+            metadata_degradation: None,
         });
     }
 
