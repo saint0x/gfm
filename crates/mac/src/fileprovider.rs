@@ -1688,7 +1688,7 @@ fn native_resource_proves_local_only(
     native_identity: &NativeFileProviderIdentity,
 ) -> bool {
     native.status == gfm_mac_sys::NativeFileProviderStatus::Available
-        && native.is_ubiquitous == Some(false)
+        && (native.is_ubiquitous == Some(false) || native.is_excluded_from_sync == Some(true))
         && !native_has_ubiquitous_materialization_evidence(native)
         && native_identity.status != NativeFileProviderIdentityStatus::Available
 }
@@ -1780,7 +1780,9 @@ fn path_only_provider_hint(source: &str) -> bool {
 }
 
 fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<CloudStorageState> {
-    if values.has_unresolved_conflicts == Some(true) {
+    if values.is_excluded_from_sync == Some(true) {
+        Some(CloudStorageState::LocalOnly)
+    } else if values.has_unresolved_conflicts == Some(true) {
         Some(CloudStorageState::Conflict)
     } else if values.is_downloading == Some(true) {
         Some(CloudStorageState::Downloading)
@@ -2210,6 +2212,7 @@ fn native_has_fileprovider_values(values: &NativeFileProviderResourceValues) -> 
         || values.downloading_status.is_some()
         || values.downloading_error.is_some()
         || values.uploading_error.is_some()
+        || values.is_excluded_from_sync.is_some()
 }
 
 fn native_has_offline_error(values: &NativeFileProviderResourceValues) -> bool {
@@ -2232,7 +2235,7 @@ fn native_has_offline_error(values: &NativeFileProviderResourceValues) -> bool {
 fn native_has_ubiquitous_materialization_evidence(
     values: &NativeFileProviderResourceValues,
 ) -> bool {
-    if values.is_ubiquitous == Some(false) {
+    if values.is_ubiquitous == Some(false) || values.is_excluded_from_sync == Some(true) {
         return false;
     }
     native_storage_state(values).is_some() || native_has_offline_error(values)
@@ -2538,6 +2541,44 @@ mod tests {
             report.commands.reason.as_deref(),
             Some("not-fileprovider-backed")
         );
+    }
+
+    #[test]
+    fn native_excluded_from_sync_overrides_placeholder_fallback() {
+        let path = PathBuf::from("/tmp/Evicted.icloud-placeholder");
+        let mut native = native_values();
+        native.is_excluded_from_sync = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloaded = Some(false);
+        native.percent_downloaded_milli = Some(0);
+        native.downloading_status = Some(NativeUbiquitousDownloadingStatus::NotDownloaded);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: vec!["com.apple.icloud.placeholder".to_string()],
+            xattr_values: vec!["not-downloaded".to_string()],
+            provider_identifier: None,
+            source: "fixture-name+native-url-resource+xattr".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_eq!(report.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::NotProviderBacked
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-not-provider-backed")
+        );
+        assert_eq!(report.commands.download, CloudCommandState::Hidden);
+        assert_eq!(report.commands.evict, CloudCommandState::Hidden);
     }
 
     #[test]
@@ -4929,6 +4970,7 @@ mod tests {
             downloading_status: None,
             downloading_error: None,
             uploading_error: None,
+            is_excluded_from_sync: None,
             status: NativeFileProviderStatus::Available,
             reason: None,
         }

@@ -30,6 +30,7 @@ extern "C" {
     static NSURLUbiquitousItemDownloadingStatusKey: CFStringRef;
     static NSURLUbiquitousItemDownloadingErrorKey: CFStringRef;
     static NSURLUbiquitousItemUploadingErrorKey: CFStringRef;
+    static NSURLUbiquitousItemIsExcludedFromSyncKey: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusNotDownloaded: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusDownloaded: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusCurrent: CFStringRef;
@@ -69,6 +70,7 @@ pub struct NativeFileProviderResourceValues {
     pub downloading_status: Option<NativeUbiquitousDownloadingStatus>,
     pub downloading_error: Option<NativeUbiquitousError>,
     pub uploading_error: Option<NativeUbiquitousError>,
+    pub is_excluded_from_sync: Option<bool>,
     pub status: NativeFileProviderStatus,
     pub reason: Option<String>,
 }
@@ -444,6 +446,12 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
         "NSURLUbiquitousItemUploadingErrorKey",
         &mut errors,
     );
+    let is_excluded_from_sync = copy_bool(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLUbiquitousItemIsExcludedFromSyncKey },
+        "NSURLUbiquitousItemIsExcludedFromSyncKey",
+        &mut errors,
+    );
     let has_values = is_ubiquitous.is_some()
         || has_unresolved_conflicts.is_some()
         || is_downloaded.is_some()
@@ -455,7 +463,8 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
         || percent_uploaded_milli.is_some()
         || downloading_status.is_some()
         || downloading_error.is_some()
-        || uploading_error.is_some();
+        || uploading_error.is_some()
+        || is_excluded_from_sync.is_some();
     let status = resource_status_for_values(has_values, &errors);
     let reason = (status == NativeFileProviderStatus::Unavailable)
         .then(|| unavailable_resource_values_reason(path, &errors));
@@ -473,6 +482,7 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
         downloading_status,
         downloading_error,
         uploading_error,
+        is_excluded_from_sync,
         status,
         reason,
     }
@@ -985,6 +995,7 @@ fn missing_values(reason: String) -> NativeFileProviderResourceValues {
         downloading_status: None,
         downloading_error: None,
         uploading_error: None,
+        is_excluded_from_sync: None,
         status: NativeFileProviderStatus::Missing,
         reason: Some(reason),
     }
@@ -1004,6 +1015,7 @@ fn unsupported(reason: String) -> NativeFileProviderResourceValues {
         downloading_status: None,
         downloading_error: None,
         uploading_error: None,
+        is_excluded_from_sync: None,
         status: NativeFileProviderStatus::UnsupportedPath,
         reason: Some(reason),
     }
@@ -1030,6 +1042,7 @@ mod tests {
 
         assert_eq!(values.status, NativeFileProviderStatus::Available);
         assert_ne!(values.is_ubiquitous, Some(true));
+        assert_ne!(values.is_excluded_from_sync, Some(true));
         assert!(values
             .percent_downloaded_milli
             .is_none_or(|value| value <= 100_000));
