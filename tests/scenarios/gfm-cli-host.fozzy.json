@@ -4945,6 +4945,21 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-permission-refresh-duplicate-scope.tsv",
+      "data": "gfm-permission-state-v1\ndocuments\tgranted\ttmp/gfm-fozzy-home/Documents\treadable\ndocuments\tdenied\ttmp/gfm-fozzy-home/Documents\tdenied\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "permission-invalidation",
+        "tmp/gfm-fozzy-permission-refresh-duplicate-scope.tsv"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-permission-previous.tsv",
       "data": "gfm-permission-state-v1\ndocuments\tgranted\ttmp/gfm-fozzy-home/Documents\treadable\n"
     },
@@ -4964,6 +4979,22 @@
       "exit_code": 0,
       "stdout": "permission-invalidation\tinitialized=false\tchanged=1\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\npermission-change\tdocuments\tprevious=granted\tcurrent=unavailable\tpath=tmp/gfm-fozzy-home/Documents\treason=permission scope no longer reported by permission onboarding\n",
       "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-permission-duplicate-scope.tsv",
+      "data": "gfm-permission-state-v1\ndocuments\tgranted\ttmp/gfm-fozzy-home/Documents\treadable\ndocuments\tdenied\ttmp/gfm-fozzy-home/Documents\tmacOS denied read access\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "permission-invalidation-compare",
+        "tmp/gfm-fozzy-permission-duplicate-scope.tsv",
+        "tmp/gfm-fozzy-permission-current.tsv"
+      ],
+      "exit_code": 1,
       "times": 1
     },
     {

@@ -1,4 +1,5 @@
 use gfm_types::{GfmError, Result};
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -40,7 +41,7 @@ impl Default for PermissionPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PermissionScope {
     Desktop,
     Documents,
@@ -241,6 +242,7 @@ impl PermissionStateSnapshot {
             }
         }
         let mut readiness = Vec::new();
+        let mut seen_scopes = BTreeSet::new();
         for (line_index, line) in lines.enumerate() {
             if line.trim().is_empty() {
                 continue;
@@ -253,9 +255,32 @@ impl PermissionStateSnapshot {
                     line_index + 2
                 )));
             }
+            let scope = PermissionScope::parse(fields[0]).map_err(|err| {
+                GfmError::Format(format!(
+                    "{}:{} invalid permission scope `{}`: {err}",
+                    path.display(),
+                    line_index + 2,
+                    fields[0]
+                ))
+            })?;
+            if !seen_scopes.insert(scope) {
+                return Err(GfmError::Format(format!(
+                    "{}:{} duplicate permission state scope `{}`",
+                    path.display(),
+                    line_index + 2,
+                    scope.as_str()
+                )));
+            }
             readiness.push(PermissionReadiness {
-                scope: PermissionScope::parse(fields[0])?,
-                state: PermissionState::parse(fields[1])?,
+                scope,
+                state: PermissionState::parse(fields[1]).map_err(|err| {
+                    GfmError::Format(format!(
+                        "{}:{} invalid permission state `{}`: {err}",
+                        path.display(),
+                        line_index + 2,
+                        fields[1]
+                    ))
+                })?,
                 path: PathBuf::from(unescape_field(fields[2])),
                 reason: unescape_field(fields[3]),
             });
@@ -682,6 +707,30 @@ mod tests {
     }
 
     #[test]
+    fn permission_state_snapshot_rejects_duplicate_scopes_with_line_number() {
+        let root = temp_root("permissions-snapshot-duplicate-scope");
+        let path = root.join("permission-state.tsv");
+        let documents = root.join("Documents");
+        fs::write(
+            &path,
+            format!(
+                "gfm-permission-state-v1\ndocuments\tgranted\t{}\treadable\ndocuments\tdenied\t{}\tmacOS denied read access\n",
+                documents.display(),
+                documents.display()
+            ),
+        )
+        .unwrap();
+
+        let err = PermissionStateSnapshot::read(&path).unwrap_err();
+
+        assert!(err.to_string().contains(&format!("{}:3", path.display())));
+        assert!(err
+            .to_string()
+            .contains("duplicate permission state scope `documents`"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn permission_state_snapshot_write_creates_parent_directory() {
         let root = temp_root("permissions-snapshot-parent");
         let path = root.join("runtime").join("permission-state.tsv");
@@ -697,6 +746,28 @@ mod tests {
         snapshot.write(&path).unwrap();
 
         assert_eq!(PermissionStateSnapshot::read(&path).unwrap(), snapshot);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permission_state_snapshot_parse_failures_include_line_number() {
+        let root = temp_root("permissions-snapshot-invalid-field");
+        let path = root.join("permission-state.tsv");
+        fs::write(
+            &path,
+            format!(
+                "gfm-permission-state-v1\ndocuments\tbroken\t{}\treadable\n",
+                root.join("Documents").display()
+            ),
+        )
+        .unwrap();
+
+        let err = PermissionStateSnapshot::read(&path).unwrap_err();
+
+        assert!(err.to_string().contains(&format!("{}:2", path.display())));
+        assert!(err
+            .to_string()
+            .contains("invalid permission state `broken`"));
         fs::remove_dir_all(root).unwrap();
     }
 

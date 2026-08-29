@@ -197,6 +197,47 @@ fn persists_permission_invalidation_state_from_binary() {
 }
 
 #[test]
+fn permission_invalidation_refuses_duplicate_previous_scope_before_persisting_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-permission-invalidation-refresh-duplicate-scope-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("permission-state.tsv");
+    let documents = root.join("Documents");
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-permission-state-v1\ndocuments\tgranted\t{}\treadable\ndocuments\tdenied\t{}\tdenied\n",
+            documents.display(),
+            documents.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation")
+        .arg(&state)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("permission-invalidation\t"), "{stdout}");
+    assert!(
+        stderr.contains("duplicate permission state scope `documents`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(":3"), "{stderr}");
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert!(state_text.contains("documents\tdenied\t"), "{state_text}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn permission_invalidation_creates_nested_state_parent_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-permission-invalidation-parent-{}",
@@ -364,6 +405,48 @@ fn permission_invalidation_compare_reports_removed_scope_as_unavailable_from_bin
     assert!(
         stdout.contains("\treason=permission scope no longer reported by permission onboarding\n")
     );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn permission_invalidation_compare_refuses_duplicate_scope_state_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-permission-invalidation-duplicate-scope-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let previous = root.join("previous-permission-state.tsv");
+    let current = root.join("current-permission-state.tsv");
+    let documents = root.join("Documents");
+    std::fs::write(
+        &previous,
+        format!(
+            "gfm-permission-state-v1\ndocuments\tgranted\t{}\treadable\ndocuments\tdenied\t{}\tmacOS denied read access\n",
+            documents.display(),
+            documents.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(&current, "gfm-permission-state-v1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation-compare")
+        .arg(&previous)
+        .arg(&current)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("permission-invalidation\t"), "{stdout}");
+    assert!(
+        stderr.contains("duplicate permission state scope `documents`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(":3"), "{stderr}");
 
     let _ = std::fs::remove_dir_all(root);
 }
