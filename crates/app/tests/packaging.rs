@@ -181,6 +181,81 @@ fn packaging_routes_refuse_unreachable_paths_before_toolchain_or_bundle_io_from_
 }
 
 #[test]
+fn packaging_routes_report_output_probe_failures_before_toolchain_or_bundle_io_from_binary() {
+    let root = unique_temp_dir("gfm-cli-packaging-output-probe");
+    let executable = root.join("gfm");
+    let icon = root.join("GFM.icns");
+    let app = root.join("GFM.app");
+    let bundle_output = root.join("bundle-unavailable".repeat(16));
+    let notarize_output = root.join("notarize-unavailable".repeat(16));
+    fs::write(&executable, b"bin").unwrap();
+    fs::write(&icon, b"icns").unwrap();
+    fs::create_dir_all(&app).unwrap();
+
+    let bundle = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "bundle-app",
+            executable.to_str().unwrap(),
+            icon.to_str().unwrap(),
+            bundle_output.to_str().unwrap(),
+            "--unsigned",
+        ])
+        .output()
+        .unwrap();
+    assert!(!bundle.status.success());
+    let bundle_stdout = String::from_utf8_lossy(&bundle.stdout);
+    let bundle_stderr = String::from_utf8_lossy(&bundle.stderr);
+    assert!(!bundle_stdout.contains("GFM.app"), "{bundle_stdout}");
+    assert!(
+        bundle_stderr.contains("packaging write path metadata unavailable"),
+        "{bundle_stderr}"
+    );
+    assert!(
+        bundle_stderr.contains("bundle-unavailable"),
+        "{bundle_stderr}"
+    );
+    assert!(
+        !bundle_stderr.contains("security-worker-admission\tworker=bundle app output\t"),
+        "{bundle_stderr}"
+    );
+    assert!(!bundle_output.exists());
+
+    let notarize = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "notarize-app",
+            app.to_str().unwrap(),
+            notarize_output.to_str().unwrap(),
+            "--keychain-profile",
+            "release",
+        ])
+        .output()
+        .unwrap();
+    assert!(!notarize.status.success());
+    let notarize_stdout = String::from_utf8_lossy(&notarize.stdout);
+    let notarize_stderr = String::from_utf8_lossy(&notarize.stderr);
+    assert!(!notarize_stdout.contains("accepted"), "{notarize_stdout}");
+    assert!(
+        notarize_stderr.contains("packaging write path metadata unavailable"),
+        "{notarize_stderr}"
+    );
+    assert!(
+        notarize_stderr.contains("notarize-unavailable"),
+        "{notarize_stderr}"
+    );
+    assert!(
+        !notarize_stderr.contains("security-worker-admission\tworker=notarize output\t"),
+        "{notarize_stderr}"
+    );
+    assert!(
+        !notarize_stderr.contains("requires Apple's full Xcode Metal toolchain"),
+        "{notarize_stderr}"
+    );
+    assert!(!notarize_output.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn notarize_app_requires_explicit_credentials_from_binary() {
     let root = unique_temp_dir("gfm-cli-notarize");
 

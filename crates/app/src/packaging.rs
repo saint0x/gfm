@@ -9,6 +9,8 @@ use gfm_packaging::{
     ReleaseArtifactReport, ReleaseArtifactSpec, ReleasePolicy, SigningIdentity,
 };
 use gfm_types::{GfmError, Result};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 pub fn release_policy() -> Result<()> {
@@ -152,7 +154,8 @@ fn run_release_validate(spec: ReleaseArtifactSpec) -> Result<ReleaseArtifactRepo
 fn run_bundle_app(spec: AppBundleSpec) -> Result<AppBundle> {
     const WORKER: &str = "bundle app";
     preflight_bundle_volumes(&spec)?;
-    let volume = parent_volume(write_probe_path(&spec.output_dir))
+    let output_probe = write_probe_path(&spec.output_dir)?.to_path_buf();
+    let volume = parent_volume(&output_probe)
         .or_else(|| parent_volume(&spec.executable))
         .or_else(|| parent_volume(&spec.icon));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -181,8 +184,8 @@ fn run_register_app(app_path: PathBuf) -> Result<()> {
 fn run_notarize_app(spec: NotarizationSpec) -> Result<NotarizationTicket> {
     const WORKER: &str = "notarize app";
     preflight_notarize_volumes(&spec)?;
-    let volume =
-        parent_volume(write_probe_path(&spec.output_dir)).or_else(|| parent_volume(&spec.app_path));
+    let output_probe = write_probe_path(&spec.output_dir)?.to_path_buf();
+    let volume = parent_volume(&output_probe).or_else(|| parent_volume(&spec.app_path));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_notarize_access(&spec.app_path, &spec.output_dir, &spec.credentials)?;
@@ -204,7 +207,7 @@ fn preflight_bundle_volumes(spec: &AppBundleSpec) -> Result<()> {
     )?;
     preflight_volume_access_scope(&spec.icon, AccessIntent::Read, "bundle app icon")?;
     preflight_volume_access_scope(
-        write_probe_path(&spec.output_dir),
+        write_probe_path(&spec.output_dir)?,
         AccessIntent::Write,
         "bundle app output",
     )
@@ -219,7 +222,7 @@ fn retain_bundle_access(
         retain_packaging_read_access(executable, "bundle app executable")?,
         retain_packaging_read_access(icon, "bundle app icon")?,
         preflight_access_scope(
-            write_probe_path(output_dir),
+            write_probe_path(output_dir)?,
             AccessIntent::Write,
             "bundle app output",
         )?,
@@ -229,7 +232,7 @@ fn retain_bundle_access(
 fn preflight_notarize_volumes(spec: &NotarizationSpec) -> Result<()> {
     preflight_volume_access_scope(&spec.app_path, AccessIntent::Read, "notarize app")?;
     preflight_volume_access_scope(
-        write_probe_path(&spec.output_dir),
+        write_probe_path(&spec.output_dir)?,
         AccessIntent::Write,
         "notarize output",
     )?;
@@ -247,7 +250,7 @@ fn retain_notarize_access(
     let mut guards = vec![
         retain_packaging_read_access(app_path, "notarize app")?,
         preflight_access_scope(
-            write_probe_path(output_dir),
+            write_probe_path(output_dir)?,
             AccessIntent::Write,
             "notarize output",
         )?,
@@ -258,11 +261,16 @@ fn retain_notarize_access(
     Ok(guards)
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("packaging write path metadata unavailable: {err}"),
+        )),
     }
-    crate::parent_or_cwd(path)
 }
 
 fn notarization_credentials(

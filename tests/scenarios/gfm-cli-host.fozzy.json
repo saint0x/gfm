@@ -39,6 +39,29 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "content-manifest-write",
+        "tmp/content-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailablecontent-manifest-unavailable.gfmmanifest",
+        "hot:gfm-fozzy-cleanup-active.gfmcontent"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-recover",
+        "tmp/gfm-fozzy-cleanup.gfmmanifest",
+        "tmp/content-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailablecontent-quarantine-unavailable",
+        "hot:gfm-fozzy-cleanup-active.gfmcontent"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "content-manifest-promotion-recovery-plan",
         "tmp/gfm-fozzy-cleanup.gfmmanifest"
       ],
@@ -267,6 +290,17 @@
         "gfm-fozzy-cleanup-missing.gfmcontent"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-cleanup",
+        "tmp/gfm-fozzy-cleanup.gfmmanifest",
+        "cleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailablecleanup-unavailable.gfmcontent"
+      ],
+      "exit_code": 1,
+      "times": 1
     },
     {
       "type": "proc_when",
@@ -1994,6 +2028,32 @@
         "--unsigned"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "bundle-app",
+        "target/aarch64-apple-darwin/debug/gfm",
+        "tmp/gfm-fozzy-host.icns",
+        "tmp/packaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailablepackaging-bundle-unavailable",
+        "--unsigned"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "notarize-app",
+        "tmp/gfm-fozzy-dist/GFM.app",
+        "tmp/packaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailablepackaging-notarize-unavailable",
+        "--keychain-profile",
+        "release"
+      ],
+      "exit_code": 1,
+      "times": 1
     },
     {
       "type": "proc_when",

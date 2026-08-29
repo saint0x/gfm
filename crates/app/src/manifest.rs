@@ -14,6 +14,8 @@ use gfm_store::{
     MmapContentSet,
 };
 use gfm_types::{GfmError, Result};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -262,7 +264,7 @@ fn preflight_manifest_cleanup_volumes(
     for candidate in candidates {
         let path = resolve_manifest_path(manifest_path, candidate);
         let (path, intent) = if removes_candidates {
-            (write_probe_path(&path), AccessIntent::Write)
+            (write_probe_path(&path)?, AccessIntent::Write)
         } else {
             (existing_read_probe_path(&path)?, AccessIntent::Read)
         };
@@ -283,7 +285,7 @@ fn retain_manifest_write_access(
     archives: &[ContentArchiveManifestEntry],
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = vec![preflight_access_scope(
-        write_probe_path(manifest_path),
+        write_probe_path(manifest_path)?,
         AccessIntent::Write,
         "content manifest write",
     )?];
@@ -302,7 +304,7 @@ fn preflight_manifest_write_volumes(
     archives: &[ContentArchiveManifestEntry],
 ) -> Result<()> {
     preflight_volume_access_scope(
-        write_probe_path(manifest_path),
+        write_probe_path(manifest_path)?,
         AccessIntent::Write,
         "content manifest write",
     )?;
@@ -322,7 +324,8 @@ fn run_manifest_write(
 ) -> Result<String> {
     const WORKER: &str = "content manifest write";
     preflight_manifest_write_volumes(&manifest_path, &archives)?;
-    let volume = path_volume(write_probe_path(&manifest_path));
+    let manifest_probe = write_probe_path(&manifest_path)?.to_path_buf();
+    let volume = path_volume(&manifest_probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_manifest_write_access(&manifest_path, &archives)?;
@@ -470,12 +473,12 @@ fn preflight_manifest_recovery_volumes(
 ) -> Result<()> {
     preflight_manifest_recovery_plan_volumes(manifest_path, discovered)?;
     preflight_volume_access_scope(
-        write_probe_path(manifest_path),
+        write_probe_path(manifest_path)?,
         AccessIntent::Write,
         "content manifest recovery manifest",
     )?;
     preflight_volume_access_scope(
-        write_probe_path(quarantine),
+        write_probe_path(quarantine)?,
         AccessIntent::Write,
         "content manifest recovery quarantine",
     )
@@ -487,9 +490,11 @@ fn run_manifest_recover(
     discovered: Vec<ContentArchiveManifestEntry>,
 ) -> Result<Vec<String>> {
     preflight_manifest_recovery_volumes(&manifest_path, &quarantine, &discovered)?;
+    let manifest_probe = write_probe_path(&manifest_path)?.to_path_buf();
+    let quarantine_probe = write_probe_path(&quarantine)?.to_path_buf();
     let volume = path_volume(&manifest_path)
-        .or_else(|| path_volume(write_probe_path(&manifest_path)))
-        .or_else(|| path_volume(write_probe_path(&quarantine)));
+        .or_else(|| path_volume(&manifest_probe))
+        .or_else(|| path_volume(&quarantine_probe));
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
@@ -529,12 +534,12 @@ fn retain_manifest_recovery_access<'a>(
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = retain_manifest_recovery_plan_access(manifest_path, discovered)?;
     guards.push(preflight_access_scope(
-        write_probe_path(manifest_path),
+        write_probe_path(manifest_path)?,
         AccessIntent::Write,
         "content manifest recovery manifest",
     )?);
     guards.push(preflight_access_scope(
-        write_probe_path(quarantine),
+        write_probe_path(quarantine)?,
         AccessIntent::Write,
         "content manifest recovery quarantine",
     )?);
@@ -553,7 +558,7 @@ fn retain_manifest_promotion_access(
             "content manifest promotion manifest",
         )?,
         preflight_access_scope(
-            write_probe_path(manifest_path),
+            write_probe_path(manifest_path)?,
             AccessIntent::Write,
             "content manifest promotion manifest",
         )?,
@@ -584,7 +589,7 @@ fn preflight_manifest_promotion_volumes(
         "content manifest promotion manifest",
     )?;
     preflight_volume_access_scope(
-        write_probe_path(manifest_path),
+        write_probe_path(manifest_path)?,
         AccessIntent::Write,
         "content manifest promotion manifest",
     )?;
@@ -675,7 +680,7 @@ fn preflight_manifest_promotion_recovery_volumes(manifest_path: &Path) -> Result
         "content manifest promotion recovery",
     )?;
     preflight_volume_access_scope(
-        write_probe_path(manifest_path),
+        write_probe_path(manifest_path)?,
         AccessIntent::Write,
         "content manifest promotion recovery",
     )?;
@@ -685,7 +690,7 @@ fn preflight_manifest_promotion_recovery_volumes(manifest_path: &Path) -> Result
         "content manifest promotion recovery journal",
     )?;
     preflight_volume_access_scope(
-        write_probe_path(&journal_path),
+        write_probe_path(&journal_path)?,
         AccessIntent::Write,
         "content manifest promotion recovery journal",
     )
@@ -737,8 +742,8 @@ fn run_manifest_promotion_recover(manifest_path: PathBuf) -> Result<Vec<String>>
     const WORKER: &str = "content manifest promotion recovery";
     const ARCHIVE_WORKER: &str = "content manifest promotion recovery archive";
     preflight_manifest_promotion_recovery_volumes(&manifest_path)?;
-    let volume =
-        path_volume(&manifest_path).or_else(|| path_volume(write_probe_path(&manifest_path)));
+    let manifest_probe = write_probe_path(&manifest_path)?.to_path_buf();
+    let volume = path_volume(&manifest_path).or_else(|| path_volume(&manifest_probe));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_manifest_promotion_recovery_access(&manifest_path)?;
@@ -789,7 +794,7 @@ fn retain_manifest_promotion_recovery_access(
             "content manifest promotion recovery",
         )?,
         preflight_access_scope(
-            write_probe_path(manifest_path),
+            write_probe_path(manifest_path)?,
             AccessIntent::Write,
             "content manifest promotion recovery",
         )?,
@@ -799,7 +804,7 @@ fn retain_manifest_promotion_recovery_access(
             "content manifest promotion recovery journal",
         )?,
         preflight_access_scope(
-            write_probe_path(&journal_path),
+            write_probe_path(&journal_path)?,
             AccessIntent::Write,
             "content manifest promotion recovery journal",
         )?,
@@ -820,7 +825,7 @@ fn retain_manifest_cleanup_access(
     for candidate in candidates {
         let path = resolve_manifest_path(manifest_path, candidate);
         let (path, intent) = if removes_candidates {
-            (write_probe_path(&path), AccessIntent::Write)
+            (write_probe_path(&path)?, AccessIntent::Write)
         } else {
             (existing_read_probe_path(&path)?, AccessIntent::Read)
         };
@@ -843,11 +848,16 @@ fn resolve_manifest_path(manifest_path: &Path, path: &Path) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("manifest write path metadata unavailable: {err}"),
+        )),
     }
-    crate::parent_or_cwd(path)
 }
 
 fn manifest_path_exists(path: &Path, label: &str) -> Result<bool> {
@@ -868,7 +878,7 @@ fn existing_read_probe_path(path: &Path) -> Result<&Path> {
     })? {
         return Ok(path);
     }
-    Ok(write_probe_path(path))
+    write_probe_path(path)
 }
 
 fn parse_content_manifest_archive_spec(value: &str) -> Result<ContentArchiveManifestEntry> {

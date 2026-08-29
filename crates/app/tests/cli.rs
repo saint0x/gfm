@@ -10445,6 +10445,76 @@ fn content_manifest_write_uses_cwd_write_probe_for_relative_manifest_from_binary
 }
 
 #[test]
+fn content_manifest_write_reports_manifest_probe_failure_before_publishing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-write-probe");
+    let manifest = root.join(format!("{}.gfmmanifest", "manifest-unavailable".repeat(16)));
+    let content = root.join("content.gfmcontent");
+    fs::write(&content, b"archive bytes").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-write",
+            manifest.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("manifest write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("manifest-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=content manifest write\t"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_manifest_write_reports_manifest_probe_failure_before_archive_admission_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-write-probe");
+    let content = root.join("content.gfmcontent");
+    let manifest = root.join(format!(
+        "{}.gfmmanifest",
+        "content-manifest-unavailable".repeat(16)
+    ));
+    fs::write(&content, b"archive bytes").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-write",
+            manifest.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("manifest write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("content-manifest-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=content manifest write\t"),
+        "{stderr}"
+    );
+    assert!(!manifest.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn content_manifest_write_refuses_unreachable_archive_before_publishing_from_binary() {
     let root = unique_temp_dir("gfm-cli-content-manifest-write-unreachable");
     let local = root.join("local");
@@ -10925,6 +10995,73 @@ fn content_manifest_recovery_plan_refuses_unreachable_archive_before_classifying
 }
 
 #[test]
+fn content_manifest_cleanup_reports_candidate_probe_failure_before_removing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-cleanup-probe");
+    let manifest = root.join("content.gfmmanifest");
+    let active = root.join("active.gfmcontent");
+    let retired = root.join("retired.gfmcontent");
+    let unavailable = root.join(format!("{}.gfmcontent", "cleanup-unavailable".repeat(16)));
+    write_content_postings(
+        &active,
+        &[ContentPosting {
+            term: "activeneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    write_content_postings(
+        &retired,
+        &[ContentPosting {
+            term: "retiredneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 2)],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    ContentArchiveManifest::new(vec![
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Hot,
+            path: active.clone(),
+        },
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Cold,
+            path: retired.clone(),
+        },
+    ])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-cleanup",
+            manifest.to_str().unwrap(),
+            unavailable.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("removed\t"), "{stdout}");
+    assert!(
+        stderr.contains("manifest write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("cleanup-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=content manifest cleanup candidate\t"),
+        "{stderr}"
+    );
+    assert!(active.exists());
+    assert!(retired.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn recovers_corrupt_content_manifest_from_binary() {
     let manifest = unique_temp_path("gfm-cli-content-manifest-recovery", "gfmmanifest");
     let content = unique_temp_path("gfm-cli-content-manifest-recovery", "gfmcontent");
@@ -11266,6 +11403,53 @@ fn content_manifest_recover_refuses_unreachable_quarantine_before_writing_from_b
     );
     assert_eq!(fs::read_to_string(&manifest).unwrap(), original_manifest);
     assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_manifest_recover_reports_quarantine_probe_failure_before_mutation_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-recover-quarantine-probe");
+    let manifest = root.join("content.gfmmanifest");
+    let content = root.join("content.gfmcontent");
+    let quarantine = root.join("quarantine-unavailable".repeat(16));
+    write_content_postings(
+        &content,
+        &[ContentPosting {
+            term: "recoverneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 7)],
+            positions: Vec::new(),
+        }],
+    )
+    .unwrap();
+    fs::write(&manifest, "not-a-content-manifest").unwrap();
+    let original_manifest = fs::read_to_string(&manifest).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-recover",
+            manifest.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("content-manifest-recovery\t"), "{stdout}");
+    assert!(
+        stderr.contains("manifest write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("quarantine-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=content manifest recovery manifest\t"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), original_manifest);
+    assert!(!quarantine.exists());
 
     fs::remove_dir_all(root).unwrap();
 }
