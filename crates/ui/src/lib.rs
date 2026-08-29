@@ -339,6 +339,9 @@ impl AppLaunchSpec {
                 "native app permission access binding requires a permission dialog".to_string(),
             ));
         }
+        if let Some(access) = &self.permission_access {
+            validate_permission_prompt_orchestration(access)?;
+        }
         titlebar::TitlebarContract::from_spec(self)?;
         Ok(())
     }
@@ -388,6 +391,32 @@ impl AppLaunchSpec {
         self.permission_refresh = Some(refresh);
         self
     }
+}
+
+fn validate_permission_prompt_orchestration(access: &PermissionAccessContract) -> Result<()> {
+    let has_prompt_action = access.prompt_action != "none";
+    let has_prompt_source = access.prompt_source != "none";
+    let is_blocked_prompt = access.prompt_kind == PermissionPromptKind::Blocked;
+
+    if access.promptable && (!has_prompt_action || !has_prompt_source || is_blocked_prompt) {
+        return Err(GfmError::Format(format!(
+            "native app permission access for `{}` is promptable without a concrete prompt action and source",
+            access.path
+        )));
+    }
+    if !access.promptable && has_prompt_action && !is_blocked_prompt {
+        return Err(GfmError::Format(format!(
+            "native app permission access for `{}` exposes an interactive prompt action without prompt orchestration",
+            access.path
+        )));
+    }
+    if has_prompt_source && !has_prompt_action {
+        return Err(GfmError::Format(format!(
+            "native app permission access for `{}` names a prompt source without a prompt action",
+            access.path
+        )));
+    }
+    Ok(())
 }
 
 impl Default for AppLaunchSpec {
@@ -797,6 +826,64 @@ mod tests {
         assert!(access
             .as_tsv()
             .contains("\tprompt-action=choose-location\tpromptable=true\tprompt-source=security-scoped-bookmark\t"));
+    }
+
+    #[test]
+    fn rejects_promptable_permission_access_without_prompt_source() {
+        let access = PermissionAccessContract {
+            path: "/Users/me/Documents/Plan.md".to_string(),
+            intent: "preview".to_string(),
+            scope: "documents".to_string(),
+            probe: "granted".to_string(),
+            mode: "security-scoped-bookmark".to_string(),
+            access_action: "prompt".to_string(),
+            worker_action: "prompt".to_string(),
+            can_touch_filesystem: false,
+            bookmark_required: true,
+            bookmark_access: false,
+            refresh_on_permission_change: false,
+            prompt_kind: PermissionPromptKind::BookmarkAcquisition,
+            prompt_action: "choose-location".to_string(),
+            promptable: true,
+            prompt_source: "none".to_string(),
+            reason: "preview worker needs retained bookmark access".to_string(),
+        };
+        let spec = AppLaunchSpec::new("/Users/me/Documents/Plan.md").with_permission_access(access);
+
+        let err = WindowLifecycleContract::from_spec(&spec).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("promptable without a concrete prompt action and source"));
+    }
+
+    #[test]
+    fn rejects_non_promptable_permission_access_with_interactive_prompt_action() {
+        let access = PermissionAccessContract {
+            path: "/Users/me/Documents/Plan.md".to_string(),
+            intent: "preview".to_string(),
+            scope: "documents".to_string(),
+            probe: "granted".to_string(),
+            mode: "security-scoped-bookmark".to_string(),
+            access_action: "prompt".to_string(),
+            worker_action: "prompt".to_string(),
+            can_touch_filesystem: false,
+            bookmark_required: true,
+            bookmark_access: false,
+            refresh_on_permission_change: false,
+            prompt_kind: PermissionPromptKind::BookmarkAcquisition,
+            prompt_action: "choose-location".to_string(),
+            promptable: false,
+            prompt_source: "none".to_string(),
+            reason: "preview worker needs retained bookmark access".to_string(),
+        };
+        let spec = AppLaunchSpec::new("/Users/me/Documents/Plan.md").with_permission_access(access);
+
+        let err = WindowLifecycleContract::from_spec(&spec).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("interactive prompt action without prompt orchestration"));
     }
 
     #[test]
