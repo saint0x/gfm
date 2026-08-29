@@ -118,6 +118,16 @@ fn volume_access_block_reason_in_report(
     report: &VolumeDiscoveryReport,
 ) -> Option<String> {
     let volume = report.volume_for_path(volume_path)?;
+    if volume.mount_state != gfm_mac::MountState::Mounted {
+        return Some(format!(
+            "{worker} volume access blocked: unmounted volume {}; label={}; root={}; stable-id={}; mount={}",
+            volume.kind.as_str(),
+            volume.label,
+            volume.path.display(),
+            volume.stable_identity,
+            volume.mount_state.as_str()
+        ));
+    }
     if volume.reachable == Some(false) {
         return Some(format!(
             "{worker} volume access blocked: unreachable volume {}; label={}; root={}; stable-id={}; mount={}",
@@ -349,6 +359,42 @@ mod tests {
             .access
             .reason
             .contains("preview worker volume access blocked"));
+        assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
+        assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_gate_refuses_stale_volume_before_filesystem_probe() {
+        let root = unique_temp_dir("gfm-access-admission-stale-volume");
+        let path = root.join("Missing.pdf");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::Network;
+        volume.mount_state = gfm_mac::MountState::Stale;
+        volume.reachable = Some(true);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let admission = worker_admission_with_volume_report(
+            &path,
+            AccessIntent::Preview,
+            "preview worker",
+            &report,
+        );
+
+        assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
+        assert!(!admission.can_touch_filesystem);
+        assert!(!admission.needs_bookmark_access);
+        assert!(admission.refresh_on_permission_change);
+        assert_eq!(admission.access.probe, gfm_mac::AccessProbeState::Unknown);
+        assert_eq!(admission.access.action, SecurityDecisionAction::Deny);
+        assert!(admission
+            .reason
+            .contains("preview worker volume access blocked"));
+        assert!(admission.reason.contains("unmounted volume network"));
+        assert!(admission.reason.contains("mount=stale"));
         assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
         assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
 
