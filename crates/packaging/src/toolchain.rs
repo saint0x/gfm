@@ -106,19 +106,40 @@ fn explicit_release_developer_dir() -> Result<Option<PathBuf>> {
     let Some(value) = std::env::var_os(RELEASE_DEVELOPER_DIR_ENV) else {
         return Ok(None);
     };
+    explicit_release_developer_dir_from_value(value)
+}
+
+fn explicit_release_developer_dir_from_value(
+    value: impl Into<std::ffi::OsString>,
+) -> Result<Option<PathBuf>> {
+    let value = value.into();
     if value.is_empty() {
         return Err(GfmError::Format(format!(
             "`{RELEASE_DEVELOPER_DIR_ENV}` is set but empty"
         )));
     }
     let path = PathBuf::from(value);
-    if !path.is_dir() {
-        return Err(GfmError::Format(format!(
-            "`{RELEASE_DEVELOPER_DIR_ENV}` points to {}, which is not a directory",
-            path.display()
-        )));
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Err(explicit_release_developer_dir_not_directory_message(&path)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(explicit_release_developer_dir_not_directory_message(&path));
+        }
+        Err(err) => {
+            return Err(GfmError::io(
+                &path,
+                format!("{RELEASE_DEVELOPER_DIR_ENV} metadata unavailable: {err}"),
+            ));
+        }
     }
     Ok(Some(path))
+}
+
+fn explicit_release_developer_dir_not_directory_message(path: &Path) -> GfmError {
+    GfmError::Format(format!(
+        "`{RELEASE_DEVELOPER_DIR_ENV}` points to {}, which is not a directory",
+        path.display()
+    ))
 }
 
 fn is_full_xcode_developer_dir(developer_dir: &Path) -> bool {
@@ -468,6 +489,21 @@ mod tests {
         assert!(!is_full_xcode_developer_dir(&PathBuf::from(
             "/Library/Developer/CommandLineTools"
         )));
+    }
+
+    #[test]
+    fn explicit_release_developer_dir_surfaces_metadata_probe_errors() {
+        let path = std::env::temp_dir().join("gfm-release-developer-dir-unavailable".repeat(16));
+
+        let err = explicit_release_developer_dir_from_value(path.as_os_str())
+            .expect_err("unprobeable explicit developer dir fails");
+
+        assert!(err
+            .to_string()
+            .contains("GFM_RELEASE_DEVELOPER_DIR metadata unavailable"));
+        assert!(err
+            .to_string()
+            .contains("gfm-release-developer-dir-unavailable"));
     }
 
     #[test]
