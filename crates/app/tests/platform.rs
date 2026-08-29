@@ -2072,6 +2072,54 @@ fn preview_cache_surfaces_corrupt_disk_index_from_binary() {
 }
 
 #[test]
+fn preview_cache_surfaces_duplicate_disk_index_path_kind_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-preview-cache-index-duplicate-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let cache = root.join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    let evicted = root.join("Remote.icloud-placeholder");
+    std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
+    let path_hex = evicted
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    std::fs::write(
+        cache.join("preview-cache-index.tsv"),
+        format!("thumbnail\t1\t2\t256\t2000\t0\t{path_hex}\nthumbnail\t1\t3\t512\t2000\t1\t{path_hex}\n"),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("preview-cache-fileprovider-invalidation")
+        .arg(&cache)
+        .arg("downloaded")
+        .arg(&evicted)
+        .arg("thumbnail")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("preview-cache-invalidation\t"), "{stdout}");
+    assert!(
+        stderr.contains("preview disk cache index duplicate path/kind at line 2"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("thumbnail"), "{stderr}");
+    assert!(stderr.contains(&evicted.display().to_string()), "{stderr}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_state_routes_refuse_unreachable_volume_before_native_read_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-state-unreachable-{}",

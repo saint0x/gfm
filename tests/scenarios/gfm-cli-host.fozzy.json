@@ -2623,6 +2623,36 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "/bin/mkdir",
+      "args": [
+        "-p",
+        "tmp/gfm-fozzy-preview-cache-index-duplicate"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-preview-cache-index-duplicate/preview-cache-index.tsv",
+      "data": "thumbnail\t1\t2\t256\t2000\t0\t746d702f67666d2d666f7a7a792d66696c6570726f76696465722d7363616e2e69636c6f75642d706c616365686f6c646572\nthumbnail\t1\t3\t512\t2000\t1\t746d702f67666d2d666f7a7a792d66696c6570726f76696465722d7363616e2e69636c6f75642d706c616365686f6c646572\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "preview-cache-fileprovider-invalidation",
+        "tmp/gfm-fozzy-preview-cache-index-duplicate",
+        "downloaded",
+        "tmp/gfm-fozzy-fileprovider-scan.icloud-placeholder",
+        "thumbnail"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-fileprovider-event.icloud-placeholder",
       "data": "placeholder\n"

@@ -381,6 +381,7 @@ fn load_disk_index(
         }
     };
     let mut index = HashMap::new();
+    let mut seen_path_kinds = HashSet::new();
     for (line_index, line) in contents.lines().enumerate() {
         if line.is_empty() {
             continue;
@@ -391,8 +392,17 @@ fn load_disk_index(
                 line_index + 1
             ))
         })?;
+        let path_kind = (key.path.clone(), key.kind);
+        if !seen_path_kinds.insert(path_kind.clone()) {
+            return Err(GfmError::Format(format!(
+                "preview disk cache index duplicate path/kind at line {}: {} {}",
+                line_index + 1,
+                key.kind.as_str(),
+                key.path.display()
+            )));
+        }
         if disk_cache_file_exists(&config.disk_root.join(key.stable_name()))? {
-            index.insert((key.path.clone(), key.kind), key);
+            index.insert(path_kind, key);
         }
     }
     Ok(index)
@@ -1067,6 +1077,35 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "preview disk cache index corrupt at line 2"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_disk_index_duplicate_path_kind_surfaces_line_number() {
+        let root = temp_root("disk-index-duplicate");
+        let path_hex = "72656d6f74652e69636c6f7564";
+        fs::write(
+            preview_cache_index_path(&PreviewCacheConfig::new(&root)),
+            format!(
+                "thumbnail\t1\t2\t256\t2000\t0\t{path_hex}\nthumbnail\t1\t3\t512\t2000\t1\t{path_hex}\n"
+            ),
+        )
+        .unwrap();
+
+        let err = match PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        }) {
+            Ok(_) => panic!("preview cache should reject a duplicate disk index path/kind"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "preview disk cache index duplicate path/kind at line 2: thumbnail remote.icloud"
         );
         fs::remove_dir_all(root).unwrap();
     }
