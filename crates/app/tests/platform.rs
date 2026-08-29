@@ -3905,6 +3905,29 @@ fn volume_operation_reports_missing_path_from_binary() {
 }
 
 #[test]
+fn volume_operation_reports_unavailable_path_probe_from_binary() {
+    let path = std::env::temp_dir().join("gfm-volume-operation-invalid".repeat(64));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-operation")
+        .arg("eject")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-operation\teject\t"));
+    assert!(stdout.contains("\tdisposition=unavailable\tnative-status=-\t"));
+    assert!(stdout.contains("\tvolume-kind=-\tmount=-\t"));
+    assert!(stdout.contains("\treason=volume-path-existence-unavailable: "));
+}
+
+#[test]
 fn volume_operation_refuses_unreachable_volume_before_descriptor_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-operation-unreachable-{}",
