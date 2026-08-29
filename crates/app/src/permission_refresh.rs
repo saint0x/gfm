@@ -4,6 +4,8 @@ use gfm_mac::{
     PermissionStateSnapshot, VolumeDiscoveryReport,
 };
 use gfm_types::{GfmError, Result};
+use std::fs;
+use std::io;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +63,7 @@ pub(crate) fn refresh_permission_state_at_path(
     path: &Path,
 ) -> Result<PermissionStateInvalidationReport> {
     preflight_permission_state_volume(path)?;
-    let previous = if path.is_file() {
+    let previous = if permission_state_is_file(path)? {
         Some(PermissionStateSnapshot::read(path)?)
     } else {
         None
@@ -73,7 +75,7 @@ pub(crate) fn refresh_permission_state_at_path(
 }
 
 fn preflight_permission_state_volume(path: &Path) -> Result<()> {
-    let probe_path = write_probe_existing_ancestor(path);
+    let probe_path = write_probe_existing_ancestor(path)?;
     let report = VolumeDiscoveryReport::for_containing_path(&probe_path);
     preflight_permission_state_volume_with_report(path, &probe_path, &report)
 }
@@ -128,16 +130,37 @@ fn preflight_permission_state_volume_with_report(
     })
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
+fn permission_state_is_file(path: &Path) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("permission state path metadata unavailable: {err}"),
+        )),
     }
-    crate::parent_or_cwd(path)
 }
 
-fn write_probe_existing_ancestor(path: &Path) -> std::path::PathBuf {
-    let mut candidate = write_probe_path(path).to_path_buf();
-    while !candidate.exists() {
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("permission state write probe unavailable: {err}"),
+        )),
+    }
+}
+
+fn write_probe_existing_ancestor(path: &Path) -> Result<std::path::PathBuf> {
+    let mut candidate = write_probe_path(path)?.to_path_buf();
+    while !candidate.try_exists().map_err(|err| {
+        GfmError::io(
+            &candidate,
+            format!("permission state ancestor existence unavailable: {err}"),
+        )
+    })? {
         let Some(parent) = candidate.parent() else {
             break;
         };
@@ -146,7 +169,7 @@ fn write_probe_existing_ancestor(path: &Path) -> std::path::PathBuf {
         }
         candidate = parent.to_path_buf();
     }
-    candidate
+    Ok(candidate)
 }
 
 fn escape_field(value: &str) -> String {

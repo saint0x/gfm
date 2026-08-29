@@ -228,6 +228,36 @@ fn permission_invalidation_creates_nested_state_parent_from_binary() {
 }
 
 #[test]
+fn permission_invalidation_surfaces_state_probe_failure_before_persisting_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-permission-invalidation-probe-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join(format!("{}.tsv", "permission-state-unavailable".repeat(16)));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation")
+        .arg(&state)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("permission-invalidation\t"), "{stdout}");
+    assert!(
+        stderr.contains("permission state write probe unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&state.display().to_string()), "{stderr}");
+    assert!(!state.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn permission_invalidation_refuses_unreachable_state_before_persisting_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-permission-invalidation-offline-{}",

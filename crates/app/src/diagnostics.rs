@@ -4,8 +4,8 @@ use crate::runtime::{
     run_volume_task_cancellable, run_volume_task_cancellable_with_payload_path,
 };
 use crate::{
-    config_store, detect_volume_id, existing_read_probe_path, parent_volume,
-    parse_required_scheduling_pressure, preflight_config_write, required_path,
+    config_store, config_write_probe_path, detect_volume_id, existing_read_probe_path,
+    parent_volume, parse_required_scheduling_pressure, preflight_config_write, required_path,
 };
 use gfm_config::ConfigStore;
 use gfm_diagnostics::{
@@ -395,7 +395,7 @@ fn run_parity_baseline(
     macos_build: String,
 ) -> Result<String> {
     preflight_volume_access_scope(
-        write_probe_path(store.path()),
+        config_write_probe_path(store.path())?,
         AccessIntent::Write,
         "diagnostics parity config",
     )?;
@@ -404,7 +404,7 @@ fn run_parity_baseline(
         AccessIntent::Read,
         "diagnostics parity baseline",
     )?;
-    let volume = parent_volume(write_probe_path(store.path()))
+    let volume = parent_volume(config_write_probe_path(store.path())?)
         .or_else(|| parent_volume(existing_read_probe_path(&baseline)));
     run_volume_task_cancellable(
         volume,

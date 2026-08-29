@@ -13,6 +13,7 @@ use gfm_mac::{
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::env;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 mod access;
@@ -503,7 +504,7 @@ fn preflight_config_init_volume(store: &ConfigStore) -> Result<()> {
         access::preflight_volume_access_scope(store.path(), AccessIntent::Read, "config init")
     } else {
         access::preflight_volume_access_scope(
-            config_write_probe_path(store.path()),
+            config_write_probe_path(store.path())?,
             AccessIntent::Write,
             "config init",
         )
@@ -514,7 +515,7 @@ fn config_volume(store: &ConfigStore) -> Result<Option<VolumeId>> {
     let probe = if config_path_exists(store.path())? {
         store.path()
     } else {
-        config_write_probe_path(store.path())
+        config_write_probe_path(store.path())?
     };
     Ok(detect_volume_id(probe)
         .ok()
@@ -526,7 +527,7 @@ pub(crate) fn preflight_config_write(
     worker: &str,
 ) -> Result<access::ScopedAccessGuard> {
     access::preflight_access_scope(
-        config_write_probe_path(store.path()),
+        config_write_probe_path(store.path())?,
         AccessIntent::Write,
         worker,
     )
@@ -556,15 +557,16 @@ pub(crate) fn existing_read_probe_path(path: &Path) -> &Path {
     parent_or_cwd(path)
 }
 
-pub(crate) fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
+pub(crate) fn config_write_probe_path(path: &Path) -> Result<&Path> {
+    match path.metadata() {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(parent_or_cwd(path)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("config write path metadata unavailable: {err}"),
+        )),
     }
-    parent_or_cwd(path)
-}
-
-fn config_write_probe_path(path: &Path) -> &Path {
-    write_probe_path(path)
 }
 
 pub(crate) fn parent_or_cwd(path: &Path) -> &Path {

@@ -687,6 +687,40 @@ fn diagnostics_parity_baseline_refuses_unreachable_paths_before_config_write_fro
     fs::remove_dir_all(offline).unwrap();
 }
 
+#[test]
+fn diagnostics_parity_baseline_surfaces_config_probe_failure_before_writing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-parity-config-probe");
+    let config = root.join(format!("{}.toml", "config-unavailable".repeat(32)));
+    let baseline = root.join("baselines");
+    fs::create_dir_all(&baseline).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-parity-baseline",
+            config.to_str().unwrap(),
+            baseline.to_str().unwrap(),
+            "25A354",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("25A354"), "{stdout}");
+    assert!(
+        stderr.contains("config write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&config.display().to_string()), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=diagnostics parity config\t"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn assert_worker_admitted(stderr: &str, worker: &str, path: &Path) {
     let expected_worker = format!("worker={worker}");
     let expected = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
