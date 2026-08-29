@@ -1565,6 +1565,41 @@ fn reports_ui_sidebar_contract_from_binary() {
 }
 
 #[test]
+fn ui_sidebar_contract_reports_unavailable_home_path_state_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-sidebar-home-unavailable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let home = root.join("sidebar-home-unavailable".repeat(16));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .args(["ui-sidebar-contract", "/tmp/gfm"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains(&format!(
+        "row\tFavorites\thome\t{}\thome-folder\tfavorite\t{}\tdepth=0\tenabled=false\t",
+        home.file_name().unwrap().to_string_lossy(),
+        home.display()
+    )));
+    assert!(
+        stdout.contains("\tvirtual=false\tpath-state=unavailable\tcloud=none\t"),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_fileprovider_state_in_ui_sidebar_contract_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-sidebar-fileprovider-{}",

@@ -5109,6 +5109,19 @@
     {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "HOME": "tmp/gfm-fozzy-sidebar-home-unavailable1gfm-fozzy-sidebar-home-unavailable2gfm-fozzy-sidebar-home-unavailable3gfm-fozzy-sidebar-home-unavailable4gfm-fozzy-sidebar-home-unavailable5gfm-fozzy-sidebar-home-unavailable6gfm-fozzy-sidebar-home-unavailable7gfm-fozzy-sidebar-home-unavailable8gfm-fozzy-sidebar-home-unavailable9gfm-fozzy-sidebar-home-unavailable10gfm-fozzy-sidebar-home-unavailable11gfm-fozzy-sidebar-home-unavailable12"
+      },
+      "args": [
+        "ui-sidebar-contract",
+        "/tmp/gfm"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
         "ui-sidebar-fileprovider-contract",
         "tmp/gfm-fozzy-downloaded.icloud.md",

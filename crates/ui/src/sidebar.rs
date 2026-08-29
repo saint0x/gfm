@@ -55,6 +55,29 @@ impl SidebarCloudState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarPathState {
+    Available,
+    Missing,
+    Unavailable,
+    Virtual,
+}
+
+impl SidebarPathState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Missing => "missing",
+            Self::Unavailable => "unavailable",
+            Self::Virtual => "virtual",
+        }
+    }
+
+    const fn enables_row(self) -> bool {
+        matches!(self, Self::Available | Self::Virtual)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidebarItemSpec {
     pub section: &'static str,
@@ -69,6 +92,7 @@ pub struct SidebarItemSpec {
     pub selected: bool,
     pub ejectable: bool,
     pub virtual_item: bool,
+    pub path_state: SidebarPathState,
     pub cloud_state: SidebarCloudState,
     pub cloud_progress_milli: Option<u32>,
     pub volume_kind: Option<SidebarVolumeKind>,
@@ -498,7 +522,7 @@ impl SidebarContract {
         ));
         lines.extend(self.rows.iter().map(|row| {
             format!(
-                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tcloud={}\tcloud-progress={}\tvolume-kind={}\tvolume-mount={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}",
+                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tpath-state={}\tcloud={}\tcloud-progress={}\tvolume-kind={}\tvolume-mount={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}",
                 row.section,
                 row.id,
                 row.label,
@@ -513,6 +537,7 @@ impl SidebarContract {
                 row.selected,
                 row.ejectable,
                 row.virtual_item,
+                row.path_state.as_str(),
                 row.cloud_state.as_str(),
                 row.cloud_progress_milli
                     .map(|value| value.to_string())
@@ -672,7 +697,10 @@ fn favorite_rows(home: &Path, current_path: &Path) -> Vec<SidebarItemSpec> {
             "internal-disk",
         )
         .path(PathBuf::from("/"))
-        .state(RowState::path(true, current_path == Path::new("/")))),
+        .state(RowState::path(
+            SidebarPathState::Available,
+            current_path == Path::new("/"),
+        ))),
         row(RowDescriptor::new(
             "Favorites",
             "home",
@@ -684,10 +712,10 @@ fn favorite_rows(home: &Path, current_path: &Path) -> Vec<SidebarItemSpec> {
             "home",
         )
         .path(home.to_path_buf())
-        .state(RowState::path(
-            path_exists(home),
-            same_path(home, current_path),
-        ))),
+        .state({
+            let state = path_state(home);
+            RowState::path(state, state.enables_row() && same_path(home, current_path))
+        })),
         row(RowDescriptor::new(
             "Favorites",
             "recents",
@@ -735,12 +763,12 @@ fn favorite_path(
     path: PathBuf,
     current_path: &Path,
 ) -> SidebarItemSpec {
-    let enabled = path_exists(&path);
-    let selected = enabled && same_path(&path, current_path);
+    let state = path_state(&path);
+    let selected = state.enables_row() && same_path(&path, current_path);
     row(
         RowDescriptor::new("Favorites", id, label, role, SidebarItemKind::Favorite, id)
             .path(path)
-            .state(RowState::path(enabled, selected)),
+            .state(RowState::path(state, selected)),
     )
 }
 
@@ -751,9 +779,13 @@ fn icloud_row(
     current_path: &Path,
 ) -> SidebarItemSpec {
     let path = icloud_drive.map(Path::to_path_buf);
-    let selected = path
+    let path_state = path
         .as_ref()
-        .is_some_and(|path| same_path(path, current_path));
+        .map_or(SidebarPathState::Missing, |path| path_state(path));
+    let selected = path_state.enables_row()
+        && path
+            .as_ref()
+            .is_some_and(|path| same_path(path, current_path));
     row(RowDescriptor::new(
         "iCloud",
         "icloud-drive",
@@ -764,7 +796,7 @@ fn icloud_row(
     )
     .optional_path(path)
     .cloud(cloud_state, progress_milli)
-    .state(RowState::path(icloud_drive.is_some(), selected)))
+    .state(RowState::path(path_state, selected)))
 }
 
 fn location_rows(volumes: &[SidebarVolumeSpec], current_path: &Path) -> Vec<SidebarItemSpec> {
@@ -779,6 +811,10 @@ fn location_rows(volumes: &[SidebarVolumeSpec], current_path: &Path) -> Vec<Side
     .state(RowState::virtual_item(true, false)))];
 
     rows.extend(volumes.iter().map(|volume| {
+        let state = path_state(&volume.path);
+        let enabled = volume.mount_state == SidebarVolumeMountState::Mounted
+            && volume.reachable != Some(false)
+            && state.enables_row();
         row(RowDescriptor::new(
             "Locations",
             volume.id.clone(),
@@ -790,10 +826,9 @@ fn location_rows(volumes: &[SidebarVolumeSpec], current_path: &Path) -> Vec<Side
         .path(volume.path.clone())
         .volume(volume)
         .state(RowState {
-            enabled: volume.mount_state == SidebarVolumeMountState::Mounted
-                && volume.reachable != Some(false)
-                && path_exists(&volume.path),
-            selected: same_path(&volume.path, current_path),
+            path_state: state,
+            enabled,
+            selected: enabled && same_path(&volume.path, current_path),
             ejectable: volume.ejectable,
             virtual_item: false,
         }))
@@ -829,15 +864,17 @@ struct RowState {
     selected: bool,
     ejectable: bool,
     virtual_item: bool,
+    path_state: SidebarPathState,
 }
 
 impl RowState {
-    const fn path(enabled: bool, selected: bool) -> Self {
+    const fn path(path_state: SidebarPathState, selected: bool) -> Self {
         Self {
-            enabled,
+            enabled: path_state.enables_row(),
             selected,
             ejectable: false,
             virtual_item: false,
+            path_state,
         }
     }
 
@@ -847,6 +884,7 @@ impl RowState {
             selected,
             ejectable: false,
             virtual_item: true,
+            path_state: SidebarPathState::Virtual,
         }
     }
 }
@@ -887,7 +925,7 @@ impl RowDescriptor {
             kind,
             icon,
             path: None,
-            state: RowState::path(true, false),
+            state: RowState::path(SidebarPathState::Available, false),
             cloud_state: SidebarCloudState::None,
             cloud_progress_milli: None,
             volume_kind: None,
@@ -943,6 +981,7 @@ fn row(descriptor: RowDescriptor) -> SidebarItemSpec {
         selected: descriptor.state.selected,
         ejectable: descriptor.state.ejectable,
         virtual_item: descriptor.state.virtual_item,
+        path_state: descriptor.state.path_state,
         cloud_state: descriptor.cloud_state,
         cloud_progress_milli: descriptor.cloud_progress_milli,
         volume_kind: descriptor.volume_kind,
@@ -998,11 +1037,15 @@ fn stable_id(prefix: &str, label: &str) -> String {
 }
 
 fn existing_path(path: PathBuf) -> Option<PathBuf> {
-    path_exists(&path).then_some(path)
+    (path_state(&path) == SidebarPathState::Available).then_some(path)
 }
 
-fn path_exists(path: &Path) -> bool {
-    fs::metadata(path).is_ok()
+fn path_state(path: &Path) -> SidebarPathState {
+    match fs::metadata(path) {
+        Ok(_) => SidebarPathState::Available,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => SidebarPathState::Missing,
+        Err(_) => SidebarPathState::Unavailable,
+    }
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
@@ -1080,11 +1123,60 @@ mod tests {
             "row\tFavorites\thome\ttester\thome-folder\tfavorite\t/Users/tester\tdepth=0"
         ));
         assert!(output.contains(
-            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false\tselected=false\tejectable=false\tvirtual=false\tcloud=none\tcloud-progress=-\tvolume-kind=-\tvolume-mount=-\tvolume-read-only=-\tvolume-network=-\tvolume-reachable=-"
+            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false\tselected=false\tejectable=false\tvirtual=false\tpath-state=missing\tcloud=none\tcloud-progress=-\tvolume-kind=-\tvolume-mount=-\tvolume-read-only=-\tvolume-network=-\tvolume-reachable=-"
         ));
         assert!(output.contains(
             "row\tTags\ttag-all\tAll Tags...\tfinder-tag\ttag\t-\tdepth=0\tenabled=true"
         ));
+    }
+
+    #[test]
+    fn path_state_distinguishes_missing_from_unavailable() {
+        let root =
+            std::env::temp_dir().join(format!("gfm-sidebar-path-state-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let missing = root.join("Missing");
+        let unprobeable = root.join("sidebar-path-unavailable".repeat(16));
+
+        assert_eq!(path_state(&root), SidebarPathState::Available);
+        assert_eq!(path_state(&missing), SidebarPathState::Missing);
+        assert_eq!(path_state(&unprobeable), SidebarPathState::Unavailable);
+        assert_eq!(existing_path(root.join("icloud-missing")), None);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn contract_surfaces_unavailable_path_state_for_disabled_rows() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-sidebar-unavailable-home-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let home = root.join("sidebar-home-unavailable".repeat(16));
+        let contract = SidebarContract::from_environment(
+            &root,
+            SidebarEnvironment {
+                home: home.clone(),
+                icloud_drive: None,
+                icloud_state: SidebarCloudState::None,
+                icloud_progress_milli: None,
+                volumes: Vec::new(),
+            },
+        );
+
+        let row = contract.rows.iter().find(|row| row.id == "home").unwrap();
+        assert_eq!(row.path.as_deref(), Some(home.as_path()));
+        assert_eq!(row.path_state, SidebarPathState::Unavailable);
+        assert!(!row.enabled);
+        assert!(!row.selected);
+        assert!(contract
+            .as_tsv()
+            .contains("\tvirtual=false\tpath-state=unavailable\tcloud=none\t"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1286,7 +1378,11 @@ mod tests {
 
     #[test]
     fn icloud_sidebar_row_carries_typed_cloud_state() {
-        let path = PathBuf::from("/Users/tester/Library/Mobile Documents/com~apple~CloudDocs");
+        let root =
+            std::env::temp_dir().join(format!("gfm-sidebar-icloud-state-{}", std::process::id()));
+        let path = root.join("Library/Mobile Documents/com~apple~CloudDocs");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&path).unwrap();
         let contract = SidebarContract::discover_with_icloud_state(
             &path,
             &path,
@@ -1300,11 +1396,14 @@ mod tests {
             .unwrap();
 
         assert!(row.selected);
+        assert_eq!(row.path_state, SidebarPathState::Available);
         assert_eq!(row.cloud_state, SidebarCloudState::Downloading);
         assert_eq!(row.cloud_progress_milli, Some(12_500));
         assert!(contract
             .as_tsv()
             .contains("\tcloud=downloading\tcloud-progress=12500\tvolume-kind=-"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -444,7 +444,7 @@ fn cache_key(
 fn has_finder_custom_icon(record: &FileRecord) -> bool {
     finder_info_has_custom_icon(&record.path)
         || (record.kind == FileKind::Directory
-            && record.path.join(CUSTOM_FOLDER_ICON_FILE).exists())
+            && record.path.join(CUSTOM_FOLDER_ICON_FILE).try_exists().ok() == Some(true))
 }
 
 fn finder_info_has_custom_icon(path: &Path) -> bool {
@@ -648,6 +648,23 @@ mod tests {
             descriptor.cache_key,
             "custom:1:1:000000000000abcd:folder:public.folder"
         );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn folder_icon_resource_ignores_unprobeable_custom_icon_child() {
+        let path = temp_path("gfm-native-folder-icon-unprobeable", "folder");
+        fs::create_dir_all(&path).unwrap();
+        let mut record = record("PlainFolder", FileKind::Directory);
+        record.path = path.join("Icon\r-unavailable".repeat(16));
+
+        let descriptor = NativeIconDescriptor::for_record(&record);
+
+        assert_eq!(
+            descriptor.provider,
+            NativeIconProvider::LaunchServicesFolderIcon
+        );
+        assert_eq!(descriptor.role, NativeIconRole::Folder);
         fs::remove_dir_all(path).unwrap();
     }
 
