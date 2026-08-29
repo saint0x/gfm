@@ -370,8 +370,15 @@ fn load_disk_index(
     config: &PreviewCacheConfig,
 ) -> Result<HashMap<(PathBuf, PreviewKind), PreviewRequestKey>> {
     let path = preview_cache_index_path(config);
-    let Ok(contents) = fs::read_to_string(&path) else {
-        return Ok(HashMap::new());
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(err) => {
+            return Err(GfmError::io(
+                &path,
+                format!("preview disk cache index unavailable: {err}"),
+            ))
+        }
     };
     let mut index = HashMap::new();
     for line in contents.lines() {
@@ -990,6 +997,45 @@ mod tests {
         assert!(err
             .to_string()
             .contains("preview disk cache metadata unavailable"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_allows_missing_disk_index_as_empty() {
+        let root = temp_root("missing-disk-index");
+        let cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        })
+        .unwrap();
+
+        assert_eq!(
+            cache.disk_key_for_path_kind(Path::new("missing.png"), PreviewKind::Thumbnail),
+            None
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_disk_index_read_failures_surface_as_unavailable_io() {
+        let root = temp_root("disk-index-unavailable");
+        fs::create_dir_all(preview_cache_index_path(&PreviewCacheConfig::new(&root))).unwrap();
+
+        let err = match PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        }) {
+            Ok(_) => panic!("preview cache should reject an unreadable disk index"),
+            Err(err) => err,
+        };
+
+        assert!(err
+            .to_string()
+            .contains("preview disk cache index unavailable"));
         fs::remove_dir_all(root).unwrap();
     }
 
