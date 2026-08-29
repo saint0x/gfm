@@ -2051,12 +2051,16 @@ fn normalized_existing_ancestor_path(path: &Path) -> Option<PathBuf> {
     let mut candidate = path;
     let mut missing = Vec::new();
     loop {
-        if candidate.exists() {
-            let mut normalized = candidate.canonicalize().ok()?;
-            for component in missing.iter().rev() {
-                normalized.push(component);
+        match candidate.try_exists() {
+            Ok(true) => {
+                let mut normalized = candidate.canonicalize().ok()?;
+                for component in missing.iter().rev() {
+                    normalized.push(component);
+                }
+                return Some(normalized);
             }
-            return Some(normalized);
+            Ok(false) => {}
+            Err(_) => return None,
         }
         missing.push(candidate.file_name()?.to_os_string());
         candidate = candidate.parent()?;
@@ -2219,6 +2223,20 @@ mod tests {
 
         assert_eq!(access_path, root);
         assert!(!tracked.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn normalized_existing_ancestor_path_returns_unknown_for_unprobeable_component() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-normalized-unprobeable-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let unprobeable = root.join("platform-path-unavailable".repeat(16));
+
+        assert_eq!(normalized_existing_ancestor_path(&unprobeable), None);
+
         std::fs::remove_dir_all(root).unwrap();
     }
 }
