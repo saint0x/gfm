@@ -460,16 +460,17 @@ fn operation_volume_copy_policy_report(operation: &Operation) -> String {
     let policy = operation_volume_copy_policy_from_report(operation, &report);
     match operation {
         Operation::Copy { from, to } | Operation::Move { from, to } => format!(
-            "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tbuffer-bytes={}\tfile-cloning={}\tvolumes={}",
+            "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tbuffer-bytes={}\tfile-cloning={}\tsparse-files={}\tvolumes={}",
             from.display(),
             to.display(),
             operation_volume_class_name(policy.class_for_path(from)),
             operation_volume_class_name(policy.class_for_path(to)),
             policy.copy_buffer_bytes_for_paths(from, to),
             policy.file_cloning_supported_for_paths(from, to),
+            policy.sparse_files_supported_for_path(to),
             report.volumes.len()
         ),
-        _ => "operation-volume-copy-policy\tsource=-\tdestination=-\tsource-class=-\tdestination-class=-\tbuffer-bytes=0\tfile-cloning=false\tvolumes=0".to_string(),
+        _ => "operation-volume-copy-policy\tsource=-\tdestination=-\tsource-class=-\tdestination-class=-\tbuffer-bytes=0\tfile-cloning=false\tsparse-files=false\tvolumes=0".to_string(),
     }
 }
 
@@ -879,6 +880,9 @@ fn operation_volume_copy_policy_from_report(
             if let Some(supported) = volume.resource_supports_file_cloning {
                 policy = policy.with_root_file_cloning_support(volume.path.clone(), supported);
             }
+            if let Some(supported) = volume.resource_supports_sparse_files {
+                policy = policy.with_root_sparse_file_support(volume.path.clone(), supported);
+            }
         }
     }
     policy
@@ -1097,6 +1101,7 @@ mod tests {
         assert!(report.contains("\tdestination-class=external\t"));
         assert!(report.contains("\tbuffer-bytes=65536\t"));
         assert!(report.contains("\tfile-cloning=true\t"));
+        assert!(report.contains("\tsparse-files=true\t"));
         assert!(report.contains("\tvolumes="));
 
         fs::remove_dir_all(root).unwrap();
@@ -1118,6 +1123,7 @@ mod tests {
         let destination = destination_root.join("destination.bin");
         let mut report = VolumeDiscoveryReport::from_paths(vec![destination_root.clone()]);
         report.volumes[0].resource_supports_file_cloning = Some(false);
+        report.volumes[0].resource_supports_sparse_files = Some(false);
         let operation = Operation::Copy {
             from: source.clone(),
             to: destination.clone(),
@@ -1126,6 +1132,7 @@ mod tests {
         let policy = operation_volume_copy_policy_from_report(&operation, &report);
 
         assert!(!policy.file_cloning_supported_for_paths(&source, &destination));
+        assert!(!policy.sparse_files_supported_for_path(&destination));
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -28,6 +28,7 @@ pub struct OperationVolumeCopyPolicy {
     default_class: OperationVolumeClass,
     root_classes: BTreeMap<PathBuf, OperationVolumeClass>,
     root_file_cloning_support: BTreeMap<PathBuf, bool>,
+    root_sparse_file_support: BTreeMap<PathBuf, bool>,
 }
 
 impl Default for OperationVolumeCopyPolicy {
@@ -36,6 +37,7 @@ impl Default for OperationVolumeCopyPolicy {
             default_class: OperationVolumeClass::Local,
             root_classes: BTreeMap::new(),
             root_file_cloning_support: BTreeMap::new(),
+            root_sparse_file_support: BTreeMap::new(),
         }
     }
 }
@@ -46,6 +48,7 @@ impl OperationVolumeCopyPolicy {
             default_class,
             root_classes: BTreeMap::new(),
             root_file_cloning_support: BTreeMap::new(),
+            root_sparse_file_support: BTreeMap::new(),
         }
     }
 
@@ -61,6 +64,15 @@ impl OperationVolumeCopyPolicy {
     ) -> Self {
         self.root_file_cloning_support
             .insert(root.into(), supported);
+        self
+    }
+
+    pub fn with_root_sparse_file_support(
+        mut self,
+        root: impl Into<PathBuf>,
+        supported: bool,
+    ) -> Self {
+        self.root_sparse_file_support.insert(root.into(), supported);
         self
     }
 
@@ -84,6 +96,15 @@ impl OperationVolumeCopyPolicy {
     pub fn file_cloning_supported_for_paths(&self, from: &Path, to: &Path) -> bool {
         self.file_cloning_support_for_path(from) != Some(false)
             && self.file_cloning_support_for_path(to) != Some(false)
+    }
+
+    pub fn sparse_files_supported_for_path(&self, path: &Path) -> bool {
+        self.root_sparse_file_support
+            .iter()
+            .filter(|(root, _)| path.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .map(|(_, supported)| *supported)
+            .unwrap_or(true)
     }
 
     pub fn copy_buffer_bytes_for_paths(&self, from: &Path, to: &Path) -> usize {
@@ -167,5 +188,16 @@ mod tests {
             Path::new("/Users/deepsaint/source.bin"),
             Path::new("/Users/deepsaint/copy.bin")
         ));
+    }
+
+    #[test]
+    fn sparse_file_support_uses_the_most_specific_destination_root() {
+        let policy = OperationVolumeCopyPolicy::default()
+            .with_root_sparse_file_support("/Volumes/Media", false)
+            .with_root_sparse_file_support("/Volumes/Media/Sparse", true);
+
+        assert!(!policy.sparse_files_supported_for_path(Path::new("/Volumes/Media/copy.bin")));
+        assert!(policy.sparse_files_supported_for_path(Path::new("/Volumes/Media/Sparse/copy.bin")));
+        assert!(policy.sparse_files_supported_for_path(Path::new("/Users/deepsaint/copy.bin")));
     }
 }

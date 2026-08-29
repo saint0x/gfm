@@ -57,7 +57,8 @@ pub(crate) fn copy_file_bytes_tracked(
 ) -> Result<u64> {
     let mut source = File::open(from).map_err(|err| GfmError::io(from, err))?;
     let source_metadata = source.metadata().map_err(|err| GfmError::io(from, err))?;
-    let preserve_sparse_holes = metadata_has_sparse_holes(&source_metadata);
+    let preserve_sparse_holes =
+        preserve_sparse_holes_for_copy(&source_metadata, volume_copy_policy, to);
     let mut destination = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -144,6 +145,15 @@ pub(crate) fn metadata_has_sparse_holes(metadata: &fs::Metadata) -> bool {
     }
 }
 
+fn preserve_sparse_holes_for_copy(
+    source_metadata: &fs::Metadata,
+    volume_copy_policy: &OperationVolumeCopyPolicy,
+    destination: &Path,
+) -> bool {
+    metadata_has_sparse_holes(source_metadata)
+        && volume_copy_policy.sparse_files_supported_for_path(destination)
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn clone_file(from: &Path, to: &Path) -> io::Result<()> {
     let source = File::open(from)?;
@@ -182,5 +192,54 @@ pub(crate) fn remove_failed_clone_destination(to: &Path) -> Result<()> {
         Ok(_) => fs::remove_file(to).map_err(|err| GfmError::io(to, err)),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(GfmError::io(to, err)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{OperationVolumeClass, OperationVolumeCopyPolicy};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn sparse_hole_preservation_respects_destination_volume_support() {
+        let root = unique_temp_dir("gfm-ops-transfer-sparse-policy");
+        let source = root.join("source.bin");
+        let supported_destination = root.join("sparse").join("copy.bin");
+        let unsupported_root = root.join("legacy");
+        let unsupported_destination = unsupported_root.join("copy.bin");
+        fs::create_dir_all(supported_destination.parent().unwrap()).unwrap();
+        fs::create_dir_all(&unsupported_root).unwrap();
+
+        let file = File::create(&source).unwrap();
+        file.set_len(1024 * 1024).unwrap();
+        let metadata = fs::metadata(&source).unwrap();
+        assert!(metadata_has_sparse_holes(&metadata));
+        let policy = OperationVolumeCopyPolicy::default()
+            .with_root(&unsupported_root, OperationVolumeClass::External)
+            .with_root_sparse_file_support(&unsupported_root, false);
+
+        assert!(preserve_sparse_holes_for_copy(
+            &metadata,
+            &policy,
+            &supported_destination
+        ));
+        assert!(!preserve_sparse_holes_for_copy(
+            &metadata,
+            &policy,
+            &unsupported_destination
+        ));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let unique = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 }

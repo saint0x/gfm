@@ -326,6 +326,11 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
         "resource-cloning",
         volume.resource_supports_file_cloning,
     );
+    push_signature_bool(
+        &mut tokens,
+        "resource-sparse",
+        volume.resource_supports_sparse_files,
+    );
     push_signature_bool(&mut tokens, "local", volume.local);
     push_signature_bool(&mut tokens, "mount-local", volume.mount_local);
     push_signature_bool(&mut tokens, "internal", volume.internal);
@@ -919,6 +924,7 @@ mod tests {
         descriptor.resource_encrypted = Some(true);
         descriptor.resource_reachable = Some(true);
         descriptor.resource_supports_file_cloning = Some(false);
+        descriptor.resource_supports_sparse_files = Some(true);
         descriptor.local = Some(true);
         descriptor.mount_local = Some(true);
         descriptor.internal = Some(false);
@@ -962,6 +968,7 @@ mod tests {
             "resource-encrypted=1",
             "resource-reachable=1",
             "resource-cloning=0",
+            "resource-sparse=1",
             "local=1",
             "mount-local=1",
             "internal=0",
