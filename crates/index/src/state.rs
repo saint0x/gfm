@@ -1,4 +1,5 @@
 use gfm_types::{DirectoryPage, GfmError, Result, VolumeId};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -104,6 +105,7 @@ impl IndexVolumeState {
         let mut scan_epoch = None;
         let mut record_count = None;
         let mut inaccessible_count = None;
+        let mut seen_fields = BTreeSet::new();
 
         for (line_index, line) in lines.enumerate() {
             let line = line.map_err(|err| GfmError::io(path, err))?;
@@ -114,6 +116,13 @@ impl IndexVolumeState {
                     line_index + 2
                 ))
             })?;
+            if !seen_fields.insert(key.to_string()) {
+                return Err(GfmError::Format(format!(
+                    "{} line {}: duplicate index state field `{key}`",
+                    path.display(),
+                    line_index + 2
+                )));
+            }
             match key {
                 "schema_version" => {
                     schema_version = Some(parse_u32(value, "schema_version", path)?)

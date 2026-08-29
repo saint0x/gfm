@@ -2467,6 +2467,34 @@ fn persists_volume_index_state_from_binary() {
 }
 
 #[test]
+fn index_state_inspect_rejects_duplicate_state_fields_from_binary() {
+    let state = unique_temp_path("gfm-cli-index-state-duplicate-field", "gfmstate");
+    fs::write(
+        &state,
+        "gfm-index-state-v1\nschema_version\t1\nroot\t/tmp/root\nrecords_path\t/tmp/index.gfmidx\nvolume_id\t1\nmount_id\tdev:1:root:/tmp/root\nscan_epoch\t1\nscan_epoch\t2\nrecord_count\t1\ninaccessible_count\t0\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index-state-inspect", state.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("index-state\t"), "{stdout}");
+    assert!(
+        stderr.contains("duplicate index state field `scan_epoch`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("line 8"), "{stderr}");
+    assert_worker_admitted(&stderr, "index state inspect", &state);
+
+    fs::remove_file(state).unwrap();
+}
+
+#[test]
 fn reports_scan_progress_from_binary() {
     let root = unique_temp_dir("gfm-cli-scan-progress-root");
     let records = unique_temp_path("gfm-cli-scan-progress-records", "gfmidx");

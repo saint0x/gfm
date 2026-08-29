@@ -3783,6 +3783,22 @@ fn index_state_rejects_unsupported_schema_versions() {
 }
 
 #[test]
+fn index_state_rejects_duplicate_fields_with_line_number() {
+    let path = unique_temp_path("gfm-index-state-duplicate-field", "gfmstate");
+    fs::write(
+        &path,
+        "gfm-index-state-v1\nschema_version\t1\nroot\t/tmp/root\nrecords_path\t/tmp/index.gfmidx\nvolume_id\t1\nmount_id\tdev:1:root:/tmp/root\nscan_epoch\t1\nscan_epoch\t2\nrecord_count\t1\ninaccessible_count\t0\n",
+    )
+    .unwrap();
+
+    let error = IndexVolumeState::read(&path).unwrap_err();
+
+    assert!(format!("{error}").contains("line 8"));
+    assert!(format!("{error}").contains("duplicate index state field `scan_epoch`"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn fsevents_cursor_checkpoints_and_resumes_from_next_event() {
     let root = unique_temp_dir("gfm-fsevents-cursor-root");
     let records = unique_temp_path("gfm-fsevents-cursor-records", "gfmidx");
