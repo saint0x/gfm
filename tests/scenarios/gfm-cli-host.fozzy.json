@@ -6308,6 +6308,21 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-parity-gate-duplicate-profile-row.tsv",
+      "data": "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\ticon\tgfm-parity-fixture/toolbar\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\tlist\tgfm-parity-fixture/text\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "parity-gate",
+        "tmp/gfm-parity-gate-duplicate-profile-row.tsv"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

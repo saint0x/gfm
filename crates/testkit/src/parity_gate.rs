@@ -377,6 +377,12 @@ pub fn parse_parity_gate_manifest_with_provenance(
             continue;
         }
         if fields.first() == Some(&"profile") {
+            if profile.is_some() {
+                return Err(GfmError::Format(format!(
+                    "parity gate manifest line {} has duplicate capture profile",
+                    line_index + 1
+                )));
+            }
             profile = Some(parse_manifest_profile(line_index, &fields)?);
             continue;
         }
@@ -1137,6 +1143,25 @@ mod tests {
         assert!(err
             .to_string()
             .contains("duplicate profile key `macos-build`"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn versioned_parity_manifest_rejects_duplicate_capture_profile_rows() {
+        let root = unique_temp_dir("gfm-parity-gate-duplicate-profile-row");
+        let profile =
+            "profile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3";
+        let err = parse_parity_gate_manifest(
+            &format!(
+                "manifest-version\t1\n{profile}\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n{profile}\nentry\ttext\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\tlist\tfixtures/text\n"
+            ),
+            &root,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("line 4"));
+        assert!(err.to_string().contains("duplicate capture profile"));
 
         fs::remove_dir_all(root).unwrap();
     }
