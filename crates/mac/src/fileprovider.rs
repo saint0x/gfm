@@ -348,9 +348,7 @@ impl FileProviderDomainEnumerationReport {
 impl FileProviderDomainReport {
     pub fn read_path(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        if !path.exists() && !is_evicted_placeholder_path(&path) {
-            return Err(GfmError::io(&path, "path does not exist"));
-        }
+        ensure_fileprovider_read_path(&path)?;
         let hints = CloudHints::read_with_identity(&path);
         Ok(Self::from_hints_and_domains(
             path,
@@ -1386,9 +1384,7 @@ fn disposition_for_native_fileprovider_operation(
 impl FileProviderStateReport {
     pub fn read_path(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        if !path.exists() && !is_evicted_placeholder_path(&path) {
-            return Err(GfmError::io(&path, "path does not exist"));
-        }
+        ensure_fileprovider_read_path(&path)?;
         Ok(Self::from_path(path))
     }
 
@@ -1499,6 +1495,18 @@ impl FileProviderStateReport {
         self.source
             .split('+')
             .any(|source| source == "native-url-resource")
+    }
+}
+
+fn ensure_fileprovider_read_path(path: &Path) -> Result<()> {
+    match path.try_exists() {
+        Ok(true) => Ok(()),
+        Ok(false) if is_evicted_placeholder_path(path) => Ok(()),
+        Ok(false) => Err(GfmError::io(path, "path does not exist")),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("path existence unavailable: {err}"),
+        )),
     }
 }
 
@@ -2350,7 +2358,11 @@ fn affected_paths_field(paths: &[PathBuf]) -> String {
 mod tests {
     use super::*;
     use gfm_mac_sys::{NativeFileProviderStatus, NativeUbiquitousError};
+    #[cfg(unix)]
+    use std::ffi::OsString;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
 
@@ -3486,6 +3498,30 @@ mod tests {
         assert!(report.as_tsv().starts_with("fileprovider-domain\t"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn domain_report_surfaces_path_probe_errors_before_provider_hints() {
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-fileprovider-domain-invalid\0path".to_vec(),
+        ));
+
+        let err = FileProviderDomainReport::read_path(&path).unwrap_err();
+
+        assert!(err.to_string().contains("path existence unavailable"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_report_surfaces_path_probe_errors_before_provider_hints() {
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-fileprovider-state-invalid\0path".to_vec(),
+        ));
+
+        let err = FileProviderStateReport::read_path(&path).unwrap_err();
+
+        assert!(err.to_string().contains("path existence unavailable"));
     }
 
     #[test]
