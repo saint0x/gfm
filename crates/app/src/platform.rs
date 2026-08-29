@@ -1849,7 +1849,7 @@ where
         .map_err(|_| GfmError::Format(format!("{worker} job completed without a result")))
 }
 
-fn run_fileprovider_observer_probe(
+pub(crate) fn run_fileprovider_observer_probe(
     state_path: &Path,
     root: &Path,
     target: &Path,

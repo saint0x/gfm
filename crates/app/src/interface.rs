@@ -298,6 +298,27 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let observed = run_ui_fileprovider_observed_invalidation(state_path, event)?;
             println!("{}", observed_sidebar_invalidation_tsv(&observed));
         }
+        "ui-sidebar-fileprovider-observer-probe" => {
+            let state_path = required_path(
+                args.next(),
+                "ui-sidebar-fileprovider-observer-probe requires a state path",
+            )?;
+            let root = required_path(
+                args.next(),
+                "ui-sidebar-fileprovider-observer-probe requires a root",
+            )?;
+            let target = required_path(
+                args.next(),
+                "ui-sidebar-fileprovider-observer-probe requires a FileProvider target path",
+            )?;
+            let observed = crate::platform::run_fileprovider_observer_probe(
+                &state_path,
+                &root,
+                &target,
+                "ui fileprovider sidebar observer",
+            )?;
+            println!("{}", observed_sidebar_invalidation_tsv(&observed));
+        }
         "ui-sidebar-volume-invalidation" => {
             let kind = parse_volume_event_kind(&required_string(
                 args.next(),

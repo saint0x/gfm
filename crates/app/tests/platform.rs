@@ -2368,6 +2368,62 @@ fn reports_sidebar_fileprovider_observed_invalidation_from_binary() {
 }
 
 #[test]
+fn reports_sidebar_fileprovider_observer_probe_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-sidebar-fileprovider-observer-probe-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v1\ndownloaded\t{}\n",
+            item.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-sidebar-fileprovider-observer-probe")
+        .arg(&state)
+        .arg(&root)
+        .arg(&item)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "ui fileprovider sidebar observer root", &root);
+    assert_worker_admitted(&stderr, "ui fileprovider sidebar observer target", &root);
+    assert_worker_admitted(&stderr, "ui fileprovider sidebar observer state", &root);
+    assert_worker_admitted(&stderr, "ui fileprovider sidebar observer state", &item);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("fileprovider-observed-invalidation\t"));
+    assert!(stdout.contains("\tevent-kinds="));
+    assert!(stdout.contains("\tpaths=1\n"));
+    assert!(stdout.contains(
+        "fileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\n"
+    ));
+    assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\tchanged=true\t"));
+    assert!(stdout.contains("\nsidebar-cloud-invalidation\ticloud-drive\tpath="));
+    assert!(stdout.contains("\tprevious=available-offline\tcurrent=cloud-only\t"));
+    assert!(stdout.contains("\tprogress=0\tinvalidate-row=true\t"));
+    assert!(stdout.ends_with("reason=sidebar-cloud-state-changed\n"));
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert!(state_text.contains(&format!("evicted\t{}\n", item.display())));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn sidebar_fileprovider_observed_invalidation_removes_deleted_tracked_subtree_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-sidebar-fileprovider-observed-subtree-{}",
