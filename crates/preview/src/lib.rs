@@ -202,7 +202,7 @@ impl PreviewCache {
         self.order.retain(|candidate| candidate != key);
         if self.config.disk_enabled {
             let path = self.disk_path(key);
-            if path.exists() {
+            if disk_cache_path_exists(&path)? {
                 fs::remove_file(&path).map_err(|err| GfmError::io(&path, err))?;
             }
             self.remove_disk_index_entry(key)?;
@@ -261,7 +261,7 @@ impl PreviewCache {
             return Ok(false);
         }
         let path = self.disk_path(key);
-        if !path.exists() {
+        if !disk_cache_path_exists(&path)? {
             self.remove_disk_index_entry(key)?;
             return Ok(false);
         }
@@ -326,7 +326,7 @@ impl PreviewCache {
 
     fn read_disk(&self, key: &PreviewRequestKey) -> Result<Option<PreviewEntry>> {
         let path = self.disk_path(key);
-        if !path.is_file() {
+        if !disk_cache_file_exists(&path)? {
             return Ok(None);
         }
         let bytes = fs::read(&path).map_err(|err| GfmError::io(&path, err))?;
@@ -339,6 +339,26 @@ impl PreviewCache {
 
     fn disk_path(&self, key: &PreviewRequestKey) -> PathBuf {
         self.config.disk_root.join(key.stable_name())
+    }
+}
+
+fn disk_cache_path_exists(path: &Path) -> Result<bool> {
+    path.try_exists().map_err(|err| {
+        GfmError::io(
+            path,
+            format!("preview disk cache existence unavailable: {err}"),
+        )
+    })
+}
+
+fn disk_cache_file_exists(path: &Path) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("preview disk cache metadata unavailable: {err}"),
+        )),
     }
 }
 
@@ -358,7 +378,7 @@ fn load_disk_index(
         let Some(key) = parse_disk_index_line(line) else {
             continue;
         };
-        if config.disk_root.join(key.stable_name()).is_file() {
+        if disk_cache_file_exists(&config.disk_root.join(key.stable_name()))? {
             index.insert((key.path.clone(), key.kind), key);
         }
     }
@@ -945,6 +965,32 @@ mod tests {
         assert!(report.removed_disk);
         assert_eq!(report.decision.reason, "content-or-icloud");
         assert_eq!(cache.get(&key).unwrap(), None);
+    }
+
+    #[test]
+    fn cache_disk_probe_failures_surface_as_unavailable_io() {
+        let root = temp_root("disk-probe-unavailable");
+        let path = root.join("preview-disk-cache-unavailable".repeat(64));
+
+        let err = disk_cache_path_exists(&path).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("preview disk cache existence unavailable"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_disk_metadata_failures_surface_as_unavailable_io() {
+        let root = temp_root("disk-metadata-unavailable");
+        let path = root.join("preview-disk-cache-metadata-unavailable".repeat(64));
+
+        let err = disk_cache_file_exists(&path).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("preview disk cache metadata unavailable"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
