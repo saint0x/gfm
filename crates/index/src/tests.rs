@@ -3628,6 +3628,48 @@ fn persistent_index_recovery_quarantines_corrupt_records_before_rebuild() {
 }
 
 #[test]
+fn persistent_index_recovery_surfaces_records_path_probe_failures() {
+    let root = unique_temp_dir("gfm-index-recovery-records-probe-root");
+    let records = root.join("record-archive-unavailable".repeat(64));
+    let state_path = unique_temp_path("gfm-index-recovery-records-probe-state", "gfmstate");
+
+    let plan = Indexer::default().plan_persistent_recovery(&root, &records, &state_path);
+
+    assert_eq!(
+        plan.action,
+        PersistentIndexAction::QuarantineRecordsAndRebuild
+    );
+    assert_eq!(plan.reason, PersistentIndexReason::UnreadableRecords);
+    assert!(plan
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("record archive existence unavailable")));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn persistent_index_recovery_surfaces_state_path_probe_failures() {
+    let root = unique_temp_dir("gfm-index-recovery-state-probe-root");
+    let records = unique_temp_path("gfm-index-recovery-state-probe-records", "gfmidx");
+    let state_path = root.join("index-state-unavailable".repeat(64));
+    fs::write(root.join("Probe.md"), "state").unwrap();
+    let indexer = Indexer::default();
+    indexer.build(&root).unwrap().save(&records).unwrap();
+
+    let plan = indexer.plan_persistent_recovery(&root, &records, &state_path);
+
+    assert_eq!(plan.action, PersistentIndexAction::RebuildState);
+    assert_eq!(plan.reason, PersistentIndexReason::UnreadableState);
+    assert_eq!(plan.record_count, Some(2));
+    assert!(plan
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("index state existence unavailable")));
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+}
+
+#[test]
 fn scan_progress_checkpoint_tracks_completed_scan_publication() {
     let root = unique_temp_dir("gfm-scan-progress-root");
     let records = unique_temp_path("gfm-scan-progress-records", "gfmidx");

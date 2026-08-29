@@ -103,7 +103,23 @@ pub fn plan_persistent_index_recovery(
     let records_path = records_path.as_ref().to_path_buf();
     let state_path = state_path.as_ref().to_path_buf();
 
-    if !records_path.exists() {
+    let records_exist = match records_path.try_exists() {
+        Ok(exists) => exists,
+        Err(err) => {
+            return PersistentIndexPlan {
+                action: PersistentIndexAction::QuarantineRecordsAndRebuild,
+                reason: PersistentIndexReason::UnreadableRecords,
+                root,
+                records_path,
+                state_path,
+                record_count: None,
+                state_record_count: None,
+                state_schema_version: None,
+                detail: Some(format!("record archive existence unavailable: {err}")),
+            }
+        }
+    };
+    if !records_exist {
         return PersistentIndexPlan {
             action: PersistentIndexAction::RebuildRecordsAndState,
             reason: PersistentIndexReason::MissingRecords,
@@ -135,7 +151,23 @@ pub fn plan_persistent_index_recovery(
     };
     let record_count = Some(records.len());
 
-    if !state_path.exists() {
+    let state_exists = match state_path.try_exists() {
+        Ok(exists) => exists,
+        Err(err) => {
+            return PersistentIndexPlan {
+                action: PersistentIndexAction::RebuildState,
+                reason: PersistentIndexReason::UnreadableState,
+                root,
+                records_path,
+                state_path,
+                record_count,
+                state_record_count: None,
+                state_schema_version: None,
+                detail: Some(format!("index state existence unavailable: {err}")),
+            }
+        }
+    };
+    if !state_exists {
         return PersistentIndexPlan {
             action: PersistentIndexAction::RebuildState,
             reason: PersistentIndexReason::MissingState,
