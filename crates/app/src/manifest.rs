@@ -264,7 +264,7 @@ fn preflight_manifest_cleanup_volumes(
         let (path, intent) = if removes_candidates {
             (write_probe_path(&path), AccessIntent::Write)
         } else {
-            (existing_read_probe_path(&path), AccessIntent::Read)
+            (existing_read_probe_path(&path)?, AccessIntent::Read)
         };
         preflight_volume_access_scope(path, intent, "content manifest cleanup candidate")?;
     }
@@ -405,13 +405,13 @@ fn retain_manifest_recovery_plan_access<'a>(
     discovered: impl Iterator<Item = &'a ContentArchiveManifestEntry>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = vec![preflight_access_scope(
-        existing_read_probe_path(manifest_path),
+        existing_read_probe_path(manifest_path)?,
         AccessIntent::Read,
         "content manifest recovery plan",
     )?];
     for entry in discovered {
         guards.push(preflight_access_scope(
-            existing_read_probe_path(&resolve_manifest_path(manifest_path, &entry.path)),
+            existing_read_probe_path(&resolve_manifest_path(manifest_path, &entry.path))?,
             AccessIntent::Read,
             "content manifest recovery discovered archive",
         )?);
@@ -424,13 +424,13 @@ fn preflight_manifest_recovery_plan_volumes(
     discovered: &[ContentArchiveManifestEntry],
 ) -> Result<()> {
     preflight_volume_access_scope(
-        existing_read_probe_path(manifest_path),
+        existing_read_probe_path(manifest_path)?,
         AccessIntent::Read,
         "content manifest recovery plan",
     )?;
     for entry in discovered {
         preflight_volume_access_scope(
-            existing_read_probe_path(&resolve_manifest_path(manifest_path, &entry.path)),
+            existing_read_probe_path(&resolve_manifest_path(manifest_path, &entry.path))?,
             AccessIntent::Read,
             "content manifest recovery discovered archive",
         )?;
@@ -443,7 +443,7 @@ fn run_manifest_recovery_plan(
     discovered: Vec<ContentArchiveManifestEntry>,
 ) -> Result<Vec<String>> {
     preflight_manifest_recovery_plan_volumes(&manifest_path, &discovered)?;
-    let volume = path_volume(existing_read_probe_path(&manifest_path));
+    let volume = path_volume(existing_read_probe_path(&manifest_path)?);
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
@@ -565,7 +565,7 @@ fn retain_manifest_promotion_access(
     ];
     for path in retired_paths {
         guards.push(preflight_access_scope(
-            existing_read_probe_path(&resolve_manifest_path(manifest_path, path)),
+            existing_read_probe_path(&resolve_manifest_path(manifest_path, path))?,
             AccessIntent::Read,
             "content manifest promotion retirement",
         )?);
@@ -595,7 +595,7 @@ fn preflight_manifest_promotion_volumes(
     )?;
     for path in retired_paths {
         preflight_volume_access_scope(
-            existing_read_probe_path(&resolve_manifest_path(manifest_path, path)),
+            existing_read_probe_path(&resolve_manifest_path(manifest_path, path))?,
             AccessIntent::Read,
             "content manifest promotion retirement",
         )?;
@@ -646,7 +646,7 @@ fn retain_manifest_promotion_recovery_plan_access(
             "content manifest promotion recovery plan",
         )?,
         preflight_access_scope(
-            existing_read_probe_path(&journal_path),
+            existing_read_probe_path(&journal_path)?,
             AccessIntent::Read,
             "content manifest promotion recovery journal",
         )?,
@@ -661,7 +661,7 @@ fn preflight_manifest_promotion_recovery_plan_volumes(manifest_path: &Path) -> R
         "content manifest promotion recovery plan",
     )?;
     preflight_volume_access_scope(
-        existing_read_probe_path(&journal_path),
+        existing_read_probe_path(&journal_path)?,
         AccessIntent::Read,
         "content manifest promotion recovery journal",
     )
@@ -680,7 +680,7 @@ fn preflight_manifest_promotion_recovery_volumes(manifest_path: &Path) -> Result
         "content manifest promotion recovery",
     )?;
     preflight_volume_access_scope(
-        existing_read_probe_path(&journal_path),
+        existing_read_probe_path(&journal_path)?,
         AccessIntent::Read,
         "content manifest promotion recovery journal",
     )?;
@@ -718,7 +718,7 @@ fn run_manifest_promotion_recovery_plan(manifest_path: PathBuf) -> Result<String
         cancellation.check()?;
         let _access = retain_manifest_promotion_recovery_plan_access(&manifest_path)?;
         let journal_path = content_manifest_promotion_journal_path(&manifest_path);
-        let archive_paths = if journal_path.exists() {
+        let archive_paths = if manifest_path_exists(&journal_path, "promotion journal")? {
             let journal = ContentManifestPromotionJournal::read(&journal_path)?;
             promotion_recovery_archive_paths(&manifest_path, &journal)?
         } else {
@@ -743,7 +743,7 @@ fn run_manifest_promotion_recover(manifest_path: PathBuf) -> Result<Vec<String>>
         cancellation.check()?;
         let _access = retain_manifest_promotion_recovery_access(&manifest_path)?;
         let journal_path = content_manifest_promotion_journal_path(&manifest_path);
-        let archive_paths = if journal_path.exists() {
+        let archive_paths = if manifest_path_exists(&journal_path, "promotion journal")? {
             let journal = ContentManifestPromotionJournal::read(&journal_path)?;
             promotion_recovery_archive_paths(&manifest_path, &journal)?
         } else {
@@ -794,7 +794,7 @@ fn retain_manifest_promotion_recovery_access(
             "content manifest promotion recovery",
         )?,
         preflight_access_scope(
-            existing_read_probe_path(&journal_path),
+            existing_read_probe_path(&journal_path)?,
             AccessIntent::Read,
             "content manifest promotion recovery journal",
         )?,
@@ -822,7 +822,7 @@ fn retain_manifest_cleanup_access(
         let (path, intent) = if removes_candidates {
             (write_probe_path(&path), AccessIntent::Write)
         } else {
-            (existing_read_probe_path(&path), AccessIntent::Read)
+            (existing_read_probe_path(&path)?, AccessIntent::Read)
         };
         guards.push(preflight_access_scope(
             path,
@@ -850,11 +850,25 @@ fn write_probe_path(path: &Path) -> &Path {
     crate::parent_or_cwd(path)
 }
 
-fn existing_read_probe_path(path: &Path) -> &Path {
-    if path.exists() {
-        return path;
+fn manifest_path_exists(path: &Path, label: &str) -> Result<bool> {
+    path.try_exists().map_err(|err| {
+        GfmError::io(
+            path,
+            format!("manifest {label} existence unavailable: {err}"),
+        )
+    })
+}
+
+fn existing_read_probe_path(path: &Path) -> Result<&Path> {
+    if path.try_exists().map_err(|err| {
+        GfmError::io(
+            path,
+            format!("manifest read path existence unavailable: {err}"),
+        )
+    })? {
+        return Ok(path);
     }
-    write_probe_path(path)
+    Ok(write_probe_path(path))
 }
 
 fn parse_content_manifest_archive_spec(value: &str) -> Result<ContentArchiveManifestEntry> {

@@ -10389,6 +10389,105 @@ fn content_manifest_promotion_recover_refuses_unreachable_archive_before_complet
 }
 
 #[test]
+fn content_manifest_promotion_recovery_plan_surfaces_journal_probe_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-promotion-recovery-plan-journal-probe");
+    let manifest = root.join(format!("{}.gfmmanifest", "m".repeat(230)));
+    fs::write(
+        &manifest,
+        "manifest is not parsed after journal probe failure\n",
+    )
+    .unwrap();
+    let journal = content_manifest_promotion_journal_path(&manifest);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-promotion-recovery-plan",
+            manifest.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("content-manifest-promotion-recovery-plan\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("manifest read path existence unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&journal.display().to_string()), "{stderr}");
+    assert!(
+        !stderr.contains("action=ready") && !stderr.contains("no pending promotion journal"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_manifest_promotion_recover_surfaces_journal_probe_failure_before_mutation_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-promotion-recover-journal-probe");
+    let manifest = root.join(format!("{}.gfmmanifest", "m".repeat(230)));
+    fs::write(
+        &manifest,
+        "manifest is not mutated after journal probe failure\n",
+    )
+    .unwrap();
+    let original_manifest = fs::read_to_string(&manifest).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-promotion-recover",
+            manifest.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("content-manifest-promotion-recovery\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("manifest read path existence unavailable"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), original_manifest);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_manifest_recovery_plan_surfaces_manifest_path_probe_failures_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-recovery-plan-manifest-probe");
+    let manifest = root.join("content-manifest-unavailable".repeat(64));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["content-manifest-recovery-plan", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("manifest read path existence unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("content-manifest-recovery-plan\t"),
+        "{stderr}"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn content_cleanup_plan_refuses_unreachable_active_archive_before_metadata_from_binary() {
     let root = unique_temp_dir("gfm-cli-content-cleanup-plan-active-unreachable");
     let local = root.join("local");
