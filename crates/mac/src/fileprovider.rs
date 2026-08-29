@@ -1783,6 +1783,10 @@ fn storage_state_for_path(
         }
     }
 
+    if let Some(state) = xattr_storage_state(hints) {
+        return state;
+    }
+
     let name = file_name_lower(path);
     let attr_blob = xattr_signal_blob(hints);
     if name.contains("conflict") || attr_blob.contains("conflict") {
@@ -1811,6 +1815,44 @@ fn storage_state_for_path(
         CloudStorageState::Downloaded
     } else {
         CloudStorageState::Unknown
+    }
+}
+
+fn xattr_storage_state(hints: &CloudHints) -> Option<CloudStorageState> {
+    let blob = hints
+        .xattr_values
+        .iter()
+        .map(|value| value.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    if blob.is_empty() {
+        return None;
+    }
+    if blob.contains("conflict") || blob.contains("unresolved") {
+        Some(CloudStorageState::Conflict)
+    } else if blob.contains("offline") || blob.contains("network") {
+        Some(CloudStorageState::Offline)
+    } else if blob.contains("downloading") || blob.contains("download-in-progress") {
+        Some(CloudStorageState::Downloading)
+    } else if blob.contains("uploading") || blob.contains("upload-in-progress") {
+        Some(CloudStorageState::Uploading)
+    } else if blob.contains("waiting") || blob.contains("queued") || blob.contains("requested") {
+        Some(CloudStorageState::Waiting)
+    } else if blob.contains("not-downloaded")
+        || blob.contains("not_downloaded")
+        || blob.contains("not downloaded")
+        || blob.contains("evicted")
+        || blob.contains("placeholder")
+    {
+        Some(CloudStorageState::Evicted)
+    } else if blob.contains("downloaded")
+        || blob.contains("current")
+        || blob.contains("materialized")
+    {
+        Some(CloudStorageState::Downloaded)
+    } else {
+        None
     }
 }
 
@@ -4962,6 +5004,77 @@ mod tests {
         assert_eq!(
             report.commands.reason.as_deref(),
             Some("not-native-provider-backed")
+        );
+    }
+
+    #[test]
+    fn xattr_value_current_overrides_placeholder_fixture_name_as_materialized() {
+        let path = PathBuf::from("/tmp/Remote.icloud-placeholder");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: vec!["com.apple.fileprovider.state".to_string()],
+            xattr_values: vec!["current".to_string()],
+            provider_identifier: None,
+            source: "fixture-name+xattr".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Downloaded);
+        assert_eq!(report.materialization, CloudMaterialization::Materialized);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::XattrFallback
+        );
+        assert_eq!(report.progress.direction, CloudTransferDirection::Download);
+        assert!(report.progress.complete);
+        assert_eq!(report.badges, vec![CloudBadge::AvailableOffline]);
+        assert_eq!(report.commands.download, CloudCommandState::Disabled);
+        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+        assert_eq!(
+            report.commands.reason.as_deref(),
+            Some("not-native-provider-backed")
+        );
+    }
+
+    #[test]
+    fn xattr_value_downloading_overrides_downloaded_fixture_name_as_in_flight() {
+        let path = PathBuf::from("/tmp/Downloaded.icloud.md");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: vec!["com.apple.fileprovider.state".to_string()],
+            xattr_values: vec!["download-in-progress".to_string()],
+            provider_identifier: None,
+            source: "fixture-name+xattr".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Downloading);
+        assert_eq!(report.materialization, CloudMaterialization::InFlight);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::XattrFallback
+        );
+        assert_eq!(report.progress.direction, CloudTransferDirection::Download);
+        assert!(report.progress.requested);
+        assert_eq!(
+            report.commands.reason.as_deref(),
+            Some("provider-operation-in-flight")
         );
     }
 
