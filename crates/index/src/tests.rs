@@ -281,6 +281,24 @@ fn persistent_index_build_honors_pre_cancelled_token_without_publishing() {
 }
 
 #[test]
+fn persistent_index_build_surfaces_previous_state_probe_failures() {
+    let root = unique_temp_dir("gfm-index-state-probe-root");
+    let records = unique_temp_path("gfm-index-state-probe-records", "gfmidx");
+    let state_path = unprobeable_child_path(&root, "index-state-unavailable", "gfmstate");
+    fs::write(root.join("never-scanned.md"), "needle").unwrap();
+
+    let err = Indexer::default()
+        .build_persistent(&root, &records, &state_path)
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("index state existence unavailable"));
+    assert!(!records.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn publishes_secondary_metadata_to_mmap_archive() {
     let metadata_path = unique_temp_path("gfm-secondary-metadata", "gfmmeta");
     let record = FileRecord {
@@ -3817,6 +3835,28 @@ fn fsevents_cursor_requires_rescan_for_missing_or_stale_state() {
 }
 
 #[test]
+fn fsevents_resume_plan_surfaces_cursor_path_probe_failures() {
+    let root = unique_temp_dir("gfm-fsevents-cursor-probe-root");
+    let records = unique_temp_path("gfm-fsevents-cursor-probe-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-fsevents-cursor-probe-state", "gfmstate");
+    let cursor_path = root.join("fsevents-cursor-unavailable".repeat(64));
+    fs::write(root.join("Probe.md"), "cursor").unwrap();
+
+    let indexer = Indexer::default();
+    indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    let error = indexer
+        .fsevents_resume_plan(&state_path, &cursor_path)
+        .unwrap_err();
+
+    assert!(format!("{error}").contains("fsevents cursor existence unavailable"));
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+}
+
+#[test]
 fn fsevents_cursor_rejects_unsupported_schema_versions() {
     let path = unique_temp_path("gfm-fsevents-cursor-bad", "gfmcursor");
     fs::write(
@@ -3988,6 +4028,10 @@ fn unique_temp_path(prefix: &str, extension: &str) -> PathBuf {
         name.push_str(extension);
     }
     std::env::temp_dir().join(name)
+}
+
+fn unprobeable_child_path(root: &Path, prefix: &str, extension: &str) -> PathBuf {
+    root.join(format!("{}.{}", prefix.repeat(64), extension))
 }
 
 fn volume_file_record(volume: u64, node: u64, path: &str, name: &str) -> FileRecord {

@@ -211,10 +211,16 @@ impl FseventsResumePlan {
 
     pub fn read(volume: &IndexVolumeState, cursor_path: impl AsRef<Path>) -> Result<Self> {
         let cursor_path = cursor_path.as_ref();
-        let cursor = cursor_path
-            .exists()
-            .then(|| FseventsCursor::read(cursor_path))
-            .transpose()?;
+        let cursor = if cursor_path.try_exists().map_err(|err| {
+            GfmError::io(
+                cursor_path,
+                format!("fsevents cursor existence unavailable: {err}"),
+            )
+        })? {
+            Some(FseventsCursor::read(cursor_path)?)
+        } else {
+            None
+        };
         Ok(Self::evaluate(volume, cursor.as_ref()))
     }
 

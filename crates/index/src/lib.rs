@@ -18,7 +18,9 @@ pub use gfm_store::{
     ContentArchiveCleanupReport, ContentArchiveManifest, ContentArchiveManifestEntry,
     ContentManifestPromotion, ContentMergeOutcome, ContentMergePolicy, ContentMergeTier,
 };
-use gfm_types::{ContentSegment, DirectoryPage, FileId, FileRecord, Result, ScanIssue, SearchHit};
+use gfm_types::{
+    ContentSegment, DirectoryPage, FileId, FileRecord, GfmError, Result, ScanIssue, SearchHit,
+};
 use std::path::{Path, PathBuf};
 
 use gfm_store::write_content_segment;
@@ -406,10 +408,16 @@ impl Indexer {
         let records_path = records_path.as_ref();
         let state_path = state_path.as_ref();
         cancellation.check()?;
-        let previous = state_path
-            .exists()
-            .then(|| IndexVolumeState::read(state_path))
-            .transpose()?;
+        let previous = if state_path.try_exists().map_err(|err| {
+            GfmError::io(
+                state_path,
+                format!("index state existence unavailable: {err}"),
+            )
+        })? {
+            Some(IndexVolumeState::read(state_path)?)
+        } else {
+            None
+        };
         let snapshot = self.build_cancellable(root, cancellation)?;
         cancellation.check()?;
         snapshot.save(records_path)?;
