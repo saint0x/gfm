@@ -1015,34 +1015,18 @@ fn volume_event_index_invalidation_from_args(
         "volume event index invalidation requires an event kind",
     )?)?;
     let path = args.next().map(PathBuf::from);
-    let descriptor = path
-        .as_ref()
-        .filter(|path| path.exists())
-        .map(VolumeDescriptor::for_path)
-        .transpose()?;
-    let native_status = if descriptor.is_some() {
-        gfm_mac::NativeVolumeStatus::Available
-    } else if path.is_some() {
-        gfm_mac::NativeVolumeStatus::Missing
-    } else {
-        gfm_mac::NativeVolumeStatus::Unavailable
-    };
-    let event_report = VolumeEventInvalidationReport::from_parts(
-        kind,
-        native_status,
-        path.clone(),
-        descriptor.as_ref(),
-        None,
-    );
+    let resolution = resolve_volume_event_path(kind, path)?;
+    let descriptor = resolution.descriptor.as_ref();
+    let event_report = resolution.invalidation_report(kind);
     let previous = (kind == VolumeEventKind::Disappeared)
-        .then(|| descriptor.as_ref().map(index_volume_descriptor))
+        .then(|| descriptor.map(index_volume_descriptor))
         .flatten();
     let current = (kind != VolumeEventKind::Disappeared)
-        .then(|| descriptor.as_ref().map(index_volume_descriptor))
+        .then(|| descriptor.map(index_volume_descriptor))
         .flatten();
     Ok(VolumeEventIndexInvalidationReport::from_event(
         index_volume_event_kind(kind),
-        path,
+        resolution.path,
         previous.as_ref(),
         current.as_ref(),
         event_report.invalidate_index_admission,
@@ -1894,10 +1878,15 @@ fn preview_cache_key_for_path_kind(
     if let Some(key) = cache.disk_key_for_path_kind(path, kind) {
         return Ok(key);
     }
-    let file_id = if path.exists() {
-        record_for_path(path, None, false)?.id
-    } else {
-        FileId::new(VolumeId(0), 0)
+    let file_id = match path.try_exists() {
+        Ok(true) => record_for_path(path, None, false)?.id,
+        Ok(false) => FileId::new(VolumeId(0), 0),
+        Err(err) => {
+            return Err(GfmError::io(
+                path,
+                format!("preview cache key path existence unavailable: {err}"),
+            ))
+        }
     };
     Ok(PreviewRequestKey::new(file_id, path.to_path_buf(), kind))
 }

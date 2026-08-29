@@ -3857,6 +3857,32 @@ fn reports_volume_event_index_invalidation_from_binary() {
 }
 
 #[test]
+fn volume_event_index_invalidation_reports_unavailable_path_probe_from_binary() {
+    let path = std::env::temp_dir().join("gfm-volume-event-index-invalid".repeat(64));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-index-invalidation")
+        .arg("description-changed")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-event-index-invalidation\tkind=description-changed\t"));
+    assert!(stdout.contains(&format!("\tpath={}\t", path.display())));
+    assert!(stdout.contains("\tprevious-volume=-\t"));
+    assert!(stdout.contains("\tcurrent-volume=-\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.ends_with("reason=volume-event-description-unavailable\n"));
+}
+
+#[test]
 fn reports_case_sensitivity_volume_event_index_invalidation_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-case-sensitivity-invalidation")

@@ -3082,6 +3082,19 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-event-index-invalidation",
+        "description-changed",
+        "tmp/gfm-fozzy-volume-event-index-invalid1gfm-fozzy-volume-event-index-invalid2gfm-fozzy-volume-event-index-invalid3gfm-fozzy-volume-event-index-invalid4gfm-fozzy-volume-event-index-invalid5gfm-fozzy-volume-event-index-invalid6gfm-fozzy-volume-event-index-invalid7gfm-fozzy-volume-event-index-invalid8gfm-fozzy-volume-event-index-invalid9gfm-fozzy-volume-event-index-invalid10gfm-fozzy-volume-event-index-invalid11gfm-fozzy-volume-event-index-invalid12gfm-fozzy-volume-event-index-invalid13gfm-fozzy-volume-event-index-invalid14gfm-fozzy-volume-event-index-invalid15gfm-fozzy-volume-event-index-invalid16"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-index-invalidation\tkind=description-changed\tpath=tmp/gfm-fozzy-volume-event-index-invalid1gfm-fozzy-volume-event-index-invalid2gfm-fozzy-volume-event-index-invalid3gfm-fozzy-volume-event-index-invalid4gfm-fozzy-volume-event-index-invalid5gfm-fozzy-volume-event-index-invalid6gfm-fozzy-volume-event-index-invalid7gfm-fozzy-volume-event-index-invalid8gfm-fozzy-volume-event-index-invalid9gfm-fozzy-volume-event-index-invalid10gfm-fozzy-volume-event-index-invalid11gfm-fozzy-volume-event-index-invalid12gfm-fozzy-volume-event-index-invalid13gfm-fozzy-volume-event-index-invalid14gfm-fozzy-volume-event-index-invalid15gfm-fozzy-volume-event-index-invalid16\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tprevious-read-only=-\tcurrent-volume=-\tcurrent-class=-\tcurrent-mount=-\tcurrent-reachable=-\tcurrent-read-only=-\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=false\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\tprevious-writable=-\tprevious-ejectable=-\tprevious-mountable=-\tprevious-case-sensitive=-\tcurrent-writable=-\tcurrent-ejectable=-\tcurrent-mountable=-\tcurrent-case-sensitive=-\twritable-changed=false\tejectable-changed=false\tmountable-changed=false\tcase-sensitive-changed=false\treason=volume-event-description-unavailable\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-operation",
         "eject",
         "tmp/gfm-fozzy-dist"

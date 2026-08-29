@@ -549,24 +549,26 @@ fn probe_path(path: &Path, intent: AccessIntent) -> AccessProbeState {
 }
 
 fn probe_write(path: &Path) -> AccessProbeState {
-    if path.is_dir() {
-        let probe = path.join(write_probe_file_name());
-        match fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&probe)
-        {
-            Ok(_) => {
-                let _ = fs::remove_file(probe);
-                AccessProbeState::Granted
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            let probe = path.join(write_probe_file_name());
+            match fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&probe)
+            {
+                Ok(_) => {
+                    let _ = fs::remove_file(probe);
+                    AccessProbeState::Granted
+                }
+                Err(err) => probe_error(err.kind()),
             }
-            Err(err) => probe_error(err.kind()),
         }
-    } else {
-        match fs::OpenOptions::new().append(true).open(path) {
+        Ok(_) => match fs::OpenOptions::new().append(true).open(path) {
             Ok(_) => AccessProbeState::Granted,
             Err(err) => probe_error(err.kind()),
-        }
+        },
+        Err(err) => probe_error(err.kind()),
     }
 }
 
@@ -791,6 +793,22 @@ mod tests {
         assert!(admission.refresh_on_permission_change);
         assert!(report.as_tsv().contains("\tprobe=unavailable\t"));
         assert!(!report.as_tsv().contains("\tprobe=unknown\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unavailable_write_probe_failures_deny_without_append_fallback() {
+        let root = temp_root("security-unavailable-write-probe");
+        let path = root.join("permission-write-probe-unavailable".repeat(64));
+
+        let report = SecurityScopedAccessReport::evaluate(&path, AccessIntent::Write);
+
+        assert_eq!(report.probe, AccessProbeState::Unavailable);
+        assert_eq!(report.mode, SecurityAccessMode::Denied);
+        assert_eq!(report.action, SecurityDecisionAction::Deny);
+        assert!(!report.can_write);
+        assert!(report.as_tsv().contains("\tprobe=unavailable\t"));
 
         fs::remove_dir_all(root).unwrap();
     }
