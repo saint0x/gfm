@@ -332,18 +332,23 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let current = (kind != VolumeEventKind::Disappeared)
                 .then(|| resolution.descriptor.as_ref().map(sidebar_volume_spec))
                 .flatten();
-            println!(
-                "{}",
-                SidebarVolumeInvalidation::from_event(
-                    sidebar_volume_event_kind(kind),
-                    resolution.path,
-                    previous.as_ref(),
-                    current.as_ref(),
-                    platform.invalidate_sidebar,
-                    platform.reason,
-                )
-                .as_tsv()
+            let invalidation = SidebarVolumeInvalidation::from_event(
+                sidebar_volume_event_kind(kind),
+                resolution.path,
+                previous.as_ref(),
+                current.as_ref(),
+                platform.invalidate_sidebar,
+                platform.reason,
+            )
+            .with_platform_statuses(
+                volume_status_string(platform.previous_native_status),
+                volume_status_string(platform.previous_resource_status),
+                volume_status_string(platform.previous_mount_table_status),
+                volume_status_string(platform.current_native_status),
+                volume_status_string(platform.current_resource_status),
+                volume_status_string(platform.current_mount_table_status),
             );
+            println!("{}", invalidation.as_tsv());
         }
         "ui-icon-view-contract" => {
             let path = required_path(
@@ -790,6 +795,10 @@ fn sidebar_volume_mount_state(state: MountState) -> SidebarVolumeMountState {
         MountState::Unmounted => SidebarVolumeMountState::Unmounted,
         MountState::Stale => SidebarVolumeMountState::Stale,
     }
+}
+
+fn volume_status_string(status: Option<gfm_mac::NativeVolumeStatus>) -> Option<String> {
+    status.map(|status| status.as_str().to_string())
 }
 
 fn parse_volume_event_kind(kind: &str) -> Result<VolumeEventKind> {

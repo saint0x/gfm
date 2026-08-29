@@ -191,11 +191,17 @@ pub struct SidebarVolumeInvalidation {
     pub previous_read_only: Option<bool>,
     pub previous_network: Option<bool>,
     pub previous_reachable: Option<bool>,
+    pub previous_native_status: Option<String>,
+    pub previous_resource_status: Option<String>,
+    pub previous_mount_status: Option<String>,
     pub current_kind: Option<SidebarVolumeKind>,
     pub current_mount_state: Option<SidebarVolumeMountState>,
     pub current_read_only: Option<bool>,
     pub current_network: Option<bool>,
     pub current_reachable: Option<bool>,
+    pub current_native_status: Option<String>,
+    pub current_resource_status: Option<String>,
+    pub current_mount_status: Option<String>,
     pub invalidate_row: bool,
     pub invalidate_section: bool,
     pub remove_row: bool,
@@ -260,11 +266,17 @@ impl SidebarVolumeInvalidation {
             previous_read_only,
             previous_network,
             previous_reachable,
+            previous_native_status: None,
+            previous_resource_status: None,
+            previous_mount_status: None,
             current_kind,
             current_mount_state,
             current_read_only,
             current_network,
             current_reachable,
+            current_native_status: None,
+            current_resource_status: None,
+            current_mount_status: None,
             invalidate_row,
             invalidate_section,
             remove_row,
@@ -273,9 +285,27 @@ impl SidebarVolumeInvalidation {
         }
     }
 
+    pub fn with_platform_statuses(
+        mut self,
+        previous_native_status: Option<String>,
+        previous_resource_status: Option<String>,
+        previous_mount_status: Option<String>,
+        current_native_status: Option<String>,
+        current_resource_status: Option<String>,
+        current_mount_status: Option<String>,
+    ) -> Self {
+        self.previous_native_status = previous_native_status;
+        self.previous_resource_status = previous_resource_status;
+        self.previous_mount_status = previous_mount_status;
+        self.current_native_status = current_native_status;
+        self.current_resource_status = current_resource_status;
+        self.current_mount_status = current_mount_status;
+        self
+    }
+
     pub fn as_tsv(&self) -> String {
         format!(
-            "sidebar-volume-invalidation\trow={}\tpath={}\tkind={}\tprevious-kind={}\tprevious-mount={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tcurrent-kind={}\tcurrent-mount={}\tread-only={}\tnetwork={}\treachable={}\tinvalidate-row={}\tinvalidate-section={}\tremove-row={}\tdisable-row={}\treason={}",
+            "sidebar-volume-invalidation\trow={}\tpath={}\tkind={}\tprevious-kind={}\tprevious-mount={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tprevious-native-status={}\tprevious-resource-status={}\tprevious-mount-status={}\tcurrent-kind={}\tcurrent-mount={}\tread-only={}\tnetwork={}\treachable={}\tcurrent-native-status={}\tcurrent-resource-status={}\tcurrent-mount-status={}\tinvalidate-row={}\tinvalidate-section={}\tremove-row={}\tdisable-row={}\treason={}",
             self.row_id.as_deref().unwrap_or("-"),
             self.path
                 .as_ref()
@@ -295,6 +325,9 @@ impl SidebarVolumeInvalidation {
             self.previous_reachable
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            self.previous_native_status.as_deref().unwrap_or("-"),
+            self.previous_resource_status.as_deref().unwrap_or("-"),
+            self.previous_mount_status.as_deref().unwrap_or("-"),
             self.current_kind.map(SidebarVolumeKind::as_str).unwrap_or("-"),
             self.current_mount_state
                 .map(SidebarVolumeMountState::as_str)
@@ -308,6 +341,9 @@ impl SidebarVolumeInvalidation {
             self.current_reachable
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            self.current_native_status.as_deref().unwrap_or("-"),
+            self.current_resource_status.as_deref().unwrap_or("-"),
+            self.current_mount_status.as_deref().unwrap_or("-"),
             self.invalidate_row,
             self.invalidate_section,
             self.remove_row,
@@ -1307,7 +1343,7 @@ mod tests {
         assert_eq!(invalidation.reason, "sidebar-volume-disabled");
         assert_eq!(
             invalidation.as_tsv(),
-            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tprevious-kind=-\tprevious-mount=-\tprevious-read-only=-\tprevious-network=-\tprevious-reachable=-\tcurrent-kind=network\tcurrent-mount=stale\tread-only=true\tnetwork=true\treachable=false\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
+            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tprevious-kind=-\tprevious-mount=-\tprevious-read-only=-\tprevious-network=-\tprevious-reachable=-\tprevious-native-status=-\tprevious-resource-status=-\tprevious-mount-status=-\tcurrent-kind=network\tcurrent-mount=stale\tread-only=true\tnetwork=true\treachable=false\tcurrent-native-status=-\tcurrent-resource-status=-\tcurrent-mount-status=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
         );
     }
 
@@ -1342,8 +1378,55 @@ mod tests {
         assert_eq!(invalidation.reason, "sidebar-volume-disabled");
         assert_eq!(
             invalidation.as_tsv(),
-            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tprevious-kind=-\tprevious-mount=-\tprevious-read-only=-\tprevious-network=-\tprevious-reachable=-\tcurrent-kind=network\tcurrent-mount=mounted\tread-only=false\tnetwork=true\treachable=false\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
+            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tprevious-kind=-\tprevious-mount=-\tprevious-read-only=-\tprevious-network=-\tprevious-reachable=-\tprevious-native-status=-\tprevious-resource-status=-\tprevious-mount-status=-\tcurrent-kind=network\tcurrent-mount=mounted\tread-only=false\tnetwork=true\treachable=false\tcurrent-native-status=-\tcurrent-resource-status=-\tcurrent-mount-status=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
         );
+    }
+
+    #[test]
+    fn volume_invalidation_serializes_platform_status_changes() {
+        let previous = SidebarVolumeSpec::from_native_seed(
+            "diskarbitration:uuid:API",
+            "API",
+            "/Volumes/API",
+            true,
+        )
+        .with_volume_state(
+            SidebarVolumeKind::External,
+            SidebarVolumeMountState::Mounted,
+            false,
+            false,
+            Some(true),
+        );
+        let current = previous.clone();
+
+        let invalidation = SidebarVolumeInvalidation::from_event(
+            SidebarVolumeEventKind::DescriptionChanged,
+            Some(PathBuf::from("/Volumes/API")),
+            Some(&previous),
+            Some(&current),
+            true,
+            "volume-api-status-changed",
+        )
+        .with_platform_statuses(
+            Some("unavailable".to_string()),
+            Some("unavailable".to_string()),
+            Some("unavailable".to_string()),
+            Some("available".to_string()),
+            Some("available".to_string()),
+            Some("available".to_string()),
+        );
+
+        assert!(invalidation.invalidate_row);
+        assert!(invalidation.invalidate_section);
+        assert!(invalidation.as_tsv().contains(
+            "\tprevious-native-status=unavailable\tprevious-resource-status=unavailable\tprevious-mount-status=unavailable\t"
+        ));
+        assert!(invalidation.as_tsv().contains(
+            "\tcurrent-native-status=available\tcurrent-resource-status=available\tcurrent-mount-status=available\t"
+        ));
+        assert!(invalidation
+            .as_tsv()
+            .ends_with("reason=volume-api-status-changed"));
     }
 
     #[test]
@@ -1389,7 +1472,7 @@ mod tests {
         assert_eq!(invalidation.reason, "sidebar-volume-disappeared");
         assert_eq!(
             invalidation.as_tsv(),
-            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=disappeared\tprevious-kind=network\tprevious-mount=mounted\tprevious-read-only=false\tprevious-network=true\tprevious-reachable=true\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared"
+            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=disappeared\tprevious-kind=network\tprevious-mount=mounted\tprevious-read-only=false\tprevious-network=true\tprevious-reachable=true\tprevious-native-status=-\tprevious-resource-status=-\tprevious-mount-status=-\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\tcurrent-native-status=-\tcurrent-resource-status=-\tcurrent-mount-status=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared"
         );
     }
 
