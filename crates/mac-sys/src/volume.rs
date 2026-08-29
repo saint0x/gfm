@@ -1,3 +1,4 @@
+use crate::url::{existing_path_url, NativePathUrl};
 use core_foundation::base::{kCFAllocatorDefault, CFType, TCFType};
 use core_foundation::boolean::{CFBoolean, CFBooleanRef};
 use core_foundation::dictionary::CFDictionary;
@@ -951,29 +952,14 @@ fn dissenter_reason(dissenter: DADissenterRef, code: u32) -> String {
 }
 
 pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
-    match path.try_exists() {
-        Ok(true) => {}
-        Ok(false) => {
-            return unavailable_resource_values(
-                NativeVolumeStatus::Missing,
-                format!("volume path does not exist: {}", path.display()),
-            );
+    let url = match existing_path_url(path, "volume path") {
+        NativePathUrl::Ready(url) => url,
+        NativePathUrl::Missing(reason) => {
+            return unavailable_resource_values(NativeVolumeStatus::Missing, reason);
         }
-        Err(err) => {
-            return unavailable_resource_values(
-                NativeVolumeStatus::Unavailable,
-                format!(
-                    "volume path existence unavailable: {}: {err}",
-                    path.display()
-                ),
-            );
+        NativePathUrl::Unavailable(reason) | NativePathUrl::Invalid(reason) => {
+            return unavailable_resource_values(NativeVolumeStatus::Unavailable, reason);
         }
-    }
-    let Some(url) = CFURL::from_path(path, path.is_dir()) else {
-        return unavailable_resource_values(
-            NativeVolumeStatus::Unavailable,
-            format!("invalid volume path URL: {}", path.display()),
-        );
     };
     let url = url.as_concrete_TypeRef();
     let mut errors = Vec::new();

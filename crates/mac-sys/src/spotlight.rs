@@ -1,3 +1,4 @@
+use crate::url::{existing_path_url, NativePathUrl};
 use core_foundation::array::CFArray;
 use core_foundation::base::{kCFAllocatorDefault, CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
@@ -11,7 +12,6 @@ use core_foundation_sys::base::CFTypeID;
 use core_foundation_sys::base::CFTypeRef;
 use libc::c_void;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 use std::ptr::NonNull;
 
@@ -81,28 +81,11 @@ pub fn read_spotlight_attributes_batch(
 }
 
 fn path_to_url(path: &Path) -> Result<PathUrl, String> {
-    path.to_str()
-        .ok_or_else(|| format!("path is not valid UTF-8: {}", path.display()))?;
-    match path.try_exists() {
-        Ok(true) => {}
-        Ok(false) => {
-            return Ok(PathUrl::Missing(format!(
-                "path does not exist: {}",
-                path.display()
-            )));
-        }
-        Err(error) => {
-            return Err(format!(
-                "path existence unavailable: {error}: {}",
-                path.display()
-            ));
-        }
+    match existing_path_url(path, "path") {
+        NativePathUrl::Ready(url) => Ok(PathUrl::Ready(url)),
+        NativePathUrl::Missing(reason) => Ok(PathUrl::Missing(reason)),
+        NativePathUrl::Unavailable(reason) | NativePathUrl::Invalid(reason) => Err(reason),
     }
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("path metadata unavailable: {error}: {}", path.display()))?;
-    let url = CFURL::from_path(path, metadata.is_dir())
-        .ok_or_else(|| format!("invalid path URL: {}", path.display()))?;
-    Ok(PathUrl::Ready(url))
 }
 
 fn create_items(urls: &[CFURL]) -> Result<CFArray, String> {

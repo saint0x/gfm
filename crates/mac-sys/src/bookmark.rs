@@ -1,10 +1,10 @@
+use crate::url::{existing_path_url, NativePathUrl};
 use core_foundation::base::{kCFAllocatorDefault, TCFType};
 use core_foundation::data::CFData;
 use core_foundation::url::CFURL;
 use core_foundation_sys::base::{Boolean, CFAllocatorRef, CFOptionFlags};
 use core_foundation_sys::error::CFErrorRef;
 use core_foundation_sys::url::CFURLRef;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
@@ -74,29 +74,12 @@ pub enum NativeBookmarkStatus {
 }
 
 pub fn create_security_scoped_bookmark(path: &Path, read_only: bool) -> NativeBookmarkData {
-    match path.try_exists() {
-        Ok(true) => {}
-        Ok(false) => {
-            return missing_data(format!("bookmark path does not exist: {}", path.display()));
+    let url = match existing_path_url(path, "bookmark path") {
+        NativePathUrl::Ready(url) => url,
+        NativePathUrl::Missing(reason) => return missing_data(reason),
+        NativePathUrl::Unavailable(reason) | NativePathUrl::Invalid(reason) => {
+            return unavailable_data(reason);
         }
-        Err(error) => {
-            return unavailable_data(format!(
-                "bookmark path existence unavailable: {error}: {}",
-                path.display()
-            ));
-        }
-    }
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            return unavailable_data(format!(
-                "bookmark path metadata unavailable: {error}: {}",
-                path.display()
-            ));
-        }
-    };
-    let Some(url) = CFURL::from_path(path, metadata.is_dir()) else {
-        return unavailable_data(format!("invalid bookmark path URL: {}", path.display()));
     };
 
     let mut options = BOOKMARK_CREATION_WITH_SECURITY_SCOPE;

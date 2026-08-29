@@ -1,3 +1,4 @@
+use crate::url::{existing_path_url, NativePathUrl};
 use block::ConcreteBlock;
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::{CFBoolean, CFBooleanRef};
@@ -371,23 +372,11 @@ fn object_responds_to_selector(object: *mut Object, selector: Sel) -> bool {
 }
 
 pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResourceValues {
-    match path.try_exists() {
-        Ok(true) => {}
-        Ok(false) => {
-            return missing_values(format!(
-                "fileprovider path does not exist: {}",
-                path.display()
-            ));
-        }
-        Err(err) => {
-            return unavailable_values(format!(
-                "fileprovider path existence unavailable: {}: {err}",
-                path.display()
-            ));
-        }
-    }
-    let Some(url) = CFURL::from_path(path, path.is_dir()) else {
-        return unsupported(format!("invalid path URL: {}", path.display()));
+    let url = match existing_path_url(path, "fileprovider path") {
+        NativePathUrl::Ready(url) => url,
+        NativePathUrl::Missing(reason) => return missing_values(reason),
+        NativePathUrl::Unavailable(reason) => return unavailable_values(reason),
+        NativePathUrl::Invalid(reason) => return unsupported(reason),
     };
 
     let mut errors = Vec::new();
@@ -501,32 +490,17 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
 }
 
 pub fn copy_fileprovider_identity(path: &Path) -> NativeFileProviderIdentity {
-    match path.try_exists() {
-        Ok(true) => {}
-        Ok(false) => {
-            return identity_result(
-                NativeFileProviderIdentityStatus::Missing,
-                format!(
-                    "fileprovider identity path does not exist: {}",
-                    path.display()
-                ),
-            );
+    let url = match existing_path_url(path, "fileprovider identity path") {
+        NativePathUrl::Ready(url) => url,
+        NativePathUrl::Missing(reason) => {
+            return identity_result(NativeFileProviderIdentityStatus::Missing, reason);
         }
-        Err(err) => {
-            return identity_result(
-                NativeFileProviderIdentityStatus::Unavailable,
-                format!(
-                    "fileprovider identity path existence unavailable: {}: {err}",
-                    path.display()
-                ),
-            );
+        NativePathUrl::Unavailable(reason) => {
+            return identity_result(NativeFileProviderIdentityStatus::Unavailable, reason);
         }
-    }
-    let Some(url) = CFURL::from_path(path, path.is_dir()) else {
-        return identity_result(
-            NativeFileProviderIdentityStatus::UnsupportedPath,
-            format!("invalid path URL: {}", path.display()),
-        );
+        NativePathUrl::Invalid(reason) => {
+            return identity_result(NativeFileProviderIdentityStatus::UnsupportedPath, reason);
+        }
     };
     let Some(manager_class) = Class::get("NSFileProviderManager") else {
         return identity_result(
@@ -777,35 +751,30 @@ fn run_filemanager_url_operation(
     operation: NativeUbiquitousOperation,
     label: &'static str,
 ) -> NativeFileProviderOperationResult {
-    match path.try_exists() {
-        Ok(true) => {}
-        Ok(false) => {
+    let url = match existing_path_url(path, "path") {
+        NativePathUrl::Ready(url) => url,
+        NativePathUrl::Missing(reason) => {
             return operation_result(
                 NativeFileProviderOperationStatus::Missing,
-                format!(
-                    "{label} failed because path does not exist: {}",
-                    path.display()
-                ),
+                format!("{label} failed because {reason}"),
             );
         }
-        Err(err) => {
+        NativePathUrl::Unavailable(reason) => {
+            let reason = reason.replace(
+                "path existence unavailable",
+                "path existence is unavailable",
+            );
             return operation_result(
                 NativeFileProviderOperationStatus::Unavailable,
-                format!(
-                    "{label} failed because path existence is unavailable: {}: {err}",
-                    path.display()
-                ),
+                format!("{label} failed because {reason}"),
             );
         }
-    }
-    let Some(url) = CFURL::from_path(path, path.is_dir()) else {
-        return operation_result(
-            NativeFileProviderOperationStatus::UnsupportedPath,
-            format!(
-                "{label} failed because path URL is invalid: {}",
-                path.display()
-            ),
-        );
+        NativePathUrl::Invalid(reason) => {
+            return operation_result(
+                NativeFileProviderOperationStatus::UnsupportedPath,
+                format!("{label} failed because {reason}"),
+            );
+        }
     };
 
     let Some(filemanager_class) = Class::get("NSFileManager") else {

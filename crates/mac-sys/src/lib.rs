@@ -2,6 +2,7 @@ mod bookmark;
 mod fileprovider;
 mod finder;
 mod spotlight;
+mod url;
 mod volume;
 
 pub use bookmark::{

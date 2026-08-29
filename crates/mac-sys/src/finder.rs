@@ -1,6 +1,6 @@
+use crate::url::{existing_path_url, NativePathUrl};
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
-use core_foundation::url::CFURL;
 use core_foundation_sys::base::OSStatus;
 use core_foundation_sys::string::CFStringRef;
 use std::path::Path;
@@ -28,8 +28,13 @@ pub enum NativeFinderKindStatus {
 }
 
 pub fn copy_kind_string_for_path(path: &Path) -> NativeFinderKind {
-    let Some(url) = CFURL::from_path(path, path.is_dir()) else {
-        return unavailable(format!("invalid path URL: {}", path.display()));
+    let url = match existing_path_url(path, "finder kind path") {
+        NativePathUrl::Ready(url) => url,
+        NativePathUrl::Missing(reason)
+        | NativePathUrl::Unavailable(reason)
+        | NativePathUrl::Invalid(reason) => {
+            return unavailable(reason);
+        }
     };
 
     let mut kind: CFStringRef = ptr::null();
@@ -92,5 +97,20 @@ mod tests {
         assert_eq!(kind.status, NativeFinderKindStatus::Available);
         assert!(!kind.kind.as_deref().unwrap().trim().is_empty());
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn kind_string_reports_unavailable_path_probe_errors() {
+        let path = std::env::temp_dir().join("finder-kind-unavailable".repeat(16));
+
+        let kind = copy_kind_string_for_path(&path);
+
+        assert_eq!(kind.status, NativeFinderKindStatus::Unavailable);
+        assert!(kind.kind.is_none());
+        assert!(kind
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("finder kind path existence unavailable"));
     }
 }
