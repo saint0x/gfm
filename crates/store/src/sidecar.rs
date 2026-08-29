@@ -219,7 +219,12 @@ pub fn recover_sidecars_checked(
         check_control()?;
         for health in &before.invalid_sidecars {
             check_control()?;
-            if health.path.exists() {
+            if health.path.try_exists().map_err(|err| {
+                GfmError::io(
+                    &health.path,
+                    format!("sidecar archive existence unavailable: {err}"),
+                )
+            })? {
                 quarantined_sidecars.push(quarantine_sidecar(&health.path, quarantine_dir)?);
                 check_control()?;
             }
@@ -244,10 +249,10 @@ fn classify_sidecars(sidecars: &SidecarPaths) -> (Vec<SidecarHealth>, Vec<Sideca
     let mut valid = Vec::new();
     let mut invalid = Vec::new();
     for (kind, path) in sidecars.iter() {
-        let detail = if path.exists() {
-            open_sidecar(kind, path).err().map(|err| err.to_string())
-        } else {
-            Some("missing sidecar archive".to_string())
+        let detail = match path.try_exists() {
+            Ok(true) => open_sidecar(kind, path).err().map(|err| err.to_string()),
+            Ok(false) => Some("missing sidecar archive".to_string()),
+            Err(err) => Some(format!("sidecar archive existence unavailable: {err}")),
         };
         let health = SidecarHealth {
             kind,
@@ -388,6 +393,36 @@ mod tests {
             .unwrap()
             .iter()
             .any(|term| term.contains("projectplan")));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sidecar_recovery_surfaces_sidecar_path_probe_failures() {
+        let dir = temp_dir("gfm-sidecar-recovery-probe");
+        let records = dir.join("records.gfmidx");
+        let dictionary = dir.join("sidecar-unavailable".repeat(64));
+        let quarantine = dir.join("quarantine");
+        fs::create_dir_all(&dir).unwrap();
+        write_records(&records, &[record("ProjectPlan.md")]).unwrap();
+        let paths = SidecarPaths {
+            dictionary: Some(dictionary.clone()),
+            ..SidecarPaths::default()
+        };
+
+        let plan = plan_sidecar_recovery(&records, &paths);
+        assert_eq!(plan.action, SidecarRecoveryAction::Rebuild);
+        assert_eq!(plan.reason, SidecarRecoveryReason::UnreadableSidecar);
+        assert!(plan.invalid_sidecars[0]
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("sidecar archive existence unavailable")));
+
+        let err = recover_sidecars(&records, &paths, &quarantine).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("sidecar archive existence unavailable"));
+        assert!(!quarantine.exists());
         fs::remove_dir_all(dir).unwrap();
     }
 

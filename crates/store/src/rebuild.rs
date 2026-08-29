@@ -397,7 +397,12 @@ pub fn rebuild_derived_sidecar_checked(
     check_control()?;
     let records = MmapRecordArchive::open(records_path)?.records()?;
     check_control()?;
-    let backup_path = if sidecar_path.exists() {
+    let backup_path = if sidecar_path.try_exists().map_err(|err| {
+        GfmError::io(
+            sidecar_path,
+            format!("derived sidecar existence unavailable: {err}"),
+        )
+    })? {
         let label = match before.sidecar.status {
             ArchiveSchemaStatus::Legacy => "legacy",
             ArchiveSchemaStatus::Unsupported => "unsupported",
@@ -834,6 +839,33 @@ mod tests {
             .unwrap()
             .is_empty());
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn derived_sidecar_rebuild_surfaces_sidecar_path_probe_failures() {
+        let dir = temp_dir("gfm-derived-sidecar-rebuild-probe");
+        let records = dir.join("records.gfmidx");
+        let prefixes = dir.join("derived-sidecar-unavailable".repeat(64));
+        let backup = dir.join("backup");
+        write_records(&records, &[record()]).unwrap();
+
+        let plan = plan_derived_sidecar_rebuild(&records, SidecarKind::Prefixes, &prefixes);
+        assert_eq!(plan.action, DerivedSidecarRebuildAction::Rebuild);
+        assert_eq!(plan.sidecar.status, ArchiveSchemaStatus::Unreadable);
+        assert!(plan
+            .sidecar
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("archive schema existence unavailable")));
+
+        let err = rebuild_derived_sidecar(&records, SidecarKind::Prefixes, &prefixes, &backup)
+            .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("derived sidecar existence unavailable"));
+        assert!(!backup.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
