@@ -1331,6 +1331,7 @@ pub enum VolumeOperationDisposition {
     Busy,
     Denied,
     Unsupported,
+    Unavailable,
     Failed,
 }
 
@@ -1343,6 +1344,7 @@ impl VolumeOperationDisposition {
             Self::Busy => "busy",
             Self::Denied => "denied",
             Self::Unsupported => "unsupported",
+            Self::Unavailable => "unavailable",
             Self::Failed => "failed",
         }
     }
@@ -1362,13 +1364,24 @@ pub struct VolumeOperationReport {
 impl VolumeOperationReport {
     pub fn execute(path: impl AsRef<Path>, operation: VolumeOperation) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        if !path.exists() {
-            return Ok(Self::without_volume(
-                path,
-                operation,
-                VolumeOperationDisposition::Refused,
-                "volume-path-missing",
-            ));
+        match path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                return Ok(Self::without_volume(
+                    path,
+                    operation,
+                    VolumeOperationDisposition::Refused,
+                    "volume-path-missing",
+                ));
+            }
+            Err(err) => {
+                return Ok(Self::without_volume(
+                    path,
+                    operation,
+                    VolumeOperationDisposition::Unavailable,
+                    format!("volume-path-existence-unavailable: {err}"),
+                ));
+            }
         }
 
         let volume = VolumeDescriptor::for_path(&path)?;
@@ -1576,8 +1589,8 @@ fn disposition_for_native_operation(
         | NativeVolumeOperationStatus::NotWritable => VolumeOperationDisposition::Refused,
         NativeVolumeOperationStatus::Failed
         | NativeVolumeOperationStatus::NotFound
-        | NativeVolumeOperationStatus::Missing
-        | NativeVolumeOperationStatus::Unavailable => VolumeOperationDisposition::Failed,
+        | NativeVolumeOperationStatus::Missing => VolumeOperationDisposition::Failed,
+        NativeVolumeOperationStatus::Unavailable => VolumeOperationDisposition::Unavailable,
     }
 }
 
@@ -2333,6 +2346,11 @@ fn escape_field(value: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -3543,6 +3561,20 @@ mod tests {
         assert!(report.as_tsv().contains("\tdisposition=refused\t"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn volume_operation_surfaces_path_probe_errors_as_unavailable() {
+        let path = invalid_path("gfm-volume-operation-invalid");
+
+        let report = VolumeOperationReport::execute(&path, VolumeOperation::Eject).unwrap();
+
+        assert_eq!(report.disposition, VolumeOperationDisposition::Unavailable);
+        assert_eq!(report.native_status, None);
+        assert_eq!(report.volume, None);
+        assert!(report.reason.contains("volume-path-existence-unavailable"));
+        assert!(report.as_tsv().contains("\tdisposition=unavailable\t"));
+    }
+
     #[test]
     fn native_volume_operation_status_maps_to_typed_dispositions() {
         assert_eq!(
@@ -3580,6 +3612,10 @@ mod tests {
         assert_eq!(
             disposition_for_native_operation(NativeVolumeOperationStatus::Unsupported),
             VolumeOperationDisposition::Unsupported
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::Unavailable),
+            VolumeOperationDisposition::Unavailable
         );
         assert_eq!(
             disposition_for_native_operation(NativeVolumeOperationStatus::NotMounted),
@@ -3701,5 +3737,14 @@ mod tests {
         };
         configure(&mut description);
         description
+    }
+
+    #[cfg(unix)]
+    fn invalid_path(prefix: &str) -> PathBuf {
+        let mut bytes = std::env::temp_dir().into_os_string().into_vec();
+        bytes.push(b'/');
+        bytes.extend_from_slice(prefix.as_bytes());
+        bytes.push(0);
+        PathBuf::from(OsString::from_vec(bytes))
     }
 }
