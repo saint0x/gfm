@@ -1718,6 +1718,7 @@ fn native_provider_state_unavailable(hints: &CloudHints) -> bool {
         NativeFileProviderIdentityStatus::ProviderUnavailable
             | NativeFileProviderIdentityStatus::TimedOut
             | NativeFileProviderIdentityStatus::Failed
+            | NativeFileProviderIdentityStatus::Unavailable
             | NativeFileProviderIdentityStatus::UnsupportedPath
     )
 }
@@ -1884,6 +1885,7 @@ fn materialization_source_for_state(
             hints.native_identity.status,
             NativeFileProviderIdentityStatus::ProviderUnavailable
                 | NativeFileProviderIdentityStatus::TimedOut
+                | NativeFileProviderIdentityStatus::Unavailable
                 | NativeFileProviderIdentityStatus::Failed
         )
     {
@@ -1968,6 +1970,7 @@ fn materialization_reason_for_state(
             NativeFileProviderIdentityStatus::Available
                 | NativeFileProviderIdentityStatus::ProviderUnavailable
                 | NativeFileProviderIdentityStatus::TimedOut
+                | NativeFileProviderIdentityStatus::Unavailable
                 | NativeFileProviderIdentityStatus::Failed
                 | NativeFileProviderIdentityStatus::UnsupportedPath
         ) {
@@ -4708,10 +4711,10 @@ mod tests {
         let hints = CloudHints {
             native: native_values(),
             native_identity: NativeFileProviderIdentity {
-                status: NativeFileProviderIdentityStatus::TimedOut,
+                status: NativeFileProviderIdentityStatus::Unavailable,
                 item_identifier: None,
                 domain_identifier: None,
-                reason: Some("NSFileProviderManager identity lookup timed out".to_string()),
+                reason: Some("FileProvider identity path probe unavailable".to_string()),
             },
             xattrs: Vec::new(),
             xattr_values: Vec::new(),
@@ -4730,12 +4733,12 @@ mod tests {
         );
         assert_eq!(
             materialization_reason_for_state(state, &hints).as_deref(),
-            Some("NSFileProviderManager identity lookup timed out")
+            Some("FileProvider identity path probe unavailable")
         );
 
         let report = FileProviderStateReport::from_hints(path, hints);
         assert!(report.as_tsv().contains(
-            "\tmaterialization-source=nsfileprovidermanager:unavailable\tmaterialization-confidence=provider-identity\tmaterialization-reason=NSFileProviderManager identity lookup timed out\t"
+            "\tmaterialization-source=nsfileprovidermanager:unavailable\tmaterialization-confidence=provider-identity\tmaterialization-reason=FileProvider identity path probe unavailable\t"
         ));
     }
 

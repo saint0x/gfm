@@ -170,6 +170,7 @@ pub enum NativeFileProviderIdentityStatus {
     NoProviderForPath,
     Missing,
     UnsupportedPath,
+    Unavailable,
     ProviderUnavailable,
     TimedOut,
     Failed,
@@ -183,6 +184,7 @@ impl NativeFileProviderIdentityStatus {
             Self::NoProviderForPath => "no-provider-for-path",
             Self::Missing => "missing",
             Self::UnsupportedPath => "unsupported-path",
+            Self::Unavailable => "unavailable",
             Self::ProviderUnavailable => "provider-unavailable",
             Self::TimedOut => "timed-out",
             Self::Failed => "failed",
@@ -512,7 +514,7 @@ pub fn copy_fileprovider_identity(path: &Path) -> NativeFileProviderIdentity {
         }
         Err(err) => {
             return identity_result(
-                NativeFileProviderIdentityStatus::Failed,
+                NativeFileProviderIdentityStatus::Unavailable,
                 format!(
                     "fileprovider identity path existence unavailable: {}: {err}",
                     path.display()
@@ -1147,12 +1149,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn identity_surfaces_path_probe_errors_as_failed() {
+    fn identity_surfaces_path_probe_errors_as_unavailable() {
         let path = invalid_path("gfm-native-fileprovider-identity-invalid");
 
         let identity = copy_fileprovider_identity(&path);
 
-        assert_eq!(identity.status, NativeFileProviderIdentityStatus::Failed);
+        assert_eq!(
+            identity.status,
+            NativeFileProviderIdentityStatus::Unavailable
+        );
         assert!(identity.item_identifier.is_none());
         assert!(identity.domain_identifier.is_none());
         assert!(identity
