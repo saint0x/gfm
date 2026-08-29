@@ -3733,6 +3733,37 @@ fn reports_volume_invalidation_from_binary() {
 }
 
 #[test]
+fn volume_invalidation_surfaces_unavailable_current_path_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-invalidation-unavailable-{}",
+        std::process::id()
+    ));
+    let invalid = root.join("volume-invalidation-unavailable".repeat(16));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-invalidation")
+        .arg("external")
+        .arg("mounted")
+        .arg(&invalid)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("volume-invalidation\t"), "{stdout}");
+    assert!(
+        stderr.contains("volume invalidation current path existence unavailable")
+            || stderr.contains("File name too long"),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_topology_diff_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-volume-topology-{}", std::process::id()));
     let previous = root.join("Work Drive");

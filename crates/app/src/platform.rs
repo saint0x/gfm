@@ -607,11 +607,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "volume-invalidation requires a previous mount state",
             )?)?;
             let previous_path = required_path(args.next(), "volume-invalidation requires a path")?;
-            let current = VolumeDiscoveryReport::from_paths(vec![previous_path.clone()])
-                .volumes
-                .into_iter()
-                .next()
-                .map(|volume| index_volume_descriptor(&volume));
+            let current = current_index_volume_descriptor(&previous_path)?;
             let previous = IndexVolumeDescriptor::new(
                 previous_path
                     .file_name()
@@ -1210,6 +1206,19 @@ fn volume_discovery_report(paths: Vec<PathBuf>) -> Result<VolumeDiscoveryReport>
         Ok(VolumeDiscoveryReport::discover())
     } else {
         VolumeDiscoveryReport::from_paths_checked(paths)
+    }
+}
+
+fn current_index_volume_descriptor(path: &Path) -> Result<Option<IndexVolumeDescriptor>> {
+    match path.try_exists() {
+        Ok(true) => Ok(Some(index_volume_descriptor(&VolumeDescriptor::for_path(
+            path,
+        )?))),
+        Ok(false) => Ok(None),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("volume invalidation current path existence unavailable: {err}"),
+        )),
     }
 }
 
