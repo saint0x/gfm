@@ -1493,7 +1493,7 @@ fn format_content_session_report(
     report: &gfm_index::ContentQuerySessionReport,
 ) -> String {
     format!(
-        "{label}\tcontent-archives={content_archives}\tcontent-keys={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tposting-cache-hits={}\tposting-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}",
+        "{label}\tcontent-archives={content_archives}\tcontent-keys={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tposting-cache-hits={}\tposting-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}\tresult-cache-hits={}\tresult-cache-misses={}",
         report.load.content_keys,
         report.load.records_loaded,
         report.load.records_missing,
@@ -1502,7 +1502,9 @@ fn format_content_session_report(
         report.posting_cache_hits,
         report.posting_cache_misses,
         report.record_cache_hits,
-        report.record_cache_misses
+        report.record_cache_misses,
+        report.result_cache_hits,
+        report.result_cache_misses
     )
 }
 

@@ -2762,9 +2762,11 @@ fn content_query_session_reuses_archives_and_record_cache() {
         .unwrap();
     let first = session.search("contentcache", 5).unwrap();
     let posting_before_second = session.posting_cache_telemetry();
+    let result_before_second = session.result_cache_telemetry();
     let before_second = session.record_cache_telemetry();
     let second = session.search("contentcache", 5).unwrap();
     let posting_after_second = session.posting_cache_telemetry();
+    let result_after_second = session.result_cache_telemetry();
     let after_second = session.record_cache_telemetry();
 
     assert_eq!(session.indexed_records(), snapshot.records.len());
@@ -2775,20 +2777,27 @@ fn content_query_session_reuses_archives_and_record_cache() {
     assert_eq!(second.search.hits[0].record.id, matched);
     assert_eq!(first.posting_cache_hits, 0);
     assert_eq!(first.posting_cache_misses, 1);
-    assert_eq!(second.posting_cache_hits, 1);
+    assert_eq!(second.posting_cache_hits, 0);
     assert_eq!(second.posting_cache_misses, 0);
     assert_eq!(first.record_cache_hits, 0);
     assert_eq!(first.record_cache_misses, 1);
-    assert_eq!(second.record_cache_hits, 1);
+    assert_eq!(second.record_cache_hits, 0);
     assert_eq!(second.record_cache_misses, 0);
-    assert!(posting_after_second.0 > posting_before_second.0);
-    assert!(after_second.0 > before_second.0);
+    assert_eq!(first.result_cache_hits, 0);
+    assert_eq!(first.result_cache_misses, 1);
+    assert_eq!(second.result_cache_hits, 1);
+    assert_eq!(second.result_cache_misses, 0);
+    assert_eq!(posting_after_second, posting_before_second);
+    assert!(result_after_second.0 > result_before_second.0);
+    assert_eq!(after_second, before_second);
 
     let missing_first = session.search("absentcontentneedle", 5).unwrap();
     let missing_posting_before_second = session.posting_cache_telemetry();
+    let missing_result_before_second = session.result_cache_telemetry();
     let missing_record_before_second = session.record_cache_telemetry();
     let missing_second = session.search("absentcontentneedle", 5).unwrap();
     let missing_posting_after_second = session.posting_cache_telemetry();
+    let missing_result_after_second = session.result_cache_telemetry();
     let missing_record_after_second = session.record_cache_telemetry();
 
     assert!(missing_first.search.hits.is_empty());
@@ -2805,13 +2814,18 @@ fn content_query_session_reuses_archives_and_record_cache() {
     assert!(!missing_second.load.full_hydration);
     assert_eq!(missing_first.posting_cache_hits, 0);
     assert_eq!(missing_first.posting_cache_misses, 1);
-    assert_eq!(missing_second.posting_cache_hits, 1);
+    assert_eq!(missing_second.posting_cache_hits, 0);
     assert_eq!(missing_second.posting_cache_misses, 0);
     assert_eq!(missing_first.record_cache_hits, 0);
     assert_eq!(missing_first.record_cache_misses, 0);
     assert_eq!(missing_second.record_cache_hits, 0);
     assert_eq!(missing_second.record_cache_misses, 0);
-    assert!(missing_posting_after_second.0 > missing_posting_before_second.0);
+    assert_eq!(missing_first.result_cache_hits, 0);
+    assert_eq!(missing_first.result_cache_misses, 1);
+    assert_eq!(missing_second.result_cache_hits, 1);
+    assert_eq!(missing_second.result_cache_misses, 0);
+    assert_eq!(missing_posting_after_second, missing_posting_before_second);
+    assert!(missing_result_after_second.0 > missing_result_before_second.0);
     assert_eq!(missing_record_after_second, missing_record_before_second);
 
     fs::remove_dir_all(root).unwrap();

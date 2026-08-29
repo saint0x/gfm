@@ -9732,11 +9732,13 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
             "content-session-first\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
         ) && session_stderr.contains("\tposting-cache-hits=0\tposting-cache-misses=1")
             && session_stderr.contains("\trecord-cache-hits=0\trecord-cache-misses=2")
+            && session_stderr.contains("\tresult-cache-hits=0\tresult-cache-misses=1")
             && session_stderr.contains(
                 "content-session-second\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
             )
-            && session_stderr.contains("\tposting-cache-hits=1\tposting-cache-misses=0")
-            && session_stderr.contains("\trecord-cache-hits=2\trecord-cache-misses=0"),
+            && session_stderr.contains("\tposting-cache-hits=0\tposting-cache-misses=0")
+            && session_stderr.contains("\trecord-cache-hits=0\trecord-cache-misses=0")
+            && session_stderr.contains("\tresult-cache-hits=1\tresult-cache-misses=0"),
         "{session_stderr}"
     );
 
@@ -9774,8 +9776,9 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
             second_content.display()
         )) && manifest_session_stderr.contains(
             "content-manifest-session-second\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
-        ) && manifest_session_stderr.contains("\tposting-cache-hits=1\tposting-cache-misses=0")
-            && manifest_session_stderr.contains("\trecord-cache-hits=2\trecord-cache-misses=0"),
+        ) && manifest_session_stderr.contains("\tposting-cache-hits=0\tposting-cache-misses=0")
+            && manifest_session_stderr.contains("\trecord-cache-hits=0\trecord-cache-misses=0")
+            && manifest_session_stderr.contains("\tresult-cache-hits=1\tresult-cache-misses=0"),
         "{manifest_session_stderr}"
     );
 
