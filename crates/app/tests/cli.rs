@@ -12402,6 +12402,34 @@ fn resume_content_index_job_refuses_unreachable_journal_before_recovery_read_fro
 }
 
 #[test]
+fn resume_content_index_job_reports_journal_path_probe_failure_before_recovery_read_from_binary() {
+    let root = unique_temp_dir("gfm-cli-resume-content-journal-probe-root");
+    let journal = root.join("gfm-recovery-journal".repeat(64));
+    let spec = unique_temp_path("gfm-cli-resume-content-journal-probe-unread", "job");
+    fs::write(&spec, "not-a-content-job-spec\n").unwrap();
+
+    let resume_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "resume-content-background",
+            spec.to_str().unwrap(),
+            journal.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!resume_output.status.success());
+    let stderr = String::from_utf8_lossy(&resume_output.stderr);
+    assert!(
+        stderr.contains("background content recovery journal existence unavailable"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("content job spec"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(spec).unwrap();
+}
+
+#[test]
 fn resume_content_index_job_refuses_unreachable_progress_store_before_recovery_read_from_binary() {
     let offline = unique_temp_dir("gfm-cli-resume-content-progress-unreachable");
     let progress = offline.join("jobs.gfmprogress");
@@ -12441,6 +12469,42 @@ fn resume_content_index_job_refuses_unreachable_progress_store_before_recovery_r
     );
 
     fs::remove_dir_all(offline).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(spec).unwrap();
+}
+
+#[test]
+fn resume_content_index_job_reports_progress_path_probe_failure_before_recovery_read_from_binary() {
+    let root = unique_temp_dir("gfm-cli-resume-content-progress-probe-root");
+    let progress = root.join("gfm-recovery-progress".repeat(64));
+    let journal = unique_temp_path("gfm-cli-resume-content-progress-probe", "journal");
+    let spec = unique_temp_path("gfm-cli-resume-content-progress-probe-unread", "job");
+    fs::write(&journal, "99\t1\tstarted\tbackground content index\n").unwrap();
+    fs::write(&spec, "not-a-content-job-spec\n").unwrap();
+
+    let resume_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "resume-content-background",
+            spec.to_str().unwrap(),
+            journal.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!resume_output.status.success());
+    let stderr = String::from_utf8_lossy(&resume_output.stderr);
+    assert!(
+        stderr.contains("background content recovery progress existence unavailable"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("content job spec"), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(&journal).unwrap(),
+        "99\t1\tstarted\tbackground content index\n"
+    );
+
+    fs::remove_dir_all(root).unwrap();
     fs::remove_file(journal).unwrap();
     fs::remove_file(spec).unwrap();
 }
