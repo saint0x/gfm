@@ -328,6 +328,11 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
     );
     push_signature_bool(
         &mut tokens,
+        "resource-hard-links",
+        volume.resource_supports_hard_links,
+    );
+    push_signature_bool(
+        &mut tokens,
         "resource-sparse",
         volume.resource_supports_sparse_files,
     );
@@ -924,6 +929,7 @@ mod tests {
         descriptor.resource_encrypted = Some(true);
         descriptor.resource_reachable = Some(true);
         descriptor.resource_supports_file_cloning = Some(false);
+        descriptor.resource_supports_hard_links = Some(true);
         descriptor.resource_supports_sparse_files = Some(true);
         descriptor.local = Some(true);
         descriptor.mount_local = Some(true);
@@ -968,6 +974,7 @@ mod tests {
             "resource-encrypted=1",
             "resource-reachable=1",
             "resource-cloning=0",
+            "resource-hard-links=1",
             "resource-sparse=1",
             "local=1",
             "mount-local=1",

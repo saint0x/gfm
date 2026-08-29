@@ -571,8 +571,13 @@ fn copy_file_with_session(
         .copied_hard_link_destination(metadata)
         .map(Path::to_path_buf)
     {
-        link_existing_hard_link(&existing, to, metadata, progress)?;
-        return Ok(());
+        if execution
+            .volume_copy_policy
+            .hard_links_supported_for_path(to)
+        {
+            link_existing_hard_link(&existing, to, metadata, progress)?;
+            return Ok(());
+        }
     }
 
     copy_file_tracked(
@@ -582,7 +587,12 @@ fn copy_file_with_session(
         execution.volume_copy_policy,
         progress,
     )?;
-    session.remember_hard_link_destination(metadata, to);
+    if execution
+        .volume_copy_policy
+        .hard_links_supported_for_path(to)
+    {
+        session.remember_hard_link_destination(metadata, to);
+    }
     Ok(())
 }
 

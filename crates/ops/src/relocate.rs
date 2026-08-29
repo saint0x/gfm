@@ -12,6 +12,7 @@ use crate::{
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
+use std::io;
 use std::path::Path;
 
 pub(crate) fn move_path(
@@ -85,28 +86,28 @@ pub(crate) fn move_path(
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
+    if volume_copy_policy.paths_are_known_distinct_volumes(from, to) {
+        return move_via_copy_then_delete(
+            from,
+            to,
+            ConflictPolicy::Replace,
+            verification,
+            volume_copy_policy,
+            progress,
+            MoveFallbackError::KnownDistinctVolumes,
+        );
+    }
     match fs::rename(from, to) {
         Ok(()) => progress.complete(),
-        Err(rename_err) => {
-            copy_path(
-                from,
-                to,
-                ConflictPolicy::Replace,
-                verification,
-                volume_copy_policy,
-                false,
-                progress,
-            )?;
-            delete_path_untracked(from).map_err(|delete_err| {
-                GfmError::Format(format!(
-                    "moved copy to {} but failed to remove source {}: {}; original rename error: {}",
-                    to.display(),
-                    from.display(),
-                    delete_err,
-                    rename_err
-                ))
-            })
-        }
+        Err(rename_err) => move_via_copy_then_delete(
+            from,
+            to,
+            ConflictPolicy::Replace,
+            verification,
+            volume_copy_policy,
+            progress,
+            MoveFallbackError::Rename(rename_err),
+        ),
     }
 }
 
@@ -153,28 +154,28 @@ fn move_file_replacing_existing(
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
+    if volume_copy_policy.paths_are_known_distinct_volumes(from, to) {
+        return move_via_copy_then_delete(
+            from,
+            to,
+            ConflictPolicy::Replace,
+            verification,
+            volume_copy_policy,
+            progress,
+            MoveFallbackError::KnownDistinctVolumes,
+        );
+    }
     match fs::rename(from, to) {
         Ok(()) => progress.complete(),
-        Err(rename_err) => {
-            copy_path(
-                from,
-                to,
-                ConflictPolicy::Replace,
-                verification,
-                volume_copy_policy,
-                false,
-                progress,
-            )?;
-            delete_path_untracked(from).map_err(|delete_err| {
-                GfmError::Format(format!(
-                    "moved copy to {} but failed to remove source {}: {}; original rename error: {}",
-                    to.display(),
-                    from.display(),
-                    delete_err,
-                    rename_err
-                ))
-            })
-        }
+        Err(rename_err) => move_via_copy_then_delete(
+            from,
+            to,
+            ConflictPolicy::Replace,
+            verification,
+            volume_copy_policy,
+            progress,
+            MoveFallbackError::Rename(rename_err),
+        ),
     }
 }
 
@@ -194,28 +195,28 @@ fn move_directory_replacing_existing(
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
+    if volume_copy_policy.paths_are_known_distinct_volumes(from, to) {
+        return move_via_copy_then_delete(
+            from,
+            to,
+            ConflictPolicy::Replace,
+            verification,
+            volume_copy_policy,
+            progress,
+            MoveFallbackError::KnownDistinctVolumes,
+        );
+    }
     match fs::rename(from, to) {
         Ok(()) => progress.complete(),
-        Err(rename_err) => {
-            copy_path(
-                from,
-                to,
-                ConflictPolicy::Replace,
-                verification,
-                volume_copy_policy,
-                false,
-                progress,
-            )?;
-            delete_path_untracked(from).map_err(|delete_err| {
-                GfmError::Format(format!(
-                    "moved directory to {} but failed to remove source {}: {}; original rename error: {}",
-                    to.display(),
-                    from.display(),
-                    delete_err,
-                    rename_err
-                ))
-            })
-        }
+        Err(rename_err) => move_via_copy_then_delete(
+            from,
+            to,
+            ConflictPolicy::Replace,
+            verification,
+            volume_copy_policy,
+            progress,
+            MoveFallbackError::Rename(rename_err),
+        ),
     }
 }
 
@@ -238,27 +239,67 @@ fn move_symlink_replacing_existing(
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
+    if volume_copy_policy.paths_are_known_distinct_volumes(from, to) {
+        return move_via_copy_then_delete(
+            from,
+            to,
+            ConflictPolicy::Replace,
+            verification,
+            volume_copy_policy,
+            progress,
+            MoveFallbackError::KnownDistinctVolumes,
+        );
+    }
     match fs::rename(from, to) {
         Ok(()) => progress.complete(),
-        Err(rename_err) => {
-            copy_path(
-                from,
-                to,
-                ConflictPolicy::Replace,
-                verification,
-                volume_copy_policy,
-                false,
-                progress,
-            )?;
-            delete_path_untracked(from).map_err(|delete_err| {
-                GfmError::Format(format!(
-                    "moved symlink to {} but failed to remove source {}: {}; original rename error: {}",
-                    to.display(),
-                    from.display(),
-                    delete_err,
-                    rename_err
-                ))
-            })
-        }
+        Err(rename_err) => move_via_copy_then_delete(
+            from,
+            to,
+            ConflictPolicy::Replace,
+            verification,
+            volume_copy_policy,
+            progress,
+            MoveFallbackError::Rename(rename_err),
+        ),
     }
+}
+
+enum MoveFallbackError {
+    KnownDistinctVolumes,
+    Rename(io::Error),
+}
+
+fn move_via_copy_then_delete(
+    from: &Path,
+    to: &Path,
+    conflict: ConflictPolicy,
+    verification: VerificationPolicy,
+    volume_copy_policy: &OperationVolumeCopyPolicy,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
+    fallback: MoveFallbackError,
+) -> Result<()> {
+    copy_path(
+        from,
+        to,
+        conflict,
+        verification,
+        volume_copy_policy,
+        false,
+        progress,
+    )?;
+    delete_path_untracked(from).map_err(|delete_err| {
+        let reason = match fallback {
+            MoveFallbackError::KnownDistinctVolumes => {
+                "known distinct volume identities".to_string()
+            }
+            MoveFallbackError::Rename(rename_err) => format!("original rename error: {rename_err}"),
+        };
+        GfmError::Format(format!(
+            "moved copy to {} but failed to remove source {}: {}; {}",
+            to.display(),
+            from.display(),
+            delete_err,
+            reason
+        ))
+    })
 }

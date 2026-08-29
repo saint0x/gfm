@@ -29,6 +29,7 @@ pub struct OperationVolumeCopyPolicy {
     root_classes: BTreeMap<PathBuf, OperationVolumeClass>,
     root_volume_identities: BTreeMap<PathBuf, String>,
     root_file_cloning_support: BTreeMap<PathBuf, bool>,
+    root_hard_link_support: BTreeMap<PathBuf, bool>,
     root_sparse_file_support: BTreeMap<PathBuf, bool>,
 }
 
@@ -39,6 +40,7 @@ impl Default for OperationVolumeCopyPolicy {
             root_classes: BTreeMap::new(),
             root_volume_identities: BTreeMap::new(),
             root_file_cloning_support: BTreeMap::new(),
+            root_hard_link_support: BTreeMap::new(),
             root_sparse_file_support: BTreeMap::new(),
         }
     }
@@ -51,6 +53,7 @@ impl OperationVolumeCopyPolicy {
             root_classes: BTreeMap::new(),
             root_volume_identities: BTreeMap::new(),
             root_file_cloning_support: BTreeMap::new(),
+            root_hard_link_support: BTreeMap::new(),
             root_sparse_file_support: BTreeMap::new(),
         }
     }
@@ -77,6 +80,15 @@ impl OperationVolumeCopyPolicy {
     ) -> Self {
         self.root_file_cloning_support
             .insert(root.into(), supported);
+        self
+    }
+
+    pub fn with_root_hard_link_support(
+        mut self,
+        root: impl Into<PathBuf>,
+        supported: bool,
+    ) -> Self {
+        self.root_hard_link_support.insert(root.into(), supported);
         self
     }
 
@@ -127,6 +139,25 @@ impl OperationVolumeCopyPolicy {
             (Some(source), Some(destination)) => source == destination,
             _ => true,
         }
+    }
+
+    pub fn paths_are_known_distinct_volumes(&self, from: &Path, to: &Path) -> bool {
+        match (
+            self.volume_identity_for_path(from),
+            self.volume_identity_for_path(to),
+        ) {
+            (Some(source), Some(destination)) => source != destination,
+            _ => false,
+        }
+    }
+
+    pub fn hard_links_supported_for_path(&self, path: &Path) -> bool {
+        self.root_hard_link_support
+            .iter()
+            .filter(|(root, _)| path.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .map(|(_, supported)| *supported)
+            .unwrap_or(true)
     }
 
     pub fn sparse_files_supported_for_path(&self, path: &Path) -> bool {
@@ -244,6 +275,29 @@ mod tests {
             Path::new("/Unknown/source.bin"),
             Path::new("/Volumes/Destination/file.bin")
         ));
+        assert!(policy.paths_are_known_distinct_volumes(
+            Path::new("/Volumes/Source/file.bin"),
+            Path::new("/Volumes/Destination/file.bin")
+        ));
+        assert!(!policy.paths_are_known_distinct_volumes(
+            Path::new("/Volumes/Source/file.bin"),
+            Path::new("/Volumes/Source/copy.bin")
+        ));
+        assert!(!policy.paths_are_known_distinct_volumes(
+            Path::new("/Unknown/source.bin"),
+            Path::new("/Volumes/Destination/file.bin")
+        ));
+    }
+
+    #[test]
+    fn hard_link_support_uses_the_most_specific_destination_root() {
+        let policy = OperationVolumeCopyPolicy::default()
+            .with_root_hard_link_support("/Volumes/Media", false)
+            .with_root_hard_link_support("/Volumes/Media/Archive", true);
+
+        assert!(!policy.hard_links_supported_for_path(Path::new("/Volumes/Media/file.bin")));
+        assert!(policy.hard_links_supported_for_path(Path::new("/Volumes/Media/Archive/file.bin")));
+        assert!(policy.hard_links_supported_for_path(Path::new("/Users/deepsaint/file.bin")));
     }
 
     #[test]

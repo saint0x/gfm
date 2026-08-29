@@ -1098,6 +1098,54 @@ fn recursive_copy_preserves_hard_link_topology() {
 
 #[cfg(unix)]
 #[test]
+fn recursive_copy_degrades_hard_links_when_destination_volume_disallows_them() {
+    use std::os::unix::fs::MetadataExt;
+
+    let root = unique_temp_dir("gfm-ops-hard-links-unsupported");
+    let journal = root.join("journal.log");
+    let source = root.join("source");
+    let destination = root.join("destination");
+    fs::create_dir_all(source.join("nested")).unwrap();
+    let original = source.join("original.txt");
+    let alias = source.join("nested").join("alias.txt");
+    fs::write(&original, "shared inode").unwrap();
+    match fs::hard_link(&original, &alias) {
+        Ok(()) => {}
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::Unsupported | io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        Err(err) => panic!("unexpected hard-link setup failure: {err}"),
+    }
+    let policy = OperationVolumeCopyPolicy::default()
+        .with_root(&destination, OperationVolumeClass::Local)
+        .with_root_hard_link_support(&destination, false);
+
+    Operator::new(OperationContext::new(&journal).with_volume_copy_policy(policy))
+        .execute(Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        })
+        .unwrap();
+
+    let copied_original = destination.join("original.txt");
+    let copied_alias = destination.join("nested").join("alias.txt");
+    assert_eq!(fs::read_to_string(&copied_alias).unwrap(), "shared inode");
+    let original_metadata = fs::metadata(&copied_original).unwrap();
+    let alias_metadata = fs::metadata(&copied_alias).unwrap();
+    assert_eq!(original_metadata.dev(), alias_metadata.dev());
+    assert_ne!(original_metadata.ino(), alias_metadata.ino());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn copy_directory_preserves_nested_symlink() {
     let root = unique_temp_dir("gfm-ops-directory-symlink");
     let journal = root.join("journal.log");
@@ -1732,6 +1780,43 @@ fn move_keep_both_allocates_next_available_destination() {
             to: second_copy
         }
     );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn move_uses_copy_delete_when_policy_reports_distinct_volumes() {
+    use std::os::unix::fs::MetadataExt;
+
+    let root = unique_temp_dir("gfm-ops-move-distinct-volume-policy");
+    let journal = root.join("journal.log");
+    let source_root = root.join("SourceVolume");
+    let destination_root = root.join("DestinationVolume");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&destination_root).unwrap();
+    let source = source_root.join("source.txt");
+    let destination = destination_root.join("destination.txt");
+    fs::write(&source, "move without doomed rename").unwrap();
+    let source_metadata = fs::metadata(&source).unwrap();
+    let policy = OperationVolumeCopyPolicy::default()
+        .with_root_volume_identity(&source_root, "diskarbitration:uuid:SOURCE")
+        .with_root_volume_identity(&destination_root, "diskarbitration:uuid:DESTINATION");
+
+    Operator::new(OperationContext::new(&journal).with_volume_copy_policy(policy))
+        .execute(Operation::Move {
+            from: source.clone(),
+            to: destination.clone(),
+        })
+        .unwrap();
+
+    let destination_metadata = fs::metadata(&destination).unwrap();
+    assert!(!source.exists());
+    assert_eq!(
+        fs::read_to_string(&destination).unwrap(),
+        "move without doomed rename"
+    );
+    assert_ne!(source_metadata.ino(), destination_metadata.ino());
 
     fs::remove_dir_all(root).unwrap();
 }
