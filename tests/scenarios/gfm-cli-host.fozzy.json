@@ -4645,6 +4645,30 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-topology-diff",
+        "tmp/volume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailablevolume-topology-unavailable",
+        "--",
+        "tmp/gfm-fozzy-network"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-topology-index-invalidation",
+        "tmp/gfm-fozzy-dist",
+        "--",
+        "tmp/volume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailablevolume-topology-index-unavailable"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

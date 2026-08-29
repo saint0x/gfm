@@ -624,8 +624,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "volume-topology-diff" => {
             let (previous_paths, current_paths) = split_topology_paths(args)?;
-            let previous = VolumeDiscoveryReport::from_paths(previous_paths);
-            let current = VolumeDiscoveryReport::from_paths(current_paths);
+            let previous = VolumeDiscoveryReport::from_paths_checked(previous_paths)?;
+            let current = VolumeDiscoveryReport::from_paths_checked(current_paths)?;
             println!(
                 "{}",
                 VolumeTopologyDiff::evaluate(&previous, &current).as_tsv()
@@ -633,8 +633,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "volume-topology-index-invalidation" => {
             let (previous_paths, current_paths) = split_topology_paths(args)?;
-            let previous = VolumeDiscoveryReport::from_paths(previous_paths);
-            let current = VolumeDiscoveryReport::from_paths(current_paths);
+            let previous = VolumeDiscoveryReport::from_paths_checked(previous_paths)?;
+            let current = VolumeDiscoveryReport::from_paths_checked(current_paths)?;
             println!(
                 "{}",
                 volume_topology_index_invalidation_tsv(&previous, &current)

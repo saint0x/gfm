@@ -3839,6 +3839,35 @@ fn reports_volume_topology_diff_from_binary() {
 }
 
 #[test]
+fn volume_topology_diff_surfaces_unavailable_explicit_path_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-topology-unavailable-{}",
+        std::process::id()
+    ));
+    let current = root.join("Team Share");
+    let invalid = root.join("volume-topology-unavailable".repeat(16));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&current).unwrap();
+    std::fs::write(current.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-topology-diff")
+        .arg(&invalid)
+        .arg("--")
+        .arg(&current)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("volume-topology-diff\t"), "{stdout}");
+    assert!(stderr.contains("File name too long"), "{stderr}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_topology_index_invalidation_from_binary() {
     let root =
         std::env::temp_dir().join(format!("gfm-volume-topology-index-{}", std::process::id()));
@@ -3875,6 +3904,39 @@ fn reports_volume_topology_index_invalidation_from_binary() {
     assert!(stdout.contains("\treason=volume-event-connected\n"));
     assert!(stdout.contains("\tcancel-index-jobs=true\t"));
     assert!(stdout.contains("\tcancel-index-jobs=false\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn volume_topology_index_invalidation_surfaces_unavailable_current_path_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-topology-index-unavailable-{}",
+        std::process::id()
+    ));
+    let previous = root.join("Work Drive");
+    let invalid = root.join("volume-topology-index-unavailable".repeat(16));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&previous).unwrap();
+    std::fs::write(previous.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-topology-index-invalidation")
+        .arg(&previous)
+        .arg("--")
+        .arg(&invalid)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("volume-topology-diff\t"), "{stdout}");
+    assert!(
+        !stdout.contains("volume-event-index-invalidation\t"),
+        "{stdout}"
+    );
+    assert!(stderr.contains("File name too long"), "{stderr}");
 
     let _ = std::fs::remove_dir_all(root);
 }
