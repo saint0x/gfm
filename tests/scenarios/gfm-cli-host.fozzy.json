@@ -1885,6 +1885,20 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "env": {
+        "GFM_OPS_JOURNAL": "tmp/gfm-fozzy-destination-parent-probe.journal"
+      },
+      "args": [
+        "copy",
+        "tmp/gfm-fozzy-copy-source.txt",
+        "tmp/destination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailabledestination-parent-unavailable.txt"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
         "GFM_OPS_JOURNAL": "tmp/gfm-fozzy-operation-conflict-probe.journal",
         "GFM_OPERATION_CONFLICT_STORE": "tmp/operation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailableoperation-conflicts-unavailable.tsv"
       },

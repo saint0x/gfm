@@ -426,6 +426,7 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     let _ = refresh_permission_state(PermissionRefreshAudience::Operations, label)?;
     let volume_report = operation_volume_report(&operation);
     let access_gate = operation_access_gate(&operation, &volume_report);
+    preflight_operation_target_probe(&operation)?;
     let _journal_access = preflight_operation_journal_write(&journal)?;
     let _trash_metadata_access =
         retain_operation_trash_metadata_access(&operation, &trash_metadata)?;
@@ -673,6 +674,19 @@ fn preflight_trash_metadata_write(path: &Path) -> Result<ScopedAccessGuard> {
         AccessIntent::Write,
         "trash metadata",
     )
+}
+
+fn preflight_operation_target_probe(operation: &Operation) -> Result<()> {
+    let Some(path) = operation.target_path() else {
+        return Ok(());
+    };
+    match path.try_exists() {
+        Ok(_) => Ok(()),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("operation target path existence unavailable: {err}"),
+        )),
+    }
 }
 
 fn write_probe_path(path: &Path) -> Result<&Path> {
@@ -1001,14 +1015,19 @@ fn operation_access_probe_path(path: &Path, role: OperationAccessRole) -> PathBu
         return path.to_path_buf();
     }
     let mut candidate = path.to_path_buf();
-    while !candidate.exists() {
-        let Some(parent) = candidate.parent() else {
-            break;
-        };
-        if parent == candidate {
-            break;
+    loop {
+        match candidate.try_exists() {
+            Ok(true) | Err(_) => break,
+            Ok(false) => {
+                let Some(parent) = candidate.parent() else {
+                    break;
+                };
+                if parent == candidate {
+                    break;
+                }
+                candidate = parent.to_path_buf();
+            }
         }
-        candidate = parent.to_path_buf();
     }
     candidate
 }
@@ -1639,6 +1658,24 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("unreachable volume network"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn destination_parent_probe_stops_at_unavailable_path() {
+        let root = unique_temp_dir("gfm-app-op-destination-parent-unavailable");
+        let missing_child = root.join("missing").join("leaf.txt");
+        let unavailable_child = root.join("destination-parent-unavailable".repeat(16));
+
+        assert_eq!(
+            operation_access_probe_path(&missing_child, OperationAccessRole::DestinationParent),
+            root
+        );
+        assert_eq!(
+            operation_access_probe_path(&unavailable_child, OperationAccessRole::DestinationParent),
+            unavailable_child
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

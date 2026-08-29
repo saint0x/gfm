@@ -6008,6 +6008,52 @@ fn operation_reports_journal_probe_failure_before_mutating_from_binary() {
 }
 
 #[test]
+fn copy_operation_reports_destination_parent_probe_failure_before_mutating_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ops-destination-parent-probe-root");
+    let journal = root.join("ops.journal");
+    let source = root.join("source.txt");
+    let destination = root
+        .join("destination-parent-unavailable".repeat(16))
+        .join("copy.txt");
+    fs::write(&source, "do not copy to an unprobeable destination").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "copy",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("\tcompleted"), "{stdout}");
+    assert!(
+        stderr.contains("security-worker-admission\tworker=copy destination-parent\t"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("operation target path existence unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("destination-parent-unavailable"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&source).unwrap(),
+        "do not copy to an unprobeable destination"
+    );
+    assert!(!destination.exists());
+    assert!(!journal.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn operation_refuses_unreachable_destination_volume_before_copying_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-unreachable-destination-root");
     let journal = root.join("ops.journal");
