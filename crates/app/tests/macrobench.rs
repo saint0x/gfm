@@ -480,6 +480,73 @@ fn parity_routes_refuse_unreachable_paths_before_manifest_or_bundle_io_from_bina
 }
 
 #[test]
+fn gate_routes_report_output_probe_failures_before_manifest_or_fixture_io_from_binary() {
+    let root = unique_temp_dir("gfm-cli-gate-output-probe");
+    let manifest = root.join("gate.tsv");
+    let review = root.join("parity-review-unavailable".repeat(16));
+    let fixture = root.join("macrobench-fixture-unavailable".repeat(16));
+    fs::write(&manifest, "not parsed").unwrap();
+
+    let review_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "parity-review",
+            manifest.to_str().unwrap(),
+            review.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!review_output.status.success());
+    let review_stdout = String::from_utf8_lossy(&review_output.stdout);
+    let review_stderr = String::from_utf8_lossy(&review_output.stderr);
+    assert!(
+        !review_stdout.contains("parity-review\t"),
+        "{review_stdout}"
+    );
+    assert!(
+        review_stderr.contains("gate write path metadata unavailable"),
+        "{review_stderr}"
+    );
+    assert!(
+        review_stderr.contains("parity-review-unavailable"),
+        "{review_stderr}"
+    );
+    assert!(
+        !review_stderr.contains("security-worker-admission\tworker=parity review manifest\t"),
+        "{review_stderr}"
+    );
+    assert!(
+        !review_stderr.contains("missing capture provenance"),
+        "{review_stderr}"
+    );
+    assert!(!review.exists());
+
+    let fixture_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["macrobench-fixture", fixture.to_str().unwrap(), "smoke"])
+        .output()
+        .unwrap();
+    assert!(!fixture_output.status.success());
+    let fixture_stdout = String::from_utf8_lossy(&fixture_output.stdout);
+    let fixture_stderr = String::from_utf8_lossy(&fixture_output.stderr);
+    assert!(!fixture_stdout.contains("fixture\t"), "{fixture_stdout}");
+    assert!(
+        fixture_stderr.contains("gate write path metadata unavailable"),
+        "{fixture_stderr}"
+    );
+    assert!(
+        fixture_stderr.contains("macrobench-fixture-unavailable"),
+        "{fixture_stderr}"
+    );
+    assert!(
+        !fixture_stderr
+            .contains("security-worker-admission\tworker=macrobench fixture workspace\t"),
+        "{fixture_stderr}"
+    );
+    assert!(!fixture.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn writes_parity_review_bundle_from_binary_manifest() {
     let root = unique_temp_dir("gfm-cli-parity-review");
     let review = root.join("review");

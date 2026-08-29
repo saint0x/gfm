@@ -23,6 +23,8 @@ use gfm_store::{
     SidecarRecoveryPlan,
 };
 use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -579,7 +581,7 @@ fn retain_record_sidecar_build_access(
     Ok(vec![
         preflight_access_scope(records, AccessIntent::Read, &format!("{worker} records"))?,
         preflight_access_scope(
-            write_probe_path(output),
+            write_probe_path(output)?,
             AccessIntent::Write,
             &format!("{worker} output"),
         )?,
@@ -593,7 +595,7 @@ fn preflight_record_sidecar_build_volumes(
 ) -> Result<()> {
     preflight_volume_access_scope(records, AccessIntent::Read, &format!("{worker} records"))?;
     preflight_volume_access_scope(
-        write_probe_path(output),
+        write_probe_path(output)?,
         AccessIntent::Write,
         &format!("{worker} output"),
     )
@@ -630,12 +632,12 @@ fn retain_archive_migration_access(
     Ok(vec![
         preflight_access_scope(archive, AccessIntent::Read, &format!("{worker} archive"))?,
         preflight_access_scope(
-            write_probe_path(archive),
+            write_probe_path(archive)?,
             AccessIntent::Write,
             &format!("{worker} archive"),
         )?,
         preflight_access_scope(
-            write_probe_path(backup_dir),
+            write_probe_path(backup_dir)?,
             AccessIntent::Write,
             &format!("{worker} backup"),
         )?,
@@ -649,12 +651,12 @@ fn preflight_archive_migration_volumes(
 ) -> Result<()> {
     preflight_volume_access_scope(archive, AccessIntent::Read, &format!("{worker} archive"))?;
     preflight_volume_access_scope(
-        write_probe_path(archive),
+        write_probe_path(archive)?,
         AccessIntent::Write,
         &format!("{worker} archive"),
     )?;
     preflight_volume_access_scope(
-        write_probe_path(backup_dir),
+        write_probe_path(backup_dir)?,
         AccessIntent::Write,
         &format!("{worker} backup"),
     )
@@ -696,12 +698,12 @@ fn retain_columns_rebuild_access(
             "columns rebuild columns",
         )?,
         preflight_access_scope(
-            write_probe_path(columns),
+            write_probe_path(columns)?,
             AccessIntent::Write,
             "columns rebuild output",
         )?,
         preflight_access_scope(
-            write_probe_path(backup_dir),
+            write_probe_path(backup_dir)?,
             AccessIntent::Write,
             "columns rebuild backup",
         )?,
@@ -720,12 +722,12 @@ fn preflight_columns_rebuild_volumes(
         "columns rebuild columns",
     )?;
     preflight_volume_access_scope(
-        write_probe_path(columns),
+        write_probe_path(columns)?,
         AccessIntent::Write,
         "columns rebuild output",
     )?;
     preflight_volume_access_scope(
-        write_probe_path(backup_dir),
+        write_probe_path(backup_dir)?,
         AccessIntent::Write,
         "columns rebuild backup",
     )
@@ -889,12 +891,12 @@ fn retain_derived_sidecar_rebuild_access(
             "derived sidecar rebuild records",
         )?,
         preflight_access_scope(
-            write_probe_path(sidecar),
+            write_probe_path(sidecar)?,
             AccessIntent::Write,
             "derived sidecar rebuild output",
         )?,
         preflight_access_scope(
-            write_probe_path(backup_dir),
+            write_probe_path(backup_dir)?,
             AccessIntent::Write,
             "derived sidecar rebuild backup",
         )?,
@@ -912,12 +914,12 @@ fn preflight_derived_sidecar_rebuild_volumes(
         "derived sidecar rebuild records",
     )?;
     preflight_volume_access_scope(
-        write_probe_path(sidecar),
+        write_probe_path(sidecar)?,
         AccessIntent::Write,
         "derived sidecar rebuild output",
     )?;
     preflight_volume_access_scope(
-        write_probe_path(backup_dir),
+        write_probe_path(backup_dir)?,
         AccessIntent::Write,
         "derived sidecar rebuild backup",
     )
@@ -962,14 +964,14 @@ fn retain_sidecar_recovery_access(
     let mut guards = vec![
         preflight_access_scope(records, AccessIntent::Read, "sidecar repair records")?,
         preflight_access_scope(
-            write_probe_path(quarantine),
+            write_probe_path(quarantine)?,
             AccessIntent::Write,
             "sidecar repair quarantine",
         )?,
     ];
     for path in sidecar_paths(sidecars) {
         guards.push(preflight_access_scope(
-            write_probe_path(path),
+            write_probe_path(path)?,
             AccessIntent::Write,
             "sidecar repair output",
         )?);
@@ -984,13 +986,13 @@ fn preflight_sidecar_recovery_volumes(
 ) -> Result<()> {
     preflight_volume_access_scope(records, AccessIntent::Read, "sidecar repair records")?;
     preflight_volume_access_scope(
-        write_probe_path(quarantine),
+        write_probe_path(quarantine)?,
         AccessIntent::Write,
         "sidecar repair quarantine",
     )?;
     for path in sidecar_paths(sidecars) {
         preflight_volume_access_scope(
-            write_probe_path(path),
+            write_probe_path(path)?,
             AccessIntent::Write,
             "sidecar repair output",
         )?;
@@ -1011,11 +1013,16 @@ fn sidecar_paths(sidecars: &SidecarPaths) -> impl Iterator<Item = &Path> {
     .flatten()
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("archive write path metadata unavailable: {err}"),
+        )),
     }
-    crate::parent_or_cwd(path)
 }
 
 fn archive_probe_path(path: &Path) -> &Path {

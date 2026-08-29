@@ -16,6 +16,8 @@ use gfm_testkit::{
     SearchTypingBenchmarkOptions,
 };
 use gfm_types::{GfmError, Result};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -279,12 +281,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 required_path(args.next(), "parity-review requires an output directory")?;
             preflight_volume_access_scope(&manifest, AccessIntent::Read, "parity review manifest")?;
             preflight_volume_access_scope(
-                write_probe_path(&output_dir),
+                write_probe_path(&output_dir)?,
                 AccessIntent::Write,
                 "parity review output",
             )?;
-            let volume =
-                primary_volume(&manifest).or_else(|| primary_volume(write_probe_path(&output_dir)));
+            let output_probe = write_probe_path(&output_dir)?.to_path_buf();
+            let volume = primary_volume(&manifest).or_else(|| primary_volume(&output_probe));
             let manifest_for_worker = manifest.clone();
             let output_dir_for_worker = output_dir.clone();
             let bundle = run_volume_task_cancellable(
@@ -582,7 +584,7 @@ where
     T: Send + 'static,
 {
     let workspace = workspace.to_path_buf();
-    let probe = write_probe_path(&workspace).to_path_buf();
+    let probe = write_probe_path(&workspace)?.to_path_buf();
     preflight_volume_access_scope(&probe, AccessIntent::Write, worker)?;
     let volume = primary_volume(&probe);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
@@ -619,7 +621,7 @@ fn retain_parity_review_access(
     Ok(vec![
         preflight_access_scope(manifest, AccessIntent::Read, "parity review manifest")?,
         preflight_access_scope(
-            write_probe_path(output_dir),
+            write_probe_path(output_dir)?,
             AccessIntent::Write,
             "parity review output",
         )?,
@@ -627,14 +629,19 @@ fn retain_parity_review_access(
 }
 
 fn retain_workspace_write_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(write_probe_path(path), AccessIntent::Write, worker)
+    preflight_access_scope(write_probe_path(path)?, AccessIntent::Write, worker)
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("gate write path metadata unavailable: {err}"),
+        )),
     }
-    crate::parent_or_cwd(path)
 }
 
 fn macrobench_options(

@@ -1700,6 +1700,53 @@ fn archive_migration_routes_refuse_unreachable_backup_before_mutating_from_binar
 }
 
 #[test]
+fn archive_migration_routes_report_backup_probe_failures_before_mutating_from_binary() {
+    let root = unique_temp_dir("gfm-cli-archive-migrate-backup-probe");
+    let backup = root.join("archive-backup-unavailable".repeat(16));
+
+    let cases = [
+        ("records-migrate", "records.gfmidx", "records migrate"),
+        ("content-migrate", "content.gfmcontent", "content migrate"),
+        ("metadata-migrate", "metadata.gfmmeta", "metadata migrate"),
+    ];
+
+    for (route, archive_name, worker) in cases {
+        let archive = root.join(archive_name);
+        fs::write(&archive, "not parsed").unwrap();
+        let original = fs::read_to_string(&archive).unwrap();
+
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args([route, archive.to_str().unwrap(), backup.to_str().unwrap()])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stdout.is_empty(), "{route}: {stdout}");
+        assert!(
+            stderr.contains("archive write path metadata unavailable"),
+            "{route}: {stderr}"
+        );
+        assert!(
+            stderr.contains("archive-backup-unavailable"),
+            "{route}: {stderr}"
+        );
+        assert!(
+            !stderr.contains(&format!(
+                "security-worker-admission\tworker={worker} archive\t"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
+        assert_eq!(fs::read_to_string(&archive).unwrap(), original, "{route}");
+        assert!(!backup.exists(), "{route}");
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn archive_rebuild_plans_refuse_unreachable_inputs_before_classifying_from_binary() {
     let root = unique_temp_dir("gfm-cli-archive-rebuild-plan-preflight-root");
     let offline = unique_temp_dir("gfm-cli-archive-rebuild-plan-preflight-offline");
@@ -1984,6 +2031,60 @@ fn record_sidecar_build_routes_refuse_unreachable_output_before_mapping_from_bin
 }
 
 #[test]
+fn record_sidecar_build_routes_report_output_probe_failure_before_mapping_from_binary() {
+    let root = unique_temp_dir("gfm-cli-record-sidecar-output-probe");
+    let records = root.join("records.gfmidx");
+    fs::write(&records, "not opened").unwrap();
+
+    let cases = [
+        ("index-columns", "gfmcols", "index columns"),
+        ("index-metadata", "gfmmeta", "index metadata"),
+        ("index-dictionary", "gfmdict", "index dictionary"),
+        ("index-prefixes", "gfmprefix", "index prefixes"),
+        ("index-substrings", "gfmsubstr", "index substrings"),
+        ("index-fuzzy", "gfmfuzzy", "index fuzzy"),
+    ];
+
+    for (route, extension, worker) in cases {
+        let output_path = root.join(format!(
+            "{}.{extension}",
+            format!("{route}-unavailable").repeat(16)
+        ));
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args([
+                route,
+                records.to_str().unwrap(),
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{route}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stdout.is_empty(), "{route}: {stdout}");
+        assert!(
+            stderr.contains("archive write path metadata unavailable"),
+            "{route}: {stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("{route}-unavailable")),
+            "{route}: {stderr}"
+        );
+        assert!(
+            !stderr.contains(&format!(
+                "security-worker-admission\tworker={worker} records\t"
+            )),
+            "{route}: {stderr}"
+        );
+        assert!(!stderr.contains("invalid magic"), "{route}: {stderr}");
+        assert!(!output_path.exists(), "{route}");
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn rebuilds_derived_sidecars_from_binary() {
     let root = unique_temp_dir("gfm-cli-derived-rebuild-root");
     let records = unique_temp_path("gfm-cli-derived-rebuild-records", "gfmidx");
@@ -2187,6 +2288,46 @@ fn derived_sidecar_rebuild_refuses_unreachable_volume_before_repair_from_binary(
         "{stderr}"
     );
     assert!(!prefixes.exists());
+    assert!(fs::read_dir(&backup).unwrap().next().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn derived_sidecar_rebuild_reports_output_probe_failure_before_repair_from_binary() {
+    let root = unique_temp_dir("gfm-cli-derived-rebuild-output-probe");
+    let records = root.join("records.gfmidx");
+    let sidecar = root.join("derived-sidecar-unavailable".repeat(16));
+    let backup = root.join("backup");
+    fs::create_dir_all(&backup).unwrap();
+    fs::write(&records, "not opened").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "derived-sidecar-rebuild",
+            records.to_str().unwrap(),
+            "prefixes",
+            sidecar.to_str().unwrap(),
+            backup.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("derived-sidecar-rebuild\t"), "{stdout}");
+    assert!(
+        stderr.contains("archive write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("derived-sidecar-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=derived sidecar rebuild records\t"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("invalid magic"), "{stderr}");
+    assert!(!sidecar.exists());
     assert!(fs::read_dir(&backup).unwrap().next().is_none());
 
     fs::remove_dir_all(root).unwrap();
@@ -4325,6 +4466,47 @@ fn searches_persisted_tags_from_binary() {
 }
 
 #[test]
+fn archive_sidecar_write_reports_output_probe_failure_before_indexing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-archive-sidecar-write-probe");
+    let records = root.join("records.gfmidx");
+    let output = root.join(format!(
+        "{}.gfmmeta",
+        "archive-output-unavailable".repeat(16)
+    ));
+    fs::write(
+        &records,
+        "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\tImportant\t/tmp/tagged.md\n",
+    )
+    .unwrap();
+
+    let output_result = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-metadata",
+            records.to_str().unwrap(),
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output_result.status.success());
+    let stdout = String::from_utf8_lossy(&output_result.stdout);
+    let stderr = String::from_utf8_lossy(&output_result.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("archive write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("archive-output-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=index metadata output\t"),
+        "{stderr}"
+    );
+    assert!(!output.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn empty_volume_scope_sidecar_search_skips_archive_access_from_binary() {
     let root = unique_temp_dir("gfm-empty-scope-sidecar-access");
 
@@ -5521,6 +5703,105 @@ fn adaptive_sidecar_recover_refuses_unreachable_quarantine_before_worker_from_bi
 }
 
 #[test]
+fn sidecar_recover_reports_output_probe_failure_before_repair_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-recovery-output-probe");
+    let records = root.join("records.gfmidx");
+    let prefixes = root.join("sidecar-recovery-output-unavailable".repeat(16));
+    let dictionary = root.join("dictionary.gfmdict");
+    let quarantine = root.join("quarantine");
+    fs::create_dir_all(&quarantine).unwrap();
+    fs::write(&records, "not opened").unwrap();
+    fs::write(&dictionary, "not-a-dictionary").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "sidecar-recover",
+            records.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            "-",
+            dictionary.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("sidecar-recovery\t"), "{stdout}");
+    assert!(
+        stderr.contains("archive write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("sidecar-recovery-output-unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=sidecar repair records\t"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("invalid magic"), "{stderr}");
+    assert!(!prefixes.exists());
+    assert_eq!(fs::read_to_string(&dictionary).unwrap(), "not-a-dictionary");
+    assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sidecar_recover_reports_quarantine_probe_failure_before_repair_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-recovery-quarantine-probe");
+    let records = root.join("records.gfmidx");
+    let prefixes = root.join("prefixes.gfmprefix");
+    let dictionary = root.join("dictionary.gfmdict");
+    let quarantine = root.join("sidecar-quarantine-unavailable".repeat(16));
+    fs::write(&records, "not opened").unwrap();
+    fs::write(&dictionary, "not-a-dictionary").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "sidecar-recover",
+            records.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            "-",
+            dictionary.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("sidecar-recovery\t"), "{stdout}");
+    assert!(
+        stderr.contains("archive write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("sidecar-quarantine-unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=sidecar repair records\t"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("invalid magic"), "{stderr}");
+    assert!(!prefixes.exists());
+    assert_eq!(fs::read_to_string(&dictionary).unwrap(), "not-a-dictionary");
+    assert!(!quarantine.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn searches_with_scope_prefixes_from_binary() {
     let root = unique_temp_dir("gfm-cli-scope-root");
     fs::create_dir_all(root.join("Desktop")).unwrap();
@@ -6325,6 +6606,50 @@ fn ui_operation_conflict_resolve_refuses_unreachable_store_before_mutating_from_
     let stored = fs::read_to_string(&conflicts).unwrap();
     assert!(stored.contains("\tpolicy=fail\t"), "{stored}");
     assert!(stored.contains("\tblocks-operation=true\t"), "{stored}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn ui_operation_conflict_resolve_reports_store_probe_failure_before_mutating_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ui-operation-conflict-resolve-probe");
+    let conflicts = root.join(format!(
+        "{}.tsv",
+        "interface-conflicts-unavailable".repeat(16)
+    ));
+    let destination = root.join("destination.md");
+    fs::write(&destination, "old report").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-operation-conflict-resolve",
+            conflicts.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            "skip",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("operation-conflict-control\tresolve\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("interface write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("interface-conflicts-unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=ui operation conflict resolve\t"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&destination).unwrap(), "old report");
 
     fs::remove_dir_all(root).unwrap();
 }

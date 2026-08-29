@@ -31,6 +31,8 @@ use gfm_ui::{
 };
 use std::collections::BTreeMap;
 use std::env;
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -838,7 +840,7 @@ fn retain_fileprovider_event_access(
     worker: &'static str,
 ) -> Result<Vec<crate::access::ScopedAccessGuard>> {
     let mut guards = Vec::new();
-    for path in fileprovider_event_access_paths(event, previous) {
+    for path in fileprovider_event_access_paths(event, previous)? {
         guards.push(crate::access::preflight_access_scope(
             &path,
             AccessIntent::Read,
@@ -851,18 +853,18 @@ fn retain_fileprovider_event_access(
 fn fileprovider_event_access_paths(
     event: &FileEvent,
     previous: Option<&FileProviderStateSnapshot>,
-) -> Vec<PathBuf> {
+) -> Result<Vec<PathBuf>> {
     match &event.kind {
         FileEventKind::Rename { from, to } => [from, to]
             .into_iter()
             .map(|path| fileprovider_event_access_path(path, previous))
             .collect(),
-        FileEventKind::Remove => vec![fileprovider_event_access_path(&event.path, previous)],
+        FileEventKind::Remove => Ok(vec![fileprovider_event_access_path(&event.path, previous)?]),
         FileEventKind::Create
         | FileEventKind::Metadata
         | FileEventKind::Modify
         | FileEventKind::Rescan
-        | FileEventKind::Other => vec![event.path.clone()],
+        | FileEventKind::Other => Ok(vec![event.path.clone()]),
     }
 }
 
@@ -881,11 +883,11 @@ fn fileprovider_raw_event_paths(event: &FileEvent) -> Vec<PathBuf> {
 fn fileprovider_event_access_path(
     path: &Path,
     previous: Option<&FileProviderStateSnapshot>,
-) -> PathBuf {
+) -> Result<PathBuf> {
     if snapshot_tracks_path_or_descendant(previous, path) {
         return write_probe_existing_ancestor(path);
     }
-    path.to_path_buf()
+    Ok(path.to_path_buf())
 }
 
 fn snapshot_tracks_path_or_descendant(
@@ -900,16 +902,31 @@ fn snapshot_tracks_path_or_descendant(
     })
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("interface write path metadata unavailable: {err}"),
+        )),
     }
-    crate::parent_or_cwd(path)
 }
 
-fn write_probe_existing_ancestor(path: &Path) -> PathBuf {
-    let mut candidate = write_probe_path(path).to_path_buf();
-    while !candidate.exists() {
+fn write_probe_existing_ancestor(path: &Path) -> Result<PathBuf> {
+    let mut candidate = write_probe_path(path)?.to_path_buf();
+    loop {
+        match fs::metadata(&candidate) {
+            Ok(_) => return Ok(candidate),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(GfmError::io(
+                    &candidate,
+                    format!("interface write path metadata unavailable: {err}"),
+                ));
+            }
+        }
         let Some(parent) = candidate.parent() else {
             break;
         };
@@ -918,7 +935,7 @@ fn write_probe_existing_ancestor(path: &Path) -> PathBuf {
         }
         candidate = parent.to_path_buf();
     }
-    candidate
+    Ok(candidate)
 }
 
 fn read_directory_with_access(path: &Path, worker: &'static str) -> Result<DirectoryPage> {
@@ -1002,13 +1019,14 @@ fn resolve_ui_operation_conflict(
 ) -> Result<(crate::runtime::RuntimeOperationConflict, PathBuf)> {
     const WORKER: &str = "ui operation conflict resolve";
     crate::access::preflight_volume_access_scope(
-        write_probe_path(&store_path),
+        write_probe_path(&store_path)?,
         AccessIntent::Write,
         WORKER,
     )?;
-    let volume = crate::detect_volume_id(write_probe_path(&store_path))
+    let store_probe = write_probe_path(&store_path)?.to_path_buf();
+    let volume = crate::detect_volume_id(&store_probe)
         .ok()
-        .or_else(|| crate::parent_volume(write_probe_path(&store_path)));
+        .or_else(|| crate::parent_volume(&store_probe));
     crate::runtime::run_volume_task_cancellable(
         volume,
         Priority::Visible,
@@ -1016,7 +1034,7 @@ fn resolve_ui_operation_conflict(
         move |cancellation| {
             cancellation.check()?;
             let _access = crate::access::preflight_access_scope(
-                write_probe_path(&store_path),
+                write_probe_path(&store_path)?,
                 AccessIntent::Write,
                 WORKER,
             )?;
@@ -1034,7 +1052,7 @@ fn run_ui_fileprovider_observed_invalidation(
     event: FileEvent,
 ) -> Result<FileProviderObservedInvalidation> {
     const WORKER: &str = "ui fileprovider sidebar observed invalidation";
-    let state_probe = write_probe_existing_ancestor(&state_path);
+    let state_probe = write_probe_existing_ancestor(&state_path)?;
     crate::access::preflight_volume_access_scope(&state_probe, AccessIntent::Write, WORKER)?;
     for path in fileprovider_raw_event_paths(&event) {
         crate::access::preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
@@ -1048,7 +1066,7 @@ fn run_ui_fileprovider_observed_invalidation(
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let state_probe = write_probe_existing_ancestor(&state_path);
+            let state_probe = write_probe_existing_ancestor(&state_path)?;
             let mut access = vec![crate::access::preflight_access_scope(
                 &state_probe,
                 AccessIntent::Write,
@@ -1668,7 +1686,7 @@ mod tests {
         };
         std::fs::remove_dir_all(tracked.parent().unwrap()).unwrap();
 
-        let access_path = fileprovider_event_access_path(&tracked, Some(&previous));
+        let access_path = fileprovider_event_access_path(&tracked, Some(&previous)).unwrap();
 
         assert_eq!(access_path, root);
         assert!(!tracked.exists());

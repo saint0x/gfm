@@ -500,6 +500,17 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "index-prefixes",
+        "/tmp/gfm-fozzy-host.gfmidx",
+        "tmp/index-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailableindex-prefixes-unavailable.gfmprefix"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "search-index-mmap",
         "/tmp/gfm-fozzy-host.gfmidx",
         "PLAN"
@@ -991,6 +1002,36 @@
         "/tmp/gfm-fozzy-derived-backups"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "derived-sidecar-rebuild",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "prefixes",
+        "tmp/derived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailablederived-sidecar-unavailable.gfmprefix",
+        "/tmp/gfm-fozzy-derived-backups"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "sidecar-recover",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-sidecar-quarantine",
+        "-",
+        "-",
+        "tmp/sidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailablesidecar-recovery-output-unavailable.gfmprefix",
+        "-",
+        "-",
+        "-"
+      ],
+      "exit_code": 1,
+      "times": 1
     },
     {
       "type": "proc_when",
@@ -4966,6 +5007,18 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "ui-operation-conflict-resolve",
+        "tmp/interface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailableinterface-conflicts-unavailable.tsv",
+        "tmp/gfm-fozzy-operation-conflict-target.txt",
+        "skip"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "ui-titlebar-contract",
         "/tmp/gfm"
       ],
@@ -5592,6 +5645,17 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "macrobench-fixture",
+        "tmp/macrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailablemacrobench-fixture-unavailable",
+        "smoke"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "parity-fixture",
         "tmp/gfm-fozzy-parity",
         "smoke"
@@ -5721,6 +5785,17 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "parity-review",
+        "tmp/gfm-parity-gate.tsv",
+        "tmp/parity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailable"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -5729,6 +5804,17 @@
         "tmp/gfm-parity-review"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "parity-review",
+        "tmp/gfm-parity-gate.tsv",
+        "tmp/parity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailableparity-review-unavailable"
+      ],
+      "exit_code": 1,
+      "times": 1
     },
     {
       "type": "proc_when",
