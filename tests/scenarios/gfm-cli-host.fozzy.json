@@ -2901,6 +2901,11 @@
       "data": "external-removable\n"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-dist/Project/Preview.pdf",
+      "data": "%PDF-1.7\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -3125,6 +3130,17 @@
         "tmp/gfm-fozzy-dist"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-operation",
+        "eject",
+        "tmp/gfm-fozzy-dist/Project/Preview.pdf"
+      ],
+      "exit_code": 0,
+      "times": 1
     },
     {
       "type": "proc_when",
