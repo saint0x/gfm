@@ -403,12 +403,13 @@ fn run_parity_baseline(
         "diagnostics parity config",
     )?;
     preflight_volume_access_scope(
-        existing_read_probe_path(&baseline),
+        existing_read_probe_path(&baseline)?,
         AccessIntent::Read,
         "diagnostics parity baseline",
     )?;
+    let baseline_probe = existing_read_probe_path(&baseline)?.to_path_buf();
     let volume = parent_volume(config_write_probe_path(store.path())?)
-        .or_else(|| parent_volume(existing_read_probe_path(&baseline)));
+        .or_else(|| parent_volume(&baseline_probe));
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
@@ -417,7 +418,7 @@ fn run_parity_baseline(
             cancellation.check()?;
             let _config_access = preflight_config_write(&store, "diagnostics parity config")?;
             let _baseline_access = preflight_access_scope(
-                existing_read_probe_path(&baseline),
+                existing_read_probe_path(&baseline)?,
                 AccessIntent::Read,
                 "diagnostics parity baseline",
             )?;

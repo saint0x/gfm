@@ -5928,6 +5928,18 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-parity-baseline",
+        "tmp/gfm-fozzy-config.toml",
+        "tmp/diagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailablediagnostics-baseline-unavailable",
+        "25A354"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-diagnostics-probe-root/needle.md",
       "data": "diagnostics probe\n"

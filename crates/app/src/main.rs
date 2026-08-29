@@ -550,11 +550,14 @@ fn config_path_exists(path: &Path) -> Result<bool> {
         .map_err(|err| GfmError::io(path, format!("config path existence unavailable: {err}")))
 }
 
-pub(crate) fn existing_read_probe_path(path: &Path) -> &Path {
-    if path.exists() {
-        return path;
+pub(crate) fn existing_read_probe_path(path: &Path) -> Result<&Path> {
+    if path
+        .try_exists()
+        .map_err(|err| GfmError::io(path, format!("read path existence unavailable: {err}")))?
+    {
+        return Ok(path);
     }
-    parent_or_cwd(path)
+    Ok(parent_or_cwd(path))
 }
 
 pub(crate) fn config_write_probe_path(path: &Path) -> Result<&Path> {

@@ -213,11 +213,7 @@ impl VolumeDescriptor {
             resource.as_ref(),
             mount_table.as_ref(),
         );
-        let mount_state = if path.exists() {
-            MountState::Mounted
-        } else {
-            MountState::Stale
-        };
+        let mount_state = MountState::Mounted;
         let marker_value = marker.as_deref();
         let removable = marker_removable(marker_value)
             .or_else(|| resource.as_ref().and_then(|resource| resource.is_removable))
@@ -1784,7 +1780,7 @@ fn volume_reachability(
     resource
         .filter(|resource| resource.status == NativeVolumeStatus::Available)
         .and_then(|resource| resource.is_reachable.or(resource.is_browsable))
-        .or_else(|| Some(path.exists()))
+        .or_else(|| path.try_exists().ok())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2107,10 +2103,10 @@ fn containing_mounted_volume_paths(path: &Path) -> Vec<PathBuf> {
         .into_iter()
         .filter(|root| path.starts_with(root))
         .collect::<Vec<_>>();
-    if paths.is_empty() && !path.exists() {
+    if paths.is_empty() && path.try_exists().ok() == Some(false) {
         paths = path
             .ancestors()
-            .find(|ancestor| ancestor.exists())
+            .find(|ancestor| ancestor.try_exists().ok() == Some(true))
             .map(mounted_volume_paths_for_existing_path)
             .unwrap_or_default();
     }
@@ -2129,7 +2125,7 @@ fn fallback_volume_paths() -> Vec<PathBuf> {
     if let Ok(entries) = fs::read_dir("/Volumes") {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            if path.try_exists().ok() == Some(true) && path.is_dir() {
                 paths.push(path);
             }
         }
@@ -2295,12 +2291,16 @@ fn normalized_lookup_path(path: &Path) -> Option<PathBuf> {
     let mut candidate = path;
     let mut missing = Vec::new();
     loop {
-        if candidate.exists() {
-            let mut normalized = candidate.canonicalize().ok()?;
-            for component in missing.iter().rev() {
-                normalized.push(component);
+        match candidate.try_exists() {
+            Ok(true) => {
+                let mut normalized = candidate.canonicalize().ok()?;
+                for component in missing.iter().rev() {
+                    normalized.push(component);
+                }
+                return Some(normalized);
             }
-            return Some(normalized);
+            Ok(false) => {}
+            Err(_) => return None,
         }
         missing.push(candidate.file_name()?.to_os_string());
         candidate = candidate.parent()?;
@@ -2850,6 +2850,28 @@ mod tests {
         assert!(normalized.starts_with(root.canonicalize().unwrap()));
         assert!(normalized.ends_with(Path::new("Missing/Nested/Plan.md")));
         assert!(!missing.exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn normalized_lookup_path_returns_unknown_for_unprobeable_component() {
+        let root = unique_temp_dir("gfm-volume-normalized-unprobeable");
+        let unprobeable = root.join("volume-path-unavailable".repeat(16));
+
+        assert_eq!(normalized_lookup_path(&unprobeable), None);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn network_reachability_returns_unknown_for_unprobeable_fallback_path() {
+        let root = unique_temp_dir("gfm-volume-reachability-unprobeable");
+        let unprobeable = root.join("volume-reachability-unavailable".repeat(16));
+
+        let reachable = volume_reachability(true, MountState::Mounted, None, &unprobeable);
+
+        assert_eq!(reachable, None);
 
         fs::remove_dir_all(root).unwrap();
     }
