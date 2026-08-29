@@ -52,6 +52,13 @@ const DA_RETURN_NOT_PRIVILEGED: u32 = 0xF8DA0009;
 const DA_RETURN_NOT_READY: u32 = 0xF8DA000A;
 const DA_RETURN_NOT_WRITABLE: u32 = 0xF8DA000B;
 const DA_RETURN_UNSUPPORTED: u32 = 0xF8DA000C;
+const MACH_ERROR_SYSTEM_SHIFT: u32 = 26;
+const MACH_ERROR_SUBSYSTEM_SHIFT: u32 = 14;
+const MACH_ERROR_SYSTEM_MASK: u32 = 0x3f;
+const MACH_ERROR_SUBSYSTEM_MASK: u32 = 0xfff;
+const MACH_ERROR_CODE_MASK: u32 = 0x3fff;
+const MACH_ERROR_UNIX_SYSTEM: u32 = 0;
+const MACH_ERROR_UNIX_SUBSYSTEM: u32 = 3;
 const VOLUME_EVENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(2);
 const VOLUME_OPERATION_CALLBACK_TIMEOUT_SECONDS: f64 = 0.5;
 const VOLUME_OPERATION_CALLBACK_TIMEOUT_MILLIS: u64 =
@@ -863,7 +870,35 @@ fn native_operation_status_for_dissenter(code: u32) -> NativeVolumeOperationStat
         DA_RETURN_NOT_READY => NativeVolumeOperationStatus::NotReady,
         DA_RETURN_NOT_WRITABLE => NativeVolumeOperationStatus::NotWritable,
         DA_RETURN_UNSUPPORTED => NativeVolumeOperationStatus::Unsupported,
-        _ => NativeVolumeOperationStatus::Failed,
+        _ => native_operation_status_for_unix_dissenter(code)
+            .unwrap_or(NativeVolumeOperationStatus::Failed),
+    }
+}
+
+fn native_operation_status_for_unix_dissenter(code: u32) -> Option<NativeVolumeOperationStatus> {
+    let system = (code >> MACH_ERROR_SYSTEM_SHIFT) & MACH_ERROR_SYSTEM_MASK;
+    let subsystem = (code >> MACH_ERROR_SUBSYSTEM_SHIFT) & MACH_ERROR_SUBSYSTEM_MASK;
+    if system != MACH_ERROR_UNIX_SYSTEM || subsystem != MACH_ERROR_UNIX_SUBSYSTEM {
+        return None;
+    }
+
+    let errno = code & MACH_ERROR_CODE_MASK;
+    if errno == libc::EBUSY as u32 || errno == libc::EAGAIN as u32 {
+        Some(NativeVolumeOperationStatus::Busy)
+    } else if errno == libc::EPERM as u32 || errno == libc::EACCES as u32 {
+        Some(NativeVolumeOperationStatus::NotPermitted)
+    } else if errno == libc::EROFS as u32 {
+        Some(NativeVolumeOperationStatus::NotWritable)
+    } else if errno == libc::ENOENT as u32 || errno == libc::ENXIO as u32 {
+        Some(NativeVolumeOperationStatus::NotFound)
+    } else if errno == libc::EINVAL as u32 {
+        Some(NativeVolumeOperationStatus::BadArgument)
+    } else if errno == libc::ENOTSUP as u32 || errno == libc::EOPNOTSUPP as u32 {
+        Some(NativeVolumeOperationStatus::Unsupported)
+    } else if errno == libc::ENOMEM as u32 {
+        Some(NativeVolumeOperationStatus::NoResources)
+    } else {
+        None
     }
 }
 
@@ -1499,6 +1534,62 @@ mod tests {
         assert_eq!(
             native_operation_status_for_dissenter(DA_RETURN_ERROR),
             NativeVolumeOperationStatus::Error
+        );
+    }
+
+    #[test]
+    fn maps_bsd_encoded_dissenter_codes_to_typed_operation_status() {
+        fn unix_dissenter_code(errno: i32) -> u32 {
+            (MACH_ERROR_UNIX_SYSTEM << MACH_ERROR_SYSTEM_SHIFT)
+                | (MACH_ERROR_UNIX_SUBSYSTEM << MACH_ERROR_SUBSYSTEM_SHIFT)
+                | errno as u32
+        }
+
+        for errno in [libc::EBUSY, libc::EAGAIN] {
+            assert_eq!(
+                native_operation_status_for_dissenter(unix_dissenter_code(errno)),
+                NativeVolumeOperationStatus::Busy
+            );
+        }
+
+        for errno in [libc::EPERM, libc::EACCES] {
+            assert_eq!(
+                native_operation_status_for_dissenter(unix_dissenter_code(errno)),
+                NativeVolumeOperationStatus::NotPermitted
+            );
+        }
+
+        assert_eq!(
+            native_operation_status_for_dissenter(unix_dissenter_code(libc::EROFS)),
+            NativeVolumeOperationStatus::NotWritable
+        );
+
+        for errno in [libc::ENOENT, libc::ENXIO] {
+            assert_eq!(
+                native_operation_status_for_dissenter(unix_dissenter_code(errno)),
+                NativeVolumeOperationStatus::NotFound
+            );
+        }
+
+        assert_eq!(
+            native_operation_status_for_dissenter(unix_dissenter_code(libc::EINVAL)),
+            NativeVolumeOperationStatus::BadArgument
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(unix_dissenter_code(libc::ENOTSUP)),
+            NativeVolumeOperationStatus::Unsupported
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(unix_dissenter_code(libc::EOPNOTSUPP)),
+            NativeVolumeOperationStatus::Unsupported
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(unix_dissenter_code(libc::ENOMEM)),
+            NativeVolumeOperationStatus::NoResources
+        );
+        assert_eq!(
+            native_operation_status_for_dissenter(unix_dissenter_code(libc::EINTR)),
+            NativeVolumeOperationStatus::Failed
         );
     }
 
