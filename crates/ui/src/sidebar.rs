@@ -999,7 +999,7 @@ fn discover_volumes() -> Vec<SidebarVolumeSpec> {
         .flat_map(|entries| entries.filter_map(Result::ok))
         .filter_map(|entry| {
             let path = entry.path();
-            if !path.is_dir() {
+            if volume_path_directory_state(&path) != SidebarPathState::Available {
                 return None;
             }
             let label = path.file_name()?.to_str()?.to_string();
@@ -1038,6 +1038,15 @@ fn stable_id(prefix: &str, label: &str) -> String {
 
 fn existing_path(path: PathBuf) -> Option<PathBuf> {
     (path_state(&path) == SidebarPathState::Available).then_some(path)
+}
+
+fn volume_path_directory_state(path: &Path) -> SidebarPathState {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => SidebarPathState::Available,
+        Ok(_) => SidebarPathState::Missing,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => SidebarPathState::Missing,
+        Err(_) => SidebarPathState::Unavailable,
+    }
 }
 
 fn path_state(path: &Path) -> SidebarPathState {
@@ -1143,6 +1152,39 @@ mod tests {
         assert_eq!(path_state(&missing), SidebarPathState::Missing);
         assert_eq!(path_state(&unprobeable), SidebarPathState::Unavailable);
         assert_eq!(existing_path(root.join("icloud-missing")), None);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_path_directory_state_distinguishes_unavailable_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-sidebar-volume-path-state-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("Plain File");
+        fs::write(&file, b"not a volume directory").unwrap();
+        let missing = root.join("Missing");
+        let unprobeable = root.join("sidebar-volume-path-unavailable".repeat(16));
+
+        assert_eq!(
+            volume_path_directory_state(&root),
+            SidebarPathState::Available
+        );
+        assert_eq!(
+            volume_path_directory_state(&file),
+            SidebarPathState::Missing
+        );
+        assert_eq!(
+            volume_path_directory_state(&missing),
+            SidebarPathState::Missing
+        );
+        assert_eq!(
+            volume_path_directory_state(&unprobeable),
+            SidebarPathState::Unavailable
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
