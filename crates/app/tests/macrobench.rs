@@ -753,6 +753,19 @@ fn writes_parity_review_bundle_from_binary_manifest() {
     assert!(review.join("entries.tsv").exists());
     assert!(review.join("violations.tsv").exists());
     assert!(review.join("first-unmasked.tsv").exists());
+    let review_markdown = fs::read_to_string(review.join("review.md")).unwrap();
+    assert!(
+        review_markdown.contains("## Capture Provenance"),
+        "{review_markdown}"
+    );
+    assert!(
+        review_markdown.contains("| text | 25A354 | dark | 2x | display-p3 |"),
+        "{review_markdown}"
+    );
+    assert!(
+        review_markdown.contains("| codex | codex | macos-25A354-default |"),
+        "{review_markdown}"
+    );
     assert!(fs::read_to_string(review.join("violations.tsv"))
         .unwrap()
         .contains("unmasked-mismatch-budget"));

@@ -704,6 +704,38 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
     text.push_str(&format!("Entries: {}\n\n", report.entries.len()));
     text.push_str(&format!("Violations: {}\n\n", report.violations()));
     text.push_str(&format!("Passed: {}\n\n", report.passed()));
+    if report
+        .entries
+        .iter()
+        .any(|entry| entry.input.provenance.is_some())
+    {
+        text.push_str("## Capture Provenance\n\n");
+        text.push_str("| Surface | macOS Build | Appearance | Scale | Color Profile | Window | Focus | View Mode | Fixture Root | Reviewer | Signer | Approved Masks |\n");
+        text.push_str(
+            "| --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- |\n",
+        );
+        for entry in &report.entries {
+            if let Some(provenance) = &entry.input.provenance {
+                text.push_str(&format!(
+                    "| {} | {} | {} | {} | {} | {}x{} | {} | {} | {} | {} | {} | {} |\n",
+                    entry.input.surface.as_str(),
+                    provenance.macos_build,
+                    provenance.appearance.as_str(),
+                    provenance.scale.as_str(),
+                    provenance.color_profile.as_str(),
+                    provenance.window_size.width,
+                    provenance.window_size.height,
+                    provenance.focus.as_str(),
+                    provenance.view_mode.as_str(),
+                    provenance.fixture_root.display(),
+                    provenance.reviewer,
+                    provenance.signer,
+                    provenance.approved_mask_set
+                ));
+            }
+        }
+        text.push('\n');
+    }
     text.push_str("## Surface Summary\n\n");
     text.push_str("| Surface | Size | Mismatched | Unmasked | Masked | Max Delta | Passed |\n");
     text.push_str("| --- | ---: | ---: | ---: | ---: | ---: | --- |\n");
@@ -1240,6 +1272,10 @@ mod tests {
         assert!(fs::read_to_string(&bundle.review_path)
             .unwrap()
             .contains("Passed: false"));
+        let review_markdown = fs::read_to_string(&bundle.review_path).unwrap();
+        assert!(review_markdown.contains("## Capture Provenance"));
+        assert!(review_markdown.contains("| text | 25A354 | dark | 2x | display-p3 |"));
+        assert!(review_markdown.contains("| codex | codex | macos-25A354-default |"));
         assert!(fs::read_to_string(&bundle.violations_path)
             .unwrap()
             .contains("unmasked-mismatch-budget"));
