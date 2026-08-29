@@ -1014,7 +1014,7 @@ impl FileProviderObservedInvalidation {
         for event in events {
             event_count += 1;
             event_kinds.insert(fileprovider_observed_event_kind(&event.kind));
-            for path in paths_for_fileprovider_event(previous, &event) {
+            for path in paths_for_fileprovider_event(previous, &event)? {
                 paths.insert(path);
             }
         }
@@ -1145,17 +1145,19 @@ fn fileprovider_observed_event_kind(kind: &FileEventKind) -> FileProviderObserve
 fn paths_for_fileprovider_event(
     previous: Option<&FileProviderStateSnapshot>,
     event: &FileEvent,
-) -> Vec<PathBuf> {
+) -> Result<Vec<PathBuf>> {
     match &event.kind {
         FileEventKind::Rename { from, to } => {
             let mut paths = BTreeSet::new();
-            paths.extend(observed_fileprovider_paths_for_root(previous, from));
-            if to.exists() && snapshot_contains_path_or_descendant(previous, from) {
+            paths.extend(observed_fileprovider_paths_for_root(previous, from)?);
+            if fileprovider_observed_path_exists(to)?
+                && snapshot_contains_path_or_descendant(previous, from)
+            {
                 paths.insert(to.clone());
             }
-            paths.extend(observed_fileprovider_paths_for_root(previous, to));
-            paths.extend(remapped_tracked_fileprovider_paths(previous, from, to));
-            paths.into_iter().collect()
+            paths.extend(observed_fileprovider_paths_for_root(previous, to)?);
+            paths.extend(remapped_tracked_fileprovider_paths(previous, from, to)?);
+            Ok(paths.into_iter().collect())
         }
         FileEventKind::Remove => observed_fileprovider_paths_for_root(previous, &event.path),
         FileEventKind::Create
@@ -1163,10 +1165,10 @@ fn paths_for_fileprovider_event(
         | FileEventKind::Modify
         | FileEventKind::Rescan
         | FileEventKind::Other => {
-            if should_read_observed_fileprovider_path(previous, &event.path) {
-                vec![event.path.clone()]
+            if should_read_observed_fileprovider_path(previous, &event.path)? {
+                Ok(vec![event.path.clone()])
             } else {
-                Vec::new()
+                Ok(Vec::new())
             }
         }
     }
@@ -1175,15 +1177,15 @@ fn paths_for_fileprovider_event(
 fn observed_fileprovider_paths_for_root(
     previous: Option<&FileProviderStateSnapshot>,
     root: &Path,
-) -> Vec<PathBuf> {
+) -> Result<Vec<PathBuf>> {
     let mut paths = BTreeSet::new();
-    if should_read_observed_fileprovider_path(previous, root) {
+    if should_read_observed_fileprovider_path(previous, root)? {
         paths.insert(root.to_path_buf());
     }
     if let Some(snapshot) = previous {
         paths.extend(snapshot.tracked_descendants_of(root));
     }
-    paths.into_iter().collect()
+    Ok(paths.into_iter().collect())
 }
 
 fn snapshot_contains_path_or_descendant(
@@ -1202,27 +1204,31 @@ fn remapped_tracked_fileprovider_paths(
     previous: Option<&FileProviderStateSnapshot>,
     from: &Path,
     to: &Path,
-) -> Vec<PathBuf> {
+) -> Result<Vec<PathBuf>> {
     let Some(snapshot) = previous else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    snapshot
-        .tracked_descendants_of(from)
-        .into_iter()
-        .filter_map(|path| path.strip_prefix(from).ok().map(|suffix| to.join(suffix)))
-        .filter(|path| should_read_observed_fileprovider_path(previous, path))
-        .collect()
+    let mut paths = Vec::new();
+    for path in snapshot.tracked_descendants_of(from) {
+        let Some(path) = path.strip_prefix(from).ok().map(|suffix| to.join(suffix)) else {
+            continue;
+        };
+        if should_read_observed_fileprovider_path(previous, &path)? {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
 }
 
 fn should_read_observed_fileprovider_path(
     previous: Option<&FileProviderStateSnapshot>,
     path: &Path,
-) -> bool {
+) -> Result<bool> {
     if previous.is_some_and(|snapshot| snapshot.contains_path(path)) {
-        return true;
+        return Ok(true);
     }
-    if !path.exists() {
-        return false;
+    if !fileprovider_observed_path_exists(path)? {
+        return Ok(false);
     }
     is_observable_fileprovider_path(previous, path)
 }
@@ -1230,18 +1236,23 @@ fn should_read_observed_fileprovider_path(
 fn is_observable_fileprovider_path(
     previous: Option<&FileProviderStateSnapshot>,
     path: &Path,
-) -> bool {
+) -> Result<bool> {
     if previous.is_some_and(|snapshot| snapshot.contains_path(path)) {
-        return true;
+        return Ok(true);
     }
-    if !path.exists() {
-        return false;
+    if !fileprovider_observed_path_exists(path)? {
+        return Ok(false);
     }
     let hints = CloudHints::read(path);
-    strong_provider_path_hint(path)
+    Ok(strong_provider_path_hint(path)
         && !native_proves_local_only(&hints)
         && !weak_path_hint_without_provider_evidence(&hints)
-        || observable_fileprovider_path_from_hints(path, &hints)
+        || observable_fileprovider_path_from_hints(path, &hints))
+}
+
+fn fileprovider_observed_path_exists(path: &Path) -> Result<bool> {
+    path.try_exists()
+        .map_err(|err| GfmError::io(path, format!("observed path existence unavailable: {err}")))
 }
 
 fn observable_fileprovider_path_from_hints(path: &Path, hints: &CloudHints) -> bool {
@@ -3099,6 +3110,20 @@ mod tests {
         assert_eq!(snapshot, previous);
         assert!(!snapshot.entries.iter().any(|entry| entry.path == local));
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_surfaces_path_probe_errors() {
+        let root = unique_temp_dir();
+        let path = root.join("Observed.icloud-placeholder".repeat(64));
+        let events = vec![FileEvent::new(&path, FileEventKind::Metadata)];
+
+        let err = FileProviderObservedInvalidation::evaluate(None, events).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("observed path existence unavailable"));
         fs::remove_dir_all(root).unwrap();
     }
 
