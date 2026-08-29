@@ -384,6 +384,15 @@ impl ContentManifestPromotionJournal {
                 "content promotion journal requires previous manifest archives".to_string(),
             ));
         }
+        let mut seen_retired = BTreeSet::new();
+        for retired in &retired_paths {
+            if !seen_retired.insert(retired.clone()) {
+                return Err(GfmError::Format(format!(
+                    "content promotion journal has duplicate retired archive path `{}`",
+                    retired.display()
+                )));
+            }
+        }
         Ok(Self {
             previous,
             new_archive,
@@ -415,6 +424,8 @@ impl ContentManifestPromotionJournal {
         let mut previous = Vec::new();
         let mut new_archive = None;
         let mut retired_paths = Vec::new();
+        let mut seen_previous = BTreeSet::new();
+        let mut seen_retired = BTreeSet::new();
         for (line_index, line) in lines.enumerate() {
             let line = line.map_err(|err| GfmError::io(path, err))?;
             if line.trim().is_empty() {
@@ -423,9 +434,18 @@ impl ContentManifestPromotionJournal {
             let fields = line.split('\t').collect::<Vec<_>>();
             match fields.as_slice() {
                 ["previous", tier, archive_path] => {
+                    let archive_path = PathBuf::from(unescape(archive_path)?);
+                    if !seen_previous.insert(archive_path.clone()) {
+                        return Err(GfmError::Format(format!(
+                            "{} line {}: duplicate previous archive path `{}`",
+                            path.display(),
+                            line_index + 2,
+                            archive_path.display()
+                        )));
+                    }
                     previous.push(ContentArchiveManifestEntry {
                         tier: parse_tier(tier, path, line_index + 2)?,
-                        path: PathBuf::from(unescape(archive_path)?),
+                        path: archive_path,
                     });
                 }
                 ["new", tier, archive_path] => {
@@ -442,7 +462,16 @@ impl ContentManifestPromotionJournal {
                     });
                 }
                 ["retire", archive_path] => {
-                    retired_paths.push(PathBuf::from(unescape(archive_path)?));
+                    let archive_path = PathBuf::from(unescape(archive_path)?);
+                    if !seen_retired.insert(archive_path.clone()) {
+                        return Err(GfmError::Format(format!(
+                            "{} line {}: duplicate retired archive path `{}`",
+                            path.display(),
+                            line_index + 2,
+                            archive_path.display()
+                        )));
+                    }
+                    retired_paths.push(archive_path);
                 }
                 _ => {
                     return Err(GfmError::Format(format!(

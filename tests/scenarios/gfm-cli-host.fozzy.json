@@ -87,6 +87,26 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-duplicate-promotion-journal.gfmmanifest",
+      "data": "gfm-content-manifest-v1\narchive\thot\thot-a.gfmcontent\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/.gfm-fozzy-duplicate-promotion-journal.gfmmanifest.promotion-journal",
+      "data": "gfm-content-promotion-journal-v1\nprevious\thot\thot-a.gfmcontent\nnew\twarm\twarm-b.gfmcontent\nretire\thot-a.gfmcontent\nretire\thot-a.gfmcontent\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "content-manifest-promotion-recovery-plan",
+        "tmp/gfm-fozzy-duplicate-promotion-journal.gfmmanifest"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-operation-apply-source.txt",
       "data": "apply source\n"
     },

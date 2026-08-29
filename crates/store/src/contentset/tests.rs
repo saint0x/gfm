@@ -412,6 +412,78 @@ fn content_manifest_promotion_recovery_completes_pending_journal() {
 }
 
 #[test]
+fn content_promotion_journal_rejects_duplicate_retired_paths() {
+    let previous = ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: PathBuf::from("hot-a.gfmcontent"),
+    }])
+    .unwrap();
+
+    let err = ContentManifestPromotionJournal::new(
+        previous,
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: PathBuf::from("warm-b.gfmcontent"),
+        },
+        vec![
+            PathBuf::from("hot-a.gfmcontent"),
+            PathBuf::from("hot-a.gfmcontent"),
+        ],
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains(
+        "content promotion journal has duplicate retired archive path `hot-a.gfmcontent`"
+    ));
+}
+
+#[test]
+fn content_promotion_journal_read_rejects_duplicate_previous_paths_with_line_number() {
+    let dir = temp_dir("gfm-content-manifest-promotion-duplicate-previous");
+    let manifest_path = dir.join("content.gfmmanifest");
+    let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        &journal_path,
+        "gfm-content-promotion-journal-v1\nprevious\thot\thot-a.gfmcontent\nprevious\twarm\thot-a.gfmcontent\nnew\twarm\twarm-b.gfmcontent\nretire\thot-a.gfmcontent\n",
+    )
+    .unwrap();
+
+    let err = ContentManifestPromotionJournal::read(&journal_path).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains(&format!("{} line 3", journal_path.display())));
+    assert!(err
+        .to_string()
+        .contains("duplicate previous archive path `hot-a.gfmcontent`"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn content_promotion_journal_read_rejects_duplicate_retired_paths_with_line_number() {
+    let dir = temp_dir("gfm-content-manifest-promotion-duplicate-retired");
+    let manifest_path = dir.join("content.gfmmanifest");
+    let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        &journal_path,
+        "gfm-content-promotion-journal-v1\nprevious\thot\thot-a.gfmcontent\nnew\twarm\twarm-b.gfmcontent\nretire\thot-a.gfmcontent\nretire\thot-a.gfmcontent\n",
+    )
+    .unwrap();
+
+    let err = ContentManifestPromotionJournal::read(&journal_path).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains(&format!("{} line 5", journal_path.display())));
+    assert!(err
+        .to_string()
+        .contains("duplicate retired archive path `hot-a.gfmcontent`"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn content_manifest_promotion_recovery_removes_stale_journal() {
     let dir = temp_dir("gfm-content-manifest-promotion-stale");
     let manifest_path = dir.join("content.gfmmanifest");

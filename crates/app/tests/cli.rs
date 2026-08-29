@@ -11297,6 +11297,62 @@ fn content_manifest_promotion_recovery_plan_surfaces_journal_probe_failure_from_
 }
 
 #[test]
+fn content_manifest_promotion_recovery_plan_rejects_duplicate_retire_journal_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-promotion-recovery-duplicate-retire");
+    let manifest = root.join("content.gfmmanifest");
+    fs::write(
+        &manifest,
+        "gfm-content-manifest-v1\narchive\thot\thot-a.gfmcontent\n",
+    )
+    .unwrap();
+    let journal = content_manifest_promotion_journal_path(&manifest);
+    fs::write(
+        &journal,
+        "gfm-content-promotion-journal-v1\nprevious\thot\thot-a.gfmcontent\nnew\twarm\twarm-b.gfmcontent\nretire\thot-a.gfmcontent\nretire\thot-a.gfmcontent\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-promotion-recovery-plan",
+            manifest.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("content-manifest-promotion-recovery-plan\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("duplicate retired archive path `hot-a.gfmcontent`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("line 5"), "{stderr}");
+    assert_worker_admitted(
+        &stderr,
+        "content manifest promotion recovery plan",
+        &manifest,
+    );
+    assert_worker_admitted(
+        &stderr,
+        "content manifest promotion recovery journal",
+        &journal,
+    );
+    assert!(
+        !stderr.contains(
+            "security-worker-admission\tworker=content manifest promotion recovery archive\t"
+        ),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn content_manifest_promotion_recover_surfaces_journal_probe_failure_before_mutation_from_binary() {
     let root = unique_temp_dir("gfm-cli-content-promotion-recover-journal-probe");
     let manifest = root.join(format!("{}.gfmmanifest", "m".repeat(230)));
