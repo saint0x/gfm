@@ -527,8 +527,15 @@ impl NativeVolumeStatus {
 }
 
 pub fn copy_volume_description_for_path(path: &Path) -> NativeVolumeDescription {
-    if !path.exists() {
-        return missing(format!("volume path does not exist: {}", path.display()));
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => return missing(format!("volume path does not exist: {}", path.display())),
+        Err(err) => {
+            return unavailable(format!(
+                "volume path existence unavailable: {}: {err}",
+                path.display()
+            ));
+        }
     }
     let Some(url) = CFURL::from_path(path, true) else {
         return unavailable(format!("invalid volume path URL: {}", path.display()));
@@ -643,23 +650,37 @@ pub fn submit_volume_operation(
     path: &Path,
     operation: NativeVolumeOperation,
 ) -> NativeVolumeOperationResult {
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => {
+            return NativeVolumeOperationResult {
+                operation,
+                status: NativeVolumeOperationStatus::Missing,
+                dissenter_status: None,
+                reason: Some(format!("volume path does not exist: {}", path.display())),
+            };
+        }
+        Err(err) => {
+            return NativeVolumeOperationResult {
+                operation,
+                status: NativeVolumeOperationStatus::Unavailable,
+                dissenter_status: None,
+                reason: Some(format!(
+                    "volume path existence unavailable: {}: {err}",
+                    path.display()
+                )),
+            };
+        }
+    }
     let Some((session, disk)) = create_disk_for_volume_path(path) else {
         return NativeVolumeOperationResult {
             operation,
-            status: if path.exists() {
-                NativeVolumeOperationStatus::Unavailable
-            } else {
-                NativeVolumeOperationStatus::Missing
-            },
+            status: NativeVolumeOperationStatus::Unavailable,
             dissenter_status: None,
-            reason: Some(if path.exists() {
-                format!(
-                    "DiskArbitration did not return a disk for {}",
-                    path.display()
-                )
-            } else {
-                format!("volume path does not exist: {}", path.display())
-            }),
+            reason: Some(format!(
+                "DiskArbitration did not return a disk for {}",
+                path.display()
+            )),
         };
     };
 
@@ -930,11 +951,23 @@ fn dissenter_reason(dissenter: DADissenterRef, code: u32) -> String {
 }
 
 pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
-    if !path.exists() {
-        return unavailable_resource_values(
-            NativeVolumeStatus::Missing,
-            format!("volume path does not exist: {}", path.display()),
-        );
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => {
+            return unavailable_resource_values(
+                NativeVolumeStatus::Missing,
+                format!("volume path does not exist: {}", path.display()),
+            );
+        }
+        Err(err) => {
+            return unavailable_resource_values(
+                NativeVolumeStatus::Unavailable,
+                format!(
+                    "volume path existence unavailable: {}: {err}",
+                    path.display()
+                ),
+            );
+        }
     }
     let Some(url) = CFURL::from_path(path, path.is_dir()) else {
         return unavailable_resource_values(
@@ -1086,11 +1119,23 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
 }
 
 pub fn copy_volume_mount_table_entry(path: &Path) -> NativeVolumeMountTableEntry {
-    if !path.exists() {
-        return unavailable_mount_table_entry(
-            NativeVolumeStatus::Missing,
-            format!("volume path does not exist: {}", path.display()),
-        );
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => {
+            return unavailable_mount_table_entry(
+                NativeVolumeStatus::Missing,
+                format!("volume path does not exist: {}", path.display()),
+            );
+        }
+        Err(err) => {
+            return unavailable_mount_table_entry(
+                NativeVolumeStatus::Unavailable,
+                format!(
+                    "volume path existence unavailable: {}: {err}",
+                    path.display()
+                ),
+            );
+        }
     }
     let display_path = path.display().to_string();
     let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
@@ -1136,7 +1181,7 @@ pub fn copy_volume_mount_table() -> NativeVolumeMountTable {
 }
 
 fn create_disk_for_volume_path(path: &Path) -> Option<(DASessionRef, DADiskRef)> {
-    if !path.exists() {
+    if !(path.try_exists().ok()?) {
         return None;
     }
     let url = CFURL::from_path(path, true)?;
@@ -1458,6 +1503,10 @@ fn unavailable_mount_table_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
 
     #[test]
     fn resolves_root_volume_description() {
@@ -1482,6 +1531,21 @@ mod tests {
         assert!(description.reason.unwrap().contains("does not exist"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn volume_description_surfaces_path_probe_errors_as_unavailable() {
+        let path = invalid_path("gfm-native-volume-description-invalid");
+
+        let description = copy_volume_description_for_path(&path);
+
+        assert_eq!(description.status, NativeVolumeStatus::Unavailable);
+        assert!(description
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("path existence unavailable"));
+    }
+
     #[test]
     fn resolves_root_volume_resource_values() {
         let values = copy_volume_resource_values(Path::new("/"));
@@ -1494,6 +1558,21 @@ mod tests {
         assert!(values.supports_hard_links.is_some());
         assert!(values.supports_sparse_files.is_some());
         assert!(values.is_browsable.is_some() || values.volume_uuid.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn volume_resource_values_surface_path_probe_errors_as_unavailable() {
+        let path = invalid_path("gfm-native-volume-resource-invalid");
+
+        let values = copy_volume_resource_values(&path);
+
+        assert_eq!(values.status, NativeVolumeStatus::Unavailable);
+        assert!(values
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("path existence unavailable"));
     }
 
     #[test]
@@ -1522,6 +1601,21 @@ mod tests {
         assert!(entry.mount_point.is_some());
         assert!(entry.filesystem_type.is_some());
         assert!(entry.flags.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mount_table_entry_surfaces_path_probe_errors_as_unavailable() {
+        let path = invalid_path("gfm-native-volume-mount-table-invalid");
+
+        let entry = copy_volume_mount_table_entry(&path);
+
+        assert_eq!(entry.status, NativeVolumeStatus::Unavailable);
+        assert!(entry
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("path existence unavailable"));
     }
 
     #[test]
@@ -1665,6 +1759,23 @@ mod tests {
         assert!(result.reason.unwrap().contains("does not exist"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn volume_operation_surfaces_path_probe_errors_as_unavailable() {
+        let path = invalid_path("gfm-native-volume-operation-invalid");
+
+        let result = submit_volume_operation(&path, NativeVolumeOperation::Eject);
+
+        assert_eq!(result.operation, NativeVolumeOperation::Eject);
+        assert_eq!(result.status, NativeVolumeOperationStatus::Unavailable);
+        assert_eq!(result.dissenter_status, None);
+        assert!(result
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("path existence unavailable"));
+    }
+
     #[test]
     fn invalid_bsd_mount_identity_does_not_submit_to_diskarbitration() {
         let result = submit_volume_mount_by_bsd_name("not/a/disk");
@@ -1706,5 +1817,12 @@ mod tests {
             volume_operation_submitted_reason(),
             "submitted-to-diskarbitration-timeout-500ms"
         );
+    }
+
+    #[cfg(unix)]
+    fn invalid_path(name: &str) -> PathBuf {
+        PathBuf::from(OsString::from_vec(
+            format!("/tmp/{name}\0path").into_bytes(),
+        ))
     }
 }
