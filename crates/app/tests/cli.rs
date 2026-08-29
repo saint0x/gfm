@@ -834,6 +834,52 @@ fn security_bookmark_create_refuses_unreachable_store_before_persisting_from_bin
 }
 
 #[test]
+fn security_bookmark_create_refuses_unreachable_target_before_bookmarking_from_binary() {
+    let root = unique_temp_dir("gfm-cli-security-bookmark-target-create-root");
+    let offline = unique_temp_dir("gfm-cli-security-bookmark-target-create-offline");
+    let home = offline.join("home");
+    let documents = home.join("Documents");
+    let protected = documents.join("Plan.md");
+    let bookmarks = root.join("bookmarks.tsv");
+    fs::create_dir_all(&documents).unwrap();
+    fs::write(&protected, "alpha protected content").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .args([
+            "security-bookmark-create",
+            protected.to_str().unwrap(),
+            "read",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("security-bookmark\t"), "{stdout}");
+    assert!(
+        stderr
+            .contains("security bookmark create volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=security bookmark store\t"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=security bookmark create\t"),
+        "{stderr}"
+    );
+    assert!(!bookmarks.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn bookmark_required_preview_refuses_unreachable_store_before_reading_from_binary() {
     let root = unique_temp_dir("gfm-cli-security-bookmark-store-read-root");
     let offline = unique_temp_dir("gfm-cli-security-bookmark-store-read-offline");

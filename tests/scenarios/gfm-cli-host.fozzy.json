@@ -4080,6 +4080,11 @@
       "data": "Visible.txt\ttmp/Visible.txt\t2026-08-27T04:00:00Z\ttrue\ttrue\t\n"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/SecurityBookmarkTarget.md",
+      "data": "offline bookmark target\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -4102,6 +4107,20 @@
         "security-bookmark-create",
         "tmp/gfm-fozzy-home/Documents/Protected.pdf",
         "preview"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_SECURITY_BOOKMARKS": "tmp/gfm-fozzy-security-bookmarks.tsv"
+      },
+      "args": [
+        "security-bookmark-create",
+        "tmp/gfm-fozzy-offline-volume/SecurityBookmarkTarget.md",
+        "read"
       ],
       "exit_code": 1,
       "times": 1

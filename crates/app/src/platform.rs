@@ -1558,6 +1558,7 @@ fn run_adaptive_thumbnail_generation(
 fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<Vec<String>> {
     const STORE_WORKER: &str = "security bookmark store";
     const WORKER: &str = "security bookmark create";
+    preflight_volume_access_scope(&path, intent, WORKER)?;
     let report = SecurityScopedAccessReport::evaluate(&path, intent).create_bookmark();
     if report.status != SecurityScopedBookmarkStatus::Created {
         return Ok(vec![report.as_tsv()]);
@@ -1565,7 +1566,6 @@ fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<V
     let store = SecurityScopedBookmarkStore::new(crate::runtime::default_security_bookmarks_path());
     let store_probe = write_probe_path(store.path())?.to_path_buf();
     preflight_volume_access_scope(&store_probe, AccessIntent::Write, STORE_WORKER)?;
-    preflight_volume_access_scope(&path, intent, WORKER)?;
     let volume = detect_volume_id(&store_probe)
         .ok()
         .or_else(|| parent_volume(&store_probe))
