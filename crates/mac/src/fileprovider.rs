@@ -921,7 +921,10 @@ impl FileProviderStateInvalidationReport {
         let mut current_entries = Vec::new();
         for path in current_paths {
             let previous_state = previous.and_then(|snapshot| snapshot.previous_state_for(&path));
-            let current = if path.exists()
+            let path_exists = path
+                .try_exists()
+                .map_err(|err| GfmError::io(&path, format!("path existence unavailable: {err}")))?;
+            let current = if path_exists
                 || (previous_state.is_none() && is_evicted_placeholder_path(&path))
             {
                 Some(FileProviderStateReport::read_path(&path)?)
@@ -2858,6 +2861,18 @@ mod tests {
         assert!(snapshot.entries.is_empty());
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_invalidation_surfaces_path_probe_errors_before_removal_classification() {
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-fileprovider-invalidation-invalid\0path".to_vec(),
+        ));
+
+        let err = FileProviderStateInvalidationReport::evaluate(None, [path]).unwrap_err();
+
+        assert!(err.to_string().contains("path existence unavailable"));
     }
 
     #[test]
