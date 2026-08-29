@@ -3,7 +3,7 @@ use gfm_search::substring_candidate_grams;
 use gfm_search::{
     SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupIds, SearchLookupTelemetry,
     SearchLookupTerms, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
-    SearchQueryReport, SearchRecordColumns, SearchSubstringPosting, SearchVolumeScope,
+    SearchQuery, SearchQueryReport, SearchRecordColumns, SearchSubstringPosting, SearchVolumeScope,
 };
 use gfm_store::{
     MetadataField, MetadataPosting, MmapContentArchive, MmapFuzzyArchive, MmapMetadataArchive,
@@ -245,7 +245,8 @@ impl SidecarIndexQuerySession {
         cancellation: &Cancellation,
     ) -> Result<SidecarQuerySessionReport> {
         cancellation.check()?;
-        let result_cache_key = query_result_cache_key(query, limit, scope, budget);
+        let parsed = SearchQuery::parse(query);
+        let result_cache_key = query_result_cache_key(&parsed, limit, scope, budget);
         if let Some(mut report) = self.result_cache_lock().get(&result_cache_key) {
             self.result_cache_hits.fetch_add(1, Ordering::Relaxed);
             report.search.lookup = SearchLookupTelemetry::default();
@@ -260,7 +261,6 @@ impl SidecarIndexQuerySession {
         self.result_cache_misses.fetch_add(1, Ordering::Relaxed);
         let content_hits_before = self.content_cache_hits.load(Ordering::Relaxed);
         let content_misses_before = self.content_cache_misses.load(Ordering::Relaxed);
-        let parsed = gfm_search::SearchQuery::parse(query);
         cancellation.check()?;
         let content_terms = parsed.content_candidate_terms();
         let content_postings = self.scoped_content_postings_for_terms(
@@ -1513,14 +1513,13 @@ fn bounded_volume_posting_cache_key(term: &str, volume: VolumeId, limit: usize) 
 }
 
 fn query_result_cache_key(
-    query: &str,
+    query: &SearchQuery,
     limit: usize,
     scope: &SearchVolumeScope,
     budget: SearchLookupBudget,
 ) -> String {
     format!(
-        "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
-        query,
+        "{query:?}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
         limit,
         search_volume_scope_cache_key(scope),
         budget.max_prefix_ids_per_term,
@@ -1609,6 +1608,26 @@ mod tests {
         assert_eq!(first.result_cache_misses, 1);
         assert_eq!(second.result_cache_hits, 1);
         assert_eq!(second.result_cache_misses, 0);
+        assert_eq!(session.result_cache_telemetry(), (1, 1));
+    }
+
+    #[test]
+    fn sidecar_session_reuses_normalized_query_results() {
+        let fixture = SidecarFixture::new("normalized-result-cache");
+        let session = fixture.session();
+
+        let first = session.search("  FinderLatency  ", 5).unwrap();
+        let second = session.search("finderlatency", 5).unwrap();
+
+        assert_eq!(first.search.hits, second.search.hits);
+        assert_eq!(first.result_cache_hits, 0);
+        assert_eq!(first.result_cache_misses, 1);
+        assert_eq!(second.result_cache_hits, 1);
+        assert_eq!(second.result_cache_misses, 0);
+        assert_eq!(second.content_cache_hits, 0);
+        assert_eq!(second.content_cache_misses, 0);
+        assert_eq!(second.record_cache_hits, 0);
+        assert_eq!(second.record_cache_misses, 0);
         assert_eq!(session.result_cache_telemetry(), (1, 1));
     }
 
