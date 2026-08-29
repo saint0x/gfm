@@ -237,9 +237,37 @@ pub struct OperationProgressContract {
     pub state: OperationProgressState,
     pub completed_units: u64,
     pub total_units: u64,
+    pub detail_kind: OperationProgressDetailKind,
     pub detail: String,
     pub percent_complete: u64,
     pub commands: Vec<OperationProgressCommandSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationProgressDetailKind {
+    Plain,
+    Planned,
+    Advanced,
+    Deferred,
+    Pressure,
+    MetadataDegraded,
+    Cancelled,
+    Failed,
+}
+
+impl OperationProgressDetailKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Planned => "planned",
+            Self::Advanced => "advanced",
+            Self::Deferred => "deferred",
+            Self::Pressure => "pressure",
+            Self::MetadataDegraded => "metadata-degraded",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,6 +309,7 @@ impl OperationProgressContract {
             state: input.state,
             completed_units: input.completed_units,
             total_units: input.total_units,
+            detail_kind: operation_progress_detail_kind(&input.detail),
             detail: input.detail,
             percent_complete,
             commands: operation_progress_commands(input.job_id, input.state),
@@ -289,7 +318,7 @@ impl OperationProgressContract {
 
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!(
-            "{}\noperation-progress\tjob={}\tlabel={}\tstate={}\tcompleted={}\ttotal={}\tpercent={}\tdetail={}",
+            "{}\noperation-progress\tjob={}\tlabel={}\tstate={}\tcompleted={}\ttotal={}\tpercent={}\tdetail={}\tdetail-kind={}",
             self.dialog.as_tsv(),
             self.job_id
                 .map(|id| id.to_string())
@@ -300,6 +329,7 @@ impl OperationProgressContract {
             self.total_units,
             self.percent_complete,
             escape_tsv(&self.detail),
+            self.detail_kind.as_str(),
         )];
         lines.extend(self.commands.iter().map(|command| {
             format!(
@@ -313,6 +343,29 @@ impl OperationProgressContract {
             )
         }));
         lines.join("\n")
+    }
+}
+
+fn operation_progress_detail_kind(detail: &str) -> OperationProgressDetailKind {
+    if detail.starts_with("operation-metadata-degradation\t") {
+        return OperationProgressDetailKind::MetadataDegraded;
+    }
+    if detail.starts_with("planned:") {
+        return OperationProgressDetailKind::Planned;
+    }
+    if detail.starts_with("advanced:") {
+        return OperationProgressDetailKind::Advanced;
+    }
+    if detail.starts_with("deferred:") {
+        return OperationProgressDetailKind::Deferred;
+    }
+    if detail.starts_with("pressure:") {
+        return OperationProgressDetailKind::Pressure;
+    }
+    match detail {
+        "cancelled" => OperationProgressDetailKind::Cancelled,
+        "failed" => OperationProgressDetailKind::Failed,
+        _ => OperationProgressDetailKind::Plain,
     }
 }
 
@@ -1623,6 +1676,7 @@ mod tests {
         ));
 
         assert_eq!(contract.percent_complete, 42);
+        assert_eq!(contract.detail_kind, OperationProgressDetailKind::Pressure);
         assert!(contract.commands.iter().any(|command| {
             command.command == OperationProgressCommand::Resume && !command.enabled
         }));
@@ -1639,6 +1693,27 @@ mod tests {
         assert!(contract.as_tsv().contains(
             "operation-progress\tjob=-\tlabel=copy selected files\tstate=paused\tcompleted=42\ttotal=100\tpercent=42\tdetail=pressure:throttled"
         ));
+        assert!(contract.as_tsv().contains("\tdetail-kind=pressure"));
+    }
+
+    #[test]
+    fn operation_progress_contract_classifies_metadata_degradation() {
+        let contract = OperationProgressContract::from_input(OperationProgressInput::new(
+            "copy",
+            OperationProgressState::Completed,
+            11,
+            11,
+            "operation-metadata-degradation\tpath=/Volumes/Archive/file.txt\tkind=hard-link-topology\tdetail=hard-link topology was not preserved",
+        ));
+
+        assert_eq!(contract.percent_complete, 100);
+        assert_eq!(
+            contract.detail_kind,
+            OperationProgressDetailKind::MetadataDegraded
+        );
+        assert!(contract
+            .as_tsv()
+            .contains("\tdetail-kind=metadata-degraded"));
     }
 
     #[test]

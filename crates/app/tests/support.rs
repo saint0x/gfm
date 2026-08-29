@@ -1048,7 +1048,7 @@ fn copy_operation_publishes_runtime_progress_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
         stdout.contains(
-            "\noperation-progress\tjob=1\tlabel=copy\tstate=completed\tcompleted=11\ttotal=11\tpercent=100\tdetail=completed"
+            "\noperation-progress\tjob=1\tlabel=copy\tstate=completed\tcompleted=11\ttotal=11\tpercent=100\tdetail=completed\tdetail-kind=plain"
         ),
         "{stdout}"
     );
@@ -1400,7 +1400,7 @@ fn reports_progress_dialog_from_job_progress_store() {
     assert!(stdout.contains("button\tresume\tResume\tdefault\tenabled=true"));
     assert!(stdout.contains("button\tstop\tStop\tcancel\tenabled=true"));
     assert!(stdout.contains(
-        "operation-progress\tjob=2\tlabel=index content\tstate=paused\tcompleted=128\ttotal=250\tpercent=51\tdetail=pressure:throttled"
+        "operation-progress\tjob=2\tlabel=index content\tstate=paused\tcompleted=128\ttotal=250\tpercent=51\tdetail=pressure:throttled\tdetail-kind=pressure"
     ));
     assert!(stdout.contains("operation-progress-command\tresume\tjob=2\tenabled=true"));
 
