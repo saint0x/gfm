@@ -154,6 +154,7 @@ pub struct VolumeDescriptor {
     pub resource_automounted: Option<bool>,
     pub resource_browsable: Option<bool>,
     pub resource_reachable: Option<bool>,
+    pub resource_root_file_system: Option<bool>,
     pub resource_remount_url: Option<String>,
     pub mount_table_status: Option<NativeVolumeStatus>,
     pub mount_from: Option<String>,
@@ -310,6 +311,9 @@ impl VolumeDescriptor {
                 .and_then(|resource| resource.is_automounted),
             resource_browsable: resource.as_ref().and_then(|resource| resource.is_browsable),
             resource_reachable: resource.as_ref().and_then(|resource| resource.is_reachable),
+            resource_root_file_system: resource
+                .as_ref()
+                .and_then(|resource| resource.is_root_file_system),
             resource_remount_url: resource
                 .as_ref()
                 .and_then(|resource| resource.remount_url.clone()),
@@ -390,7 +394,7 @@ impl VolumeDescriptor {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tapfs-container-uuid={}\tapfs-role={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-reachable={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tapfs-container-uuid={}\tapfs-role={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-reachable={}\tresource-root-filesystem={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -487,6 +491,9 @@ impl VolumeDescriptor {
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.resource_reachable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.resource_root_file_system
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.resource_remount_url
@@ -1846,10 +1853,14 @@ fn classify_native_volume(
     resource: Option<&NativeVolumeResourceValues>,
     mount_table: Option<&NativeVolumeMountTableEntry>,
 ) -> Option<VolumeKind> {
+    let native = native.filter(|native| native.status == NativeVolumeStatus::Available);
+    let resource = resource.filter(|resource| resource.status == NativeVolumeStatus::Available);
+    if resource.and_then(|resource| resource.is_root_file_system) == Some(true) {
+        return Some(VolumeKind::System);
+    }
     if path == Path::new("/") {
         return Some(VolumeKind::System);
     }
-    let native = native.filter(|native| native.status == NativeVolumeStatus::Available);
     if native.and_then(|native| native.volume_network) == Some(true) {
         return Some(VolumeKind::Network);
     }
@@ -1877,7 +1888,6 @@ fn classify_native_volume(
         }
     }
 
-    let resource = resource.filter(|resource| resource.status == NativeVolumeStatus::Available);
     if resource.and_then(|resource| resource.is_local) == Some(false) {
         return Some(VolumeKind::Network);
     }
@@ -2321,6 +2331,9 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tresource-automounted="));
         assert!(descriptor.as_tsv().contains("\tresource-browsable="));
         assert!(descriptor.as_tsv().contains("\tresource-reachable=true\t"));
+        assert!(descriptor
+            .as_tsv()
+            .contains("\tresource-root-filesystem=true\t"));
         assert!(descriptor.as_tsv().contains("\tresource-remount-url="));
         assert!(descriptor.as_tsv().contains("\tmount-status=available\t"));
         assert!(descriptor.as_tsv().contains("\tapfs-container-uuid="));
@@ -2368,6 +2381,19 @@ mod tests {
         assert!(descriptor.source.contains("mount-table="));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_resource_root_filesystem_classifies_system_without_path_fallback() {
+        let path = Path::new("/Volumes/SystemSnapshot");
+        let resource = resource_values(|values| {
+            values.is_root_file_system = Some(true);
+            values.is_internal = Some(true);
+        });
+
+        let kind = classify_volume(path, None, None, Some(&resource), None);
+
+        assert_eq!(kind, VolumeKind::System);
     }
 
     #[test]
@@ -3485,6 +3511,7 @@ mod tests {
             is_read_only: None,
             is_reachable: None,
             is_removable: None,
+            is_root_file_system: None,
             remount_url: None,
             supports_case_preserved_names: None,
             supports_case_sensitive_names: None,

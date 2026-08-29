@@ -171,6 +171,7 @@ extern "C" {
     static NSURLVolumeIsLocalKey: CFStringRef;
     static NSURLVolumeIsReadOnlyKey: CFStringRef;
     static NSURLVolumeIsRemovableKey: CFStringRef;
+    static NSURLVolumeIsRootFileSystemKey: CFStringRef;
     static NSURLVolumeURLForRemountingKey: CFStringRef;
     static NSURLVolumeUUIDStringKey: CFStringRef;
     static NSURLVolumeSupportsCasePreservedNamesKey: CFStringRef;
@@ -242,6 +243,7 @@ pub struct NativeVolumeResourceValues {
     pub is_read_only: Option<bool>,
     pub is_reachable: Option<bool>,
     pub is_removable: Option<bool>,
+    pub is_root_file_system: Option<bool>,
     pub remount_url: Option<String>,
     pub supports_case_preserved_names: Option<bool>,
     pub supports_case_sensitive_names: Option<bool>,
@@ -978,6 +980,12 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
         "NSURLVolumeIsRemovableKey",
         &mut errors,
     );
+    let is_root_file_system = copy_resource_bool(
+        url,
+        unsafe { NSURLVolumeIsRootFileSystemKey },
+        "NSURLVolumeIsRootFileSystemKey",
+        &mut errors,
+    );
     let remount_url = copy_resource_url_string(
         url,
         unsafe { NSURLVolumeURLForRemountingKey },
@@ -1010,6 +1018,7 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
         || is_read_only.is_some()
         || is_reachable.is_some()
         || is_removable.is_some()
+        || is_root_file_system.is_some()
         || remount_url.is_some()
         || supports_case_preserved_names.is_some()
         || supports_case_sensitive_names.is_some()
@@ -1027,6 +1036,7 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
         is_read_only,
         is_reachable,
         is_removable,
+        is_root_file_system,
         remount_url,
         supports_case_preserved_names,
         supports_case_sensitive_names,
@@ -1376,6 +1386,7 @@ fn unavailable_resource_values(
         is_read_only: None,
         is_reachable: None,
         is_removable: None,
+        is_root_file_system: None,
         remount_url: None,
         supports_case_preserved_names: None,
         supports_case_sensitive_names: None,
@@ -1434,6 +1445,7 @@ mod tests {
         assert_eq!(values.status, NativeVolumeStatus::Available);
         assert!(values.is_local.is_some() || values.is_read_only.is_some());
         assert_eq!(values.is_reachable, Some(true));
+        assert_eq!(values.is_root_file_system, Some(true));
         assert!(values.is_browsable.is_some() || values.volume_uuid.is_some());
     }
 
