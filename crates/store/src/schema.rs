@@ -581,7 +581,10 @@ fn inspect_archive_schema_result(
     kind: ArchiveSchemaKind,
     path: &Path,
 ) -> Result<ArchiveSchemaReport> {
-    if !path.exists() {
+    if !path
+        .try_exists()
+        .map_err(|err| GfmError::io(path, format!("archive schema existence unavailable: {err}")))?
+    {
         return Ok(report(kind, path, ArchiveSchemaStatus::Missing, None, None));
     }
     match kind {

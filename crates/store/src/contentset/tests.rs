@@ -412,6 +412,25 @@ fn content_manifest_promotion_recovery_removes_stale_journal() {
 }
 
 #[test]
+fn content_manifest_promotion_recovery_surfaces_journal_probe_failures() {
+    let dir = temp_dir("gfm-content-manifest-promotion-probe");
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest_path = dir.join("content-manifest-promotion-unavailable".repeat(64));
+
+    let plan = plan_content_manifest_promotion_recovery(&manifest_path);
+
+    assert_eq!(
+        plan.action,
+        ContentManifestPromotionRecoveryAction::CannotRecover
+    );
+    assert!(plan
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("content promotion journal existence unavailable")));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn content_archive_cleanup_removes_only_inactive_candidates() {
     let dir = temp_dir("gfm-content-manifest-cleanup");
     let manifest_path = dir.join("content.gfmmanifest");

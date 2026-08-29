@@ -105,6 +105,21 @@ fn classifies_legacy_missing_unsupported_and_unreadable_archives() {
 }
 
 #[test]
+fn archive_schema_inspection_surfaces_path_probe_failures() {
+    let dir = temp_dir("gfm-schema-probe");
+    let path = dir.join("archive-schema-unavailable".repeat(64));
+
+    let report = inspect_archive_schema(ArchiveSchemaKind::Records, &path);
+
+    assert_eq!(report.status, ArchiveSchemaStatus::Unreadable);
+    assert!(report
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("archive schema existence unavailable")));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn migrates_legacy_record_archive_to_current_schema_with_backup() {
     let dir = temp_dir("gfm-schema-record-migration");
     let records = dir.join("legacy.gfmidx");

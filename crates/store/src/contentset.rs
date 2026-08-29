@@ -526,7 +526,20 @@ pub fn plan_content_manifest_promotion_recovery(
 ) -> ContentManifestPromotionRecoveryPlan {
     let manifest_path = manifest_path.as_ref().to_path_buf();
     let journal_path = content_manifest_promotion_journal_path(&manifest_path);
-    if !journal_path.exists() {
+    let journal_exists = match journal_path.try_exists() {
+        Ok(exists) => exists,
+        Err(err) => {
+            return ContentManifestPromotionRecoveryPlan {
+                action: ContentManifestPromotionRecoveryAction::CannotRecover,
+                manifest_path,
+                journal_path,
+                detail: Some(format!(
+                    "content promotion journal existence unavailable: {err}"
+                )),
+            }
+        }
+    };
+    if !journal_exists {
         return ContentManifestPromotionRecoveryPlan {
             action: ContentManifestPromotionRecoveryAction::Ready,
             manifest_path,

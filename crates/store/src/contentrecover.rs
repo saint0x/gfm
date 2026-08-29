@@ -100,7 +100,20 @@ pub fn plan_content_manifest_recovery(
     discovered_archives: &[ContentArchiveManifestEntry],
 ) -> ContentManifestRecoveryPlan {
     let manifest_path = manifest_path.as_ref().to_path_buf();
-    if !manifest_path.exists() {
+    let manifest_exists = match manifest_path.try_exists() {
+        Ok(exists) => exists,
+        Err(err) => {
+            return ContentManifestRecoveryPlan {
+                action: ContentManifestRecoveryAction::CannotRecover,
+                reason: ContentManifestRecoveryReason::UnreadableManifest,
+                manifest_path,
+                valid_archives: Vec::new(),
+                invalid_archives: Vec::new(),
+                detail: Some(format!("content manifest existence unavailable: {err}")),
+            }
+        }
+    };
+    if !manifest_exists {
         let (valid, invalid) = classify_archives(&manifest_path, discovered_archives);
         return plan_from_discovered(
             manifest_path,
@@ -456,6 +469,26 @@ mod tests {
             .as_ref()
             .is_some_and(|path| path.exists()));
         assert!(recovery.after.ready());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn content_manifest_recovery_surfaces_manifest_probe_failures() {
+        let dir = temp_dir("gfm-content-recovery-manifest-probe");
+        fs::create_dir_all(&dir).unwrap();
+        let manifest = dir.join("content-manifest-unavailable".repeat(64));
+
+        let plan = plan_content_manifest_recovery(&manifest, &[]);
+
+        assert_eq!(plan.action, ContentManifestRecoveryAction::CannotRecover);
+        assert_eq!(
+            plan.reason,
+            ContentManifestRecoveryReason::UnreadableManifest
+        );
+        assert!(plan
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("content manifest existence unavailable")));
         fs::remove_dir_all(dir).unwrap();
     }
 
