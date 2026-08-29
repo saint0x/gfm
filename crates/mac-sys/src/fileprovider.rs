@@ -498,14 +498,26 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
 }
 
 pub fn copy_fileprovider_identity(path: &Path) -> NativeFileProviderIdentity {
-    if !path.exists() {
-        return identity_result(
-            NativeFileProviderIdentityStatus::Missing,
-            format!(
-                "fileprovider identity path does not exist: {}",
-                path.display()
-            ),
-        );
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => {
+            return identity_result(
+                NativeFileProviderIdentityStatus::Missing,
+                format!(
+                    "fileprovider identity path does not exist: {}",
+                    path.display()
+                ),
+            );
+        }
+        Err(err) => {
+            return identity_result(
+                NativeFileProviderIdentityStatus::Failed,
+                format!(
+                    "fileprovider identity path existence unavailable: {}: {err}",
+                    path.display()
+                ),
+            );
+        }
     }
     let Some(url) = CFURL::from_path(path, path.is_dir()) else {
         return identity_result(
@@ -762,14 +774,26 @@ fn run_filemanager_url_operation(
     operation: NativeUbiquitousOperation,
     label: &'static str,
 ) -> NativeFileProviderOperationResult {
-    if !path.exists() {
-        return operation_result(
-            NativeFileProviderOperationStatus::Missing,
-            format!(
-                "{label} failed because path does not exist: {}",
-                path.display()
-            ),
-        );
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => {
+            return operation_result(
+                NativeFileProviderOperationStatus::Missing,
+                format!(
+                    "{label} failed because path does not exist: {}",
+                    path.display()
+                ),
+            );
+        }
+        Err(err) => {
+            return operation_result(
+                NativeFileProviderOperationStatus::Failed,
+                format!(
+                    "{label} failed because path existence is unavailable: {}: {err}",
+                    path.display()
+                ),
+            );
+        }
     }
     let Some(url) = CFURL::from_path(path, path.is_dir()) else {
         return operation_result(
@@ -1108,14 +1132,29 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resource_values_surface_path_probe_errors_as_unavailable() {
-        let path = std::path::PathBuf::from(OsString::from_vec(
-            b"/tmp/gfm-native-fileprovider-invalid\0path".to_vec(),
-        ));
+        let path = invalid_path("gfm-native-fileprovider-invalid");
 
         let values = copy_fileprovider_resource_values(&path);
 
         assert_eq!(values.status, NativeFileProviderStatus::Unavailable);
         assert!(values
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("path existence unavailable"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn identity_surfaces_path_probe_errors_as_failed() {
+        let path = invalid_path("gfm-native-fileprovider-identity-invalid");
+
+        let identity = copy_fileprovider_identity(&path);
+
+        assert_eq!(identity.status, NativeFileProviderIdentityStatus::Failed);
+        assert!(identity.item_identifier.is_none());
+        assert!(identity.domain_identifier.is_none());
+        assert!(identity
             .reason
             .as_deref()
             .unwrap_or_default()
@@ -1136,6 +1175,21 @@ mod tests {
 
         assert_eq!(result.status, NativeFileProviderOperationStatus::Missing);
         assert!(result.reason.unwrap().contains("does not exist"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn operation_surfaces_path_probe_errors_as_failed() {
+        let path = invalid_path("gfm-native-fileprovider-operation-invalid");
+
+        let result = start_downloading_ubiquitous_item(&path);
+
+        assert_eq!(result.status, NativeFileProviderOperationStatus::Failed);
+        assert!(result
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("path existence is unavailable"));
     }
 
     #[test]
@@ -1208,5 +1262,12 @@ mod tests {
         if domains.status == NativeFileProviderDomainStatus::Available {
             assert!(!domains.domains.is_empty());
         }
+    }
+
+    #[cfg(unix)]
+    fn invalid_path(name: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(OsString::from_vec(
+            format!("/tmp/{name}\0path").into_bytes(),
+        ))
     }
 }
