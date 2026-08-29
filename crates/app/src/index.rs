@@ -445,14 +445,7 @@ fn run_fsevents_repair_schedule(
         AccessIntent::Read,
         "fsevents repair schedule cursor",
     )?;
-    let existing_dropped_roots = existing_dropped_roots(&dropped_roots);
-    for root in &existing_dropped_roots {
-        preflight_volume_access_scope(
-            root,
-            AccessIntent::Read,
-            "fsevents repair schedule dropped root",
-        )?;
-    }
+    let existing_dropped_roots = existing_dropped_roots(&dropped_roots)?;
     let volume = path_volume(&state)
         .or_else(|| path_volume(&cursor))
         .or_else(|| {
@@ -477,19 +470,26 @@ fn run_fsevents_repair_schedule(
                 state,
                 cursor,
                 &observed_event_ids,
-                &dropped_roots,
+                &existing_dropped_roots,
                 reason.as_deref(),
             )
         },
     )
 }
 
-fn existing_dropped_roots(dropped_roots: &[PathBuf]) -> Vec<PathBuf> {
-    dropped_roots
-        .iter()
-        .filter(|root| root.exists())
-        .cloned()
-        .collect()
+fn existing_dropped_roots(dropped_roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut existing = Vec::new();
+    for root in dropped_roots {
+        preflight_volume_access_scope(
+            root,
+            AccessIntent::Read,
+            "fsevents repair schedule dropped root",
+        )?;
+        if root.exists() {
+            existing.push(root.clone());
+        }
+    }
+    Ok(existing)
 }
 
 fn run_index_read_task<T>(
