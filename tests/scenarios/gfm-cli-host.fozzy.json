@@ -5799,6 +5799,29 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-diagnostics-probe-root/recovery-records.gfmidx",
+      "data": "not-records"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-diagnostics-probe-root/recovery-state.gfmstate",
+      "data": "not-state"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-index-recover",
+        "tmp/gfm-fozzy-diagnostics-probe-root",
+        "tmp/gfm-fozzy-diagnostics-probe-root/recovery-records.gfmidx",
+        "tmp/gfm-fozzy-diagnostics-probe-root/recovery-state.gfmstate",
+        "tmp/gfm-fozzy-diagnostics-probe-root/quarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailablequarantine-unavailable"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

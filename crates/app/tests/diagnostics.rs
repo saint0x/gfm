@@ -665,7 +665,7 @@ fn diagnostics_recover_reports_output_probe_failures_before_worker_from_binary()
             path
         };
         let quarantine = if target == "quarantine" {
-            root.join(format!("{}", "quarantine-unavailable".repeat(16)))
+            root.join("quarantine-unavailable".repeat(16))
         } else {
             root.join("quarantine")
         };
@@ -685,12 +685,18 @@ fn diagnostics_recover_reports_output_probe_failures_before_worker_from_binary()
         assert!(!output.status.success(), "{target}");
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(!stdout.contains("persistent-index-recovery"), "{target}: {stdout}");
+        assert!(
+            !stdout.contains("persistent-index-recovery"),
+            "{target}: {stdout}"
+        );
         assert!(
             stderr.contains("diagnostics write path metadata unavailable"),
             "{target}: {stderr}"
         );
-        assert!(stderr.contains(&format!("{target}-unavailable")), "{target}: {stderr}");
+        assert!(
+            stderr.contains(&format!("{target}-unavailable")),
+            "{target}: {stderr}"
+        );
         assert!(
             !stderr.contains("security-worker-admission\tworker=persistent index repair\t"),
             "{target}: {stderr}"
