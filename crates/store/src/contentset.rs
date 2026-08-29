@@ -130,6 +130,15 @@ impl ContentArchiveManifest {
                 "content manifest requires at least one archive".to_string(),
             ));
         }
+        let mut seen = BTreeSet::new();
+        for archive in &archives {
+            if !seen.insert(archive.path.clone()) {
+                return Err(GfmError::Format(format!(
+                    "content manifest has duplicate archive path `{}`",
+                    archive.path.display()
+                )));
+            }
+        }
         Ok(Self { archives })
     }
 
@@ -155,6 +164,7 @@ impl ContentArchiveManifest {
         }
 
         let mut archives = Vec::new();
+        let mut seen_paths = BTreeSet::new();
         for (line_index, line) in lines.enumerate() {
             let line = line.map_err(|err| GfmError::io(path, err))?;
             if line.trim().is_empty() {
@@ -168,9 +178,19 @@ impl ContentArchiveManifest {
                     line_index + 2
                 )));
             }
+            let archive_path = PathBuf::from(unescape(fields[2])?);
+            let resolved = resolve_manifest_path(path, &archive_path);
+            if !seen_paths.insert(resolved) {
+                return Err(GfmError::Format(format!(
+                    "{} line {}: duplicate content archive path `{}`",
+                    path.display(),
+                    line_index + 2,
+                    archive_path.display()
+                )));
+            }
             archives.push(ContentArchiveManifestEntry {
                 tier: parse_tier(fields[1], path, line_index + 2)?,
-                path: PathBuf::from(unescape(fields[2])?),
+                path: archive_path,
             });
         }
         Self::new(archives)

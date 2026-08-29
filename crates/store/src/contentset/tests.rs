@@ -250,6 +250,47 @@ fn content_archive_manifest_round_trips_and_resolves_relative_paths() {
 }
 
 #[test]
+fn content_archive_manifest_rejects_duplicate_constructed_archive_paths() {
+    let err = ContentArchiveManifest::new(vec![
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Hot,
+            path: PathBuf::from("active.gfmcontent"),
+        },
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: PathBuf::from("active.gfmcontent"),
+        },
+    ])
+    .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("content manifest has duplicate archive path `active.gfmcontent`"));
+}
+
+#[test]
+fn content_archive_manifest_rejects_duplicate_persisted_archive_paths_with_line_number() {
+    let dir = temp_dir("gfm-content-manifest-duplicate-archive");
+    let manifest_path = dir.join("content.gfmmanifest");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        &manifest_path,
+        "gfm-content-manifest-v1\narchive\thot\tactive.gfmcontent\narchive\twarm\tactive.gfmcontent\n",
+    )
+    .unwrap();
+
+    let err = ContentArchiveManifest::read(&manifest_path).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains(&format!("{} line 3", manifest_path.display())));
+    assert!(err
+        .to_string()
+        .contains("duplicate content archive path `active.gfmcontent`"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn content_archive_manifest_promotes_new_archive_and_reports_retirement_state() {
     let dir = temp_dir("gfm-content-manifest-promote");
     let manifest_path = dir.join("content.gfmmanifest");

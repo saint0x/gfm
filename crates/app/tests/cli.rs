@@ -10354,6 +10354,42 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{inspect_stdout}"
     );
 
+    let duplicate_manifest = root.join("duplicate-content.gfmmanifest");
+    fs::write(
+        &duplicate_manifest,
+        format!(
+            "gfm-content-manifest-v1\narchive\thot\t{}\narchive\twarm\t{}\n",
+            first_content.display(),
+            first_content.display()
+        ),
+    )
+    .unwrap();
+    let duplicate_inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-inspect",
+            duplicate_manifest.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!duplicate_inspect.status.success());
+    let duplicate_stdout = String::from_utf8_lossy(&duplicate_inspect.stdout);
+    let duplicate_stderr = String::from_utf8_lossy(&duplicate_inspect.stderr);
+    assert!(
+        !duplicate_stdout.contains("content-manifest\t"),
+        "{duplicate_stdout}"
+    );
+    assert!(
+        duplicate_stderr.contains("duplicate content archive path"),
+        "{duplicate_stderr}"
+    );
+    assert!(duplicate_stderr.contains("line 3"), "{duplicate_stderr}");
+    assert_worker_admitted(
+        &duplicate_stderr,
+        "content manifest inspect",
+        &duplicate_manifest,
+    );
+
     let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "search-content-index-set",
