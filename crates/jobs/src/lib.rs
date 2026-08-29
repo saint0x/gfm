@@ -27,6 +27,11 @@ pub use schedule::{
     SchedulingDecision, SchedulingPressure, VolumeConcurrencyPolicy,
 };
 
+fn path_exists(path: &Path, context: &str) -> Result<bool> {
+    path.try_exists()
+        .map_err(|err| GfmError::io(path, format!("{context} existence unavailable: {err}")))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JobId(u64);
 
@@ -625,7 +630,7 @@ impl JobPayloadCatalog {
     }
 
     pub fn append(&self, record: &JobPayloadRecord) -> Result<()> {
-        if !self.path.exists() {
+        if !path_exists(&self.path, "job payload catalog")? {
             self.write_all(&[])?;
         }
         if self.contains_id(record.id)? {
@@ -647,7 +652,7 @@ impl JobPayloadCatalog {
     }
 
     pub fn read(&self) -> Result<Vec<JobPayloadRecord>> {
-        if !self.path.exists() {
+        if !path_exists(&self.path, "job payload catalog")? {
             return Ok(Vec::new());
         }
         let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
@@ -688,7 +693,7 @@ impl JobPayloadCatalog {
         if wanted.is_empty() {
             return Ok(Vec::new());
         }
-        if !self.path.exists() {
+        if !path_exists(&self.path, "job payload catalog")? {
             return Ok(Vec::new());
         }
         let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
@@ -732,7 +737,7 @@ impl JobPayloadCatalog {
     }
 
     fn contains_id(&self, id: JobId) -> Result<bool> {
-        if !self.path.exists() {
+        if !path_exists(&self.path, "job payload catalog")? {
             return Ok(false);
         }
         let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
@@ -815,7 +820,7 @@ impl JobJournal {
     }
 
     pub fn read(&self) -> Result<Vec<JournalEntry>> {
-        if !self.path.exists() {
+        if !path_exists(&self.path, "job journal")? {
             return Ok(Vec::new());
         }
         let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;

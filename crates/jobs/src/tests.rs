@@ -431,6 +431,34 @@ fn progress_restore_missing_store_is_noop() {
 }
 
 #[test]
+fn progress_store_read_surfaces_path_probe_failures() {
+    let root = temp_dir("gfm-job-progress-probe");
+    let path = unprobeable_child_path(&root, "job-progress-unavailable", "gfmprogress");
+    let store = JobProgressStore::new(&path);
+
+    let err = store.read().unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("job progress store existence unavailable"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn progress_restore_interrupted_surfaces_path_probe_failures() {
+    let root = temp_dir("gfm-job-progress-restore-probe");
+    let path = unprobeable_child_path(&root, "job-progress-restore-unavailable", "gfmprogress");
+    let store = JobProgressStore::new(&path);
+
+    let err = store.restore_interrupted(99).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("job progress store existence unavailable"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn scheduling_pressure_defers_background_under_saturated_io() {
     let pressure = SchedulingPressure {
         io: JobIoPressure::Saturated,
@@ -889,6 +917,20 @@ fn job_journal_append_accepts_relative_leaf_path() {
 }
 
 #[test]
+fn job_journal_read_surfaces_path_probe_failures() {
+    let root = temp_dir("gfm-job-journal-probe");
+    let path = unprobeable_child_path(&root, "job-journal-unavailable", "journal");
+    let journal = JobJournal::new(&path);
+
+    let err = journal.read().unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("job journal existence unavailable"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn journal_identifies_interrupted_and_retryable_jobs() {
     let path = temp_path("gfm-job-recovery", "journal");
     let journal = JobJournal::new(&path);
@@ -1319,6 +1361,56 @@ fn payload_catalog_filtered_read_uses_latest_legacy_duplicate_record() {
 }
 
 #[test]
+fn payload_catalog_read_surfaces_path_probe_failures() {
+    let root = temp_dir("gfm-job-payload-catalog-probe");
+    let path = unprobeable_child_path(&root, "job-payload-catalog-unavailable", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+
+    let err = catalog.read().unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("job payload catalog existence unavailable"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn payload_catalog_filtered_read_surfaces_path_probe_failures() {
+    let root = temp_dir("gfm-job-payload-catalog-filter-probe");
+    let path = unprobeable_child_path(&root, "job-payload-catalog-filter-unavailable", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+
+    let err = catalog.read_for_ids([JobId::from_raw(1)]).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("job payload catalog existence unavailable"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn payload_catalog_append_surfaces_path_probe_failures() {
+    let root = temp_dir("gfm-job-payload-catalog-append-probe");
+    let path = unprobeable_child_path(&root, "job-payload-catalog-append-unavailable", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+    let record = JobPayloadRecord::new(
+        JobId::from_raw(1),
+        JobPayloadKind::Repair,
+        "repair",
+        "repair/sidecar.gfmjob",
+        None,
+        "repair sidecar",
+    );
+
+    let err = catalog.append(&record).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("job payload catalog existence unavailable"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn runtime_stores_write_relative_leaf_paths_in_current_directory() {
     let _cwd = CWD_LOCK.lock().unwrap();
     let root = temp_dir("gfm-job-relative-stores");
@@ -1387,4 +1479,8 @@ fn temp_dir(prefix: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn unprobeable_child_path(root: &std::path::Path, prefix: &str, extension: &str) -> PathBuf {
+    root.join(format!("{}.{}", prefix.repeat(64), extension))
 }

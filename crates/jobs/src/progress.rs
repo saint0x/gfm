@@ -8,6 +8,15 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 const MAGIC: &str = "gfm-job-progress-v1";
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+fn progress_path_exists(path: &Path) -> Result<bool> {
+    path.try_exists().map_err(|err| {
+        GfmError::io(
+            path,
+            format!("job progress store existence unavailable: {err}"),
+        )
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobProgressState {
     Planned,
@@ -214,7 +223,7 @@ impl JobProgressStore {
         &self,
         mut keep: impl FnMut(&JobProgressSnapshot) -> bool,
     ) -> Result<Vec<JobProgressSnapshot>> {
-        if !self.path.exists() {
+        if !progress_path_exists(&self.path)? {
             return Ok(Vec::new());
         }
         let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
@@ -251,7 +260,7 @@ impl JobProgressStore {
     }
 
     pub fn restore_interrupted(&self, updated_ms: u64) -> Result<Vec<JobProgressSnapshot>> {
-        if !self.path.exists() {
+        if !progress_path_exists(&self.path)? {
             return Ok(Vec::new());
         }
         let mut snapshots = self.read()?;
