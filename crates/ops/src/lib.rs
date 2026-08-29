@@ -4,6 +4,7 @@ mod context;
 mod control;
 mod copy;
 mod journal;
+mod locked;
 mod operation;
 mod operator;
 mod plan;

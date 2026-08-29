@@ -26,6 +26,7 @@ pub(crate) fn move_path(
 ) -> Result<()> {
     progress.check_cancelled()?;
     ensure_source_exists(from)?;
+    crate::locked::ensure_unlocked_tree(from, "move")?;
     if resuming && path_exists_or_symlink(to) {
         copy_path(
             from,
@@ -143,6 +144,7 @@ fn move_file_replacing_existing(
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
+    crate::locked::ensure_unlocked_path(to, "replace")?;
     let source_metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
     if metadata_same_file(&source_metadata, &destination_metadata) {
@@ -187,6 +189,7 @@ fn move_directory_replacing_existing(
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
+    crate::locked::ensure_unlocked_tree(to, "replace")?;
     let source_metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
     if metadata_same_file(&source_metadata, &destination_metadata) {
@@ -228,6 +231,7 @@ fn move_symlink_replacing_existing(
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
+    crate::locked::ensure_unlocked_path(to, "replace")?;
     let source_metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
     if metadata_same_file(&source_metadata, &destination_metadata) {
@@ -278,6 +282,7 @@ fn move_via_copy_then_delete(
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
     fallback: MoveFallbackError,
 ) -> Result<()> {
+    crate::locked::ensure_unlocked_tree(from, "move")?;
     copy_path(
         from,
         to,

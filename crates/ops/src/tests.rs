@@ -837,6 +837,78 @@ fn copy_preserves_bsd_file_flags_when_host_supports_them() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(target_vendor = "apple")]
+#[test]
+fn delete_refuses_locked_file_before_remove() {
+    use nix::sys::stat::FileFlag;
+
+    let root = unique_temp_dir("gfm-ops-delete-locked-file");
+    let journal = root.join("journal.log");
+    let path = root.join("locked.txt");
+    fs::write(&path, "locked").unwrap();
+    match nix::unistd::chflags(&path, FileFlag::UF_IMMUTABLE) {
+        Ok(()) => {}
+        Err(err) => {
+            let err = io::Error::from_raw_os_error(err as i32);
+            if file_flag_preservation_unsupported(&err) {
+                fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            panic!("unexpected locked-file setup failure: {err}");
+        }
+    }
+
+    let err = Operator::new(OperationContext::new(&journal))
+        .execute(Operation::Delete { path: path.clone() })
+        .unwrap_err();
+
+    assert!(matches!(err, GfmError::Conflict { .. }));
+    assert!(err.to_string().contains("locked-item confirmation"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "locked");
+
+    nix::unistd::chflags(&path, FileFlag::empty()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn copy_replace_refuses_locked_destination_before_staging() {
+    use nix::sys::stat::FileFlag;
+
+    let root = unique_temp_dir("gfm-ops-copy-replace-locked");
+    let journal = root.join("journal.log");
+    let source = root.join("source.txt");
+    let destination = root.join("destination.txt");
+    fs::write(&source, "new").unwrap();
+    fs::write(&destination, "old").unwrap();
+    match nix::unistd::chflags(&destination, FileFlag::UF_IMMUTABLE) {
+        Ok(()) => {}
+        Err(err) => {
+            let err = io::Error::from_raw_os_error(err as i32);
+            if file_flag_preservation_unsupported(&err) {
+                fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            panic!("unexpected locked-file setup failure: {err}");
+        }
+    }
+
+    let err = Operator::new(OperationContext::new(&journal).with_conflict(ConflictPolicy::Replace))
+        .execute(Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        })
+        .unwrap_err();
+
+    assert!(matches!(err, GfmError::Conflict { .. }));
+    assert!(err.to_string().contains("locked-item confirmation"));
+    assert_eq!(fs::read_to_string(&source).unwrap(), "new");
+    assert_eq!(fs::read_to_string(&destination).unwrap(), "old");
+
+    nix::unistd::chflags(&destination, FileFlag::empty()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn copy_preserves_access_control_lists_when_host_supports_them() {
@@ -1818,6 +1890,92 @@ fn move_uses_copy_delete_when_policy_reports_distinct_volumes() {
     );
     assert_ne!(source_metadata.ino(), destination_metadata.ino());
 
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn move_copy_delete_refuses_locked_descendant_before_copying() {
+    use nix::sys::stat::FileFlag;
+
+    let root = unique_temp_dir("gfm-ops-move-locked-descendant");
+    let journal = root.join("journal.log");
+    let source_root = root.join("SourceVolume");
+    let destination_root = root.join("DestinationVolume");
+    let source = source_root.join("source");
+    let locked = source.join("nested").join("locked.txt");
+    let destination = destination_root.join("source");
+    fs::create_dir_all(locked.parent().unwrap()).unwrap();
+    fs::create_dir_all(&destination_root).unwrap();
+    fs::write(&locked, "locked").unwrap();
+    match nix::unistd::chflags(&locked, FileFlag::UF_IMMUTABLE) {
+        Ok(()) => {}
+        Err(err) => {
+            let err = io::Error::from_raw_os_error(err as i32);
+            if file_flag_preservation_unsupported(&err) {
+                fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            panic!("unexpected locked-file setup failure: {err}");
+        }
+    }
+    let policy = OperationVolumeCopyPolicy::default()
+        .with_root_volume_identity(&source_root, "diskarbitration:uuid:SOURCE")
+        .with_root_volume_identity(&destination_root, "diskarbitration:uuid:DESTINATION");
+
+    let err = Operator::new(OperationContext::new(&journal).with_volume_copy_policy(policy))
+        .execute(Operation::Move {
+            from: source.clone(),
+            to: destination.clone(),
+        })
+        .unwrap_err();
+
+    assert!(matches!(err, GfmError::Conflict { .. }));
+    assert!(err.to_string().contains("locked-item confirmation"));
+    assert!(locked.exists());
+    assert!(!destination.exists());
+
+    nix::unistd::chflags(&locked, FileFlag::empty()).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn move_rename_refuses_locked_descendant_before_renaming() {
+    use nix::sys::stat::FileFlag;
+
+    let root = unique_temp_dir("gfm-ops-move-rename-locked-descendant");
+    let journal = root.join("journal.log");
+    let source = root.join("source");
+    let locked = source.join("nested").join("locked.txt");
+    let destination = root.join("destination");
+    fs::create_dir_all(locked.parent().unwrap()).unwrap();
+    fs::write(&locked, "locked").unwrap();
+    match nix::unistd::chflags(&locked, FileFlag::UF_IMMUTABLE) {
+        Ok(()) => {}
+        Err(err) => {
+            let err = io::Error::from_raw_os_error(err as i32);
+            if file_flag_preservation_unsupported(&err) {
+                fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            panic!("unexpected locked-file setup failure: {err}");
+        }
+    }
+
+    let err = Operator::new(OperationContext::new(&journal))
+        .execute(Operation::Move {
+            from: source.clone(),
+            to: destination.clone(),
+        })
+        .unwrap_err();
+
+    assert!(matches!(err, GfmError::Conflict { .. }));
+    assert!(err.to_string().contains("locked-item confirmation"));
+    assert!(locked.exists());
+    assert!(!destination.exists());
+
+    nix::unistd::chflags(&locked, FileFlag::empty()).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 

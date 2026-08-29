@@ -192,6 +192,7 @@ fn copy_file_replacing_existing(
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
+    crate::locked::ensure_unlocked_path(to, "replace")?;
     let source_metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
     if metadata_same_file(&source_metadata, &destination_metadata) {
@@ -222,6 +223,7 @@ fn copy_directory_replacing_existing(
     session: &mut CopySession,
 ) -> Result<()> {
     progress.check_cancelled()?;
+    crate::locked::ensure_unlocked_tree(to, "replace")?;
     let source_metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
     if metadata_same_file(&source_metadata, &destination_metadata) {
@@ -252,6 +254,7 @@ fn copy_symlink_replacing_existing(
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
+    crate::locked::ensure_unlocked_path(to, "replace")?;
     let source_metadata = fs::symlink_metadata(from).map_err(|err| GfmError::io(from, err))?;
     let destination_metadata = fs::symlink_metadata(to).map_err(|err| GfmError::io(to, err))?;
     if metadata_same_file(&source_metadata, &destination_metadata) {

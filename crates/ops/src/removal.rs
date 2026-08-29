@@ -14,6 +14,7 @@ pub(crate) fn delete_path(
     progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     progress.check_cancelled()?;
+    crate::locked::ensure_unlocked_tree(path, "delete")?;
     let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
     if metadata.is_dir() {
         fs::remove_dir_all(path).map_err(|err| GfmError::io(path, err))?;
@@ -42,6 +43,7 @@ pub(crate) fn trash_path(
 ) -> Result<()> {
     progress.check_cancelled()?;
     ensure_source_exists(path)?;
+    crate::locked::ensure_unlocked_tree(path, "trash")?;
     if let Some(metadata_path) = metadata_path {
         append_trash_metadata(metadata_path, path)?;
     }
@@ -62,6 +64,7 @@ pub(crate) fn empty_trash_path(
             path.display()
         )));
     }
+    crate::locked::ensure_unlocked_tree(path, "empty trash")?;
     let mut entries = fs::read_dir(path)
         .map_err(|err| GfmError::io(path, err))?
         .map(|entry| {
