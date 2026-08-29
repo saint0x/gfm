@@ -469,8 +469,8 @@ fn probe_scope(scope: PermissionScope, path: PathBuf) -> PermissionReadiness {
         Err(err) => PermissionReadiness {
             scope,
             path,
-            state: PermissionState::Unknown,
-            reason: format!("probe failed: {err}"),
+            state: PermissionState::Unavailable,
+            reason: format!("permission probe unavailable: {err}"),
         },
     }
 }
@@ -481,7 +481,7 @@ fn probe_file(path: &Path) -> PermissionState {
         Ok(_) => PermissionState::Granted,
         Err(err) if err.kind() == ErrorKind::NotFound => PermissionState::Missing,
         Err(err) if err.kind() == ErrorKind::PermissionDenied => PermissionState::Denied,
-        Err(_) => PermissionState::Unknown,
+        Err(_) => PermissionState::Unavailable,
     }
 }
 
@@ -941,6 +941,21 @@ mod tests {
         snapshot.write(&path).unwrap();
 
         assert_eq!(PermissionStateSnapshot::read(&path).unwrap(), snapshot);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permission_scope_probe_reports_unavailable_for_host_probe_failures() {
+        let root = temp_root("permissions-probe-unavailable");
+        let path = root.join("permission-probe-unavailable".repeat(64));
+
+        let readiness = probe_scope(PermissionScope::Documents, path.clone());
+
+        assert_eq!(readiness.scope, PermissionScope::Documents);
+        assert_eq!(readiness.path, path);
+        assert_eq!(readiness.state, PermissionState::Unavailable);
+        assert!(readiness.reason.contains("permission probe unavailable"));
+        assert_eq!(probe_file(&readiness.path), PermissionState::Unavailable);
         fs::remove_dir_all(root).unwrap();
     }
 
