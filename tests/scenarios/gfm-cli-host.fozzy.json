@@ -3084,6 +3084,22 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-duplicate-state.tsv",
+      "data": "gfm-fileprovider-state-v1\nevicted\ttmp/gfm-fozzy-downloaded.icloud.md\ndownloaded\ttmp/gfm-fozzy-downloaded.icloud.md\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-invalidation-scan",
+        "tmp/gfm-fozzy-fileprovider-duplicate-state.tsv",
+        "tmp/gfm-fozzy-downloaded.icloud.md"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-dist/.gfm-volume-kind",
       "data": "external-removable\n"
     },

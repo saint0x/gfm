@@ -852,6 +852,7 @@ impl FileProviderStateSnapshot {
             }
         }
         let mut entries = Vec::new();
+        let mut seen_paths = BTreeSet::new();
         for (line_index, line) in lines.enumerate() {
             if line.trim().is_empty() {
                 continue;
@@ -872,9 +873,18 @@ impl FileProviderStateSnapshot {
                     fields[0]
                 ))
             })?;
+            let entry_path = PathBuf::from(unescape_field(fields[1]));
+            if !seen_paths.insert(entry_path.clone()) {
+                return Err(GfmError::Format(format!(
+                    "{}:{} duplicate FileProvider state path `{}`",
+                    path.display(),
+                    line_index + 2,
+                    entry_path.display()
+                )));
+            }
             entries.push(FileProviderStateSnapshotEntry {
                 state,
-                path: PathBuf::from(unescape_field(fields[1])),
+                path: entry_path,
             });
         }
         Ok(Self { entries })
@@ -2857,6 +2867,31 @@ mod tests {
         assert!(err
             .to_string()
             .contains("unsupported FileProvider storage state `broken`"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_state_snapshot_rejects_duplicate_paths_with_line_number() {
+        let root = unique_temp_dir();
+        let path = root.join("fileprovider-state.tsv");
+        let remote = root.join("Remote.icloud-placeholder");
+        fs::write(
+            &path,
+            format!(
+                "gfm-fileprovider-state-v1\nevicted\t{}\ndownloaded\t{}\n",
+                remote.display(),
+                remote.display()
+            ),
+        )
+        .unwrap();
+
+        let err = FileProviderStateSnapshot::read(&path).unwrap_err();
+
+        assert!(err.to_string().contains(&format!("{}:3", path.display())));
+        assert!(err
+            .to_string()
+            .contains("duplicate FileProvider state path"));
+        assert!(err.to_string().contains(&remote.display().to_string()));
         fs::remove_dir_all(root).unwrap();
     }
 
