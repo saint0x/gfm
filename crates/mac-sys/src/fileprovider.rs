@@ -201,6 +201,7 @@ pub enum NativeFileProviderOperationStatus {
     Completed,
     Missing,
     PermissionDenied,
+    Unavailable,
     Failed,
     UnsupportedPath,
 }
@@ -787,7 +788,7 @@ fn run_filemanager_url_operation(
         }
         Err(err) => {
             return operation_result(
-                NativeFileProviderOperationStatus::Failed,
+                NativeFileProviderOperationStatus::Unavailable,
                 format!(
                     "{label} failed because path existence is unavailable: {}: {err}",
                     path.display()
@@ -807,21 +808,21 @@ fn run_filemanager_url_operation(
 
     let Some(filemanager_class) = Class::get("NSFileManager") else {
         return operation_result(
-            NativeFileProviderOperationStatus::Failed,
+            NativeFileProviderOperationStatus::Unavailable,
             "NSFileManager class is unavailable",
         );
     };
     let default_manager = unsafe { default_filemanager(filemanager_class) };
     if default_manager.is_null() {
         return operation_result(
-            NativeFileProviderOperationStatus::Failed,
+            NativeFileProviderOperationStatus::Unavailable,
             "NSFileManager defaultManager is unavailable",
         );
     }
     let selector = operation.selector();
     if !object_responds_to_selector(default_manager, selector) {
         return operation_result(
-            NativeFileProviderOperationStatus::Failed,
+            NativeFileProviderOperationStatus::Unavailable,
             format!("NSFileManager {} is unavailable", operation.selector_name()),
         );
     }
@@ -1179,12 +1180,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn operation_surfaces_path_probe_errors_as_failed() {
+    fn operation_surfaces_path_probe_errors_as_unavailable() {
         let path = invalid_path("gfm-native-fileprovider-operation-invalid");
 
         let result = start_downloading_ubiquitous_item(&path);
 
-        assert_eq!(result.status, NativeFileProviderOperationStatus::Failed);
+        assert_eq!(
+            result.status,
+            NativeFileProviderOperationStatus::Unavailable
+        );
         assert!(result
             .reason
             .as_deref()

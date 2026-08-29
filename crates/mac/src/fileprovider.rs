@@ -643,6 +643,7 @@ pub enum FileProviderOperationDisposition {
     Completed,
     Refused,
     Denied,
+    Unavailable,
     Failed,
 }
 
@@ -652,6 +653,7 @@ impl FileProviderOperationDisposition {
             Self::Completed => "completed",
             Self::Refused => "refused",
             Self::Denied => "denied",
+            Self::Unavailable => "unavailable",
             Self::Failed => "failed",
         }
     }
@@ -1320,6 +1322,7 @@ impl FileProviderOperationReport {
             }
             NativeFileProviderOperationStatus::Missing
             | NativeFileProviderOperationStatus::PermissionDenied
+            | NativeFileProviderOperationStatus::Unavailable
             | NativeFileProviderOperationStatus::UnsupportedPath
             | NativeFileProviderOperationStatus::Failed => Ok(Self {
                 path,
@@ -1374,6 +1377,9 @@ fn disposition_for_native_fileprovider_operation(
         NativeFileProviderOperationStatus::Completed => FileProviderOperationDisposition::Completed,
         NativeFileProviderOperationStatus::PermissionDenied => {
             FileProviderOperationDisposition::Denied
+        }
+        NativeFileProviderOperationStatus::Unavailable => {
+            FileProviderOperationDisposition::Unavailable
         }
         NativeFileProviderOperationStatus::Missing
         | NativeFileProviderOperationStatus::UnsupportedPath
@@ -3738,6 +3744,12 @@ mod tests {
                 NativeFileProviderOperationStatus::PermissionDenied
             ),
             FileProviderOperationDisposition::Denied
+        );
+        assert_eq!(
+            disposition_for_native_fileprovider_operation(
+                NativeFileProviderOperationStatus::Unavailable
+            ),
+            FileProviderOperationDisposition::Unavailable
         );
         assert_eq!(
             disposition_for_native_fileprovider_operation(
