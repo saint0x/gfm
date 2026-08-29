@@ -460,7 +460,7 @@ pub(crate) fn config_store(value: Option<String>) -> Result<ConfigStore> {
 fn run_config_init(store: &ConfigStore) -> Result<GfmConfig> {
     const WORKER: &str = "config init";
     preflight_config_init_volume(store)?;
-    let volume = config_volume(store);
+    let volume = config_volume(store)?;
     let store = store.clone();
     runtime::run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
@@ -473,7 +473,7 @@ fn run_config_init(store: &ConfigStore) -> Result<GfmConfig> {
 fn run_config_check(store: &ConfigStore) -> Result<GfmConfig> {
     const WORKER: &str = "config check";
     access::preflight_volume_access_scope(store.path(), AccessIntent::Read, WORKER)?;
-    let volume = config_volume(store);
+    let volume = config_volume(store)?;
     let store = store.clone();
     runtime::run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
@@ -488,7 +488,7 @@ fn run_config_check(store: &ConfigStore) -> Result<GfmConfig> {
 fn run_config_dump(store: &ConfigStore) -> Result<GfmConfig> {
     const WORKER: &str = "config dump";
     access::preflight_volume_access_scope(store.path(), AccessIntent::Read, WORKER)?;
-    let volume = config_volume(store);
+    let volume = config_volume(store)?;
     let store = store.clone();
     runtime::run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
@@ -499,7 +499,7 @@ fn run_config_dump(store: &ConfigStore) -> Result<GfmConfig> {
 }
 
 fn preflight_config_init_volume(store: &ConfigStore) -> Result<()> {
-    if store.path().exists() {
+    if config_path_exists(store.path())? {
         access::preflight_volume_access_scope(store.path(), AccessIntent::Read, "config init")
     } else {
         access::preflight_volume_access_scope(
@@ -510,15 +510,15 @@ fn preflight_config_init_volume(store: &ConfigStore) -> Result<()> {
     }
 }
 
-fn config_volume(store: &ConfigStore) -> Option<VolumeId> {
-    let probe = if store.path().exists() {
+fn config_volume(store: &ConfigStore) -> Result<Option<VolumeId>> {
+    let probe = if config_path_exists(store.path())? {
         store.path()
     } else {
         config_write_probe_path(store.path())
     };
-    detect_volume_id(probe)
+    Ok(detect_volume_id(probe)
         .ok()
-        .or_else(|| parent_volume(probe))
+        .or_else(|| parent_volume(probe)))
 }
 
 pub(crate) fn preflight_config_write(
@@ -537,11 +537,16 @@ fn preflight_config_read(store: &ConfigStore, worker: &str) -> Result<access::Sc
 }
 
 fn preflight_config_init(store: &ConfigStore) -> Result<access::ScopedAccessGuard> {
-    if store.path().exists() {
+    if config_path_exists(store.path())? {
         preflight_config_read(store, "config init")
     } else {
         preflight_config_write(store, "config init")
     }
+}
+
+fn config_path_exists(path: &Path) -> Result<bool> {
+    path.try_exists()
+        .map_err(|err| GfmError::io(path, format!("config path existence unavailable: {err}")))
 }
 
 pub(crate) fn existing_read_probe_path(path: &Path) -> &Path {

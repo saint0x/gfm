@@ -82,6 +82,33 @@ fn config_init_uses_cwd_write_probe_for_relative_store_from_binary() {
 }
 
 #[test]
+fn config_init_surfaces_store_path_probe_failure_before_writing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-config-init-store-probe");
+    let config = root.join(format!("{}.toml", "config-unavailable".repeat(32)));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["config-init", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("3\t"), "{stdout}");
+    assert!(
+        stderr.contains("config path existence unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&config.display().to_string()), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=config init\t"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn config_routes_refuse_unreachable_volume_before_loading_or_persisting_from_binary() {
     let root = unique_temp_dir("gfm-cli-config-preflight-root");
     let offline = unique_temp_dir("gfm-cli-config-preflight-offline");
