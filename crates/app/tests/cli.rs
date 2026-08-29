@@ -7725,6 +7725,45 @@ fn adaptive_extraction_worker_refuses_unreachable_scratch_before_launch_from_bin
 }
 
 #[test]
+fn adaptive_extraction_worker_refuses_unprobeable_scratch_volume_before_launch_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-worker-scratch-probe-root");
+    let path = root.join("document.txt");
+    let unavailable_scratch = root.join("scratch-unavailable".repeat(16));
+    fs::write(&path, "scratch probe marker").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("TMPDIR", &unavailable_scratch)
+        .args([
+            "extract-worker-adaptive",
+            path.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("extract\t"), "{stdout}");
+    assert!(
+        stderr.contains("adaptive extraction volume access blocked"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("read-only volume system"), "{stderr}");
+    assert!(stderr.contains("scratch-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=adaptive extraction stdout\t"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), "scratch probe marker");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn fileprovider_progress_job_persists_runtime_payload_and_progress_from_binary() {
     let root = unique_temp_dir("gfm-cli-fileprovider-progress-runtime-root");
     let item = root.join("Remote.icloud-downloading");
@@ -8695,6 +8734,41 @@ fn extract_quarantine_refuses_unreachable_store_before_recording_from_binary() {
 
     fs::remove_dir_all(source_root).unwrap();
     fs::remove_dir_all(store_root).unwrap();
+}
+
+#[test]
+fn extract_quarantine_surfaces_store_probe_failure_before_recording_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-quarantine-store-probe-source");
+    let path = root.join("Slow.pdf");
+    let store = root.join("quarantine-store-unavailable".repeat(16));
+    fs::write(&path, minimal_pdf("probe failure worker")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "extract-quarantine",
+            path.to_str().unwrap(),
+            store.to_str().unwrap(),
+            "timeout",
+            "2",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("quarantine\t"), "{stdout}");
+    assert!(
+        stderr.contains("content write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("quarantine-store-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=extraction quarantine\t"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

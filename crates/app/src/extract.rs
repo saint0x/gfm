@@ -14,6 +14,8 @@ use gfm_jobs::{
 use gfm_mac::{AccessIntent, VolumeDescriptor, VolumeDiscoveryReport, VolumeKind};
 use gfm_types::{GfmError, Result};
 use std::env;
+use std::fs;
+use std::io;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -242,7 +244,7 @@ pub(crate) fn read_extraction_quarantine(
     store: &Path,
     threshold: u32,
 ) -> Result<ExtractionQuarantine> {
-    if store.is_file() {
+    if extraction_path_is_file(store, "quarantine store")? {
         ExtractionQuarantine::read(store)
     } else {
         Ok(ExtractionQuarantine::new(threshold))
@@ -273,11 +275,12 @@ fn retain_extraction_quarantine_worker_access(
 ) -> Result<Vec<ScopedAccessGuard>> {
     Ok(vec![
         preflight_access_scope(path, AccessIntent::Read, worker)?,
-        preflight_access_scope(write_probe_path(store), AccessIntent::Write, worker)?,
+        preflight_access_scope(write_probe_path(store)?, AccessIntent::Write, worker)?,
     ])
 }
 
 struct WorkerSandbox {
+    sandbox_exec_path: Option<PathBuf>,
     profile_path: Option<PathBuf>,
 }
 
@@ -289,10 +292,12 @@ impl WorkerSandbox {
         stderr: &Path,
         permission_state: &Path,
     ) -> Result<Self> {
-        let Some(sandbox_exec) = sandbox_exec_path() else {
-            return Ok(Self { profile_path: None });
+        let Some(sandbox_exec) = sandbox_exec_path()? else {
+            return Ok(Self {
+                sandbox_exec_path: None,
+                profile_path: None,
+            });
         };
-        let _ = sandbox_exec;
         let profile = extraction_sandbox_profile(
             exe,
             input,
@@ -307,12 +312,13 @@ impl WorkerSandbox {
             monotonic_nanos()
         ));
         let _profile_access = preflight_access_scope(
-            write_probe_path(&profile_path),
+            write_probe_path(&profile_path)?,
             AccessIntent::Write,
             "adaptive extraction sandbox profile",
         )?;
         std::fs::write(&profile_path, profile).map_err(|err| GfmError::io(&profile_path, err))?;
         Ok(Self {
+            sandbox_exec_path: Some(sandbox_exec),
             profile_path: Some(profile_path),
         })
     }
@@ -324,7 +330,8 @@ impl WorkerSandbox {
         pressure: SchedulingPressure,
         permission_state: &Path,
     ) -> Command {
-        if let (Some(sandbox_exec), Some(profile_path)) = (sandbox_exec_path(), &self.profile_path)
+        if let (Some(sandbox_exec), Some(profile_path)) =
+            (&self.sandbox_exec_path, &self.profile_path)
         {
             let mut command = Command::new(sandbox_exec);
             command
@@ -481,33 +488,48 @@ fn retain_worker_scratch_access(
 ) -> Result<Vec<ScopedAccessGuard>> {
     Ok(vec![
         preflight_access_scope(
-            write_probe_path(stdout_path),
+            write_probe_path(stdout_path)?,
             AccessIntent::Write,
             "adaptive extraction stdout",
         )?,
         preflight_access_scope(
-            write_probe_path(stderr_path),
+            write_probe_path(stderr_path)?,
             AccessIntent::Write,
             "adaptive extraction stderr",
         )?,
         preflight_access_scope(
-            write_probe_path(permission_state_dir),
+            write_probe_path(permission_state_dir)?,
             AccessIntent::Write,
             "adaptive extraction permission state",
         )?,
     ])
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.exists() {
-        return path;
+fn extraction_path_is_file(path: &Path, label: &str) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("extraction {label} metadata unavailable: {err}"),
+        )),
     }
-    crate::parent_or_cwd(path)
 }
 
-fn sandbox_exec_path() -> Option<PathBuf> {
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match path.try_exists() {
+        Ok(true) => Ok(path),
+        Ok(false) => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("extraction write path existence unavailable: {err}"),
+        )),
+    }
+}
+
+fn sandbox_exec_path() -> Result<Option<PathBuf>> {
     let path = PathBuf::from("/usr/bin/sandbox-exec");
-    path.is_file().then_some(path)
+    Ok(extraction_path_is_file(&path, "sandbox-exec")?.then_some(path))
 }
 
 fn extraction_sandbox_profile(
@@ -778,6 +800,38 @@ mod tests {
 
         fs::remove_dir_all(source).unwrap();
         fs::remove_dir_all(offline).unwrap();
+    }
+
+    #[test]
+    fn quarantine_reader_surfaces_store_probe_failure() {
+        let root = unique_temp_dir("gfm-extract-quarantine-store-probe");
+        let store = root.join("quarantine-store-unavailable".repeat(16));
+
+        let err = read_extraction_quarantine(&store, 2).unwrap_err();
+
+        assert!(matches!(err, GfmError::Io { .. }));
+        assert!(err
+            .to_string()
+            .contains("extraction quarantine store metadata unavailable"));
+        assert!(err.to_string().contains(&store.display().to_string()));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extraction_write_probe_surfaces_path_probe_failure() {
+        let root = unique_temp_dir("gfm-extract-write-probe");
+        let output = root.join("extraction-output-unavailable".repeat(16));
+
+        let err = write_probe_path(&output).unwrap_err();
+
+        assert!(matches!(err, GfmError::Io { .. }));
+        assert!(err
+            .to_string()
+            .contains("extraction write path existence unavailable"));
+        assert!(err.to_string().contains(&output.display().to_string()));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

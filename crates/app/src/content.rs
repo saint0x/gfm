@@ -32,6 +32,8 @@ use gfm_mac::AccessIntent;
 use gfm_store::{read_records, ContentArchiveManifest};
 use gfm_types::{GfmError, Result, SearchHit};
 use std::collections::HashSet;
+use std::fs;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -1140,13 +1142,21 @@ fn retain_extraction_quarantine_access(
 ) -> Result<Vec<ScopedAccessGuard>> {
     Ok(vec![
         preflight_access_scope(path, AccessIntent::Read, worker)?,
-        preflight_access_scope(write_probe_path(store), AccessIntent::Write, worker)?,
+        preflight_access_scope(
+            checked_write_probe_path(store)?,
+            AccessIntent::Write,
+            worker,
+        )?,
     ])
 }
 
 fn preflight_extraction_quarantine_volumes(path: &Path, store: &Path, worker: &str) -> Result<()> {
     preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
-    preflight_volume_access_scope(write_probe_path(store), AccessIntent::Write, worker)
+    preflight_volume_access_scope(
+        checked_write_probe_path(store)?,
+        AccessIntent::Write,
+        worker,
+    )
 }
 
 fn run_extraction_quarantine(
@@ -1157,10 +1167,11 @@ fn run_extraction_quarantine(
 ) -> Result<Vec<String>> {
     const WORKER: &str = "extraction quarantine";
     preflight_extraction_quarantine_volumes(&path, &store, WORKER)?;
+    let store_probe = checked_write_probe_path(&store)?.to_path_buf();
     let volume = detect_volume_id(&path)
         .ok()
         .or_else(|| parent_volume(&path))
-        .or_else(|| parent_volume(write_probe_path(&store)));
+        .or_else(|| parent_volume(&store_probe));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_extraction_quarantine_access(&path, &store, WORKER)?;
@@ -1342,6 +1353,37 @@ fn write_probe_path(path: &Path) -> &Path {
         return path;
     }
     crate::parent_or_cwd(path)
+}
+
+fn checked_write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => validate_write_file_name(path).map(|()| crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            validate_write_file_name(path).map(|()| crate::parent_or_cwd(path))
+        }
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("content write path metadata unavailable: {err}"),
+        )),
+    }
+}
+
+fn validate_write_file_name(path: &Path) -> Result<()> {
+    let Some(file_name) = path.file_name() else {
+        return Ok(());
+    };
+    let limit = 255;
+    if file_name.as_encoded_bytes().len() > limit {
+        return Err(GfmError::io(
+            path,
+            format!(
+                "content write filename too long: {} bytes exceeds {limit}",
+                file_name.as_encoded_bytes().len()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
