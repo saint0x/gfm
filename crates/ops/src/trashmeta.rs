@@ -54,7 +54,10 @@ pub fn read_trash_metadata(
     path: impl AsRef<Path>,
 ) -> Result<BTreeMap<String, TrashRestoreMetadata>> {
     let path = path.as_ref();
-    if !path.exists() {
+    if !path
+        .try_exists()
+        .map_err(|err| GfmError::io(path, format!("trash metadata existence unavailable: {err}")))?
+    {
         return Ok(BTreeMap::new());
     }
     let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
@@ -141,7 +144,15 @@ pub(crate) fn reconcile_empty_trash_metadata(
     };
     let mut entries = read_trash_metadata(metadata_path)?;
     let before = entries.len();
-    entries.retain(|name, _| path_exists_or_symlink(&trash_dir.join(name)));
+    let mut stale = Vec::new();
+    for name in entries.keys() {
+        if !path_exists_or_symlink(&trash_dir.join(name))? {
+            stale.push(name.clone());
+        }
+    }
+    for name in stale {
+        entries.remove(&name);
+    }
     if entries.len() != before {
         write_trash_metadata(metadata_path, entries.values())?;
     }
@@ -178,8 +189,15 @@ fn parse_bool_field(value: &str, name: &str, path: &Path, line: usize) -> Result
     }
 }
 
-fn path_exists_or_symlink(path: &Path) -> bool {
-    path.exists() || fs::symlink_metadata(path).is_ok()
+fn path_exists_or_symlink(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("trash item existence unavailable: {err}"),
+        )),
+    }
 }
 
 fn escape(input: &str) -> String {
@@ -288,6 +306,54 @@ mod tests {
 
         assert!(entries.contains_key("present.md"));
         assert!(!entries.contains_key("missing.md"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_trash_metadata_surfaces_path_probe_failures() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-trashmeta-probe-root-{}-{}",
+            std::process::id(),
+            now_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let metadata = root.join("trash-metadata-unavailable".repeat(64));
+
+        let err = read_trash_metadata(&metadata).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("trash metadata existence unavailable"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_trash_reconciliation_surfaces_item_probe_failures() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-trashmeta-item-probe-root-{}-{}",
+            std::process::id(),
+            now_nanos()
+        ));
+        let trash_dir = root.join("Trash");
+        let metadata = root.join("trash.tsv");
+        fs::create_dir_all(&trash_dir).unwrap();
+        let name = "trash-item-unavailable".repeat(64);
+        append_trash_metadata_entry(
+            &metadata,
+            &TrashRestoreMetadata {
+                name,
+                original_path: root.join("Documents").join("missing.md"),
+                deleted_at_nanos: 1,
+                can_restore: true,
+                can_delete_permanently: true,
+                permission_issue: None,
+            },
+        )
+        .unwrap();
+
+        let err = reconcile_empty_trash_metadata(Some(&metadata), &trash_dir).unwrap_err();
+
+        assert!(err.to_string().contains("trash item existence unavailable"));
         fs::remove_dir_all(root).unwrap();
     }
 }
