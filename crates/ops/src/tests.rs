@@ -52,6 +52,19 @@ fn copies_directories_and_records_journal() {
 }
 
 #[test]
+fn read_journal_surfaces_path_probe_failures() {
+    let root = unique_temp_dir("gfm-ops-journal-probe");
+    let journal = root.join("operation-journal-unavailable".repeat(64));
+
+    let err = read_journal(&journal).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("operation journal existence unavailable"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn plans_recursive_copy_totals_before_execution() {
     let root = unique_temp_dir("gfm-ops-plan-copy");
     let source = root.join("source");

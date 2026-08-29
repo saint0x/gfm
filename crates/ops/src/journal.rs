@@ -129,7 +129,12 @@ pub(crate) fn append_journal(path: &Path, entry: &JournalEntry) -> Result<()> {
 
 pub fn read_journal(path: impl AsRef<Path>) -> Result<Vec<JournalEntry>> {
     let path = path.as_ref();
-    if !path.exists() {
+    if !path.try_exists().map_err(|err| {
+        GfmError::io(
+            path,
+            format!("operation journal existence unavailable: {err}"),
+        )
+    })? {
         return Ok(Vec::new());
     }
     let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
