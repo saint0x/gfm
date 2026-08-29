@@ -21,12 +21,13 @@ use std::ffi::{CStr, CString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 type DASessionRef = *const c_void;
 type DADiskRef = *const c_void;
@@ -51,6 +52,7 @@ const DA_RETURN_NOT_PRIVILEGED: u32 = 0xF8DA0009;
 const DA_RETURN_NOT_READY: u32 = 0xF8DA000A;
 const DA_RETURN_NOT_WRITABLE: u32 = 0xF8DA000B;
 const DA_RETURN_UNSUPPORTED: u32 = 0xF8DA000C;
+const VOLUME_EVENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(2);
 const VOLUME_OPERATION_CALLBACK_TIMEOUT_SECONDS: f64 = 0.5;
 const VOLUME_OPERATION_CALLBACK_TIMEOUT_MILLIS: u64 =
     (VOLUME_OPERATION_CALLBACK_TIMEOUT_SECONDS * 1000.0) as u64;
@@ -377,6 +379,7 @@ struct NativeVolumeOperationContext {
 impl NativeVolumeEventStream {
     pub fn start() -> Self {
         let (event_tx, event_rx) = mpsc::channel();
+        let startup_event_tx = event_tx.clone();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
@@ -429,12 +432,29 @@ impl NativeVolumeEventStream {
             }
         });
 
-        let run_loop = ready_rx.recv().ok().flatten();
+        let (run_loop, thread) = match ready_rx.recv_timeout(VOLUME_EVENT_STARTUP_TIMEOUT) {
+            Ok(run_loop) => (run_loop, Some(thread)),
+            Err(RecvTimeoutError::Timeout) => {
+                stop.store(true, Ordering::Release);
+                let _ = startup_event_tx.send(NativeVolumeEvent {
+                    kind: NativeVolumeEventKind::Unavailable,
+                    description: unavailable("DiskArbitration event session startup timed out"),
+                });
+                (None, None)
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                let _ = startup_event_tx.send(NativeVolumeEvent {
+                    kind: NativeVolumeEventKind::Unavailable,
+                    description: unavailable("DiskArbitration event session exited before startup"),
+                });
+                (None, Some(thread))
+            }
+        };
         Self {
             receiver: event_rx,
             run_loop,
             stop,
-            thread: Some(thread),
+            thread,
         }
     }
 
