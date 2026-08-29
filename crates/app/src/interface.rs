@@ -899,10 +899,10 @@ fn fileprovider_event_access_path(
     path: &Path,
     previous: Option<&FileProviderStateSnapshot>,
 ) -> PathBuf {
-    if path.exists() || !snapshot_tracks_path_or_descendant(previous, path) {
-        return path.to_path_buf();
+    if snapshot_tracks_path_or_descendant(previous, path) {
+        return write_probe_existing_ancestor(path);
     }
-    write_probe_existing_ancestor(path)
+    path.to_path_buf()
 }
 
 fn snapshot_tracks_path_or_descendant(
@@ -1611,6 +1611,7 @@ fn required_string(value: Option<String>, message: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_mac::FileProviderStateSnapshotEntry;
 
     fn allowed_permission_access() -> PermissionAccessContract {
         PermissionAccessContract {
@@ -1659,5 +1660,28 @@ mod tests {
         access.prompt_source = "missing-path".to_string();
 
         assert!(permission_access_requires_surface(&access));
+    }
+
+    #[test]
+    fn tracked_removed_fileprovider_event_uses_existing_ancestor_without_path_probe() {
+        let root = env::temp_dir().join(format!(
+            "gfm-interface-fileprovider-event-access-{}",
+            std::process::id()
+        ));
+        let tracked = root.join("Remote.icloud").join("Gone.md");
+        std::fs::create_dir_all(tracked.parent().unwrap()).unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: tracked.clone(),
+                state: CloudStorageState::Evicted,
+            }],
+        };
+        std::fs::remove_dir_all(tracked.parent().unwrap()).unwrap();
+
+        let access_path = fileprovider_event_access_path(&tracked, Some(&previous));
+
+        assert_eq!(access_path, root);
+        assert!(!tracked.exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

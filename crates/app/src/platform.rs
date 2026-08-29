@@ -2036,10 +2036,10 @@ fn fileprovider_event_access_path(
     path: &Path,
     previous: Option<&FileProviderStateSnapshot>,
 ) -> PathBuf {
-    if path.exists() || !snapshot_tracks_path_or_descendant(previous, path) {
-        return path.to_path_buf();
+    if snapshot_tracks_path_or_descendant(previous, path) {
+        return write_probe_existing_ancestor(path);
     }
-    write_probe_existing_ancestor(path)
+    path.to_path_buf()
 }
 
 fn snapshot_tracks_path_or_descendant(
@@ -2170,6 +2170,7 @@ fn parse_platform_bool(value: &str, name: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_mac::FileProviderStateSnapshotEntry;
 
     #[test]
     fn fileprovider_observer_poll_pause_returns_promptly_after_cancellation() {
@@ -2191,5 +2192,28 @@ mod tests {
             "cancelled observer poll pause waited {:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn tracked_removed_fileprovider_event_uses_existing_ancestor_without_path_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-fileprovider-event-access-{}",
+            std::process::id()
+        ));
+        let tracked = root.join("Remote.icloud").join("Gone.md");
+        std::fs::create_dir_all(tracked.parent().unwrap()).unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: tracked.clone(),
+                state: CloudStorageState::Evicted,
+            }],
+        };
+        std::fs::remove_dir_all(tracked.parent().unwrap()).unwrap();
+
+        let access_path = fileprovider_event_access_path(&tracked, Some(&previous));
+
+        assert_eq!(access_path, root);
+        assert!(!tracked.exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
