@@ -1,3 +1,4 @@
+use crate::volume::resolve_volume_event_path;
 use gfm_fs::{
     read_directory, scan_tree, FinderMetadataReport, PackageTraversalMode, PackageTraversalReport,
     ScanOptions,
@@ -8,9 +9,9 @@ use gfm_mac::{
     current_permission_onboarding, AccessIntent, AccessProbeState, CloudCommandState,
     CloudStorageState, FileProviderConflictReport, FileProviderInvalidationReport,
     FileProviderObservedInvalidation, FileProviderStateReport, FileProviderStateSnapshot,
-    MountState, NativeVolumeStatus, SecurityAccessMode, SecurityDecisionAction,
-    SecurityWorkerAction, SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport,
-    VolumeEventInvalidationReport, VolumeEventKind, VolumeKind,
+    MountState, SecurityAccessMode, SecurityDecisionAction, SecurityWorkerAction,
+    SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport, VolumeEventKind,
+    VolumeKind,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
 use gfm_types::{DirectoryPage, FileEvent, FileEventKind, FileKind, GfmError, Result};
@@ -300,37 +301,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "ui-sidebar-volume-invalidation requires a volume event kind",
             )?)?;
-            let path = args.next().map(PathBuf::from);
-            let descriptor = path
-                .as_ref()
-                .filter(|path| path.exists())
-                .map(VolumeDescriptor::for_path)
-                .transpose()?;
-            let native_status = if descriptor.is_some() {
-                NativeVolumeStatus::Available
-            } else if path.is_some() {
-                NativeVolumeStatus::Missing
-            } else {
-                NativeVolumeStatus::Unavailable
-            };
-            let platform = VolumeEventInvalidationReport::from_parts(
-                kind,
-                native_status,
-                path.clone(),
-                descriptor.as_ref(),
-                None,
-            );
+            let resolution = resolve_volume_event_path(kind, args.next().map(PathBuf::from))?;
+            let platform = resolution.invalidation_report(kind);
             let previous = (kind == VolumeEventKind::Disappeared)
-                .then(|| descriptor.as_ref().map(sidebar_volume_spec))
+                .then(|| resolution.descriptor.as_ref().map(sidebar_volume_spec))
                 .flatten();
             let current = (kind != VolumeEventKind::Disappeared)
-                .then(|| descriptor.as_ref().map(sidebar_volume_spec))
+                .then(|| resolution.descriptor.as_ref().map(sidebar_volume_spec))
                 .flatten();
             println!(
                 "{}",
                 SidebarVolumeInvalidation::from_event(
                     sidebar_volume_event_kind(kind),
-                    path,
+                    resolution.path,
                     previous.as_ref(),
                     current.as_ref(),
                     platform.invalidate_sidebar,

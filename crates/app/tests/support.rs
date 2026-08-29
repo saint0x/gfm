@@ -1545,6 +1545,34 @@ fn reports_volume_invalidation_in_ui_sidebar_contract_from_binary() {
 }
 
 #[test]
+fn reports_missing_volume_disappearance_in_ui_sidebar_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-sidebar-volume-missing-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-sidebar-volume-invalidation")
+        .arg("disappeared")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("sidebar-volume-invalidation\trow=-\t"));
+    assert!(stdout.contains(&format!("\tpath={}\t", root.display())));
+    assert!(stdout.contains("\tkind=disappeared\tprevious-kind=-\tprevious-mount=-\t"));
+    assert!(stdout.contains("\tcurrent-kind=-\tcurrent-mount=-\t"));
+    assert!(stdout.contains("\tremove-row=true\tdisable-row=false\t"));
+    assert!(stdout.ends_with("reason=sidebar-volume-disappeared\n"));
+}
+
+#[test]
 fn reports_fileprovider_conflict_in_ui_dialog_contract_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-fileprovider-conflict-{}",

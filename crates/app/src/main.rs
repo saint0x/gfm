@@ -31,6 +31,7 @@ mod permission_refresh;
 mod platform;
 mod runtime;
 mod search;
+mod volume;
 
 fn main() {
     if let Err(err) = run() {

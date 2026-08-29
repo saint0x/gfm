@@ -2,6 +2,7 @@ use crate::access::{
     preflight_access_scope, preflight_volume_access_scope, worker_admission_with_volume_gate,
     ScopedAccessGuard,
 };
+use crate::volume::resolve_volume_event_path;
 use crate::{
     detect_volume_id, index_volume_descriptor, parent_volume, parse_required_scheduling_pressure,
     run_preview_contract_adaptive_with_volume_and_payload_path,
@@ -385,30 +386,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "volume-event-invalidation requires an event kind",
             )?)?;
-            let path = args.next().map(PathBuf::from);
-            let descriptor = path
-                .as_ref()
-                .filter(|path| path.exists())
-                .map(VolumeDescriptor::for_path)
-                .transpose()?;
-            let native_status = if descriptor.is_some() {
-                gfm_mac::NativeVolumeStatus::Available
-            } else if path.is_some() {
-                gfm_mac::NativeVolumeStatus::Missing
-            } else {
-                gfm_mac::NativeVolumeStatus::Unavailable
-            };
-            println!(
-                "{}",
-                VolumeEventInvalidationReport::from_parts(
-                    kind,
-                    native_status,
-                    path,
-                    descriptor.as_ref(),
-                    None,
-                )
-                .as_tsv()
-            );
+            let resolution = resolve_volume_event_path(kind, args.next().map(PathBuf::from))?;
+            println!("{}", resolution.invalidation_report(kind).as_tsv());
         }
         "volume-event-transition-invalidation" => {
             let kind = parse_volume_event_kind(&required_string(
