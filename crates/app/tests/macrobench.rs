@@ -263,6 +263,42 @@ fn checks_pixel_threshold_from_binary() {
 }
 
 #[test]
+fn pixel_threshold_accepts_sidebar_sheet_and_menu_surfaces_from_binary() {
+    let root = unique_temp_dir("gfm-cli-pixel-threshold-finder-surfaces");
+    let expected = root.join("expected.rgba");
+    let actual = root.join("actual.rgba");
+    fs::write(&expected, [0, 0, 0, 255]).unwrap();
+    fs::write(&actual, [0, 0, 0, 255]).unwrap();
+
+    for surface in ["sidebar", "sheet", "menu"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args([
+                "pixel-threshold-check",
+                surface,
+                expected.to_str().unwrap(),
+                actual.to_str().unwrap(),
+                "1",
+                "1",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            surface,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            stdout.contains(&format!("threshold\t{surface}\t")),
+            "{stdout}"
+        );
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn pixel_threshold_rejects_ungoverned_mask_from_binary() {
     let root = unique_temp_dir("gfm-cli-pixel-threshold-ungoverned");
     let expected = root.join("expected.rgba");

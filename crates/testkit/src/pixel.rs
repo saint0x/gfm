@@ -151,25 +151,31 @@ pub enum ParitySurface {
     Layout,
     Text,
     Icon,
+    Sidebar,
     Selection,
     Focus,
     Hover,
     Toolbar,
     Thumbnail,
     Preview,
+    Sheet,
+    Menu,
 }
 
 impl ParitySurface {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 12] = [
         Self::Layout,
         Self::Text,
         Self::Icon,
+        Self::Sidebar,
         Self::Selection,
         Self::Focus,
         Self::Hover,
         Self::Toolbar,
         Self::Thumbnail,
         Self::Preview,
+        Self::Sheet,
+        Self::Menu,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -177,12 +183,15 @@ impl ParitySurface {
             Self::Layout => "layout",
             Self::Text => "text",
             Self::Icon => "icon",
+            Self::Sidebar => "sidebar",
             Self::Selection => "selection",
             Self::Focus => "focus",
             Self::Hover => "hover",
             Self::Toolbar => "toolbar",
             Self::Thumbnail => "thumbnail",
             Self::Preview => "preview",
+            Self::Sheet => "sheet",
+            Self::Menu => "menu",
         }
     }
 }
@@ -195,12 +204,15 @@ impl FromStr for ParitySurface {
             "layout" => Ok(Self::Layout),
             "text" => Ok(Self::Text),
             "icon" => Ok(Self::Icon),
+            "sidebar" => Ok(Self::Sidebar),
             "selection" => Ok(Self::Selection),
             "focus" => Ok(Self::Focus),
             "hover" => Ok(Self::Hover),
             "toolbar" => Ok(Self::Toolbar),
             "thumbnail" => Ok(Self::Thumbnail),
             "preview" => Ok(Self::Preview),
+            "sheet" => Ok(Self::Sheet),
+            "menu" => Ok(Self::Menu),
             _ => Err(format!("unknown parity surface: {value}")),
         }
     }
@@ -873,6 +885,31 @@ mod tests {
         assert_eq!(
             threshold.as_tsv().to_string(),
             "threshold\ttoolbar\tunmasked<=0\tmasked<=unbounded-explicit\texplicit-masks=true"
+        );
+    }
+
+    #[test]
+    fn strict_surface_parser_includes_finder_sidebar_sheet_and_menu_regions() {
+        assert_eq!(
+            "sidebar".parse::<ParitySurface>().unwrap(),
+            ParitySurface::Sidebar
+        );
+        assert_eq!(
+            "sheet".parse::<ParitySurface>().unwrap(),
+            ParitySurface::Sheet
+        );
+        assert_eq!(
+            "menu".parse::<ParitySurface>().unwrap(),
+            ParitySurface::Menu
+        );
+        assert!(ParitySurface::ALL.contains(&ParitySurface::Sidebar));
+        assert!(ParitySurface::ALL.contains(&ParitySurface::Sheet));
+        assert!(ParitySurface::ALL.contains(&ParitySurface::Menu));
+        assert_eq!(
+            PixelDriftThreshold::finder_strict(ParitySurface::Menu)
+                .as_tsv()
+                .to_string(),
+            "threshold\tmenu\tunmasked<=0\tmasked<=unbounded-explicit\texplicit-masks=true"
         );
     }
 
