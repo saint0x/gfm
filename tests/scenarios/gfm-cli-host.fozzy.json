@@ -6184,6 +6184,11 @@
       "data": "0\t0\t1\t1\tOS-owned stale toolbar repaint\n"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-pixel-duplicate-governed-mask.tsv",
+      "data": "1\t0\t1\t1\tOS-owned toolbar repaint\n1\t0\t1\t1\tOS-owned clock tick\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -6264,6 +6269,21 @@
         "3",
         "1",
         "tmp/gfm-pixel-loose-governed-mask.tsv"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "pixel-threshold-check",
+        "toolbar",
+        "tmp/gfm-pixel-expected.rgba",
+        "tmp/gfm-pixel-actual.rgba",
+        "3",
+        "1",
+        "tmp/gfm-pixel-duplicate-governed-mask.tsv"
       ],
       "exit_code": 1,
       "times": 1

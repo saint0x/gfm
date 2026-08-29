@@ -1,4 +1,5 @@
 use gfm_types::{GfmError, Result};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::BufWriter;
 use std::path::Path;
@@ -28,7 +29,7 @@ impl PixelSize {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PixelMaskRect {
     pub x: u32,
     pub y: u32,
@@ -616,6 +617,7 @@ pub fn parse_masks(content: &str, size: PixelSize) -> Result<Vec<PixelMaskRect>>
 
 pub fn parse_governed_masks(content: &str, size: PixelSize) -> Result<Vec<PixelMaskRegion>> {
     let mut masks = Vec::new();
+    let mut seen_rects = BTreeSet::new();
     for (line_index, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -647,6 +649,16 @@ pub fn parse_governed_masks(content: &str, size: PixelSize) -> Result<Vec<PixelM
                 line_index + 1,
                 size.width,
                 size.height
+            )));
+        }
+        if !seen_rects.insert(rect) {
+            return Err(GfmError::Format(format!(
+                "governed mask line {} duplicates rectangle {},{},{},{}",
+                line_index + 1,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height
             )));
         }
         masks.push(PixelMaskRegion::new(rect, reason));
@@ -838,6 +850,18 @@ mod tests {
         assert!(err
             .to_string()
             .contains("must contain x, y, width, height, reason"));
+    }
+
+    #[test]
+    fn governed_masks_reject_duplicate_rectangles() {
+        let err = parse_governed_masks(
+            "1\t0\t1\t1\tOS-owned hover flash\n1\t0\t1\t1\tOS-owned clock tick\n",
+            PixelSize::new(3, 1),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("line 2"));
+        assert!(err.to_string().contains("duplicates rectangle 1,0,1,1"));
     }
 
     #[test]
