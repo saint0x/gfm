@@ -5780,6 +5780,33 @@
         "25A354"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-diagnostics-probe-root/needle.md",
+      "data": "diagnostics probe\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-index-rebuild",
+        "tmp/gfm-fozzy-diagnostics-probe-root",
+        "tmp/gfm-fozzy-diagnostics-probe-root/records-unavailablerecords-unavailablerecords-unavailablerecords-unavailablerecords-unavailablerecords-unavailablerecords-unavailablerecords-unavailablerecords-unavailablerecords-unavailablerecords-unavailablerecords-unavailablerecords-unavailablerecords-unavailablerecords-unavailablerecords-unavailable.gfmidx",
+        "tmp/gfm-fozzy-diagnostics-probe-root/content.gfmcontent"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "diagnostics-trace-export",
+        "tmp/trace-unavailabletrace-unavailabletrace-unavailabletrace-unavailabletrace-unavailabletrace-unavailabletrace-unavailabletrace-unavailabletrace-unavailabletrace-unavailabletrace-unavailabletrace-unavailabletrace-unavailabletrace-unavailabletrace-unavailabletrace-unavailable.json"
+      ],
+      "exit_code": 1,
+      "times": 1
     }
   ]
 }

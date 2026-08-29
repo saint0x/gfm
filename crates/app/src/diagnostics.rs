@@ -17,6 +17,8 @@ use gfm_index::{PersistentIndexPlan, PersistentIndexRecovery};
 use gfm_jobs::{Priority, SchedulingAction};
 use gfm_mac::AccessIntent;
 use gfm_types::{GfmError, Result};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -266,13 +268,13 @@ fn retain_rebuild_access(spec: &RebuildSpec) -> Result<Vec<ScopedAccessGuard>> {
         "index rebuild root",
     )?);
     guards.push(preflight_access_scope(
-        write_probe_path(&spec.records_path),
+        write_probe_path(&spec.records_path)?,
         AccessIntent::Write,
         "index rebuild records",
     )?);
     if let Some(content_path) = &spec.content_path {
         guards.push(preflight_access_scope(
-            write_probe_path(content_path),
+            write_probe_path(content_path)?,
             AccessIntent::Write,
             "index rebuild content",
         )?);
@@ -283,13 +285,13 @@ fn retain_rebuild_access(spec: &RebuildSpec) -> Result<Vec<ScopedAccessGuard>> {
 fn preflight_rebuild_volumes(spec: &RebuildSpec) -> Result<()> {
     preflight_volume_access_scope(&spec.root, AccessIntent::Index, "index rebuild root")?;
     preflight_volume_access_scope(
-        write_probe_path(&spec.records_path),
+        write_probe_path(&spec.records_path)?,
         AccessIntent::Write,
         "index rebuild records",
     )?;
     if let Some(content_path) = &spec.content_path {
         preflight_volume_access_scope(
-            write_probe_path(content_path),
+            write_probe_path(content_path)?,
             AccessIntent::Write,
             "index rebuild content",
         )?;
@@ -329,17 +331,17 @@ fn retain_recovery_access(spec: &PersistentIndexRecoverySpec) -> Result<Vec<Scop
             "persistent index repair root",
         )?,
         preflight_access_scope(
-            write_probe_path(&spec.records_path),
+            write_probe_path(&spec.records_path)?,
             AccessIntent::Write,
             "persistent index repair records",
         )?,
         preflight_access_scope(
-            write_probe_path(&spec.state_path),
+            write_probe_path(&spec.state_path)?,
             AccessIntent::Write,
             "persistent index repair state",
         )?,
         preflight_access_scope(
-            write_probe_path(&spec.quarantine_dir),
+            write_probe_path(&spec.quarantine_dir)?,
             AccessIntent::Write,
             "persistent index repair quarantine",
         )?,
@@ -354,17 +356,17 @@ fn preflight_recovery_volumes(spec: &PersistentIndexRecoverySpec) -> Result<()> 
         "persistent index repair root",
     )?;
     preflight_volume_access_scope(
-        write_probe_path(&spec.records_path),
+        write_probe_path(&spec.records_path)?,
         AccessIntent::Write,
         "persistent index repair records",
     )?;
     preflight_volume_access_scope(
-        write_probe_path(&spec.state_path),
+        write_probe_path(&spec.state_path)?,
         AccessIntent::Write,
         "persistent index repair state",
     )?;
     preflight_volume_access_scope(
-        write_probe_path(&spec.quarantine_dir),
+        write_probe_path(&spec.quarantine_dir)?,
         AccessIntent::Write,
         "persistent index repair quarantine",
     )?;
@@ -373,12 +375,13 @@ fn preflight_recovery_volumes(spec: &PersistentIndexRecoverySpec) -> Result<()> 
 
 fn run_trace_export(output: PathBuf) -> Result<String> {
     const WORKER: &str = "diagnostics trace export";
-    preflight_volume_access_scope(write_probe_path(&output), AccessIntent::Write, WORKER)?;
-    let volume = parent_volume(write_probe_path(&output));
+    let output_probe = write_probe_path(&output)?.to_path_buf();
+    preflight_volume_access_scope(&output_probe, AccessIntent::Write, WORKER)?;
+    let volume = parent_volume(&output_probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access =
-            preflight_access_scope(write_probe_path(&output), AccessIntent::Write, WORKER)?;
+            preflight_access_scope(write_probe_path(&output)?, AccessIntent::Write, WORKER)?;
         cancellation.check()?;
         let report = export_operator_trace(output)?;
         Ok(format!(
@@ -462,11 +465,16 @@ fn run_storage_inspect(storage: PathBuf) -> Result<String> {
     })
 }
 
-fn write_probe_path(path: &Path) -> &Path {
-    if path.is_dir() {
-        return path;
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("diagnostics write path metadata unavailable: {err}"),
+        )),
     }
-    crate::parent_or_cwd(path)
 }
 
 fn print_index_rebuild_report(report: gfm_diagnostics::RebuildReport) {

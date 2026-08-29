@@ -242,6 +242,41 @@ fn adaptive_diagnostics_rebuild_refuses_unreachable_outputs_before_worker_from_b
 }
 
 #[test]
+fn diagnostics_rebuild_reports_output_probe_failure_before_worker_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-rebuild-output-probe");
+    fs::write(root.join("needle.md"), "diagnostic needle").unwrap();
+    let records = root.join(format!("{}.gfmidx", "records-unavailable".repeat(16)));
+    let content = root.join("content.gfmcontent");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-index-rebuild",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("records.gfmidx"), "{stdout}");
+    assert!(
+        stderr.contains("diagnostics write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("records-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=index rebuild root\t"),
+        "{stderr}"
+    );
+    assert!(!content.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn diagnostics_trace_and_storage_refuse_unreachable_paths_before_io_from_binary() {
     let offline = unique_temp_dir("gfm-cli-diagnostics-io-preflight-offline");
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
@@ -287,6 +322,33 @@ fn diagnostics_trace_and_storage_refuse_unreachable_paths_before_io_from_binary(
     );
 
     fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn diagnostics_trace_export_reports_output_probe_failure_before_io_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-trace-probe");
+    let trace = root.join(format!("{}.json", "trace-unavailable".repeat(16)));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["diagnostics-trace-export", trace.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("trace-unavailable"), "{stdout}");
+    assert!(
+        stderr.contains("diagnostics write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("trace-unavailable"), "{stderr}");
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=diagnostics trace export\t"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -582,6 +644,67 @@ fn adaptive_diagnostics_recover_refuses_unreachable_outputs_before_worker_from_b
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn diagnostics_recover_reports_output_probe_failures_before_worker_from_binary() {
+    for target in ["records", "state", "quarantine"] {
+        let root = unique_temp_dir(&format!("gfm-cli-diagnostics-recovery-{target}-probe"));
+        let records = if target == "records" {
+            root.join(format!("{}.gfmidx", "records-unavailable".repeat(16)))
+        } else {
+            let path = root.join("records.gfmidx");
+            fs::write(&path, "not-records").unwrap();
+            path
+        };
+        let state = if target == "state" {
+            root.join(format!("{}.gfmstate", "state-unavailable".repeat(16)))
+        } else {
+            let path = root.join("state.gfmstate");
+            fs::write(&path, "not-state").unwrap();
+            path
+        };
+        let quarantine = if target == "quarantine" {
+            root.join(format!("{}", "quarantine-unavailable".repeat(16)))
+        } else {
+            root.join("quarantine")
+        };
+        fs::write(root.join("needle.md"), "diagnostic needle").unwrap();
+
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args([
+                "diagnostics-index-recover",
+                root.to_str().unwrap(),
+                records.to_str().unwrap(),
+                state.to_str().unwrap(),
+                quarantine.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{target}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains("persistent-index-recovery"), "{target}: {stdout}");
+        assert!(
+            stderr.contains("diagnostics write path metadata unavailable"),
+            "{target}: {stderr}"
+        );
+        assert!(stderr.contains(&format!("{target}-unavailable")), "{target}: {stderr}");
+        assert!(
+            !stderr.contains("security-worker-admission\tworker=persistent index repair\t"),
+            "{target}: {stderr}"
+        );
+        if target != "records" {
+            assert_eq!(fs::read_to_string(&records).unwrap(), "not-records");
+        }
+        if target != "state" {
+            assert_eq!(fs::read_to_string(&state).unwrap(), "not-state");
+        }
+        assert!(!quarantine.exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[test]
