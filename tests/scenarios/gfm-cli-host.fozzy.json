@@ -5235,7 +5235,7 @@
         "tmp/gfm-fozzy-permission-current.tsv"
       ],
       "exit_code": 0,
-      "stdout": "permission-invalidation\tinitialized=false\tchanged=1\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\npermission-change\tdocuments\tprevious=granted\tcurrent=unavailable\tpath=tmp/gfm-fozzy-home/Documents\treason=permission scope no longer reported by permission onboarding\n",
+      "stdout": "permission-invalidation\tinitialized=false\tchanged=1\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\npermission-change\tdocuments\tkind=removed\tprevious=granted\tcurrent=unavailable\tpath=tmp/gfm-fozzy-home/Documents\treason=permission scope no longer reported by permission onboarding\n",
       "stderr": "",
       "times": 1
     },
