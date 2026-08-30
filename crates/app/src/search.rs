@@ -553,7 +553,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 content,
                 "content ids mmap",
                 move |content, cancellation| {
-                    let archive = MmapContentArchive::open(content)?;
+                    let archive =
+                        MmapContentArchive::open_checked(content, || cancellation.check())?;
                     cancellation.check()?;
                     let ids = archive.ids_for_term(&term)?;
                     cancellation.check()?;
@@ -612,7 +613,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 content,
                 "content id block mmap",
                 move |content, cancellation| {
-                    let archive = MmapContentArchive::open(content)?;
+                    let archive =
+                        MmapContentArchive::open_checked(content, || cancellation.check())?;
                     cancellation.check()?;
                     let ids = archive.id_block_for_term(&term, block_index)?;
                     cancellation.check()?;
@@ -627,7 +629,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 content,
                 "content verify",
                 move |content, cancellation| {
-                    let archive = MmapContentArchive::open(content)?;
+                    let archive =
+                        MmapContentArchive::open_checked(content, || cancellation.check())?;
                     cancellation.check()?;
                     let report = format!(
                         "content-verify\tterms={}\tbytes={}\tchecksum={}",
@@ -652,7 +655,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 fuzzy,
                 "fuzzy terms mmap",
                 move |fuzzy, cancellation| {
-                    let archive = MmapFuzzyArchive::open(fuzzy)?;
+                    let archive = MmapFuzzyArchive::open_checked(fuzzy, || cancellation.check())?;
                     cancellation.check()?;
                     let terms = archive.terms_for(&key)?;
                     cancellation.check()?;
@@ -669,7 +672,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 fuzzy,
                 "fuzzy verify",
                 move |fuzzy, cancellation| {
-                    let archive = MmapFuzzyArchive::open(fuzzy)?;
+                    let archive = MmapFuzzyArchive::open_checked(fuzzy, || cancellation.check())?;
                     cancellation.check()?;
                     let report = format!(
                         "fuzzy-verify\tkeys={}\tbytes={}\tchecksum={}",
@@ -690,7 +693,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 prefixes,
                 "prefix ids mmap",
                 move |prefixes, cancellation| {
-                    let archive = MmapPrefixArchive::open(prefixes)?;
+                    let archive =
+                        MmapPrefixArchive::open_checked(prefixes, || cancellation.check())?;
                     cancellation.check()?;
                     let ids = archive.ids_for(&prefix)?;
                     cancellation.check()?;
@@ -709,7 +713,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 prefixes,
                 "prefix id block mmap",
                 move |prefixes, cancellation| {
-                    let archive = MmapPrefixArchive::open(prefixes)?;
+                    let archive =
+                        MmapPrefixArchive::open_checked(prefixes, || cancellation.check())?;
                     cancellation.check()?;
                     let ids = archive.id_block_for(&prefix, block_index)?;
                     cancellation.check()?;
@@ -724,7 +729,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 prefixes,
                 "prefix verify",
                 move |prefixes, cancellation| {
-                    let archive = MmapPrefixArchive::open(prefixes)?;
+                    let archive =
+                        MmapPrefixArchive::open_checked(prefixes, || cancellation.check())?;
                     cancellation.check()?;
                     let report = format!(
                         "prefix-verify\tprefixes={}\tbytes={}\tchecksum={}",
@@ -746,7 +752,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 substrings,
                 "substring ids mmap",
                 move |substrings, cancellation| {
-                    let archive = MmapSubstringArchive::open(substrings)?;
+                    let archive =
+                        MmapSubstringArchive::open_checked(substrings, || cancellation.check())?;
                     cancellation.check()?;
                     let ids = archive.ids_for(&gram)?;
                     cancellation.check()?;
@@ -769,7 +776,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 substrings,
                 "substring id block mmap",
                 move |substrings, cancellation| {
-                    let archive = MmapSubstringArchive::open(substrings)?;
+                    let archive =
+                        MmapSubstringArchive::open_checked(substrings, || cancellation.check())?;
                     cancellation.check()?;
                     let ids = archive.id_block_for(&gram, block_index)?;
                     cancellation.check()?;
@@ -785,7 +793,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 substrings,
                 "substring verify",
                 move |substrings, cancellation| {
-                    let archive = MmapSubstringArchive::open(substrings)?;
+                    let archive =
+                        MmapSubstringArchive::open_checked(substrings, || cancellation.check())?;
                     cancellation.check()?;
                     let report = format!(
                         "substring-verify\tgrams={}\tbytes={}\tchecksum={}",
@@ -807,7 +816,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 dictionary,
                 "dictionary lookup",
                 move |dictionary, cancellation| {
-                    let archive = MmapDictionary::open(dictionary)?;
+                    let archive =
+                        MmapDictionary::open_checked(dictionary, || cancellation.check())?;
                     cancellation.check()?;
                     let report = match archive.find(&term)? {
                         Some(index) => format!("dictionary\tfound\tindex={index}\tterm={term}"),
@@ -826,7 +836,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 dictionary,
                 "dictionary verify",
                 move |dictionary, cancellation| {
-                    let archive = MmapDictionary::open(dictionary)?;
+                    let archive =
+                        MmapDictionary::open_checked(dictionary, || cancellation.check())?;
                     cancellation.check()?;
                     let report = format!(
                         "dictionary-verify\tterms={}\tbytes={}\tchecksum={}",
@@ -856,7 +867,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 metadata,
                 "metadata ids mmap",
                 move |metadata, cancellation| {
-                    let archive = MmapMetadataArchive::open(metadata)?;
+                    let archive =
+                        MmapMetadataArchive::open_checked(metadata, || cancellation.check())?;
                     cancellation.check()?;
                     let ids = archive.ids_for(field, &term)?;
                     cancellation.check()?;
@@ -881,7 +893,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 metadata,
                 "metadata id block mmap",
                 move |metadata, cancellation| {
-                    let archive = MmapMetadataArchive::open(metadata)?;
+                    let archive =
+                        MmapMetadataArchive::open_checked(metadata, || cancellation.check())?;
                     cancellation.check()?;
                     let ids = archive.id_block_for(field, &term, block_index)?;
                     cancellation.check()?;
@@ -896,7 +909,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 metadata,
                 "metadata verify",
                 move |metadata, cancellation| {
-                    let archive = MmapMetadataArchive::open(metadata)?;
+                    let archive =
+                        MmapMetadataArchive::open_checked(metadata, || cancellation.check())?;
                     cancellation.check()?;
                     let report = format!(
                         "metadata-verify\tterms={}\tbytes={}\tchecksum={}",

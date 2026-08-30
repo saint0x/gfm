@@ -15,17 +15,43 @@ impl MmapContentSet {
         I: IntoIterator<Item = P>,
         P: AsRef<Path>,
     {
+        Self::open_checked(paths, || Ok(()))
+    }
+
+    pub fn open_checked<I, P>(
+        paths: I,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        check_control()?;
         let archives = paths
             .into_iter()
-            .map(MmapContentArchive::open)
+            .map(|path| {
+                check_control()?;
+                MmapContentArchive::open_checked(path, &mut check_control)
+            })
             .collect::<Result<Vec<_>>>()?;
+        check_control()?;
         Ok(Self { archives })
     }
 
     pub fn open_manifest(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_manifest_checked(path, || Ok(()))
+    }
+
+    pub fn open_manifest_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
         let path = path.as_ref();
+        check_control()?;
         let manifest = ContentArchiveManifest::read(path)?;
-        Self::open(manifest.resolved_archive_paths(path))
+        check_control()?;
+        Self::open_checked(manifest.resolved_archive_paths(path), check_control)
     }
 
     pub fn ids_for_term(&self, term: &str) -> Result<Vec<FileId>> {

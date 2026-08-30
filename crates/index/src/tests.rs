@@ -3906,6 +3906,21 @@ fn index_footprint_reports_sizes_and_schedules_segment_compaction() {
 }
 
 #[test]
+fn index_footprint_checked_honors_pre_cancelled_token_before_records_open() {
+    let root = unique_temp_dir("gfm-footprint-cancel");
+    let records = root.join("records.gfmidx");
+    let spec = IndexFootprintSpec::new(&records);
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = inspect_index_footprint_checked(&spec, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!records.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn content_index_job_spec_round_trips() {
     let path = unique_temp_path("gfm-content-job", "job");
     let spec = ContentIndexJobSpec {

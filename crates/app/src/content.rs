@@ -938,7 +938,7 @@ fn run_index_footprint_inspect(
         cancellation.check()?;
         let _archive_access = retain_index_footprint_archive_access(&archive_paths, worker)?;
         cancellation.check()?;
-        gfm_index::inspect_index_footprint(&spec)
+        gfm_index::inspect_index_footprint_checked(&spec, &cancellation)
     })
 }
 

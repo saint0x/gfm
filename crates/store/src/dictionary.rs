@@ -194,28 +194,43 @@ fn write_dictionary_with_block_size(
 
 impl MmapDictionary {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_checked(path, || Ok(()))
+    }
+
+    pub fn open_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mmap = {
             // SAFETY: The dictionary is mapped read-only and accessed only through
             // checked immutable slices. Writers publish complete files with atomic
             // rename, so this API never mutates or aliases writable mapped bytes.
             unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
         };
+        check_control()?;
         if !mmap.starts_with(DICTIONARY_MAGIC_V1) {
             return Err(dictionary_format_error(
                 path,
                 "unsupported dictionary header",
             ));
         }
+        check_control()?;
         verify_dictionary_checksum_from_slice(&mmap, path)?;
+        check_control()?;
         let mut cursor = Cursor::new(&mmap[DICTIONARY_MAGIC_V1.len()..]);
         let len = usize::try_from(read_varint(&mut cursor).map_err(|err| GfmError::io(path, err))?)
             .map_err(|_| dictionary_format_error(path, "dictionary length overflow"))?;
+        check_control()?;
         let block_size =
             usize::try_from(read_varint(&mut cursor).map_err(|err| GfmError::io(path, err))?)
                 .map_err(|_| dictionary_format_error(path, "dictionary block size overflow"))?;
+        check_control()?;
         let blocks = read_dictionary_directory_from_slice(&mmap, path)?;
+        check_control()?;
         Ok(Self {
             path: path.to_path_buf(),
             mmap,
@@ -642,6 +657,16 @@ mod tests {
 
         assert!(error.contains("checksum mismatch"), "{error}");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_dictionary_checked_open_honors_pre_cancelled_control_before_file_open() {
+        let path = temp_path("gfm-dictionary-open-cancel", "gfmdict");
+
+        let result = MmapDictionary::open_checked(&path, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!path.exists());
     }
 
     #[test]

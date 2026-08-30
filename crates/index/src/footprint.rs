@@ -1,7 +1,8 @@
+use gfm_jobs::Cancellation;
 use gfm_store::{
-    plan_content_segment_merge, summarize_content_segment, ContentMergePolicy, ContentMergeTier,
-    MmapContentSet, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
-    MmapRecordColumns, MmapSubstringArchive,
+    plan_content_segment_merge_checked, summarize_content_segment, ContentMergePolicy,
+    ContentMergeTier, MmapContentSet, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
+    MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_types::{GfmError, Result};
 use std::path::{Path, PathBuf};
@@ -158,12 +159,21 @@ pub enum CompactionAction {
 }
 
 pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootprintReport> {
-    let records = MmapRecordArchive::open(&spec.records)?;
+    inspect_index_footprint_checked(spec, &Cancellation::default())
+}
+
+pub fn inspect_index_footprint_checked(
+    spec: &IndexFootprintSpec,
+    cancellation: &Cancellation,
+) -> Result<IndexFootprintReport> {
+    cancellation.check()?;
+    let records = MmapRecordArchive::open_checked(&spec.records, || cancellation.check())?;
     let record_count = records.len();
     let record_bytes = mapped_bytes(&spec.records, records.mapped_len())?;
+    cancellation.check()?;
 
     let (column_count, column_bytes, column_string_pool_bytes) = if let Some(path) = &spec.columns {
-        let archive = MmapRecordColumns::open(path)?;
+        let archive = MmapRecordColumns::open_checked(path, || cancellation.check())?;
         (
             archive.len(),
             mapped_bytes(path, archive.mapped_len())?,
@@ -172,9 +182,10 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
     } else {
         (0, 0, 0)
     };
+    cancellation.check()?;
 
     let (metadata_terms, metadata_bytes) = if let Some(path) = &spec.metadata {
-        let archive = MmapMetadataArchive::open(path)?;
+        let archive = MmapMetadataArchive::open_checked(path, || cancellation.check())?;
         (
             archive.indexed_terms(),
             mapped_bytes(path, archive.mapped_len())?,
@@ -182,9 +193,10 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
     } else {
         (0, 0)
     };
+    cancellation.check()?;
 
     let (prefix_keys, prefix_bytes) = if let Some(path) = &spec.prefixes {
-        let archive = MmapPrefixArchive::open(path)?;
+        let archive = MmapPrefixArchive::open_checked(path, || cancellation.check())?;
         (
             archive.indexed_prefixes(),
             mapped_bytes(path, archive.mapped_len())?,
@@ -192,9 +204,10 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
     } else {
         (0, 0)
     };
+    cancellation.check()?;
 
     let (fuzzy_keys, fuzzy_bytes) = if let Some(path) = &spec.fuzzy {
-        let archive = MmapFuzzyArchive::open(path)?;
+        let archive = MmapFuzzyArchive::open_checked(path, || cancellation.check())?;
         (
             archive.indexed_keys(),
             mapped_bytes(path, archive.mapped_len())?,
@@ -202,9 +215,10 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
     } else {
         (0, 0)
     };
+    cancellation.check()?;
 
     let (substring_keys, substring_bytes) = if let Some(path) = &spec.substrings {
-        let archive = MmapSubstringArchive::open(path)?;
+        let archive = MmapSubstringArchive::open_checked(path, || cancellation.check())?;
         (
             archive.indexed_grams(),
             mapped_bytes(path, archive.mapped_len())?,
@@ -212,10 +226,11 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
     } else {
         (0, 0)
     };
+    cancellation.check()?;
 
     let (content_archives, content_terms, content_bytes) =
         if let Some(path) = &spec.content_manifest {
-            let content = MmapContentSet::open_manifest(path)?;
+            let content = MmapContentSet::open_manifest_checked(path, || cancellation.check())?;
             (
                 content.archive_count(),
                 content.indexed_terms(),
@@ -224,12 +239,17 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
         } else {
             (0, 0, 0)
         };
+    cancellation.check()?;
 
     let summaries = spec
         .content_segments
         .iter()
-        .map(|path| summarize_content_segment(path, &spec.merge_policy))
+        .map(|path| {
+            cancellation.check()?;
+            summarize_content_segment(path, &spec.merge_policy)
+        })
         .collect::<Result<Vec<_>>>()?;
+    cancellation.check()?;
     let segment_count = summaries.len();
     let segment_bytes = summaries
         .iter()
@@ -258,7 +278,10 @@ pub fn inspect_index_footprint(spec: &IndexFootprintSpec) -> Result<IndexFootpri
         total_bytes / record_count as u64
     };
     let density_pressure = bytes_per_record > spec.density_policy.target_bytes_per_record;
-    let plan = plan_content_segment_merge(&spec.content_segments, &spec.merge_policy)?;
+    let plan =
+        plan_content_segment_merge_checked(&spec.content_segments, &spec.merge_policy, || {
+            cancellation.check()
+        })?;
     let reason = if spec.content_segments.is_empty() {
         CompactionReason::NoSegments
     } else if plan.tombstone_segments > 0 {

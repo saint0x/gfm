@@ -58,9 +58,9 @@ pub use cursor::{
     FSEVENTS_CURSOR_SCHEMA_VERSION,
 };
 pub use footprint::{
-    inspect_index_footprint, BatteryState, CompactionAction, CompactionPressure, CompactionReason,
-    IndexCompactionSchedule, IndexDensityPolicy, IndexFootprintReport, IndexFootprintSpec,
-    IoPressure, ThermalState, UserActivity,
+    inspect_index_footprint, inspect_index_footprint_checked, BatteryState, CompactionAction,
+    CompactionPressure, CompactionReason, IndexCompactionSchedule, IndexDensityPolicy,
+    IndexFootprintReport, IndexFootprintSpec, IoPressure, ThermalState, UserActivity,
 };
 pub use live::{LiveIndex, UpdateOutcome};
 pub use lookup::{

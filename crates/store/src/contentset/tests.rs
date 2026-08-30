@@ -1,7 +1,7 @@
 use super::*;
 use crate::content::write_content_postings;
 use crate::contentquery::MmapContentSet;
-use gfm_types::{ContentPositions, ContentPosting, FileId, VolumeId};
+use gfm_types::{ContentPositions, ContentPosting, FileId, GfmError, VolumeId};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -207,6 +207,16 @@ fn mmap_content_set_batches_selected_terms_across_archives() {
 
     std::fs::remove_file(first).unwrap();
     std::fs::remove_file(second).unwrap();
+}
+
+#[test]
+fn mmap_content_set_checked_open_honors_pre_cancelled_control_before_archive_open() {
+    let path = temp_path("gfm-content-set-open-cancel", "gfmcontent");
+
+    let result = MmapContentSet::open_checked([&path], || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
 }
 
 #[test]
