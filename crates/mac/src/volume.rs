@@ -167,6 +167,9 @@ pub struct VolumeDescriptor {
     pub mount_read_only: Option<bool>,
     pub mount_local: Option<bool>,
     pub bsd_name: Option<String>,
+    pub bsd_major: Option<u64>,
+    pub bsd_minor: Option<u64>,
+    pub bsd_unit: Option<u64>,
     pub volume_uuid: Option<String>,
     pub volume_type: Option<String>,
     pub apfs_container_uuid: Option<String>,
@@ -358,6 +361,9 @@ impl VolumeDescriptor {
             bsd_name: native
                 .as_ref()
                 .and_then(|native| native.media_bsd_name.clone()),
+            bsd_major: native.as_ref().and_then(|native| native.media_bsd_major),
+            bsd_minor: native.as_ref().and_then(|native| native.media_bsd_minor),
+            bsd_unit: native.as_ref().and_then(|native| native.media_bsd_unit),
             volume_uuid: native
                 .as_ref()
                 .and_then(|native| native.volume_uuid.clone()),
@@ -416,7 +422,7 @@ impl VolumeDescriptor {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tvolume-uuid={}\tapfs-container-uuid={}\tapfs-role={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-encrypted={}\tresource-reachable={}\tresource-root-filesystem={}\tresource-supports-file-cloning={}\tresource-supports-hard-links={}\tresource-supports-sparse-files={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tbsd-major={}\tbsd-minor={}\tbsd-unit={}\tvolume-uuid={}\tapfs-container-uuid={}\tapfs-role={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-encrypted={}\tresource-reachable={}\tresource-root-filesystem={}\tresource-supports-file-cloning={}\tresource-supports-hard-links={}\tresource-supports-sparse-files={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -463,6 +469,15 @@ impl VolumeDescriptor {
             self.bsd_name
                 .as_deref()
                 .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.bsd_major
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.bsd_minor
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.bsd_unit
+                .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.volume_uuid
                 .as_deref()
@@ -1952,6 +1967,9 @@ fn topology_change_reason(
         || previous.media_uuid != current.media_uuid
         || previous.resource_uuid != current.resource_uuid
         || previous.bsd_name != current.bsd_name
+        || previous.bsd_major != current.bsd_major
+        || previous.bsd_minor != current.bsd_minor
+        || previous.bsd_unit != current.bsd_unit
         || previous.mount_from != current.mount_from
         || previous.media_content != current.media_content
         || previous.media_name != current.media_name
@@ -2784,6 +2802,9 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\treachable=true\t"));
         assert!(descriptor.as_tsv().contains("\tcase-sensitive="));
         assert!(descriptor.as_tsv().contains("\tlocal="));
+        assert!(descriptor.as_tsv().contains("\tbsd-major="));
+        assert!(descriptor.as_tsv().contains("\tbsd-minor="));
+        assert!(descriptor.as_tsv().contains("\tbsd-unit="));
         assert!(descriptor.as_tsv().contains("\tresource-status=available"));
         assert!(descriptor.as_tsv().contains("\tresource-uuid="));
         assert!(descriptor.as_tsv().contains("\tresource-automounted="));
@@ -3745,6 +3766,38 @@ mod tests {
         current_volume.mount_from = Some("/dev/disk4s1".to_string());
         current_volume.media_name = Some("Container disk4".to_string());
         current_volume.media_path = Some("IODeviceTree:/PCI0@0/AppleAPFSMedia".to_string());
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].reason, "volume-identity-changed");
+        assert!(diff.changes[0].invalidate_sidebar);
+        assert!(diff.changes[0].invalidate_operation_policy);
+        assert!(diff.changes[0].invalidate_index_admission);
+        assert!(diff.changes[0].rescan_index);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_invalidates_policy_for_bsd_identity_number_changes() {
+        let root = unique_temp_dir("gfm-volume-topology-bsd-identity");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        previous_volume.bsd_name = Some("disk4s1".to_string());
+        previous_volume.bsd_major = Some(1);
+        previous_volume.bsd_minor = Some(2);
+        previous_volume.bsd_unit = Some(4);
+        let mut current_volume = previous_volume.clone();
+        current_volume.bsd_major = Some(8);
+        current_volume.bsd_minor = Some(9);
+        current_volume.bsd_unit = Some(10);
         let previous = VolumeDiscoveryReport {
             volumes: vec![previous_volume],
         };

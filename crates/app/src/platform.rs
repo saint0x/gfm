@@ -585,6 +585,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "volume-root-filesystem-invalidation" => {
             println!("{}", volume_root_filesystem_invalidation().as_tsv());
         }
+        "volume-bsd-identity-invalidation" => {
+            println!("{}", volume_bsd_identity_invalidation().as_tsv());
+        }
         "volume-event-runtime-invalidation" => {
             let report = volume_event_index_invalidation_from_args(args)?;
             println!("{}", report.as_tsv());
@@ -1375,6 +1378,36 @@ fn volume_root_filesystem_invalidation() -> VolumeEventIndexInvalidationReport {
     VolumeEventIndexInvalidationReport::from_event(
         IndexVolumeEventKind::DescriptionChanged,
         Some(PathBuf::from("/Volumes/Root Filesystem Test")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    )
+}
+
+fn volume_bsd_identity_invalidation() -> VolumeEventIndexInvalidationReport {
+    let previous = IndexVolumeDescriptor::new(
+        "BSD Identity Test",
+        "/Volumes/BSD Identity Test",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(45))
+    .with_stable_identity("diskarbitration:uuid:BSD-IDENTITY-TEST")
+    .with_filesystem_signature("fs=apfs|bsd=disk4s1|bsd-major=1|bsd-minor=2|bsd-unit=4");
+    let current = IndexVolumeDescriptor::new(
+        "BSD Identity Test",
+        "/Volumes/BSD Identity Test",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(45))
+    .with_stable_identity("diskarbitration:uuid:BSD-IDENTITY-TEST")
+    .with_filesystem_signature("fs=apfs|bsd=disk4s1|bsd-major=8|bsd-minor=9|bsd-unit=10");
+
+    VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/BSD Identity Test")),
         Some(&previous),
         Some(&current),
         false,

@@ -314,6 +314,9 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
         volume.resource_uuid.as_deref(),
     );
     push_signature_str(&mut tokens, "bsd", volume.bsd_name.as_deref());
+    push_signature_u64(&mut tokens, "bsd-major", volume.bsd_major);
+    push_signature_u64(&mut tokens, "bsd-minor", volume.bsd_minor);
+    push_signature_u64(&mut tokens, "bsd-unit", volume.bsd_unit);
     push_signature_str(&mut tokens, "mount-from", volume.mount_from.as_deref());
     push_signature_u32(&mut tokens, "mount-flags", volume.mount_flags);
     push_signature_str(
@@ -950,6 +953,9 @@ mod tests {
         descriptor.media_uuid = Some("APFS-CONTAINER-UUID".to_string());
         descriptor.resource_uuid = Some("RESOURCE-UUID".to_string());
         descriptor.bsd_name = Some("disk4s1".to_string());
+        descriptor.bsd_major = Some(1);
+        descriptor.bsd_minor = Some(2);
+        descriptor.bsd_unit = Some(4);
         descriptor.mount_from = Some("/dev/disk4s1".to_string());
         descriptor.mount_flags = Some(0x0000_1000);
         descriptor.media_content = Some("Apple_APFS".to_string());
@@ -995,6 +1001,9 @@ mod tests {
             "media-uuid=APFS-CONTAINER-UUID",
             "resource-uuid=RESOURCE-UUID",
             "bsd=disk4s1",
+            "bsd-major=1",
+            "bsd-minor=2",
+            "bsd-unit=4",
             "mount-from=/dev/disk4s1",
             "mount-flags=0x00001000",
             "media-content=Apple_APFS",
@@ -1031,6 +1040,33 @@ mod tests {
         ] {
             assert!(signature.contains(token), "{signature}");
         }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_volume_filesystem_signature_tracks_bsd_identity_numbers() {
+        let root = unique_temp_dir("gfm-app-volume-bsd-number-signature");
+        let mut previous = VolumeDescriptor::for_path(&root).unwrap();
+        previous.bsd_name = Some("disk4s1".to_string());
+        previous.bsd_major = Some(1);
+        previous.bsd_minor = Some(2);
+        previous.bsd_unit = Some(4);
+        let mut current = previous.clone();
+        current.bsd_major = Some(8);
+        current.bsd_minor = Some(9);
+        current.bsd_unit = Some(10);
+
+        let previous_signature = index_volume_filesystem_signature(&previous);
+        let current_signature = index_volume_filesystem_signature(&current);
+
+        assert_ne!(previous_signature, current_signature);
+        assert!(previous_signature.contains("bsd-major=1"));
+        assert!(previous_signature.contains("bsd-minor=2"));
+        assert!(previous_signature.contains("bsd-unit=4"));
+        assert!(current_signature.contains("bsd-major=8"));
+        assert!(current_signature.contains("bsd-minor=9"));
+        assert!(current_signature.contains("bsd-unit=10"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
