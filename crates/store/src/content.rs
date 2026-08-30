@@ -168,10 +168,21 @@ pub struct MmapContentArchive {
 
 impl ContentArchive {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_checked(path, || Ok(()))
+    }
+
+    pub fn open_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let mut file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let magic = read_content_magic(&mut file, path)?;
+        check_control()?;
         let version = content_version(&magic, path)?;
+        check_control()?;
         if matches!(
             version,
             ContentStoreVersion::IndexedIds
@@ -179,8 +190,10 @@ impl ContentArchive {
                 | ContentStoreVersion::IndexedBlockedPositions
                 | ContentStoreVersion::IndexedChecksummed
         ) {
-            verify_content_checksum_for_file_checked(&mut file, path, version, || Ok(()))?;
-            let directory = read_content_directory(&mut file, path)?;
+            verify_content_checksum_for_file_checked(&mut file, path, version, &mut check_control)?;
+            check_control()?;
+            let directory = read_content_directory_checked(&mut file, path, &mut check_control)?;
+            check_control()?;
             Ok(Self {
                 path: path.to_path_buf(),
                 file,
@@ -190,11 +203,14 @@ impl ContentArchive {
         } else if version == ContentStoreVersion::Legacy {
             file.seek(SeekFrom::Start(CONTENT_MAGIC_V1.len() as u64))
                 .map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
             let count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
             let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
             for _ in 0..count {
+                check_control()?;
                 postings.push(read_content_posting(&mut file, path, version)?);
             }
+            check_control()?;
             Ok(Self {
                 path: path.to_path_buf(),
                 file,
@@ -692,11 +708,21 @@ pub fn write_content_segment(path: impl AsRef<Path>, segment: &ContentSegment) -
 }
 
 pub fn read_content_segment(path: impl AsRef<Path>) -> Result<ContentSegment> {
+    read_content_segment_checked(path, || Ok(()))
+}
+
+pub fn read_content_segment_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ContentSegment> {
     let path = path.as_ref();
+    check_control()?;
     let mut file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let mut magic = vec![0; CONTENT_SEGMENT_MAGIC.len()];
     file.read_exact(&mut magic)
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let uses_positions = if magic == CONTENT_SEGMENT_MAGIC_V2 {
         true
     } else if magic == CONTENT_SEGMENT_MAGIC {
@@ -709,9 +735,11 @@ pub fn read_content_segment(path: impl AsRef<Path>) -> Result<ContentSegment> {
     };
 
     let tombstones = read_file_ids(&mut file, path)?;
+    check_control()?;
     let posting_count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
     let mut postings = Vec::with_capacity(posting_count.min(1_000_000) as usize);
     for _ in 0..posting_count {
+        check_control()?;
         let version = if uses_positions {
             ContentStoreVersion::IndexedPositions
         } else {
@@ -719,6 +747,7 @@ pub fn read_content_segment(path: impl AsRef<Path>) -> Result<ContentSegment> {
         };
         postings.push(read_content_posting(&mut file, path, version)?);
     }
+    check_control()?;
     Ok(ContentSegment {
         tombstones,
         postings,
@@ -785,21 +814,31 @@ fn verify_content_checksum_from_slice(
     Ok(())
 }
 
-fn content_indexed_len_for_file(file: &mut File, path: &Path, len: u64) -> Result<u64> {
+fn content_indexed_len_for_file_checked(
+    file: &mut File,
+    path: &Path,
+    len: u64,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<u64> {
     let footer_len = content_checksum_footer_len() as u64;
     if len < footer_len {
         return Ok(len);
     }
+    check_control()?;
     let position = file
         .stream_position()
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     file.seek(SeekFrom::Start(len - footer_len))
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let mut footer = vec![0; footer_len as usize];
     file.read_exact(&mut footer)
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     file.seek(SeekFrom::Start(position))
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     if footer.get(4..) == Some(CONTENT_CHECKSUM_FOOTER) {
         Ok(len - footer_len)
     } else {
@@ -841,12 +880,18 @@ fn write_directory_entry(
     write_varint(&mut writer, entry.len)
 }
 
-fn read_content_directory(file: &mut File, path: &Path) -> Result<Vec<ContentDirectoryEntry>> {
+fn read_content_directory_checked(
+    file: &mut File,
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<ContentDirectoryEntry>> {
+    check_control()?;
     let len = file
         .metadata()
         .map_err(|err| GfmError::io(path, err))?
         .len();
-    let len = content_indexed_len_for_file(file, path, len)?;
+    check_control()?;
+    let len = content_indexed_len_for_file_checked(file, path, len, &mut check_control)?;
     if len < CONTENT_MAGIC_V2.len() as u64 + CONTENT_FOOTER_LEN {
         return Err(content_format_error(
             path,
@@ -854,15 +899,19 @@ fn read_content_directory(file: &mut File, path: &Path) -> Result<Vec<ContentDir
         ));
     }
 
+    check_control()?;
     file.seek(SeekFrom::Start(len.saturating_sub(CONTENT_FOOTER_LEN)))
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let mut offset = [0u8; 8];
     file.read_exact(&mut offset)
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let directory_offset = u64::from_le_bytes(offset);
     let mut footer = vec![0; CONTENT_INDEX_FOOTER.len()];
     file.read_exact(&mut footer)
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     if footer != CONTENT_INDEX_FOOTER {
         return Err(content_format_error(
             path,
@@ -878,11 +927,14 @@ fn read_content_directory(file: &mut File, path: &Path) -> Result<Vec<ContentDir
 
     file.seek(SeekFrom::Start(directory_offset))
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let count = read_varint(&mut *file).map_err(|err| GfmError::io(path, err))?;
     let mut directory = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
+        check_control()?;
         directory.push(read_directory_entry(&mut *file, path)?);
     }
+    check_control()?;
     Ok(directory)
 }
 

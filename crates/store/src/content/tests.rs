@@ -128,6 +128,16 @@ fn content_archive_reads_one_term_from_directory() {
 }
 
 #[test]
+fn content_archive_checked_open_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-content-archive-open-cancel", "gfmcontent");
+
+    let result = ContentArchive::open_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
 fn mmap_content_archive_reads_terms_without_file_seeks() {
     let path = temp_path("gfm-content-mmap-archive", "gfmcontent");
     let alpha = FileId::new(VolumeId(4), 12);
@@ -391,6 +401,16 @@ fn round_trips_content_segments() {
 }
 
 #[test]
+fn checked_content_segment_read_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-content-segment-read-cancel", "gfmseg");
+
+    let result = read_content_segment_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
 fn compacts_content_segments_with_tombstones() {
     let first = temp_path("gfm-content-segment-first", "gfmseg");
     let second = temp_path("gfm-content-segment-second", "gfmseg");
@@ -483,6 +503,26 @@ fn cancellable_compaction_stops_before_writing_output() {
     assert!(!output.exists());
 
     std::fs::remove_file(first).unwrap();
+}
+
+#[test]
+fn cancellable_compaction_stops_before_segment_file_open() {
+    let output = temp_path("gfm-content-cancel-before-segment", "gfmcontent");
+    let first = temp_path("gfm-content-missing-cancel-segment", "gfmseg");
+    let mut checks = 0usize;
+
+    let result = compact_content_segments_checked(&output, &[&first], || {
+        checks += 1;
+        if checks >= 2 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!first.exists());
+    assert!(!output.exists());
 }
 
 #[test]

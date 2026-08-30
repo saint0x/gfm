@@ -1273,7 +1273,7 @@ fn run_extraction_quarantine(
         cancellation.check()?;
         let _access = retain_extraction_quarantine_access(&path, &store, WORKER)?;
         cancellation.check()?;
-        let fingerprint = ExtractionFingerprint::for_path(&path)?;
+        let fingerprint = ExtractionFingerprint::for_path_checked(&path, || cancellation.check())?;
         let mut quarantine = ExtractionQuarantine::new(2);
         let mut decision = quarantine.before_extract(&path, &fingerprint);
         for _ in 0..attempts {

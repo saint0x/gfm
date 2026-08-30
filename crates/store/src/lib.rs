@@ -19,8 +19,8 @@ mod substring;
 pub use columns::{write_record_columns, MmapRecordColumns, RecordColumn};
 pub use content::{
     read_content_postings, read_content_postings_checked, read_content_segment,
-    write_content_postings, write_content_segment, ContentArchive, LimitedContentPosting,
-    MmapContentArchive,
+    read_content_segment_checked, write_content_postings, write_content_segment, ContentArchive,
+    LimitedContentPosting, MmapContentArchive,
 };
 pub use contentmerge::{
     compact_content_postings_with_segments, compact_content_postings_with_segments_checked,

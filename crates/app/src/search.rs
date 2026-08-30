@@ -539,7 +539,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 content,
                 "content ids",
                 move |content, cancellation| {
-                    let mut archive = ContentArchive::open(content)?;
+                    let mut archive =
+                        ContentArchive::open_checked(content, || cancellation.check())?;
                     cancellation.check()?;
                     let ids = archive.ids_for_term(&term)?;
                     cancellation.check()?;

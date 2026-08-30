@@ -640,7 +640,8 @@ impl LiveIndex {
                 continue;
             }
 
-            let fingerprint = ExtractionFingerprint::for_path(&record.path)?;
+            let fingerprint =
+                ExtractionFingerprint::for_path_checked(&record.path, || cancellation.check())?;
             cancellation.check()?;
             if matches!(
                 quarantine.before_extract(&record.path, &fingerprint),

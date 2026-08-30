@@ -119,6 +119,7 @@ impl ContentIndexDelta {
         &mut self,
         current: &[FileRecord],
         quarantine: &ExtractionQuarantine,
+        cancellation: &Cancellation,
     ) -> Result<()> {
         let mut selected = self
             .records
@@ -126,10 +127,12 @@ impl ContentIndexDelta {
             .map(|record| record.id)
             .collect::<HashSet<_>>();
         for record in current {
+            cancellation.check()?;
             if record.kind != FileKind::File || selected.contains(&record.id) {
                 continue;
             }
-            let fingerprint = ExtractionFingerprint::for_path(&record.path)?;
+            let fingerprint =
+                ExtractionFingerprint::for_path_checked(&record.path, || cancellation.check())?;
             if quarantine.has_entry(&record.path, &fingerprint) {
                 self.records.push(record.clone());
                 selected.insert(record.id);
@@ -418,7 +421,7 @@ impl BackgroundContentIndexer {
         fs::create_dir_all(output_dir).map_err(|err| gfm_types::GfmError::io(output_dir, err))?;
         let mut delta = ContentIndexDelta::from_records(&snapshot.records, previous_records);
         if let Some(quarantine) = quarantine.as_deref() {
-            delta.retry_quarantine_entries(&snapshot.records, quarantine)?;
+            delta.retry_quarantine_entries(&snapshot.records, quarantine, cancellation)?;
         }
         let batch_size = self.options.batch_size.max(1);
         let mut report = ContentIndexReport {

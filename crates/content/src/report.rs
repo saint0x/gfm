@@ -79,7 +79,16 @@ impl ExtractionFingerprint {
     }
 
     pub fn for_path(path: &Path) -> Result<Self> {
+        Self::for_path_checked(path, || Ok(()))
+    }
+
+    pub fn for_path_checked(
+        path: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
         let metadata = std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         Ok(Self::from_metadata(
             &metadata,
             extractor_version_for_path(path),

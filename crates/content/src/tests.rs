@@ -120,6 +120,18 @@ fn extraction_report_checked_honors_cancellation_before_reading_content_bytes() 
 }
 
 #[test]
+fn extraction_fingerprint_checked_honors_pre_cancelled_control_before_metadata_probe() {
+    let root = unique_temp_dir("gfm-content-fingerprint-pre-cancel");
+    let path = root.join("missing.md");
+
+    let result = ExtractionFingerprint::for_path_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn pressure_budget_skips_large_text_before_reading_content() {
     let root = unique_temp_dir("gfm-content-pressure-budget");
     let path = root.join("large.txt");
