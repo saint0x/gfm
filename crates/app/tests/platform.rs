@@ -1862,6 +1862,25 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     assert!(conflict_stdout.contains("\tbefore-state=conflict\tafter-state=-\t"));
     assert!(conflict_stdout.ends_with("reason=provider-conflict-requires-resolution\n"));
 
+    let missing = std::fs::canonicalize(&root).unwrap().join("Missing.icloud");
+    let missing_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-operation")
+        .arg("download")
+        .arg(&missing)
+        .output()
+        .unwrap();
+    assert!(
+        missing_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&missing_output.stderr)
+    );
+    let missing_stdout = String::from_utf8(missing_output.stdout).unwrap();
+    let missing_stderr = String::from_utf8_lossy(&missing_output.stderr);
+    assert_worker_admitted(&missing_stderr, "fileprovider operation", &missing);
+    assert!(missing_stdout.contains("\toperation=download\tdisposition=missing\t"));
+    assert!(missing_stdout.contains("\tbefore-state=evicted\tafter-state=-\t"));
+    assert!(missing_stdout.ends_with("reason=fileprovider-path-missing\n"));
+
     let _ = std::fs::remove_dir_all(root);
 }
 

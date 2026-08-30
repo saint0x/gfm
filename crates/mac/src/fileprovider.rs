@@ -1340,6 +1340,9 @@ impl FileProviderOperationReport {
             FileProviderOperation::Download => before.commands.download,
             FileProviderOperation::Evict => before.commands.evict,
         };
+        if path.try_exists().ok() == Some(false) {
+            return Ok(Self::missing(path, operation, before));
+        }
         if before.storage_state == CloudStorageState::Conflict {
             return Ok(Self::refused(
                 path,
@@ -1435,6 +1438,21 @@ impl FileProviderOperationReport {
             before,
             after: None,
             reason: Some(reason.into()),
+        }
+    }
+
+    fn missing(
+        path: PathBuf,
+        operation: FileProviderOperation,
+        before: FileProviderStateReport,
+    ) -> Self {
+        Self {
+            path,
+            operation,
+            disposition: FileProviderOperationDisposition::Missing,
+            before,
+            after: None,
+            reason: Some("fileprovider-path-missing".to_string()),
         }
     }
 }
@@ -4234,6 +4252,26 @@ mod tests {
             Some("operation-disabled-for-current-state")
         );
         assert_eq!(evict.before.storage_state, CloudStorageState::LocalOnly);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operations_report_missing_placeholder_path_before_native_call() {
+        let root = unique_temp_dir();
+        let missing = root.join("Missing.icloud");
+
+        let report =
+            FileProviderOperationReport::execute(&missing, FileProviderOperation::Download)
+                .unwrap();
+
+        assert_eq!(
+            report.disposition,
+            FileProviderOperationDisposition::Missing
+        );
+        assert_eq!(report.reason.as_deref(), Some("fileprovider-path-missing"));
+        assert_eq!(report.before.storage_state, CloudStorageState::Evicted);
+        assert!(report.as_tsv().contains("\tdisposition=missing\t"));
 
         fs::remove_dir_all(root).unwrap();
     }
