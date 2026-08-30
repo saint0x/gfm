@@ -144,6 +144,99 @@ fn ui_permission_access_contract_reports_blocked_volume_orchestration_from_binar
 }
 
 #[test]
+fn ui_permission_access_contract_reports_missing_path_orchestration_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-missing-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("Missing.pdf");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-permission-access-contract")
+        .arg(&path)
+        .arg("preview")
+        .arg("preview worker")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tprompt-kind=blocked\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tprompt-action=blocked-missing-path\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tpromptable=false\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tprompt-source=missing-path\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tprobe=missing\t"), "{stdout}");
+    assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
+    assert!(
+        stdout.contains("preview worker access is denied"),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn ui_permission_access_contract_reports_unavailable_path_orchestration_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-unavailable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("permission-path-unavailable".repeat(16));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-permission-access-contract")
+        .arg(&path)
+        .arg("preview")
+        .arg("preview worker")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tprompt-kind=blocked\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tprompt-action=blocked-unavailable\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tpromptable=false\t"), "{stdout}");
+    assert!(stdout.contains("\tprompt-source=unavailable\t"), "{stdout}");
+    assert!(stdout.contains("\tprobe=unavailable\t"), "{stdout}");
+    assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
+    assert!(
+        stdout.contains("preview worker access is denied"),
+        "{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn persists_permission_invalidation_state_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-permission-invalidation-{}",
