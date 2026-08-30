@@ -7415,6 +7415,48 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "preview-volume-scheduling",
+        "tmp/gfm-fozzy-preview-network/Installer.dmg",
+        "thumbnail",
+        "nominal",
+        "nominal",
+        "ac",
+        "idle"
+      ],
+      "stdout": "preview-volume-scheduling\tkind=thumbnail\tpath=tmp/gfm-fozzy-preview-network/Installer.dmg\tvolume-kind=network\tremote=true\tslow=false\tmax-visible=8\tmax-prefetch=0\tcancel-offscreen=true\n",
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-preview-scheduling/.gfm-volume-kind",
+      "data": "network\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-preview-scheduling/Preview.png",
+      "data": "image fixture\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "preview-volume-scheduling",
+        "tmp/gfm-fozzy-preview-scheduling/Preview.png",
+        "thumbnail",
+        "nominal",
+        "fair",
+        "ac",
+        "idle"
+      ],
+      "stdout": "preview-volume-scheduling\tkind=thumbnail\tpath=tmp/gfm-fozzy-preview-scheduling/Preview.png\tvolume-kind=network\tremote=true\tslow=false\tmax-visible=8\tmax-prefetch=0\tcancel-offscreen=true\n",
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-preview.pdf",
       "data": "%PDF-1.7\n"

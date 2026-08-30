@@ -909,6 +909,27 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 path.display()
             );
         }
+        "preview-volume-scheduling" => {
+            let path = required_path(args.next(), "preview-volume-scheduling requires a path")?;
+            let kind = parse_preview_kind(args.next())?;
+            let pressure = parse_required_scheduling_pressure(args, "preview volume scheduling")?;
+            let base = preview_base_scheduling_policy(kind);
+            let report = VolumeDiscoveryReport::for_containing_path(absolute_preview_path(&path));
+            let policy =
+                preview_scheduling_policy_from_volume_report(&path, base, pressure, &report);
+            let (volume_kind, remote, slow) = preview_volume_scheduling_facts(&path, &report);
+            println!(
+                "preview-volume-scheduling\tkind={}\tpath={}\tvolume-kind={}\tremote={}\tslow={}\tmax-visible={}\tmax-prefetch={}\tcancel-offscreen={}",
+                kind.as_str(),
+                path.display(),
+                volume_kind,
+                remote,
+                slow,
+                policy.max_visible,
+                policy.max_prefetch,
+                policy.cancel_offscreen
+            );
+        }
         "icon-preview" => {
             let path = required_path(args.next(), "icon-preview requires a path")?;
             println!("{}", run_icon_preview(path)?.as_tsv());
@@ -1698,13 +1719,7 @@ fn volume_event_runtime_fanout_summary(
 
 fn preview_security_input_with_volume(path: &Path, kind: PreviewKind) -> PreviewSecurityInput {
     let mut input = security_input_for_path(path, kind);
-    let volume_path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map(|cwd| cwd.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
-    };
+    let volume_path = absolute_preview_path(path);
     let report = VolumeDiscoveryReport::for_containing_path(&volume_path);
     if let Some(volume) = report.volume_for_path(&volume_path) {
         input.is_remote = volume_reports_remote_for_preview(volume);
@@ -1712,8 +1727,105 @@ fn preview_security_input_with_volume(path: &Path, kind: PreviewKind) -> Preview
     input
 }
 
+fn absolute_preview_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
 fn volume_reports_remote_for_preview(volume: &VolumeDescriptor) -> bool {
     volume.network || volume.local == Some(false) || volume.kind == gfm_mac::VolumeKind::Network
+}
+
+fn preview_base_scheduling_policy(kind: PreviewKind) -> PreviewSchedulingPolicy {
+    match kind {
+        PreviewKind::QuickLook => PreviewSchedulingPolicy {
+            max_visible: 1,
+            max_prefetch: 1,
+            cancel_offscreen: true,
+        },
+        PreviewKind::Icon | PreviewKind::Thumbnail | PreviewKind::Text => {
+            PreviewSchedulingPolicy::default()
+        }
+    }
+}
+
+fn preview_scheduling_policy_for_path(
+    path: &Path,
+    kind: PreviewKind,
+    pressure: SchedulingPressure,
+) -> PreviewSchedulingPolicy {
+    let report = VolumeDiscoveryReport::for_containing_path(absolute_preview_path(path));
+    preview_scheduling_policy_from_volume_report(
+        path,
+        preview_base_scheduling_policy(kind),
+        pressure,
+        &report,
+    )
+}
+
+fn preview_scheduling_policy_from_volume_report(
+    path: &Path,
+    base: PreviewSchedulingPolicy,
+    pressure: SchedulingPressure,
+    report: &VolumeDiscoveryReport,
+) -> PreviewSchedulingPolicy {
+    let policy = base.adapted_for_pressure(pressure);
+    let volume_path = absolute_preview_path(path);
+    let Some(volume) = report.volume_for_path(&volume_path) else {
+        return preview_conservative_volume_policy(policy);
+    };
+    if volume.platform_state_unavailable()
+        || volume_reports_remote_for_preview(volume)
+        || volume_reports_slow_for_preview(volume)
+    {
+        preview_conservative_volume_policy(policy)
+    } else {
+        policy
+    }
+}
+
+fn preview_conservative_volume_policy(
+    mut policy: PreviewSchedulingPolicy,
+) -> PreviewSchedulingPolicy {
+    policy.max_visible = policy.max_visible.clamp(1, 8);
+    policy.max_prefetch = 0;
+    policy.cancel_offscreen = true;
+    policy
+}
+
+fn volume_reports_slow_for_preview(volume: &VolumeDescriptor) -> bool {
+    if volume_reports_remote_for_preview(volume) {
+        return false;
+    }
+    matches!(
+        volume.kind,
+        gfm_mac::VolumeKind::DiskImage | gfm_mac::VolumeKind::Removable
+    ) || (volume.kind == gfm_mac::VolumeKind::External
+        && (volume.resource_automounted == Some(true)
+            || volume
+                .device_protocol
+                .as_deref()
+                .is_some_and(|protocol| protocol.eq_ignore_ascii_case("usb"))))
+}
+
+fn preview_volume_scheduling_facts(
+    path: &Path,
+    report: &VolumeDiscoveryReport,
+) -> (&'static str, bool, bool) {
+    let volume_path = absolute_preview_path(path);
+    let Some(volume) = report.volume_for_path(&volume_path) else {
+        return ("unknown", false, true);
+    };
+    (
+        volume.kind.as_str(),
+        volume_reports_remote_for_preview(volume),
+        volume_reports_slow_for_preview(volume),
+    )
 }
 
 fn volume_event_operation_policy_invalidation_tsv(
@@ -2457,14 +2569,11 @@ fn run_adaptive_quicklook_session(
                 Viewport::new(Rect::new(0, 0, 1024, 768), 256),
             )
             .with_cloud_materialization(cloud)
-            .with_scheduling_policy(
-                PreviewSchedulingPolicy {
-                    max_visible: 1,
-                    max_prefetch: 1,
-                    cancel_offscreen: true,
-                }
-                .adapted_for_pressure(pressure),
-            )
+            .with_scheduling_policy(preview_scheduling_policy_for_path(
+                &path,
+                PreviewKind::QuickLook,
+                pressure,
+            ))
             .with_invalidation(PreviewInvalidationEvent {
                 content_changed: true,
                 ..PreviewInvalidationEvent::default()
@@ -2517,9 +2626,11 @@ fn run_adaptive_thumbnail_generation(
                 Viewport::new(Rect::new(0, 0, 1024, 768), 256),
             )
             .with_cloud_materialization(cloud)
-            .with_scheduling_policy(
-                PreviewSchedulingPolicy::default().adapted_for_pressure(pressure),
-            )
+            .with_scheduling_policy(preview_scheduling_policy_for_path(
+                &path,
+                PreviewKind::Thumbnail,
+                pressure,
+            ))
             .with_size(512, 2_000)
             .with_invalidation(PreviewInvalidationEvent {
                 metadata_changed: true,
