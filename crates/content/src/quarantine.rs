@@ -135,39 +135,68 @@ impl ExtractionQuarantine {
     }
 
     pub fn write(&self, path: impl AsRef<Path>) -> crate::Result<()> {
+        self.write_checked(path, || Ok(()))
+    }
+
+    pub fn write_checked(
+        &self,
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> crate::Result<()>,
+    ) -> crate::Result<()> {
         let path = path.as_ref();
+        check_control()?;
         let temp = quarantine_temp_path(path);
-        let file = File::create(&temp).map_err(|err| gfm_types::GfmError::io(&temp, err))?;
-        let mut writer = BufWriter::new(file);
-        writeln!(writer, "gfm-extraction-quarantine-v1")
-            .map_err(|err| gfm_types::GfmError::io(&temp, err))?;
-        writeln!(
-            writer,
-            "schema_version\t{EXTRACTION_QUARANTINE_SCHEMA_VERSION}"
-        )
-        .map_err(|err| gfm_types::GfmError::io(&temp, err))?;
-        writeln!(writer, "failure_threshold\t{}", self.failure_threshold)
-            .map_err(|err| gfm_types::GfmError::io(&temp, err))?;
-        for entry in self.entries.values() {
-            writeln!(
-                writer,
-                "entry\t{}\t{}\t{}\t{}\t{}",
-                escape_field(&entry.cache_key),
-                escape_field(&entry.path.to_string_lossy()),
-                entry.kind.as_str(),
-                entry.failures,
-                escape_field(&entry.reason)
-            )
-            .map_err(|err| gfm_types::GfmError::io(&temp, err))?;
+        let result = (|| {
+            let file = File::create(&temp).map_err(|err| gfm_types::GfmError::io(&temp, err))?;
+            check_control()?;
+            let mut writer = BufWriter::new(file);
+            write_quarantine_line_checked(
+                &mut writer,
+                &temp,
+                "gfm-extraction-quarantine-v1\n",
+                &mut check_control,
+            )?;
+            write_quarantine_line_checked(
+                &mut writer,
+                &temp,
+                &format!("schema_version\t{EXTRACTION_QUARANTINE_SCHEMA_VERSION}\n"),
+                &mut check_control,
+            )?;
+            write_quarantine_line_checked(
+                &mut writer,
+                &temp,
+                &format!("failure_threshold\t{}\n", self.failure_threshold),
+                &mut check_control,
+            )?;
+            for entry in self.entries.values() {
+                let line = format!(
+                    "entry\t{}\t{}\t{}\t{}\t{}\n",
+                    escape_field(&entry.cache_key),
+                    escape_field(&entry.path.to_string_lossy()),
+                    entry.kind.as_str(),
+                    entry.failures,
+                    escape_field(&entry.reason)
+                );
+                write_quarantine_line_checked(&mut writer, &temp, &line, &mut check_control)?;
+            }
+            check_control()?;
+            writer
+                .flush()
+                .map_err(|err| gfm_types::GfmError::io(&temp, err))?;
+            check_control()?;
+            writer
+                .get_ref()
+                .sync_all()
+                .map_err(|err| gfm_types::GfmError::io(&temp, err))?;
+            check_control()?;
+            fs::rename(&temp, path).map_err(|err| gfm_types::GfmError::io(path, err))?;
+            check_control()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temp);
         }
-        writer
-            .flush()
-            .map_err(|err| gfm_types::GfmError::io(&temp, err))?;
-        writer
-            .get_ref()
-            .sync_all()
-            .map_err(|err| gfm_types::GfmError::io(&temp, err))?;
-        fs::rename(&temp, path).map_err(|err| gfm_types::GfmError::io(path, err))
+        result
     }
 
     pub fn read(path: impl AsRef<Path>) -> crate::Result<Self> {
@@ -316,6 +345,20 @@ fn unescape_field(value: &str) -> String {
         }
     }
     output
+}
+
+fn write_quarantine_line_checked(
+    writer: &mut impl Write,
+    path: &Path,
+    line: &str,
+    mut check_control: impl FnMut() -> crate::Result<()>,
+) -> crate::Result<()> {
+    check_control()?;
+    writer
+        .write_all(line.as_bytes())
+        .map_err(|err| gfm_types::GfmError::io(path, err))?;
+    check_control()?;
+    Ok(())
 }
 
 fn report_failure_kind(reason: &str) -> QuarantineFailureKind {

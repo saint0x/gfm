@@ -799,6 +799,52 @@ fn extraction_quarantine_checked_read_honors_pre_cancelled_control_before_file_o
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn extraction_quarantine_checked_write_honors_pre_cancelled_control_before_file_create() {
+    let root = unique_temp_dir("gfm-content-quarantine-write-pre-cancel");
+    let store = root.join("quarantine.gfmquarantine");
+    let quarantine = ExtractionQuarantine::new(2);
+
+    let result = quarantine.write_checked(&store, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!store.exists());
+    assert!(!has_quarantine_temp_file(&root, "quarantine.gfmquarantine"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extraction_quarantine_checked_write_removes_temp_file_after_cancelled_entry_write() {
+    let root = unique_temp_dir("gfm-content-quarantine-write-entry-cancel");
+    let path = root.join("slow.pdf");
+    let store = root.join("quarantine.gfmquarantine");
+    fs::write(&path, minimal_pdf("slow")).unwrap();
+    let fingerprint = ExtractionFingerprint::for_path(&path).unwrap();
+    let mut quarantine = ExtractionQuarantine::new(2);
+    quarantine.record_failure(
+        &path,
+        &fingerprint,
+        QuarantineFailureKind::Timeout,
+        "worker-timeout",
+    );
+    let mut checks = 0usize;
+
+    let result = quarantine.write_checked(&store, || {
+        checks += 1;
+        if checks >= 9 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 9);
+    assert!(!store.exists());
+    assert!(!has_quarantine_temp_file(&root, "quarantine.gfmquarantine"));
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
         "{}-{}",
@@ -810,6 +856,16 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     ));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn has_quarantine_temp_file(root: &PathBuf, prefix: &str) -> bool {
+    fs::read_dir(root).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(&format!("{prefix}.tmp."))
+    })
 }
 
 fn record_for_path(path: &Path) -> FileRecord {

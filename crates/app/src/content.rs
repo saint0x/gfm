@@ -1285,7 +1285,7 @@ fn run_extraction_quarantine(
             );
         }
         cancellation.check()?;
-        quarantine.write(&store)?;
+        quarantine.write_checked(&store, || cancellation.check())?;
         let reloaded = ExtractionQuarantine::read_checked(&store, || cancellation.check())?;
         cancellation.check()?;
         Ok(vec![
@@ -1620,7 +1620,7 @@ pub(crate) fn run_content_job(
                     request,
                     &mut extraction_quarantine,
                 )?;
-                extraction_quarantine.write(&quarantine_store)?;
+                extraction_quarantine.write_checked(&quarantine_store, || cancellation.check())?;
                 job_result_tx.send((report, inaccessible)).map_err(|_| {
                     GfmError::Format("background content index result receiver dropped".to_string())
                 })?;

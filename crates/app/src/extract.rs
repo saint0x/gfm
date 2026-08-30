@@ -219,7 +219,7 @@ pub(crate) fn run_quarantined_adaptive_extraction_worker_cancellable(
             cancellation.check()?;
             let decision = quarantine.record_success(path, &fingerprint);
             cancellation.check()?;
-            quarantine.write(store)?;
+            quarantine.write_checked(store, || cancellation.check())?;
             Ok(format!("{report}{}\n", decision.as_tsv()))
         }
         Err(err) => {
@@ -228,7 +228,7 @@ pub(crate) fn run_quarantined_adaptive_extraction_worker_cancellable(
             let decision =
                 quarantine.record_failure(path, &fingerprint, kind, worker_failure_reason(kind));
             cancellation.check()?;
-            quarantine.write(store)?;
+            quarantine.write_checked(store, || cancellation.check())?;
             Ok(format!("{}\n", decision.as_tsv()))
         }
     }
