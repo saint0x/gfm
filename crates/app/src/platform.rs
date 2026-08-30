@@ -2200,8 +2200,12 @@ fn run_preview_cache_fileprovider_observed_invalidation(
         .or_else(|| parent_volume(&state_probe));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _cache_access =
-            preflight_access_scope(&cache_probe, AccessIntent::Write, "preview cache root")?;
+        let _cache_access = preflight_access_scope_checked(
+            &cache_probe,
+            AccessIntent::Write,
+            "preview cache root",
+            || cancellation.check(),
+        )?;
         let observed =
             evaluate_fileprovider_observed_invalidation(&state_path, event, WORKER, &cancellation)?;
         cancellation.check()?;
@@ -2220,7 +2224,10 @@ fn run_fileprovider_invalidation_scan(
         parent_volume(&state_probe).or_else(|| paths.iter().find_map(|path| parent_volume(path)));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_fileprovider_snapshot_access(&state_path, &paths, WORKER)?;
+        let _access =
+            retain_fileprovider_snapshot_access_checked(&state_path, &paths, WORKER, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
         let previous = if fileprovider_state_file_exists(&state_path, WORKER)? {
             Some(FileProviderStateSnapshot::read_checked(
@@ -2275,10 +2282,12 @@ fn evaluate_fileprovider_observed_invalidation_checked(
 ) -> Result<FileProviderObservedInvalidation> {
     check_control()?;
     let state_probe = write_probe_existing_ancestor(state_path, worker)?;
-    let mut access = vec![preflight_access_scope(
+    check_control()?;
+    let mut access = vec![preflight_access_scope_checked(
         &state_probe,
         AccessIntent::Write,
         worker,
+        &mut check_control,
     )?];
     check_control()?;
     let previous = if fileprovider_state_file_exists(state_path, worker)? {
@@ -2290,10 +2299,11 @@ fn evaluate_fileprovider_observed_invalidation_checked(
         None
     };
     check_control()?;
-    access.extend(retain_fileprovider_event_access(
+    access.extend(retain_fileprovider_event_access_checked(
         &event,
         previous.as_ref(),
         worker,
+        &mut check_control,
     )?);
     check_control()?;
     let (observed, snapshot) =
@@ -2415,14 +2425,26 @@ pub(crate) fn run_fileprovider_observer_probe(
             let root_worker = format!("{worker_name} root");
             let target_worker = format!("{worker_name} target");
             let state_worker = format!("{worker_name} state");
+            cancellation.check()?;
             let target_probe = write_probe_existing_ancestor(&target, &target_worker)?;
-            let _root_access = preflight_access_scope(&root, AccessIntent::Index, &root_worker)?;
-            let _target_access =
-                preflight_access_scope(&target_probe, AccessIntent::Write, &target_worker)?;
-            let _state_access = retain_fileprovider_snapshot_access(
+            cancellation.check()?;
+            let _root_access =
+                preflight_access_scope_checked(&root, AccessIntent::Index, &root_worker, || {
+                    cancellation.check()
+                })?;
+            cancellation.check()?;
+            let _target_access = preflight_access_scope_checked(
+                &target_probe,
+                AccessIntent::Write,
+                &target_worker,
+                || cancellation.check(),
+            )?;
+            cancellation.check()?;
+            let _state_access = retain_fileprovider_snapshot_access_checked(
                 &state_path,
                 std::slice::from_ref(&target),
                 &state_worker,
+                || cancellation.check(),
             )?;
             cancellation.check()?;
             let previous = if fileprovider_state_file_exists(&state_path, &state_worker)? {
@@ -2557,34 +2579,54 @@ fn index_volume_event_kind(kind: VolumeEventKind) -> IndexVolumeEventKind {
     }
 }
 
-fn retain_fileprovider_snapshot_access(
+fn retain_fileprovider_snapshot_access_checked(
     state_path: &Path,
     paths: &[PathBuf],
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
     let mut guards = Vec::with_capacity(paths.len() + 1);
     let state_probe = write_probe_existing_ancestor(state_path, worker)?;
-    guards.push(preflight_access_scope(
+    check_control()?;
+    guards.push(preflight_access_scope_checked(
         &state_probe,
         AccessIntent::Write,
         worker,
+        &mut check_control,
     )?);
     for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
-        guards.push(preflight_access_scope(path, AccessIntent::Read, worker)?);
+        check_control()?;
+        guards.push(preflight_access_scope_checked(
+            path,
+            AccessIntent::Read,
+            worker,
+            &mut check_control,
+        )?);
     }
+    check_control()?;
     Ok(guards)
 }
 
-fn retain_fileprovider_event_access(
+fn retain_fileprovider_event_access_checked(
     event: &FileEvent,
     previous: Option<&FileProviderStateSnapshot>,
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
     let mut guards = Vec::new();
     let paths = fileprovider_event_access_paths(event, previous, worker)?;
     for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
-        guards.push(preflight_access_scope(path, AccessIntent::Read, worker)?);
+        check_control()?;
+        guards.push(preflight_access_scope_checked(
+            path,
+            AccessIntent::Read,
+            worker,
+            &mut check_control,
+        )?);
     }
+    check_control()?;
     Ok(guards)
 }
 
@@ -3011,6 +3053,50 @@ mod tests {
             .count();
         assert_eq!(leftovers, 0);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_snapshot_access_checked_honors_pre_cancelled_control() {
+        let state_path = std::env::temp_dir()
+            .join(format!(
+                "gfm-platform-snapshot-access-pre-cancelled-{}",
+                std::process::id()
+            ))
+            .join("state.tsv");
+        let tracked = std::env::temp_dir().join("gfm-platform-snapshot-access-tracked");
+
+        let result = retain_fileprovider_snapshot_access_checked(
+            &state_path,
+            &[tracked],
+            "fileprovider snapshot",
+            || Err(GfmError::Cancelled),
+        );
+
+        let err = match result {
+            Ok(_) => panic!("pre-cancelled snapshot access should not retain guards"),
+            Err(err) => err,
+        };
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!state_path.exists());
+    }
+
+    #[test]
+    fn fileprovider_event_access_checked_honors_pre_cancelled_control() {
+        let event = FileEvent::new(
+            std::env::temp_dir().join("gfm-platform-event-access-pre-cancelled"),
+            FileEventKind::Modify,
+        );
+
+        let result =
+            retain_fileprovider_event_access_checked(&event, None, "fileprovider event", || {
+                Err(GfmError::Cancelled)
+            });
+
+        let err = match result {
+            Ok(_) => panic!("pre-cancelled event access should not retain guards"),
+            Err(err) => err,
+        };
+        assert_eq!(err, GfmError::Cancelled);
     }
 
     #[test]
