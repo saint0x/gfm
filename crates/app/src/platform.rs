@@ -44,6 +44,10 @@ use gfm_preview::{
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
 use gfm_types::{FileEvent, FileEventKind, FileId, FileRecord, GfmError, Result, VolumeId};
+use gfm_ui::{
+    SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind, SidebarVolumeMountState,
+    SidebarVolumeSpec,
+};
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -654,6 +658,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         "index-jobs-still-valid"
                     }
                 );
+            }
+        }
+        "volume-event-runtime-fanout" => {
+            for line in volume_event_runtime_fanout_from_args(args)? {
+                println!("{line}");
             }
         }
         "volume-operation" => {
@@ -1516,6 +1525,111 @@ fn volume_event_state_index_invalidation_from_args(
     ))
 }
 
+fn volume_event_runtime_fanout_from_args(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<Vec<String>> {
+    let mut previous_paths = Vec::new();
+    loop {
+        let arg = required_string(
+            args.next(),
+            "volume event runtime fanout requires previous paths, `--`, event kind, and optional event path",
+        )?;
+        if arg == "--" {
+            break;
+        }
+        previous_paths.push(PathBuf::from(arg));
+    }
+
+    let kind = parse_volume_event_kind(&required_string(
+        args.next(),
+        "volume event runtime fanout requires an event kind after `--`",
+    )?)?;
+    let resolution = resolve_volume_event_path(kind, args.next().map(PathBuf::from))?;
+    let mut state = VolumeEventState::new(volume_discovery_report(previous_paths)?);
+    let current = (kind != VolumeEventKind::Disappeared)
+        .then_some(resolution.descriptor)
+        .flatten();
+    let transition = state.apply_parts_transition(
+        kind,
+        resolution.native_status,
+        resolution.path.clone(),
+        current,
+        resolution.native_reason,
+    );
+    let previous_index = transition.previous.as_ref().map(index_volume_descriptor);
+    let current_index = transition.current.as_ref().map(index_volume_descriptor);
+    let index = VolumeEventIndexInvalidationReport::from_event(
+        index_volume_event_kind(kind),
+        transition.invalidation.path.clone(),
+        previous_index.as_ref(),
+        current_index.as_ref(),
+        transition.invalidation.invalidate_index_admission,
+        transition.invalidation.rescan_index,
+    );
+    let previous_sidebar = transition.previous.as_ref().map(sidebar_volume_spec);
+    let current_sidebar = transition.current.as_ref().map(sidebar_volume_spec);
+    let sidebar = SidebarVolumeInvalidation::from_event(
+        sidebar_volume_event_kind(kind),
+        transition.invalidation.path.clone(),
+        previous_sidebar.as_ref(),
+        current_sidebar.as_ref(),
+        transition.invalidation.invalidate_sidebar,
+        transition.invalidation.reason.clone(),
+    )
+    .with_platform_statuses(
+        volume_status_string(transition.invalidation.previous_native_status),
+        volume_status_string(transition.invalidation.previous_resource_status),
+        volume_status_string(transition.invalidation.previous_mount_table_status),
+        volume_status_string(transition.invalidation.current_native_status),
+        volume_status_string(transition.invalidation.current_resource_status),
+        volume_status_string(transition.invalidation.current_mount_table_status),
+    );
+
+    let mut lines = vec![
+        volume_event_runtime_fanout_summary(&transition.invalidation, &index, &sidebar),
+        index.as_tsv(),
+        sidebar.as_tsv(),
+    ];
+    if let Some(cancellation) = runtime_volume_cancellation(&index) {
+        lines.push(cancellation.as_tsv());
+    } else {
+        lines.push(format!(
+            "volume-job-cancellation\tvolume=-\tclass=background\tcancelled=0\treason={}",
+            if index.cancel_index_jobs {
+                "missing-volume-id"
+            } else {
+                "index-jobs-still-valid"
+            }
+        ));
+    }
+    Ok(lines)
+}
+
+fn volume_event_runtime_fanout_summary(
+    platform: &VolumeEventInvalidationReport,
+    index: &VolumeEventIndexInvalidationReport,
+    sidebar: &SidebarVolumeInvalidation,
+) -> String {
+    format!(
+        "volume-event-runtime-fanout\tkind={}\tpath={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tsidebar-row={}\tsidebar-section={}\treason={}",
+        platform.kind.as_str(),
+        platform
+            .path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        platform.invalidate_sidebar,
+        platform.invalidate_operation_policy,
+        index.invalidate_index_admission,
+        index.rescan_index,
+        index.cancel_index_jobs,
+        index.clear_fsevents_cursor,
+        sidebar.invalidate_row,
+        sidebar.invalidate_section,
+        platform.reason
+    )
+}
+
 fn volume_case_sensitivity_invalidation(
     previous_case_sensitive: bool,
     current_case_sensitive: bool,
@@ -1684,6 +1798,54 @@ fn runtime_volume_cancellation(
         VolumeId(volume.0 + 1),
     );
     Some(scheduler.cancel_volume_jobs(volume, Some(JobClass::Background)))
+}
+
+fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
+    SidebarVolumeSpec::from_native_seed(
+        &volume.stable_identity,
+        volume.label.clone(),
+        volume.path.clone(),
+        volume.ejectable,
+    )
+    .with_volume_state(
+        sidebar_volume_kind(volume.kind),
+        sidebar_volume_mount_state(volume.mount_state),
+        volume.read_only,
+        volume.network,
+        volume.reachable,
+    )
+}
+
+fn sidebar_volume_kind(kind: gfm_mac::VolumeKind) -> SidebarVolumeKind {
+    match kind {
+        gfm_mac::VolumeKind::System | gfm_mac::VolumeKind::Internal => SidebarVolumeKind::Internal,
+        gfm_mac::VolumeKind::External => SidebarVolumeKind::External,
+        gfm_mac::VolumeKind::Removable => SidebarVolumeKind::Removable,
+        gfm_mac::VolumeKind::Network => SidebarVolumeKind::Network,
+        gfm_mac::VolumeKind::DiskImage => SidebarVolumeKind::DiskImage,
+        gfm_mac::VolumeKind::Unknown => SidebarVolumeKind::Unknown,
+    }
+}
+
+fn sidebar_volume_mount_state(state: gfm_mac::MountState) -> SidebarVolumeMountState {
+    match state {
+        gfm_mac::MountState::Mounted => SidebarVolumeMountState::Mounted,
+        gfm_mac::MountState::Unmounted => SidebarVolumeMountState::Unmounted,
+        gfm_mac::MountState::Stale => SidebarVolumeMountState::Stale,
+    }
+}
+
+fn sidebar_volume_event_kind(kind: VolumeEventKind) -> SidebarVolumeEventKind {
+    match kind {
+        VolumeEventKind::Appeared => SidebarVolumeEventKind::Appeared,
+        VolumeEventKind::DescriptionChanged => SidebarVolumeEventKind::DescriptionChanged,
+        VolumeEventKind::Disappeared => SidebarVolumeEventKind::Disappeared,
+        VolumeEventKind::Unavailable => SidebarVolumeEventKind::Unavailable,
+    }
+}
+
+fn volume_status_string(status: Option<gfm_mac::NativeVolumeStatus>) -> Option<String> {
+    status.map(|status| status.as_str().to_string())
 }
 
 fn fileprovider_progress_total_units(report: &FileProviderProgressReport) -> u64 {

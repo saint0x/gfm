@@ -5799,6 +5799,79 @@ fn reports_volume_event_runtime_cancellation_from_binary() {
 }
 
 #[test]
+fn reports_volume_event_runtime_fanout_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-event-runtime-fanout-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let disappeared = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-runtime-fanout")
+        .arg(&root)
+        .arg("--")
+        .arg("disappeared")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        disappeared.status.success(),
+        "{}",
+        String::from_utf8_lossy(&disappeared.stderr)
+    );
+    let stdout = String::from_utf8(disappeared.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-event-runtime-fanout\tkind=disappeared\t"));
+    assert!(stdout.contains("\tsidebar=true\t"));
+    assert!(stdout.contains("\toperation-policy=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\t"));
+    assert!(stdout.contains("\trescan-index=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\t"));
+    assert!(stdout.contains("\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.contains("\tsidebar-row=true\tsidebar-section=true\t"));
+    assert!(stdout.contains("\treason=volume-event-disappeared\n"));
+    assert!(stdout.contains("volume-event-index-invalidation\tkind=disappeared\t"));
+    assert!(stdout.contains("\tcurrent-volume=-\t"));
+    assert!(stdout.contains("sidebar-volume-invalidation\trow=volume-"));
+    assert!(stdout.contains("\tkind=disappeared\t"));
+    assert!(stdout.contains("\tremove-row=true\t"));
+    assert!(stdout.contains("\nvolume-job-cancellation\tvolume="));
+    assert!(stdout.contains("\tclass=background\tcancelled=1\n"));
+    assert!(stdout.contains("cancelled-job\t1\tbackground\tbackground\tindex invalidated volume"));
+    assert!(!stdout.contains("render visible volume previews"));
+    assert!(!stdout.contains("index unrelated volume"));
+
+    let kept = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-runtime-fanout")
+        .arg(&root)
+        .arg("--")
+        .arg("appeared")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        kept.status.success(),
+        "{}",
+        String::from_utf8_lossy(&kept.stderr)
+    );
+    let kept_stdout = String::from_utf8(kept.stdout).unwrap();
+    assert!(kept_stdout.starts_with("volume-event-runtime-fanout\tkind=appeared\t"));
+    assert!(kept_stdout.contains("\tsidebar=true\t"));
+    assert!(kept_stdout.contains("\toperation-policy=true\t"));
+    assert!(kept_stdout.contains("\tindex-admission=true\t"));
+    assert!(kept_stdout.contains("\tcancel-index-jobs=false\t"));
+    assert!(kept_stdout.contains("sidebar-volume-invalidation\trow=volume-"));
+    assert!(kept_stdout.contains("\tremove-row=false\t"));
+    assert!(kept_stdout.ends_with(
+        "volume-job-cancellation\tvolume=-\tclass=background\tcancelled=0\treason=index-jobs-still-valid\n"
+    ));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_operation_refusal_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-volume-operation-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

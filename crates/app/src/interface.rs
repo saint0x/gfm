@@ -363,21 +363,25 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .flatten();
             let invalidation = SidebarVolumeInvalidation::from_event(
                 sidebar_volume_event_kind(kind),
-                resolution.path,
+                resolution.path.clone(),
                 previous.as_ref(),
                 current.as_ref(),
                 platform.invalidate_sidebar,
-                platform.reason,
-            )
-            .with_platform_statuses(
-                volume_status_string(platform.previous_native_status),
-                volume_status_string(platform.previous_resource_status),
-                volume_status_string(platform.previous_mount_table_status),
-                volume_status_string(platform.current_native_status),
-                volume_status_string(platform.current_resource_status),
-                volume_status_string(platform.current_mount_table_status),
+                platform.reason.clone(),
             );
-            println!("{}", invalidation.as_tsv());
+            println!(
+                "{}",
+                invalidation
+                    .with_platform_statuses(
+                        volume_status_string(platform.previous_native_status),
+                        volume_status_string(platform.previous_resource_status),
+                        volume_status_string(platform.previous_mount_table_status),
+                        volume_status_string(platform.current_native_status),
+                        volume_status_string(platform.current_resource_status),
+                        volume_status_string(platform.current_mount_table_status),
+                    )
+                    .as_tsv()
+            );
         }
         "ui-sidebar-volume-api-status-invalidation" => {
             let mut descriptor = VolumeDescriptor::for_path("/")?;
@@ -396,11 +400,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let current = sidebar_volume_spec(&descriptor);
             let invalidation = SidebarVolumeInvalidation::from_event(
                 SidebarVolumeEventKind::DescriptionChanged,
-                platform.path,
+                platform.path.clone(),
                 None,
                 Some(&current),
                 platform.invalidate_sidebar,
-                platform.reason,
+                platform.reason.clone(),
             )
             .with_platform_statuses(
                 volume_status_string(platform.previous_native_status),
@@ -446,21 +450,25 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let platform = transition.invalidation;
             let invalidation = SidebarVolumeInvalidation::from_event(
                 sidebar_volume_event_kind(kind),
-                platform.path,
+                platform.path.clone(),
                 previous.as_ref(),
                 current.as_ref(),
                 platform.invalidate_sidebar,
-                platform.reason,
-            )
-            .with_platform_statuses(
-                volume_status_string(platform.previous_native_status),
-                volume_status_string(platform.previous_resource_status),
-                volume_status_string(platform.previous_mount_table_status),
-                volume_status_string(platform.current_native_status),
-                volume_status_string(platform.current_resource_status),
-                volume_status_string(platform.current_mount_table_status),
+                platform.reason.clone(),
             );
-            println!("{}", invalidation.as_tsv());
+            println!(
+                "{}",
+                invalidation
+                    .with_platform_statuses(
+                        volume_status_string(platform.previous_native_status),
+                        volume_status_string(platform.previous_resource_status),
+                        volume_status_string(platform.previous_mount_table_status),
+                        volume_status_string(platform.current_native_status),
+                        volume_status_string(platform.current_resource_status),
+                        volume_status_string(platform.current_mount_table_status),
+                    )
+                    .as_tsv()
+            );
         }
         "ui-icon-view-contract" => {
             let path = required_path(
