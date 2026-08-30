@@ -2006,6 +2006,11 @@ fn classify_native_volume(
     if resource.and_then(|resource| resource.is_local) == Some(false) {
         return Some(VolumeKind::Network);
     }
+    let mount_table =
+        mount_table.filter(|mount_table| mount_table.status == NativeVolumeStatus::Available);
+    if mount_table.and_then(|mount_table| mount_table.is_local) == Some(false) {
+        return Some(VolumeKind::Network);
+    }
     if resource.and_then(|resource| resource.is_removable) == Some(true) {
         return Some(VolumeKind::Removable);
     }
@@ -2016,12 +2021,6 @@ fn classify_native_volume(
     }
     if resource.and_then(|resource| resource.is_internal) == Some(true) {
         return Some(VolumeKind::Internal);
-    }
-
-    let mount_table =
-        mount_table.filter(|mount_table| mount_table.status == NativeVolumeStatus::Available);
-    if mount_table.and_then(|mount_table| mount_table.is_local) == Some(false) {
-        return Some(VolumeKind::Network);
     }
 
     let native = native?;
@@ -2585,6 +2584,25 @@ mod tests {
             Path::new("/Volumes/Team Share"),
             None,
             None,
+            Some(&mount_table),
+        );
+
+        assert_eq!(kind, Some(VolumeKind::Network));
+    }
+
+    #[test]
+    fn classify_native_volume_prefers_mount_table_network_over_resource_ejectability() {
+        let resource = resource_values(|values| {
+            values.is_ejectable = Some(true);
+        });
+        let mount_table = mount_table_entry(|entry| {
+            entry.is_local = Some(false);
+        });
+
+        let kind = classify_native_volume(
+            Path::new("/Volumes/Team Share"),
+            None,
+            Some(&resource),
             Some(&mount_table),
         );
 
