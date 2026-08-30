@@ -262,6 +262,9 @@ impl SidecarIndexQuerySession {
         cancellation: &Cancellation,
     ) -> Result<SidecarQuerySessionReport> {
         cancellation.check()?;
+        if parsed.is_empty() || limit == 0 || scope_excludes_all(scope) {
+            return Ok(empty_sidecar_query_session_report());
+        }
         let result_cache_key = query_result_cache_key(parsed, limit, scope, budget);
         if let Some(mut report) = self.result_cache_lock().get(&result_cache_key) {
             self.result_cache_hits.fetch_add(1, Ordering::Relaxed);
@@ -1520,6 +1523,22 @@ fn bounded_substring_grams(terms: &[String], budget: SearchLookupBudget) -> Vec<
     grams.into_iter().collect()
 }
 
+fn empty_sidecar_query_session_report() -> SidecarQuerySessionReport {
+    SidecarQuerySessionReport {
+        hydration: SidecarRecordHydrationReport::default(),
+        search: SearchQueryReport {
+            hits: Vec::new(),
+            lookup: SearchLookupTelemetry::default(),
+        },
+        content_cache_hits: 0,
+        content_cache_misses: 0,
+        record_cache_hits: 0,
+        record_cache_misses: 0,
+        result_cache_hits: 0,
+        result_cache_misses: 0,
+    }
+}
+
 fn bounded_posting_cache_key(term: &str, limit: usize) -> String {
     format!("{limit}:{term}")
 }
@@ -1646,6 +1665,30 @@ mod tests {
         assert_eq!(second.record_cache_hits, 0);
         assert_eq!(second.record_cache_misses, 0);
         assert_eq!(session.result_cache_telemetry(), (1, 1));
+    }
+
+    #[test]
+    fn sidecar_session_empty_zero_limit_and_empty_scope_skip_cache_work() {
+        let fixture = SidecarFixture::new("empty-query");
+        let session = fixture.session();
+
+        let empty = session.search("   ", 5).unwrap();
+        let zero_limit = session.search("finderlatency", 0).unwrap();
+        let empty_scope = session
+            .search_with_volume_scope("finderlatency", 5, &SearchVolumeScope::only([]))
+            .unwrap();
+
+        assert!(empty.search.hits.is_empty());
+        assert_eq!(empty.hydration, SidecarRecordHydrationReport::default());
+        assert_eq!(zero_limit, empty);
+        assert_eq!(empty_scope, empty);
+        assert_eq!(session.content_cache_telemetry(), (0, 0));
+        assert_eq!(session.record_cache_telemetry(), (0, 0));
+        assert_eq!(session.result_cache_telemetry(), (0, 0));
+        assert_eq!(
+            session.lookup.cache_telemetry(),
+            SearchLookupTelemetry::default()
+        );
     }
 
     #[test]

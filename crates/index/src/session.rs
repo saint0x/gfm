@@ -170,6 +170,9 @@ impl ContentIndexQuerySession {
         cancellation: &Cancellation,
     ) -> Result<ContentQuerySessionReport> {
         cancellation.check()?;
+        if parsed.is_empty() || limit == 0 {
+            return Ok(empty_content_query_session_report());
+        }
         let result_cache_key = content_query_result_cache_key(parsed, limit, budget);
         if let Some(mut report) = self.result_cache_lock().get(&result_cache_key) {
             self.result_cache_hits.fetch_add(1, Ordering::Relaxed);
@@ -410,6 +413,22 @@ fn content_candidate_ids(postings: &[ContentPosting]) -> BTreeSet<FileId> {
     ids
 }
 
+fn empty_content_query_session_report() -> ContentQuerySessionReport {
+    ContentQuerySessionReport {
+        load: ContentQueryLoadReport::default(),
+        search: SearchQueryReport {
+            hits: Vec::new(),
+            lookup: SearchLookupTelemetry::default(),
+        },
+        posting_cache_hits: 0,
+        posting_cache_misses: 0,
+        record_cache_hits: 0,
+        record_cache_misses: 0,
+        result_cache_hits: 0,
+        result_cache_misses: 0,
+    }
+}
+
 fn posting_cache_key(term: &str, limit: usize) -> String {
     format!("{limit}:{term}")
 }
@@ -603,6 +622,22 @@ mod tests {
         assert_eq!(second.result_cache_hits, 1);
         assert_eq!(second.result_cache_misses, 0);
         assert_eq!(session.result_cache_telemetry(), (1, 1));
+    }
+
+    #[test]
+    fn content_session_empty_and_zero_limit_queries_skip_cache_work() {
+        let fixture = ContentSessionFixture::new("empty-query");
+        let session = fixture.session();
+
+        let empty = session.search("   ", 5).unwrap();
+        let zero_limit = session.search("needle", 0).unwrap();
+
+        assert!(empty.search.hits.is_empty());
+        assert_eq!(empty.load, ContentQueryLoadReport::default());
+        assert_eq!(zero_limit, empty);
+        assert_eq!(session.posting_cache_telemetry(), (0, 0));
+        assert_eq!(session.record_cache_telemetry(), (0, 0));
+        assert_eq!(session.result_cache_telemetry(), (0, 0));
     }
 
     #[test]

@@ -75,7 +75,7 @@ impl SearchQuery {
         self.filters.dedup();
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.terms.is_empty()
             && self.excluded_terms.is_empty()
             && self.phrases.is_empty()
