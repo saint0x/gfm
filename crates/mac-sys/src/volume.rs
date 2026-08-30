@@ -943,15 +943,30 @@ fn volume_operation_submitted_reason() -> String {
 }
 
 fn dissenter_reason(dissenter: DADissenterRef, code: u32) -> String {
+    let operation_status = native_operation_status_for_dissenter(code);
     let status = unsafe { DADissenterGetStatusString(dissenter) };
     if status.is_null() {
-        return format!("diskarbitration-dissenter-0x{code:08x}");
+        return dissenter_reason_for_status(operation_status, code, None);
     }
     let status = unsafe { CFString::wrap_under_get_rule(status) }.to_string();
-    if status.is_empty() {
-        format!("diskarbitration-dissenter-0x{code:08x}")
-    } else {
-        format!("diskarbitration-dissenter-0x{code:08x}:{status}")
+    dissenter_reason_for_status(
+        operation_status,
+        code,
+        (!status.is_empty()).then_some(&status),
+    )
+}
+
+fn dissenter_reason_for_status(
+    status: NativeVolumeOperationStatus,
+    code: u32,
+    native_status: Option<&str>,
+) -> String {
+    match native_status {
+        Some(native_status) => format!(
+            "diskarbitration-{}:0x{code:08x}:{native_status}",
+            status.as_str()
+        ),
+        None => format!("diskarbitration-{}:0x{code:08x}", status.as_str()),
     }
 }
 
@@ -1736,6 +1751,26 @@ mod tests {
                 NativeVolumeOperationStatus::Cancelled
             );
         }
+    }
+
+    #[test]
+    fn dissenter_reason_includes_typed_operation_status() {
+        assert_eq!(
+            dissenter_reason_for_status(
+                NativeVolumeOperationStatus::BadArgument,
+                DA_RETURN_BAD_ARGUMENT,
+                None
+            ),
+            "diskarbitration-bad-argument:0xf8da0003"
+        );
+        assert_eq!(
+            dissenter_reason_for_status(
+                NativeVolumeOperationStatus::Busy,
+                DA_RETURN_BUSY,
+                Some("Resource busy")
+            ),
+            "diskarbitration-busy:0xf8da0002:Resource busy"
+        );
     }
 
     #[test]

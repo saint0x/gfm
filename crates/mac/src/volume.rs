@@ -3545,6 +3545,26 @@ mod tests {
     }
 
     #[test]
+    fn volume_mount_identity_surfaces_native_dissenter_reason() {
+        let report = VolumeMountIdentityReport::execute("disk999999s999");
+
+        assert_eq!(report.bsd_name, "disk999999s999");
+        assert_eq!(report.disposition, VolumeOperationDisposition::Refused);
+        assert_eq!(
+            report.native_status,
+            NativeVolumeOperationStatus::BadArgument
+        );
+        assert_eq!(report.dissenter_status, Some(0xf8da0003));
+        assert!(
+            report
+                .reason
+                .starts_with("diskarbitration-bad-argument:0xf8da0003"),
+            "{}",
+            report.reason
+        );
+    }
+
+    #[test]
     fn discovery_report_orders_volumes_stably() {
         let first = unique_temp_dir("gfm-volume-a");
         let second = unique_temp_dir("gfm-volume-b");
