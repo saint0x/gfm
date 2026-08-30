@@ -2,7 +2,7 @@ use gfm_config::ConfigStore;
 use gfm_content::Extractor;
 use gfm_index::{Indexer, PersistentIndexPlan, PersistentIndexRecovery};
 use gfm_jobs::Cancellation;
-use gfm_store::{read_records, ContentArchive};
+use gfm_store::{read_records_checked, ContentArchive};
 use gfm_telemetry::{
     export_diagnostics_checked, DiagnosticExportError, DiagnosticPrivacy, IoSample, LatencyMetric,
     Telemetry,
@@ -204,6 +204,16 @@ pub fn select_parity_baseline(
     baseline_root: impl Into<PathBuf>,
     macos_build: impl Into<String>,
 ) -> Result<ParityBaselineReport> {
+    select_parity_baseline_checked(store, baseline_root, macos_build, || Ok(()))
+}
+
+pub fn select_parity_baseline_checked(
+    store: &ConfigStore,
+    baseline_root: impl Into<PathBuf>,
+    macos_build: impl Into<String>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ParityBaselineReport> {
+    check_control()?;
     let baseline_root = baseline_root.into();
     let macos_build = macos_build.into();
     if baseline_root.as_os_str().is_empty() {
@@ -216,10 +226,13 @@ pub fn select_parity_baseline(
             "parity macOS build cannot be empty".to_string(),
         ));
     }
-    let mut config = store.load_or_create_default()?;
+    check_control()?;
+    let mut config = store.load_or_create_default_checked(&mut check_control)?;
+    check_control()?;
     config.parity.baseline_root = baseline_root.clone();
     config.parity.profile.macos_build = macos_build.clone();
-    store.save(&config)?;
+    store.save_checked(&config, &mut check_control)?;
+    check_control()?;
     Ok(ParityBaselineReport {
         config_path: store.path().to_path_buf(),
         baseline_root,
@@ -253,11 +266,23 @@ pub struct ContentInspection {
 }
 
 pub fn inspect_storage(path: impl AsRef<Path>) -> Result<StorageInspection> {
+    inspect_storage_checked(path, || Ok(()))
+}
+
+pub fn inspect_storage_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<StorageInspection> {
     let path = path.as_ref();
+    check_control()?;
     let extension = path.extension().and_then(|extension| extension.to_str());
     match extension {
-        Some("gfmidx") => inspect_records(path).map(StorageInspection::Records),
-        Some("gfmcontent") => inspect_content(path).map(StorageInspection::Content),
+        Some("gfmidx") => {
+            inspect_records_checked(path, &mut check_control).map(StorageInspection::Records)
+        }
+        Some("gfmcontent") => {
+            inspect_content_checked(path, &mut check_control).map(StorageInspection::Content)
+        }
         Some(other) => Err(GfmError::Format(format!(
             "{} has unsupported storage extension `{other}`",
             path.display()
@@ -269,11 +294,17 @@ pub fn inspect_storage(path: impl AsRef<Path>) -> Result<StorageInspection> {
     }
 }
 
-fn inspect_records(path: &Path) -> Result<RecordInspection> {
-    let records = read_records(path)?;
+fn inspect_records_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<RecordInspection> {
+    check_control()?;
+    let records = read_records_checked(path, &mut check_control)?;
+    check_control()?;
     let bytes = fs::metadata(path)
         .map_err(|err| GfmError::io(path, err))?
         .len();
+    check_control()?;
     let mut files = 0;
     let mut directories = 0;
     let mut symlinks = 0;
@@ -289,6 +320,7 @@ fn inspect_records(path: &Path) -> Result<RecordInspection> {
         hidden += usize::from(record.hidden);
         tagged += usize::from(!record.tags.is_empty());
     }
+    check_control()?;
     Ok(RecordInspection {
         path: path.to_path_buf(),
         bytes,
@@ -301,11 +333,17 @@ fn inspect_records(path: &Path) -> Result<RecordInspection> {
     })
 }
 
-fn inspect_content(path: &Path) -> Result<ContentInspection> {
-    let archive = ContentArchive::open(path)?;
+fn inspect_content_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ContentInspection> {
+    check_control()?;
+    let archive = ContentArchive::open_checked(path, &mut check_control)?;
+    check_control()?;
     let bytes = fs::metadata(path)
         .map_err(|err| GfmError::io(path, err))?
         .len();
+    check_control()?;
     Ok(ContentInspection {
         path: path.to_path_buf(),
         bytes,
@@ -476,6 +514,84 @@ mod tests {
         assert_eq!(report.config_path, root.join("config.toml"));
         assert_eq!(config.parity.baseline_root, root.join("baselines"));
         assert_eq!(config.parity.profile.macos_build, "25A354");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellable_parity_baseline_stops_before_config_create() {
+        let root = unique_temp_dir("gfm-diagnostics-parity-cancel-create");
+        let store = ConfigStore::new(root.join("config.toml"));
+
+        let result =
+            select_parity_baseline_checked(&store, root.join("baselines"), "25A354", || {
+                Err(GfmError::Cancelled)
+            });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellable_parity_baseline_preserves_existing_config() {
+        let root = unique_temp_dir("gfm-diagnostics-parity-cancel-preserve");
+        let store = ConfigStore::new(root.join("config.toml"));
+        select_parity_baseline(&store, root.join("baselines-a"), "25A354").unwrap();
+        let before = fs::read(store.path()).unwrap();
+        let mut checks = 0usize;
+
+        let result =
+            select_parity_baseline_checked(&store, root.join("baselines-b"), "25A355", || {
+                checks += 1;
+                if checks >= 8 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 8);
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellable_storage_inspection_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-diagnostics-storage-pre-cancel");
+        let records = root.join("records.gfmidx");
+
+        let result = inspect_storage_checked(&records, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellable_storage_inspection_can_cancel_during_records_read() {
+        let root = unique_temp_dir("gfm-diagnostics-storage-record-cancel");
+        let records = root.join("records.gfmidx");
+        for index in 0..2_048 {
+            fs::write(root.join(format!("needle-{index}.md")), "needle").unwrap();
+        }
+        Indexer::default()
+            .build(&root)
+            .unwrap()
+            .save(&records)
+            .unwrap();
+        let mut checks = 0usize;
+
+        let result = inspect_storage_checked(&records, || {
+            checks += 1;
+            if checks >= 8 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 8);
         fs::remove_dir_all(root).unwrap();
     }
 

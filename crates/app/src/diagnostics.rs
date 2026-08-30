@@ -12,8 +12,8 @@ use crate::{
 };
 use gfm_config::ConfigStore;
 use gfm_diagnostics::{
-    export_operator_trace_checked, inspect_storage, plan_index_recovery_cancellable,
-    rebuild_index_cancellable, recover_index_cancellable, select_parity_baseline,
+    export_operator_trace_checked, inspect_storage_checked, plan_index_recovery_cancellable,
+    rebuild_index_cancellable, recover_index_cancellable, select_parity_baseline_checked,
     PersistentIndexRecoverySpec, RebuildSpec, StorageInspection,
 };
 use gfm_index::{PersistentIndexPlan, PersistentIndexRecovery};
@@ -429,7 +429,9 @@ fn run_parity_baseline(
                 "diagnostics parity baseline",
             )?;
             cancellation.check()?;
-            let report = select_parity_baseline(&store, baseline, macos_build)?;
+            let report = select_parity_baseline_checked(&store, baseline, macos_build, || {
+                cancellation.check()
+            })?;
             Ok(format!(
                 "{}\t{}\t{}",
                 report.config_path.display(),
@@ -450,7 +452,7 @@ fn run_storage_inspect(storage: PathBuf) -> Result<String> {
         cancellation.check()?;
         let _access = preflight_access_scope(&storage, AccessIntent::Read, WORKER)?;
         cancellation.check()?;
-        match inspect_storage(storage)? {
+        match inspect_storage_checked(storage, || cancellation.check())? {
             StorageInspection::Records(report) => Ok(format!(
                 "records\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 report.path.display(),
