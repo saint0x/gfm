@@ -488,7 +488,7 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
                         .with_access_gate(access_gate)
                         .with_volume_copy_policy(volume_copy_policy),
                 );
-                return execute_with_runtime_progress(operator, operation, runtime);
+                return execute_with_runtime_progress(operator, operation, runtime, &cancellation);
             }
             let operator = Operator::new(
                 OperationContext::new(journal)
@@ -497,7 +497,7 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
                     .with_access_gate(access_gate)
                     .with_volume_copy_policy(volume_copy_policy),
             );
-            execute_with_runtime_progress(operator, operation, runtime)
+            execute_with_runtime_progress(operator, operation, runtime, &cancellation)
         },
     )?;
     println!("{}\t{}", entry.id, operation_status(entry.status));
@@ -508,12 +508,13 @@ fn execute_with_runtime_progress(
     operator: Operator,
     operation: Operation,
     runtime: RuntimeJobHandle,
+    cancellation: &gfm_jobs::Cancellation,
 ) -> Result<gfm_ops::JournalEntry> {
     let mut progress_error = None;
     let entry = operator.execute_with_progress(operation, |event| {
         emit_operation_progress_event(event.clone());
         if progress_error.is_none() {
-            if let Err(err) = publish_runtime_operation_progress(&runtime, &event) {
+            if let Err(err) = publish_runtime_operation_progress(&runtime, &event, cancellation) {
                 progress_error = Some(err);
             }
         }
@@ -533,15 +534,18 @@ fn emit_operation_progress_event(event: OperationProgressEvent) {
 fn publish_runtime_operation_progress(
     runtime: &RuntimeJobHandle,
     event: &OperationProgressEvent,
+    cancellation: &gfm_jobs::Cancellation,
 ) -> Result<()> {
     let total_units = operation_progress_total_units(&event.progress);
     let completed_units = operation_progress_completed_units(&event.progress);
     let detail = operation_progress_detail(event);
-    runtime.resize(total_units, detail.clone())?;
+    runtime.resize_checked(total_units, detail.clone(), || cancellation.check())?;
     if event.phase == OperationProgressPhase::MetadataDegraded {
         runtime.remember_completion_detail(detail.clone())?;
     }
-    runtime.progress(JobProgressState::Running, completed_units, detail)
+    runtime.progress_checked(JobProgressState::Running, completed_units, detail, || {
+        cancellation.check()
+    })
 }
 
 fn operation_progress_total_units(progress: &OperationProgress) -> u64 {

@@ -99,7 +99,7 @@ where
     )?;
     let runtime_task = runtime.clone();
     let task = Task::new(job.clone(), move |cancellation| {
-        runtime_task.running()?;
+        runtime_task.running_checked(|| cancellation.check())?;
         let result = work(cancellation, runtime_task.clone())?;
         result_tx
             .send(result)
@@ -273,7 +273,7 @@ where
     let job = drain_single_runtime_job(&mut scheduler, job, label)?;
     let runtime_task = runtime.clone();
     let task = RetriableTask::new(job.clone(), move |cancellation| {
-        runtime_task.running()?;
+        runtime_task.running_checked(|| cancellation.check())?;
         let result = work(cancellation)?;
         result_tx
             .send(result)
@@ -379,21 +379,35 @@ impl RuntimeJobHandle {
         })
     }
 
-    pub(crate) fn running(&self) -> Result<()> {
+    pub(crate) fn running_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
         let detail = self
             .last_progress
             .lock()
             .map_err(|_| runtime_progress_lock_error())?
             .detail
             .clone();
-        self.persist_progress(JobProgressState::Running, 0, detail)
+        check_control()?;
+        self.persist_progress_checked(JobProgressState::Running, 0, detail, check_control)
     }
 
     pub(crate) fn deferred(&self, action: SchedulingAction) -> Result<()> {
-        self.persist_progress(
+        self.deferred_checked(action, || Ok(()))
+    }
+
+    pub(crate) fn deferred_checked(
+        &self,
+        action: SchedulingAction,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        self.persist_progress_checked(
             JobProgressState::Paused,
             0,
             format!("deferred:{}", action.as_str()),
+            check_control,
         )
     }
 
@@ -403,7 +417,17 @@ impl RuntimeJobHandle {
         completed_units: u64,
         detail: impl Into<String>,
     ) -> Result<()> {
-        self.persist_progress(state, completed_units, detail)
+        self.progress_checked(state, completed_units, detail, || Ok(()))
+    }
+
+    pub(crate) fn progress_checked(
+        &self,
+        state: JobProgressState,
+        completed_units: u64,
+        detail: impl Into<String>,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        self.persist_progress_checked(state, completed_units, detail, check_control)
     }
 
     pub(crate) fn remember_completion_detail(&self, detail: impl Into<String>) -> Result<()> {
@@ -414,7 +438,13 @@ impl RuntimeJobHandle {
         Ok(())
     }
 
-    pub(crate) fn resize(&self, total_units: u64, detail: impl Into<String>) -> Result<()> {
+    pub(crate) fn resize_checked(
+        &self,
+        total_units: u64,
+        detail: impl Into<String>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
         let detail = detail.into();
         let mut last = self
             .last_progress
@@ -430,14 +460,25 @@ impl RuntimeJobHandle {
         }
 
         if let Some(store) = &self.progress_store {
-            let _access = preflight_runtime_write(store.path(), &snapshot.label)?;
-            store.upsert(snapshot.clone())?;
+            let _access =
+                preflight_runtime_write_checked(store.path(), &snapshot.label, &mut check_control)?;
+            check_control()?;
+            store.upsert_checked(snapshot.clone(), &mut check_control)?;
         }
         *last = snapshot;
         Ok(())
     }
 
     pub(crate) fn finish(&self, status: &TaskStatus) -> Result<()> {
+        self.finish_checked(status, || Ok(()))
+    }
+
+    pub(crate) fn finish_checked(
+        &self,
+        status: &TaskStatus,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
         let total_units = self
             .last_progress
             .lock()
@@ -456,15 +497,23 @@ impl RuntimeJobHandle {
             TaskStatus::Cancelled => (0, "cancelled".to_string()),
             TaskStatus::Failed(message) => (0, message.clone()),
         };
-        self.persist_progress(JobProgressState::from(status), completed_units, detail)
+        check_control()?;
+        self.persist_progress_checked(
+            JobProgressState::from(status),
+            completed_units,
+            detail,
+            check_control,
+        )
     }
 
-    fn persist_progress(
+    fn persist_progress_checked(
         &self,
         state: JobProgressState,
         completed_units: u64,
         detail: impl Into<String>,
+        mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<()> {
+        check_control()?;
         let Some(store) = &self.progress_store else {
             return Ok(());
         };
@@ -479,8 +528,10 @@ impl RuntimeJobHandle {
             return Ok(());
         }
 
-        let _access = preflight_runtime_write(store.path(), &snapshot.label)?;
-        store.upsert(snapshot.clone())?;
+        let _access =
+            preflight_runtime_write_checked(store.path(), &snapshot.label, &mut check_control)?;
+        check_control()?;
+        store.upsert_checked(snapshot.clone(), &mut check_control)?;
         *last = snapshot;
         Ok(())
     }
@@ -543,10 +594,10 @@ mod tests {
         };
         let cloned = handle.clone();
 
-        handle.running().unwrap();
+        handle.running_checked(|| Ok(())).unwrap();
         let before_noop = std::fs::metadata(&path).unwrap().modified().unwrap();
 
-        cloned.running().unwrap();
+        cloned.running_checked(|| Ok(())).unwrap();
 
         let after_noop = std::fs::metadata(&path).unwrap().modified().unwrap();
         let snapshots = store.read().unwrap();
@@ -554,6 +605,77 @@ mod tests {
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].state, JobProgressState::Running);
 
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn runtime_progress_checked_honors_pre_cancelled_control() {
+        let path = temp_path("gfm-runtime-progress-pre-cancel", "gfmprogress");
+        let store = JobProgressStore::new(&path);
+        let initial = sample_progress_snapshot(JobId::from_raw(14)).with_progress(
+            JobProgressState::Planned,
+            0,
+            "foreground:copy",
+            10,
+        );
+        store.write_all(std::slice::from_ref(&initial)).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let handle = RuntimeJobHandle {
+            progress_store: Some(store.clone()),
+            last_progress: Arc::new(Mutex::new(initial)),
+            completion_detail: Arc::new(Mutex::new(None)),
+        };
+
+        let err = handle
+            .running_checked(|| Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(
+            handle.last_progress.lock().unwrap().state,
+            JobProgressState::Planned
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn runtime_progress_checked_can_cancel_before_store_write() {
+        let path = temp_path("gfm-runtime-progress-write-cancel", "gfmprogress");
+        let store = JobProgressStore::new(&path);
+        let initial = sample_progress_snapshot(JobId::from_raw(15)).with_progress(
+            JobProgressState::Planned,
+            0,
+            "foreground:copy",
+            10,
+        );
+        store.write_all(std::slice::from_ref(&initial)).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let handle = RuntimeJobHandle {
+            progress_store: Some(store.clone()),
+            last_progress: Arc::new(Mutex::new(initial)),
+            completion_detail: Arc::new(Mutex::new(None)),
+        };
+        let mut checks = 0usize;
+
+        let err = handle
+            .running_checked(|| {
+                checks += 1;
+                if checks >= 6 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(checks >= 6);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(
+            handle.last_progress.lock().unwrap().state,
+            JobProgressState::Planned
+        );
         std::fs::remove_file(path).unwrap();
     }
 
@@ -574,7 +696,9 @@ mod tests {
             completion_detail: Arc::new(Mutex::new(None)),
         };
 
-        handle.resize(42, "index:/workspace").unwrap();
+        handle
+            .resize_checked(42, "index:/workspace", || Ok(()))
+            .unwrap();
         handle.finish(&TaskStatus::Completed).unwrap();
 
         let snapshots = store.read().unwrap();
@@ -616,6 +740,64 @@ mod tests {
             "operation-metadata-degradation\tkind=ownership"
         );
 
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn runtime_resize_checked_preserves_existing_state_when_cancelled() {
+        let path = temp_path("gfm-runtime-resize-checked-cancel", "gfmprogress");
+        let store = JobProgressStore::new(&path);
+        let initial = sample_progress_snapshot(JobId::from_raw(16)).with_progress(
+            JobProgressState::Running,
+            1,
+            "copying",
+            10,
+        );
+        store.write_all(std::slice::from_ref(&initial)).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let handle = RuntimeJobHandle {
+            progress_store: Some(store.clone()),
+            last_progress: Arc::new(Mutex::new(initial)),
+            completion_detail: Arc::new(Mutex::new(None)),
+        };
+
+        let err = handle
+            .resize_checked(42, "copying-expanded", || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let snapshot = handle.last_progress.lock().unwrap().clone();
+        assert_eq!(snapshot.total_units, 10);
+        assert_eq!(snapshot.detail, "copying");
+        assert_eq!(store.read().unwrap(), vec![snapshot]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn runtime_finish_unchecked_persists_cancelled_terminal_status() {
+        let path = temp_path("gfm-runtime-finish-cancelled-terminal", "gfmprogress");
+        let store = JobProgressStore::new(&path);
+        let initial = sample_progress_snapshot(JobId::from_raw(17)).with_progress(
+            JobProgressState::Running,
+            3,
+            "copying",
+            10,
+        );
+        store.write_all(std::slice::from_ref(&initial)).unwrap();
+        let handle = RuntimeJobHandle {
+            progress_store: Some(store.clone()),
+            last_progress: Arc::new(Mutex::new(initial)),
+            completion_detail: Arc::new(Mutex::new(None)),
+        };
+
+        handle.finish(&TaskStatus::Cancelled).unwrap();
+
+        let snapshots = store.read().unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].state, JobProgressState::Cancelled);
+        assert_eq!(snapshots[0].completed_units, 0);
+        assert_eq!(snapshots[0].detail, "cancelled");
         std::fs::remove_file(path).unwrap();
     }
 
@@ -887,8 +1069,18 @@ mod tests {
 }
 
 fn preflight_runtime_write(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
+    preflight_runtime_write_checked(path, worker, || Ok(()))
+}
+
+fn preflight_runtime_write_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    check_control()?;
     let probe = write_probe_path(path)?.to_path_buf();
-    preflight_access_scope_checked(&probe, AccessIntent::Write, worker, || Ok(()))
+    check_control()?;
+    preflight_access_scope_checked(&probe, AccessIntent::Write, worker, check_control)
 }
 
 pub(crate) fn default_journal_path() -> PathBuf {

@@ -1962,7 +1962,7 @@ pub(crate) fn run_content_job(
             let job_result_tx = job_result_tx.clone();
             let runtime = runtime.clone();
             RetriableTask::new(scheduled, move |cancellation| {
-                runtime.running()?;
+                runtime.running_checked(|| cancellation.check())?;
                 cancellation.check()?;
                 let _access = retain_content_job_access_checked(
                     &job_spec,
@@ -1974,9 +1974,10 @@ pub(crate) fn run_content_job(
                 let snapshot =
                     Indexer::default().build_cancellable(&job_spec.root, &cancellation)?;
                 let inaccessible = snapshot.inaccessible.len();
-                runtime.resize(
+                runtime.resize_checked(
                     snapshot.records.len().max(1) as u64,
                     format!("index:{}", job_spec.root.display()),
+                    || cancellation.check(),
                 )?;
                 let previous_records = if content_input_file_exists_checked(
                     &job_spec.records_path,
