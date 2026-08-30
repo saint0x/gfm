@@ -1146,13 +1146,12 @@ fn operation_paths(operation: &Operation) -> Vec<&Path> {
 
 fn operation_volume_class_for_kind(kind: VolumeKind) -> OperationVolumeClass {
     match kind {
-        VolumeKind::System | VolumeKind::Internal | VolumeKind::Unknown => {
-            OperationVolumeClass::Local
-        }
+        VolumeKind::System | VolumeKind::Internal => OperationVolumeClass::Local,
         VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage => {
             OperationVolumeClass::External
         }
         VolumeKind::Network => OperationVolumeClass::Network,
+        VolumeKind::Unknown => OperationVolumeClass::Network,
     }
 }
 
@@ -1577,6 +1576,44 @@ mod tests {
             policy.copy_buffer_bytes_for_paths(&source, &destination),
             64 * 1024
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_policy_constrains_unknown_descriptor_as_network() {
+        let root = unique_temp_dir("gfm-app-op-volume-policy-unknown");
+        let source_root = root.join("Unclassified");
+        let destination_root = root.join("LocalWork");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&destination_root).unwrap();
+        let source = source_root.join("source.bin");
+        let destination = destination_root.join("destination.bin");
+        let mut report = VolumeDiscoveryReport::from_paths(vec![source_root.clone()]);
+        report.volumes[0].kind = VolumeKind::Unknown;
+        report.volumes[0].network = false;
+        report.volumes[0].local = None;
+        report.volumes[0].resource_supports_file_cloning = None;
+        report.volumes[0].resource_supports_hard_links = None;
+        report.volumes[0].resource_supports_sparse_files = None;
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert_eq!(
+            policy.class_for_path(&source),
+            OperationVolumeClass::Network
+        );
+        assert_eq!(
+            policy.copy_buffer_bytes_for_paths(&source, &destination),
+            64 * 1024
+        );
+        assert!(!policy.file_cloning_supported_for_paths(&source, &destination));
+        assert!(!policy.hard_links_supported_for_path(&source));
+        assert!(!policy.sparse_files_supported_for_path(&source));
 
         fs::remove_dir_all(root).unwrap();
     }
