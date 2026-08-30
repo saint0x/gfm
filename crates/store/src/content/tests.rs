@@ -138,6 +138,36 @@ fn content_archive_checked_open_honors_pre_cancelled_control_before_file_open() 
 }
 
 #[test]
+fn content_archive_checked_ids_can_cancel_during_term_canonicalization() {
+    let path = temp_path("gfm-content-archive-normalize-cancel", "gfmcontent");
+    write_content_postings(
+        &path,
+        &[ContentPosting {
+            term: "needle".to_string(),
+            ids: vec![FileId::new(VolumeId(8), 30_000)],
+            positions: Vec::new(),
+        }],
+    )
+    .unwrap();
+    let mut archive = ContentArchive::open(&path).unwrap();
+    let long_term = "Needle".repeat(256);
+    let mut checks = 0usize;
+
+    let result = archive.ids_for_term_checked(&long_term, || {
+        checks += 1;
+        if checks >= 3 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 3);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn mmap_content_archive_reads_terms_without_file_seeks() {
     let path = temp_path("gfm-content-mmap-archive", "gfmcontent");
     let alpha = FileId::new(VolumeId(4), 12);
@@ -327,6 +357,36 @@ fn mmap_content_archive_checked_term_limit_can_cancel_during_term_canonicalizati
     let mut checks = 0usize;
 
     let result = archive.posting_for_term_limit_checked(&long_term, 1, || {
+        checks += 1;
+        if checks >= 3 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 3);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn mmap_content_archive_checked_ids_can_cancel_during_term_canonicalization() {
+    let path = temp_path("gfm-content-mmap-normalize-cancel", "gfmcontent");
+    write_content_postings(
+        &path,
+        &[ContentPosting {
+            term: "needle".to_string(),
+            ids: vec![FileId::new(VolumeId(8), 30_002)],
+            positions: Vec::new(),
+        }],
+    )
+    .unwrap();
+    let archive = MmapContentArchive::open(&path).unwrap();
+    let long_term = "Needle".repeat(256);
+    let mut checks = 0usize;
+
+    let result = archive.ids_for_term_checked(&long_term, || {
         checks += 1;
         if checks >= 3 {
             Err(GfmError::Cancelled)

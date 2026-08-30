@@ -1,8 +1,8 @@
 use crate::durable;
 use crate::ids::{
     read_blocked_file_id_block_from_slice, read_blocked_file_ids,
-    read_blocked_file_ids_for_volume_limited_from_slice, read_blocked_file_ids_limited_from_slice,
-    write_blocked_file_ids,
+    read_blocked_file_ids_for_volume_limited_from_slice_checked,
+    read_blocked_file_ids_limited_from_slice_checked, write_blocked_file_ids,
 };
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
@@ -232,7 +232,7 @@ impl MmapSubstringArchive {
             return Ok((Vec::new(), false));
         };
         check_control()?;
-        let posting = self.limited_posting_for_entry(entry, limit)?;
+        let posting = self.limited_posting_for_entry_checked(entry, limit, &mut check_control)?;
         Ok((posting.posting.ids, posting.truncated))
     }
 
@@ -282,7 +282,13 @@ impl MmapSubstringArchive {
             .get(ids_start..)
             .ok_or_else(|| substring_format_error(&self.path, "substring ids out of bounds"))?;
         check_control()?;
-        read_blocked_file_ids_for_volume_limited_from_slice(ids_bytes, volume, limit, &self.path)
+        read_blocked_file_ids_for_volume_limited_from_slice_checked(
+            ids_bytes,
+            volume,
+            limit,
+            &self.path,
+            check_control,
+        )
     }
 
     pub fn postings_for_sorted_grams_limit<I, S>(
@@ -345,7 +351,11 @@ impl MmapSubstringArchive {
             if let Some(entry) = self.directory.get(directory_index) {
                 if entry.gram.as_str() == gram.as_str() {
                     check_control()?;
-                    postings.push(self.limited_posting_for_entry(entry, limit_per_gram)?);
+                    postings.push(self.limited_posting_for_entry_checked(
+                        entry,
+                        limit_per_gram,
+                        &mut check_control,
+                    )?);
                 }
             }
             previous = Some(gram);
@@ -531,11 +541,13 @@ impl MmapSubstringArchive {
             .ok_or_else(|| substring_format_error(&self.path, "posting range out of bounds"))
     }
 
-    fn limited_posting_for_entry(
+    fn limited_posting_for_entry_checked(
         &self,
         entry: &SubstringDirectoryEntry,
         limit: usize,
+        mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<LimitedSubstringPosting> {
+        check_control()?;
         let bytes = self.posting_bytes(entry)?;
         let mut cursor = Cursor::new(bytes);
         let posting_gram = read_substring_posting_header(&mut cursor, &self.path)?;
@@ -550,10 +562,12 @@ impl MmapSubstringArchive {
         let ids_bytes = bytes
             .get(ids_start..)
             .ok_or_else(|| substring_format_error(&self.path, "substring ids out of bounds"))?;
-        let mut ids = read_blocked_file_ids_limited_from_slice(
+        check_control()?;
+        let mut ids = read_blocked_file_ids_limited_from_slice_checked(
             ids_bytes,
             limit.saturating_add(1),
             &self.path,
+            &mut check_control,
         )?;
         let truncated = ids.len() > limit;
         ids.truncate(limit);

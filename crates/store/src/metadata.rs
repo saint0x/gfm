@@ -1,7 +1,7 @@
 use crate::durable;
 use crate::ids::{
     read_blocked_file_id_block_from_slice, read_blocked_file_ids,
-    read_blocked_file_ids_limited_from_slice, write_blocked_file_ids,
+    read_blocked_file_ids_limited_from_slice_checked, write_blocked_file_ids,
 };
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use gfm_types::{FileId, FileRecord, GfmError, Result, SecondaryMetadataRecord, VolumeId};
@@ -332,7 +332,7 @@ impl MmapMetadataArchive {
             return Ok((Vec::new(), false));
         };
         check_control()?;
-        let posting = self.limited_posting_for_entry(entry, limit)?;
+        let posting = self.limited_posting_for_entry_checked(entry, limit, &mut check_control)?;
         Ok((posting.posting.ids, posting.truncated))
     }
 
@@ -444,7 +444,11 @@ impl MmapMetadataArchive {
             if let Some(entry) = self.directory.get(directory_index) {
                 if entry.field == field && entry.term.as_str() == term.as_str() {
                     check_control()?;
-                    postings.push(self.limited_posting_for_entry(entry, limit_per_term)?);
+                    postings.push(self.limited_posting_for_entry_checked(
+                        entry,
+                        limit_per_term,
+                        &mut check_control,
+                    )?);
                 }
             }
             previous = Some(term);
@@ -594,11 +598,13 @@ impl MmapMetadataArchive {
             .ok_or_else(|| metadata_format_error(&self.path, "posting range out of bounds"))
     }
 
-    fn limited_posting_for_entry(
+    fn limited_posting_for_entry_checked(
         &self,
         entry: &MetadataDirectoryEntry,
         limit: usize,
+        mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<LimitedMetadataPosting> {
+        check_control()?;
         let bytes = self.posting_bytes(entry)?;
         let mut cursor = Cursor::new(bytes);
         let (posting_field, posting_term) = read_metadata_posting_header(&mut cursor, &self.path)?;
@@ -613,15 +619,20 @@ impl MmapMetadataArchive {
         let id_bytes = bytes
             .get(ids_start..)
             .ok_or_else(|| metadata_format_error(&self.path, "metadata id offset out of bounds"))?;
+        check_control()?;
         let mut ids = match self.version {
-            MetadataStoreVersion::V1 => {
-                read_file_ids_limited(Cursor::new(id_bytes), &self.path, limit.saturating_add(1))?
-            }
+            MetadataStoreVersion::V1 => read_file_ids_limited_checked(
+                Cursor::new(id_bytes),
+                &self.path,
+                limit.saturating_add(1),
+                &mut check_control,
+            )?,
             MetadataStoreVersion::V2 | MetadataStoreVersion::V3 => {
-                read_blocked_file_ids_limited_from_slice(
+                read_blocked_file_ids_limited_from_slice_checked(
                     id_bytes,
                     limit.saturating_add(1),
                     &self.path,
+                    &mut check_control,
                 )?
             }
         };
@@ -853,11 +864,20 @@ fn read_file_ids(mut reader: impl Read, path: &Path) -> Result<Vec<FileId>> {
     Ok(ids)
 }
 
-fn read_file_ids_limited(mut reader: impl Read, path: &Path, limit: usize) -> Result<Vec<FileId>> {
+fn read_file_ids_limited_checked(
+    mut reader: impl Read,
+    path: &Path,
+    limit: usize,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<FileId>> {
+    check_control()?;
     let id_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
     let mut ids = Vec::with_capacity((id_count as usize).min(limit));
     let mut previous = FileId::new(VolumeId(0), 0);
-    for _ in 0..id_count.min(limit as u64) {
+    for index in 0..id_count.min(limit as u64) {
+        if index.is_multiple_of(METADATA_NORMALIZE_CHECK_STRIDE as u64) {
+            check_control()?;
+        }
         let volume_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
         let volume = previous
             .volume
@@ -877,6 +897,7 @@ fn read_file_ids_limited(mut reader: impl Read, path: &Path, limit: usize) -> Re
         ids.push(id);
         previous = id;
     }
+    check_control()?;
     Ok(ids)
 }
 

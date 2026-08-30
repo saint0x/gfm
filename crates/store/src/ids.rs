@@ -5,6 +5,7 @@ use std::path::Path;
 const DEFAULT_ID_BLOCK_SIZE: usize = 128;
 const BLOCKED_IDS_V2_MARKER: u64 = 0;
 const BLOCKED_IDS_V2_VERSION: u64 = 2;
+const ID_DECODE_CHECK_STRIDE: u64 = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IdBlock {
@@ -119,12 +120,14 @@ pub(crate) fn read_blocked_file_ids(mut reader: impl Read, path: &Path) -> Resul
     Ok(ids)
 }
 
-pub(crate) fn read_blocked_file_ids_limited_from_slice(
+pub(crate) fn read_blocked_file_ids_limited_from_slice_checked(
     bytes: &[u8],
     limit: usize,
     path: &Path,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<FileId>> {
-    read_blocked_file_ids_limited_report_from_slice(bytes, limit, path).map(|report| report.ids)
+    read_blocked_file_ids_limited_report_from_slice_checked(bytes, limit, path, check_control)
+        .map(|report| report.ids)
 }
 
 pub(crate) fn read_blocked_file_ids_for_volume_limited_from_slice(
@@ -133,9 +136,24 @@ pub(crate) fn read_blocked_file_ids_for_volume_limited_from_slice(
     limit: usize,
     path: &Path,
 ) -> Result<(Vec<FileId>, bool)> {
+    read_blocked_file_ids_for_volume_limited_from_slice_checked(bytes, volume, limit, path, || {
+        Ok(())
+    })
+}
+
+pub(crate) fn read_blocked_file_ids_for_volume_limited_from_slice_checked(
+    bytes: &[u8],
+    volume: VolumeId,
+    limit: usize,
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(Vec<FileId>, bool)> {
+    check_control()?;
     let mut reader = Cursor::new(bytes);
     let _count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let (_block_size, blocks) = read_blocked_header(&mut reader, path)?;
+    check_control()?;
     let payload_start = usize::try_from(reader.position())
         .map_err(|_| id_format_error(path, "id block payload offset overflow"))?;
     let payload_len = block_payload_len(&blocks, path)?;
@@ -152,6 +170,7 @@ pub(crate) fn read_blocked_file_ids_for_volume_limited_from_slice(
     let mut payload_offset = 0usize;
     let mut ids = Vec::with_capacity(limit.min(DEFAULT_ID_BLOCK_SIZE));
     for (index, block) in blocks.iter().enumerate() {
+        check_control()?;
         let len = usize::try_from(block.len)
             .map_err(|_| id_format_error(path, "id block length overflow"))?;
         let start = payload_start
@@ -175,7 +194,13 @@ pub(crate) fn read_blocked_file_ids_for_volume_limited_from_slice(
         let block_bytes = bytes
             .get(start..end)
             .ok_or_else(|| id_format_error(path, "id block out of bounds"))?;
-        for id in read_encoded_file_ids(Cursor::new(block_bytes), block, path)? {
+        for id in read_encoded_file_ids_checked(
+            Cursor::new(block_bytes),
+            block,
+            path,
+            &mut check_control,
+        )? {
+            check_control()?;
             if id.volume < volume {
                 continue;
             }
@@ -207,9 +232,21 @@ pub(crate) fn read_blocked_file_ids_limited_report_from_slice(
     limit: usize,
     path: &Path,
 ) -> Result<BlockedFileIdsLimitedReport> {
+    read_blocked_file_ids_limited_report_from_slice_checked(bytes, limit, path, || Ok(()))
+}
+
+pub(crate) fn read_blocked_file_ids_limited_report_from_slice_checked(
+    bytes: &[u8],
+    limit: usize,
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<BlockedFileIdsLimitedReport> {
+    check_control()?;
     let mut reader = Cursor::new(bytes);
     let count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let (_block_size, blocks) = read_blocked_header(&mut reader, path)?;
+    check_control()?;
     let payload_start = usize::try_from(reader.position())
         .map_err(|_| id_format_error(path, "id block payload offset overflow"))?;
     let payload_len = block_payload_len(&blocks, path)?;
@@ -229,6 +266,7 @@ pub(crate) fn read_blocked_file_ids_limited_report_from_slice(
     let mut payload_offset = 0usize;
     let mut ids = Vec::with_capacity(limit.min(DEFAULT_ID_BLOCK_SIZE));
     for block in &blocks {
+        check_control()?;
         let len = usize::try_from(block.len)
             .map_err(|_| id_format_error(path, "id block length overflow"))?;
         let start = payload_start
@@ -240,10 +278,11 @@ pub(crate) fn read_blocked_file_ids_limited_report_from_slice(
         let block_bytes = bytes
             .get(start..end)
             .ok_or_else(|| id_format_error(path, "id block out of bounds"))?;
-        ids.extend(read_encoded_file_ids(
+        ids.extend(read_encoded_file_ids_checked(
             Cursor::new(block_bytes),
             block,
             path,
+            &mut check_control,
         )?);
         if ids.len() >= limit {
             ids.truncate(limit);
@@ -388,9 +427,20 @@ fn encode_best_block(ids: &[FileId]) -> std::io::Result<(IdBlockCodec, Vec<u8>)>
 }
 
 fn read_encoded_file_ids(reader: impl Read, block: &IdBlock, path: &Path) -> Result<Vec<FileId>> {
+    read_encoded_file_ids_checked(reader, block, path, || Ok(()))
+}
+
+fn read_encoded_file_ids_checked(
+    reader: impl Read,
+    block: &IdBlock,
+    path: &Path,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<FileId>> {
     match block.codec {
-        IdBlockCodec::Delta => read_delta_file_ids(reader, block.entries, path),
-        IdBlockCodec::Run => read_run_file_ids(reader, block.entries, path),
+        IdBlockCodec::Delta => {
+            read_delta_file_ids_checked(reader, block.entries, path, check_control)
+        }
+        IdBlockCodec::Run => read_run_file_ids_checked(reader, block.entries, path, check_control),
     }
 }
 
@@ -433,10 +483,19 @@ fn write_run_file_ids(mut writer: impl Write, ids: &[FileId]) -> std::io::Result
     Ok(())
 }
 
-fn read_delta_file_ids(mut reader: impl Read, count: u64, path: &Path) -> Result<Vec<FileId>> {
+fn read_delta_file_ids_checked(
+    mut reader: impl Read,
+    count: u64,
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<FileId>> {
+    check_control()?;
     let mut ids = Vec::with_capacity(count.min(1_000_000) as usize);
     let mut previous = FileId::new(VolumeId(0), 0);
-    for _ in 0..count {
+    for index in 0..count {
+        if index.is_multiple_of(ID_DECODE_CHECK_STRIDE) {
+            check_control()?;
+        }
         let volume_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
         let volume = previous
             .volume
@@ -456,14 +515,23 @@ fn read_delta_file_ids(mut reader: impl Read, count: u64, path: &Path) -> Result
         ids.push(id);
         previous = id;
     }
+    check_control()?;
     Ok(ids)
 }
 
-fn read_run_file_ids(mut reader: impl Read, count: u64, path: &Path) -> Result<Vec<FileId>> {
+fn read_run_file_ids_checked(
+    mut reader: impl Read,
+    count: u64,
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<FileId>> {
+    check_control()?;
     let run_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
     let mut ids = Vec::with_capacity(count.min(1_000_000) as usize);
     let mut previous = FileId::new(VolumeId(0), 0);
+    let mut decoded = 0u64;
     for _ in 0..run_count {
+        check_control()?;
         let volume_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
         let volume = previous
             .volume
@@ -484,10 +552,14 @@ fn read_run_file_ids(mut reader: impl Read, count: u64, path: &Path) -> Result<V
             return Err(id_format_error(path, "empty id run"));
         }
         for offset in 0..entries {
+            if decoded.is_multiple_of(ID_DECODE_CHECK_STRIDE) {
+                check_control()?;
+            }
             let node = start_node
                 .checked_add(offset)
                 .ok_or_else(|| id_format_error(path, "file node id overflow"))?;
             ids.push(FileId::new(VolumeId(volume), node));
+            decoded += 1;
         }
         previous = FileId::new(
             VolumeId(volume),
@@ -499,6 +571,7 @@ fn read_run_file_ids(mut reader: impl Read, count: u64, path: &Path) -> Result<V
     if ids.len() != count as usize {
         return Err(id_format_error(path, "id run count mismatch"));
     }
+    check_control()?;
     Ok(ids)
 }
 
@@ -616,5 +689,57 @@ mod tests {
             FileId::new(VolumeId(11), 10_000 + 128 * 257)
         );
         assert!(encoded.len() <= legacy.len() + 8);
+    }
+
+    #[test]
+    fn checked_limited_blocked_file_ids_cancel_during_run_decode() {
+        let path = Path::new("/tmp/gfm-id-block-run-cancel-test");
+        let ids = (0..1024)
+            .map(|node| FileId::new(VolumeId(7), 10_000 + node))
+            .collect::<Vec<_>>();
+        let mut encoded = Vec::new();
+        let mut checks = 0usize;
+
+        write_blocked_file_ids(&mut encoded, &ids).unwrap();
+        let result = read_blocked_file_ids_limited_from_slice_checked(&encoded, 1024, path, || {
+            checks += 1;
+            if checks >= 5 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(checks, 5);
+    }
+
+    #[test]
+    fn checked_volume_limited_blocked_file_ids_cancel_during_run_decode() {
+        let path = Path::new("/tmp/gfm-id-block-volume-run-cancel-test");
+        let ids = (0..1024)
+            .map(|node| FileId::new(VolumeId(7), 10_000 + node))
+            .collect::<Vec<_>>();
+        let mut encoded = Vec::new();
+        let mut checks = 0usize;
+
+        write_blocked_file_ids(&mut encoded, &ids).unwrap();
+        let result = read_blocked_file_ids_for_volume_limited_from_slice_checked(
+            &encoded,
+            VolumeId(7),
+            1024,
+            path,
+            || {
+                checks += 1;
+                if checks >= 5 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(checks, 5);
     }
 }

@@ -542,7 +542,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let mut archive =
                         ContentArchive::open_checked(content, || cancellation.check())?;
                     cancellation.check()?;
-                    let ids = archive.ids_for_term(&term)?;
+                    let ids = archive.ids_for_term_checked(&term, || cancellation.check())?;
                     cancellation.check()?;
                     Ok(ids)
                 },
@@ -559,7 +559,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let archive =
                         MmapContentArchive::open_checked(content, || cancellation.check())?;
                     cancellation.check()?;
-                    let ids = archive.ids_for_term(&term)?;
+                    let ids = archive.ids_for_term_checked(&term, || cancellation.check())?;
                     cancellation.check()?;
                     Ok(ids)
                 },
@@ -580,7 +580,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 move |paths, cancellation| {
                     let archive = MmapContentSet::open_checked(&paths, || cancellation.check())?;
                     cancellation.check()?;
-                    let ids = archive.ids_for_term(&term)?;
+                    let ids = archive.ids_for_term_checked(&term, || cancellation.check())?;
                     cancellation.check()?;
                     Ok(ids)
                 },
@@ -600,7 +600,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let archive =
                         MmapContentSet::open_manifest_checked(manifest, || cancellation.check())?;
                     cancellation.check()?;
-                    let ids = archive.ids_for_term(&term)?;
+                    let ids = archive.ids_for_term_checked(&term, || cancellation.check())?;
                     cancellation.check()?;
                     Ok(ids)
                 },
@@ -620,7 +620,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let archive =
                         MmapContentArchive::open_checked(content, || cancellation.check())?;
                     cancellation.check()?;
-                    let ids = archive.id_block_for_term(&term, block_index)?;
+                    let ids = archive
+                        .id_block_for_term_checked(&term, block_index, || cancellation.check())?;
                     cancellation.check()?;
                     Ok(ids)
                 },

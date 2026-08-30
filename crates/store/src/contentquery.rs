@@ -58,19 +58,40 @@ impl MmapContentSet {
 
     pub fn ids_for_term(&self, term: &str) -> Result<Vec<FileId>> {
         Ok(self
-            .posting_for_term(term)?
+            .posting_for_term_checked(term, || Ok(()))?
+            .map(|posting| posting.ids)
+            .unwrap_or_default())
+    }
+
+    pub fn ids_for_term_checked(
+        &self,
+        term: &str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<FileId>> {
+        Ok(self
+            .posting_for_term_checked(term, check_control)?
             .map(|posting| posting.ids)
             .unwrap_or_default())
     }
 
     pub fn posting_for_term(&self, term: &str) -> Result<Option<ContentPosting>> {
-        let term = canonical_term(term);
+        self.posting_for_term_checked(term, || Ok(()))
+    }
+
+    pub fn posting_for_term_checked(
+        &self,
+        term: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<ContentPosting>> {
+        check_control()?;
+        let term = canonical_term_checked(term, &mut check_control)?;
         if term.is_empty() {
             return Ok(None);
         }
         let mut positions_by_id: BTreeMap<FileId, BTreeSet<u32>> = BTreeMap::new();
         for archive in &self.archives {
-            let Some(posting) = archive.posting_for_term(&term)? else {
+            check_control()?;
+            let Some(posting) = archive.posting_for_term_checked(&term, &mut check_control)? else {
                 continue;
             };
             merge_content_posting_positions(posting, &mut positions_by_id);
@@ -158,7 +179,7 @@ impl MmapContentSet {
             .into_iter()
             .filter_map(|term| {
                 check_control()
-                    .and_then(|_| self.posting_for_term(&term))
+                    .and_then(|_| self.posting_for_term_checked(&term, &mut check_control))
                     .transpose()
             })
             .collect()
@@ -254,10 +275,6 @@ impl MmapContentSet {
     }
 }
 
-fn canonical_term(term: &str) -> String {
-    term.trim().to_lowercase()
-}
-
 fn canonical_term_checked(
     term: &str,
     mut check_control: impl FnMut() -> Result<()>,
@@ -335,6 +352,27 @@ mod tests {
         let mut checks = 0usize;
 
         let result = set.posting_for_term_limit_checked(&long_term, 10, || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 3);
+    }
+
+    #[test]
+    fn content_set_checked_ids_query_can_cancel_during_term_canonicalization() {
+        let set = MmapContentSet {
+            archives: Vec::new(),
+        };
+        let long_term = "Needle".repeat(256);
+        let mut checks = 0usize;
+
+        let result = set.ids_for_term_checked(&long_term, || {
             checks += 1;
             if checks >= 3 {
                 Err(GfmError::Cancelled)

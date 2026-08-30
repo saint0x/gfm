@@ -251,10 +251,20 @@ impl ContentArchive {
     }
 
     pub fn ids_for_term(&mut self, term: &str) -> Result<Vec<FileId>> {
-        let term = term.trim().to_lowercase();
+        self.ids_for_term_checked(term, || Ok(()))
+    }
+
+    pub fn ids_for_term_checked(
+        &mut self,
+        term: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<FileId>> {
+        check_control()?;
+        let term = canonical_term_checked(term, &mut check_control)?;
         if term.is_empty() {
             return Ok(Vec::new());
         }
+        check_control()?;
         match &self.directory {
             ContentArchiveDirectory::Indexed(directory) => {
                 let Some(entry) = directory
@@ -264,15 +274,18 @@ impl ContentArchive {
                 else {
                     return Ok(Vec::new());
                 };
+                check_control()?;
                 self.file
                     .seek(SeekFrom::Start(entry.offset))
                     .map_err(|err| GfmError::io(&self.path, err))?;
+                check_control()?;
                 let posting = read_content_posting(
                     (&mut self.file).take(entry.len),
                     &self.path,
                     self.version,
                 )?;
-                if posting.term.trim().to_lowercase() == term {
+                check_control()?;
+                if canonical_term_checked(&posting.term, &mut check_control)? == term {
                     Ok(posting.ids)
                 } else {
                     Err(content_format_error(
@@ -281,11 +294,16 @@ impl ContentArchive {
                     ))
                 }
             }
-            ContentArchiveDirectory::Legacy(postings) => Ok(postings
-                .iter()
-                .find(|posting| posting.term.trim().to_lowercase() == term)
-                .map(|posting| posting.ids.clone())
-                .unwrap_or_default()),
+            ContentArchiveDirectory::Legacy(postings) => {
+                for posting in postings {
+                    check_control()?;
+                    if canonical_term_checked(&posting.term, &mut check_control)? == term {
+                        return Ok(posting.ids.clone());
+                    }
+                }
+                check_control()?;
+                Ok(Vec::new())
+            }
         }
     }
 
@@ -341,34 +359,33 @@ impl MmapContentArchive {
 
     pub fn ids_for_term(&self, term: &str) -> Result<Vec<FileId>> {
         Ok(self
-            .posting_for_term(term)?
+            .posting_for_term_checked(term, || Ok(()))?
+            .map(|posting| posting.ids)
+            .unwrap_or_default())
+    }
+
+    pub fn ids_for_term_checked(
+        &self,
+        term: &str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<FileId>> {
+        Ok(self
+            .posting_for_term_checked(term, check_control)?
             .map(|posting| posting.ids)
             .unwrap_or_default())
     }
 
     pub fn posting_for_term(&self, term: &str) -> Result<Option<ContentPosting>> {
-        let term = term.trim().to_lowercase();
-        if term.is_empty() {
-            return Ok(None);
-        }
-        let Some(entry) = self
-            .directory
-            .binary_search_by(|entry| entry.term.as_str().cmp(term.as_str()))
-            .ok()
-            .map(|index| &self.directory[index])
-        else {
-            return Ok(None);
-        };
-        let bytes = self.posting_bytes(entry)?;
-        let posting = read_content_posting(Cursor::new(bytes), &self.path, self.version)?;
-        if posting.term.trim().to_lowercase() == term {
-            Ok(Some(posting))
-        } else {
-            Err(content_format_error(
-                &self.path,
-                "content directory points at the wrong term",
-            ))
-        }
+        self.posting_for_term_checked(term, || Ok(()))
+    }
+
+    pub fn posting_for_term_checked(
+        &self,
+        term: &str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<ContentPosting>> {
+        let (posting, _) = self.posting_for_term_limit_checked(term, usize::MAX, check_control)?;
+        Ok(posting)
     }
 
     pub fn posting_for_term_limit(
@@ -420,18 +437,19 @@ impl MmapContentArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        let mut selected = BTreeSet::new();
-        for term in terms {
-            let term = term.as_ref().trim().to_lowercase();
-            if !term.is_empty() {
-                selected.insert(term);
-            }
-        }
+        self.postings_for_terms_checked(terms, || Ok(()))
+    }
 
-        selected
-            .into_iter()
-            .filter_map(|term| self.posting_for_term(&term).transpose())
-            .collect()
+    pub fn postings_for_terms_checked<I, S>(
+        &self,
+        terms: I,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.postings_for_terms_limit_checked(terms, usize::MAX, check_control)
     }
 
     pub fn postings_for_terms_limit<I, S>(
@@ -671,10 +689,21 @@ impl MmapContentArchive {
     }
 
     pub fn id_block_for_term(&self, term: &str, block_index: usize) -> Result<Vec<FileId>> {
-        let term = term.trim().to_lowercase();
+        self.id_block_for_term_checked(term, block_index, || Ok(()))
+    }
+
+    pub fn id_block_for_term_checked(
+        &self,
+        term: &str,
+        block_index: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<FileId>> {
+        check_control()?;
+        let term = canonical_term_checked(term, &mut check_control)?;
         if term.is_empty() {
             return Ok(Vec::new());
         }
+        check_control()?;
         let Some(entry) = self
             .directory
             .binary_search_by(|entry| entry.term.as_str().cmp(term.as_str()))
@@ -684,17 +713,21 @@ impl MmapContentArchive {
             return Ok(Vec::new());
         };
         if !self.version.uses_blocked_ids() {
-            return self.ids_for_term(&term);
+            return self.ids_for_term_checked(&term, check_control);
         }
+        check_control()?;
         let bytes = self.posting_bytes(entry)?;
+        check_control()?;
         let mut cursor = Cursor::new(bytes);
         let decoded_term = read_content_posting_term(&mut cursor, &self.path)?;
-        if decoded_term.trim().to_lowercase() != term {
+        check_control()?;
+        if canonical_term_checked(&decoded_term, &mut check_control)? != term {
             return Err(content_format_error(
                 &self.path,
                 "content directory points at the wrong term",
             ));
         }
+        check_control()?;
         let ids_start = usize::try_from(cursor.position())
             .map_err(|_| content_format_error(&self.path, "content id offset overflow"))?;
         let id_bytes = bytes
