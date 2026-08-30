@@ -597,7 +597,10 @@ impl VolumeInvalidationReport {
                 (true, true, true, true, true, true, "volume-class-changed")
             }
             (Some(previous), Some(current))
-                if known_optional_value_changed(&previous.reachable, &current.reachable) =>
+                if known_optional_value_lost_or_changed(
+                    &previous.reachable,
+                    &current.reachable,
+                ) =>
             {
                 (
                     true,
@@ -610,7 +613,10 @@ impl VolumeInvalidationReport {
                 )
             }
             (Some(previous), Some(current))
-                if known_optional_value_changed(&previous.read_only, &current.read_only) =>
+                if known_optional_value_lost_or_changed(
+                    &previous.read_only,
+                    &current.read_only,
+                ) =>
             {
                 (
                     true,
@@ -623,7 +629,7 @@ impl VolumeInvalidationReport {
                 )
             }
             (Some(previous), Some(current))
-                if known_optional_value_changed(&previous.writable, &current.writable) =>
+                if known_optional_value_lost_or_changed(&previous.writable, &current.writable) =>
             {
                 (
                     true,
@@ -636,7 +642,10 @@ impl VolumeInvalidationReport {
                 )
             }
             (Some(previous), Some(current))
-                if known_optional_value_changed(&previous.ejectable, &current.ejectable) =>
+                if known_optional_value_lost_or_changed(
+                    &previous.ejectable,
+                    &current.ejectable,
+                ) =>
             {
                 (
                     true,
@@ -649,7 +658,10 @@ impl VolumeInvalidationReport {
                 )
             }
             (Some(previous), Some(current))
-                if known_optional_value_changed(&previous.mountable, &current.mountable) =>
+                if known_optional_value_lost_or_changed(
+                    &previous.mountable,
+                    &current.mountable,
+                ) =>
             {
                 (
                     true,
@@ -662,7 +674,7 @@ impl VolumeInvalidationReport {
                 )
             }
             (Some(previous), Some(current))
-                if known_optional_value_changed(
+                if known_optional_value_lost_or_changed(
                     &previous.case_sensitive,
                     &current.case_sensitive,
                 ) =>
@@ -678,7 +690,7 @@ impl VolumeInvalidationReport {
                 )
             }
             (Some(previous), Some(current))
-                if known_optional_value_changed(
+                if known_optional_value_lost_or_changed(
                     &previous.stable_identity,
                     &current.stable_identity,
                 ) =>
@@ -694,7 +706,7 @@ impl VolumeInvalidationReport {
                 )
             }
             (Some(previous), Some(current))
-                if known_optional_value_changed(
+                if known_optional_value_lost_or_changed(
                     &previous.filesystem_signature,
                     &current.filesystem_signature,
                 ) =>
@@ -803,31 +815,31 @@ impl VolumeEventIndexInvalidationReport {
         source_invalidates_index_admission: bool,
         source_rescans_index: bool,
     ) -> Self {
-        let stable_identity_changed = known_optional_value_changed(
+        let stable_identity_changed = known_optional_value_lost_or_changed(
             &previous.and_then(|volume| volume.stable_identity.clone()),
             &current.and_then(|volume| volume.stable_identity.clone()),
         );
-        let filesystem_signature_changed = known_optional_value_changed(
+        let filesystem_signature_changed = known_optional_value_lost_or_changed(
             &previous.and_then(|volume| volume.filesystem_signature.clone()),
             &current.and_then(|volume| volume.filesystem_signature.clone()),
         );
-        let read_only_changed = known_optional_value_changed(
+        let read_only_changed = known_optional_value_lost_or_changed(
             &previous.and_then(|volume| volume.read_only),
             &current.and_then(|volume| volume.read_only),
         );
-        let writable_changed = known_optional_value_changed(
+        let writable_changed = known_optional_value_lost_or_changed(
             &previous.and_then(|volume| volume.writable),
             &current.and_then(|volume| volume.writable),
         );
-        let ejectable_changed = known_optional_value_changed(
+        let ejectable_changed = known_optional_value_lost_or_changed(
             &previous.and_then(|volume| volume.ejectable),
             &current.and_then(|volume| volume.ejectable),
         );
-        let mountable_changed = known_optional_value_changed(
+        let mountable_changed = known_optional_value_lost_or_changed(
             &previous.and_then(|volume| volume.mountable),
             &current.and_then(|volume| volume.mountable),
         );
-        let case_sensitive_changed = known_optional_value_changed(
+        let case_sensitive_changed = known_optional_value_lost_or_changed(
             &previous.and_then(|volume| volume.case_sensitive),
             &current.and_then(|volume| volume.case_sensitive),
         );
@@ -990,8 +1002,8 @@ impl VolumeEventIndexInvalidationReport {
     }
 }
 
-fn known_optional_value_changed<T: Eq>(previous: &Option<T>, current: &Option<T>) -> bool {
-    matches!((previous, current), (Some(previous), Some(current)) if previous != current)
+fn known_optional_value_lost_or_changed<T: Eq>(previous: &Option<T>, current: &Option<T>) -> bool {
+    matches!((previous, current), (Some(_), None) | (Some(_), Some(_))) && previous != current
 }
 
 fn format_optional_bool(value: Option<bool>) -> String {

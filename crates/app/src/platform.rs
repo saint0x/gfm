@@ -711,6 +711,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 VolumeInvalidationReport::evaluate(Some(&previous), current.as_ref()).as_tsv()
             );
         }
+        "volume-known-facts-lost-invalidation" => {
+            for line in volume_known_facts_lost_invalidation() {
+                println!("{line}");
+            }
+        }
         "volume-topology-diff" => {
             let (previous_paths, current_paths) = split_topology_paths(args)?;
             let previous = VolumeDiscoveryReport::from_paths_checked(previous_paths)?;
@@ -1115,6 +1120,43 @@ fn volume_topology_index_invalidation_tsv(
         );
     }
     lines.join("\n")
+}
+
+fn volume_known_facts_lost_invalidation() -> Vec<String> {
+    let previous = IndexVolumeDescriptor::new(
+        "Known Facts Lost",
+        "/Volumes/Known Facts Lost",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(78))
+    .with_stable_identity("diskarbitration:uuid:KNOWN-FACTS")
+    .with_read_only(Some(false))
+    .with_writable(Some(true))
+    .with_ejectable(Some(true))
+    .with_mountable(Some(false))
+    .with_case_sensitive(Some(false))
+    .with_filesystem_signature("fs=apfs|case-sensitive=0|writable=1|ejectable=1|mountable=0");
+    let current = IndexVolumeDescriptor::new(
+        "Known Facts Lost",
+        "/Volumes/Known Facts Lost",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(78));
+    let path = Some(PathBuf::from("/Volumes/Known Facts Lost"));
+    vec![
+        VolumeInvalidationReport::evaluate(Some(&previous), Some(&current)).as_tsv(),
+        VolumeEventIndexInvalidationReport::from_event(
+            IndexVolumeEventKind::DescriptionChanged,
+            path,
+            Some(&previous),
+            Some(&current),
+            false,
+            false,
+        )
+        .as_tsv(),
+    ]
 }
 
 fn volume_event_transition_case_sensitivity(

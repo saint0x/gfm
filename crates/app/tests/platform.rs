@@ -4584,6 +4584,40 @@ fn volume_invalidation_surfaces_unavailable_current_path_from_binary() {
 }
 
 #[test]
+fn volume_known_facts_lost_invalidates_index_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-known-facts-lost-invalidation")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-invalidation\tpath=/Volumes/Known Facts Lost\t"));
+    assert!(stdout.contains("\tprevious-read-only=false\t"));
+    assert!(stdout.contains("\tcurrent-read-only=-\t"));
+    assert!(stdout.contains("\tprevious-writable=true\t"));
+    assert!(stdout.contains("\tcurrent-writable=-\t"));
+    assert!(stdout.contains("\tprevious-ejectable=true\t"));
+    assert!(stdout.contains("\tcurrent-ejectable=-\t"));
+    assert!(stdout.contains("\tprevious-mountable=false\t"));
+    assert!(stdout.contains("\tcurrent-mountable=-\t"));
+    assert!(stdout.contains("\tprevious-case-sensitive=false\t"));
+    assert!(stdout.contains("\tcurrent-case-sensitive=-\t"));
+    assert!(stdout.contains("\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.contains("\treason=volume-read-only-changed\n"));
+    assert!(stdout.contains(
+        "volume-event-index-invalidation\tkind=description-changed\tpath=/Volumes/Known Facts Lost\t"
+    ));
+    assert!(stdout.contains("\tidentity-changed=true\tfilesystem-changed=true\t"));
+    assert!(stdout.ends_with("reason=volume-event-identity-changed\n"));
+}
+
+#[test]
 fn reports_volume_topology_diff_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-volume-topology-{}", std::process::id()));
     let previous = root.join("Work Drive");

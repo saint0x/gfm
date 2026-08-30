@@ -5185,6 +5185,17 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-known-facts-lost-invalidation"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-invalidation\tpath=/Volumes/Known Facts Lost\tprevious-class=external\tprevious-mount=mounted\tprevious-reachable=true\tprevious-read-only=false\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tcurrent-read-only=-\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\tprevious-writable=true\tprevious-ejectable=true\tprevious-mountable=false\tprevious-case-sensitive=false\tcurrent-writable=-\tcurrent-ejectable=-\tcurrent-mountable=-\tcurrent-case-sensitive=-\treason=volume-read-only-changed\nvolume-event-index-invalidation\tkind=description-changed\tpath=/Volumes/Known Facts Lost\tprevious-volume=78\tprevious-class=external\tprevious-mount=mounted\tprevious-reachable=true\tprevious-read-only=false\tcurrent-volume=78\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tcurrent-read-only=-\tread-only-changed=true\tidentity-changed=true\tfilesystem-changed=true\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\tprevious-writable=true\tprevious-ejectable=true\tprevious-mountable=false\tprevious-case-sensitive=false\tcurrent-writable=-\tcurrent-ejectable=-\tcurrent-mountable=-\tcurrent-case-sensitive=-\twritable-changed=true\tejectable-changed=true\tmountable-changed=true\tcase-sensitive-changed=true\treason=volume-event-identity-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-event-description-api-status"
       ],
       "exit_code": 0,

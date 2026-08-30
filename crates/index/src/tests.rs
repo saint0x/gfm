@@ -2233,6 +2233,54 @@ fn volume_event_index_invalidation_reports_operation_capability_drift() {
 }
 
 #[test]
+fn volume_event_index_invalidation_cancels_jobs_when_known_volume_facts_are_lost() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(77))
+    .with_stable_identity("diskarbitration:uuid:WORK")
+    .with_read_only(Some(false))
+    .with_writable(Some(true))
+    .with_ejectable(Some(true))
+    .with_mountable(Some(false))
+    .with_case_sensitive(Some(false))
+    .with_filesystem_signature("fs=apfs|case-sensitive=0|writable=1|ejectable=1|mountable=0");
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(77));
+
+    let report = VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/Work")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    );
+
+    assert!(report.read_only_changed);
+    assert!(report.writable_changed);
+    assert!(report.ejectable_changed);
+    assert!(report.mountable_changed);
+    assert!(report.case_sensitive_changed);
+    assert!(report.stable_identity_changed);
+    assert!(report.filesystem_signature_changed);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-event-identity-changed");
+    assert!(report.as_tsv().contains("\tcurrent-case-sensitive=-\t"));
+}
+
+#[test]
 fn volume_event_index_invalidation_cancels_jobs_when_case_sensitivity_changes() {
     let previous = IndexVolumeDescriptor::new(
         "Work Drive",
@@ -2349,6 +2397,41 @@ fn volume_event_index_invalidation_cancels_jobs_when_filesystem_signature_change
     assert_eq!(report.reason, "volume-event-filesystem-changed");
     assert!(report.as_tsv().contains("\tidentity-changed=false\t"));
     assert!(report.as_tsv().contains("\tfilesystem-changed=true\t"));
+}
+
+#[test]
+fn volume_invalidation_cancels_index_jobs_when_known_volume_facts_are_lost() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:WORK")
+    .with_read_only(Some(false))
+    .with_writable(Some(true))
+    .with_ejectable(Some(true))
+    .with_mountable(Some(false))
+    .with_case_sensitive(Some(false))
+    .with_filesystem_signature("fs=apfs|case-sensitive=0|writable=1|ejectable=1|mountable=0");
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    );
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+    assert!(report.invalidate_sidebar);
+    assert!(report.invalidate_operation_policy);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-read-only-changed");
+    assert!(report.as_tsv().contains("\tprevious-writable=true\t"));
+    assert!(report.as_tsv().contains("\tcurrent-writable=-\t"));
 }
 
 #[test]
