@@ -1,4 +1,6 @@
-use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
+use crate::access::{
+    preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
+};
 use crate::runtime::{
     default_job_journal_path, run_scheduled_volume_task_cancellable, run_volume_task_cancellable,
 };
@@ -171,10 +173,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 pressure,
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = preflight_access_scope(
-                        write_probe_path(&state)?,
+                    let state_probe = write_probe_path(&state)?.to_path_buf();
+                    cancellation.check()?;
+                    let _access = preflight_access_scope_checked(
+                        &state_probe,
                         AccessIntent::Write,
                         "runtime retry probe",
+                        || cancellation.check(),
                     )?;
                     cancellation.check()?;
                     runtime_retry_probe_cancellable(&state, &cancellation)
@@ -204,7 +209,9 @@ fn run_jobs_recover(journal: PathBuf) -> Result<Vec<String>> {
     let volume = parent_volume(&journal);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope(&journal, AccessIntent::Read, WORKER)?;
+        let _access = preflight_access_scope_checked(&journal, AccessIntent::Read, WORKER, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         let lines = JobJournal::new(journal)
             .recoverable_checked(RetryPolicy { max_attempts: 2 }, || cancellation.check())?
@@ -232,8 +239,11 @@ fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
     let volume = parent_volume(&probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            preflight_access_scope(write_probe_path(&path)?, AccessIntent::Write, WORKER)?;
+        let probe = write_probe_path(&path)?.to_path_buf();
+        cancellation.check()?;
+        let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, WORKER, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         let catalog = JobPayloadCatalog::new(&path);
         let records = sample_payload_catalog_records();
@@ -255,8 +265,11 @@ fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
     let volume = parent_volume(&probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            preflight_access_scope(write_probe_path(&path)?, AccessIntent::Write, WORKER)?;
+        let probe = write_probe_path(&path)?.to_path_buf();
+        cancellation.check()?;
+        let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, WORKER, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         let store = JobProgressStore::new(&path);
         for snapshot in sample_progress_snapshots() {
@@ -279,8 +292,11 @@ fn run_jobs_progress_restore(path: PathBuf, updated_ms: u64) -> Result<Vec<Strin
     let volume = parent_volume(&probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            preflight_access_scope(write_probe_path(&path)?, AccessIntent::Write, WORKER)?;
+        let probe = write_probe_path(&path)?.to_path_buf();
+        cancellation.check()?;
+        let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, WORKER, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         let lines = JobProgressStore::new(&path)
             .restore_interrupted_checked(updated_ms, || cancellation.check())?
@@ -303,8 +319,11 @@ fn run_jobs_progress_control(
     let volume = parent_volume(&probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            preflight_access_scope(write_probe_path(&path)?, AccessIntent::Write, WORKER)?;
+        let probe = write_probe_path(&path)?.to_path_buf();
+        cancellation.check()?;
+        let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, WORKER, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         let snapshot = JobProgressStore::new(&path).apply_command_checked(
             gfm_jobs::JobId::from_raw(job_id),
@@ -336,7 +355,9 @@ fn run_jobs_payload_restore_plan(
     let volume = parent_volume(&progress_probe).or_else(|| parent_volume(&catalog_path));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_payload_restore_access(&catalog_path, &progress_path)?;
+        let _access = retain_payload_restore_access_checked(&catalog_path, &progress_path, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         let store = JobProgressStore::new(&progress_path);
         let restored = store.restore_interrupted_checked(updated_ms, || cancellation.check())?;
@@ -380,20 +401,26 @@ fn preflight_payload_restore_volumes(catalog_path: &Path, progress_path: &Path) 
     )
 }
 
-fn retain_payload_restore_access(
+fn retain_payload_restore_access_checked(
     catalog_path: &Path,
     progress_path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let progress_probe = write_probe_path(progress_path)?.to_path_buf();
+    check_control()?;
     Ok(vec![
-        preflight_access_scope(
+        preflight_access_scope_checked(
             catalog_path,
             AccessIntent::Read,
             "jobs payload restore plan",
+            &mut check_control,
         )?,
-        preflight_access_scope(
-            write_probe_path(progress_path)?,
+        preflight_access_scope_checked(
+            &progress_probe,
             AccessIntent::Write,
             "jobs payload restore plan",
+            &mut check_control,
         )?,
     ])
 }
@@ -834,5 +861,81 @@ mod tests {
                     .is_some_and(|name| name.starts_with(&temp_prefix))
             });
         assert!(!leaked_temp);
+    }
+
+    #[test]
+    fn payload_restore_access_checked_honors_pre_cancelled_control() {
+        let catalog = std::env::temp_dir().join(format!(
+            "gfm-payload-restore-catalog-pre-cancel-{}-{}.tsv",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let progress = catalog.with_extension("progress.tsv");
+
+        let result =
+            retain_payload_restore_access_checked(&catalog, &progress, || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!catalog.exists());
+        assert!(!progress.exists());
+    }
+
+    #[test]
+    fn payload_restore_access_checked_can_cancel_before_progress_probe() {
+        let catalog = std::env::temp_dir().join(format!(
+            "gfm-payload-restore-catalog-mid-cancel-{}-{}.tsv",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let progress = catalog.with_extension("progress.tsv");
+        let mut checks = 0usize;
+
+        let result = retain_payload_restore_access_checked(&catalog, &progress, || {
+            checks += 1;
+            if checks >= 2 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 2);
+        assert!(!progress.exists());
+    }
+
+    #[test]
+    fn payload_restore_access_checked_can_cancel_during_access_preflights() {
+        let catalog = std::env::temp_dir().join(format!(
+            "gfm-payload-restore-catalog-access-cancel-{}-{}.tsv",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let progress = catalog.with_extension("progress.tsv");
+        fs::write(&catalog, "payload").unwrap();
+        let mut checks = 0usize;
+
+        let result = retain_payload_restore_access_checked(&catalog, &progress, || {
+            checks += 1;
+            if checks >= 5 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 5);
+        assert!(!progress.exists());
+        fs::remove_file(catalog).unwrap();
     }
 }
