@@ -178,23 +178,61 @@ impl JobProgressStore {
     }
 
     pub fn write_all(&self, snapshots: &[JobProgressSnapshot]) -> Result<()> {
+        self.write_all_checked(snapshots, || Ok(()))
+    }
+
+    pub fn write_all_checked(
+        &self,
+        snapshots: &[JobProgressSnapshot],
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
         let parent = real_parent_or_cwd(&self.path);
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+        check_control()?;
         let tmp = self.temp_path();
-        {
+        let result = (|| {
             let file = File::create(&tmp).map_err(|err| GfmError::io(&tmp, err))?;
+            check_control()?;
             let mut writer = BufWriter::new(file);
-            writeln!(writer, "{MAGIC}").map_err(|err| GfmError::io(&tmp, err))?;
+            write_progress_line_checked(&mut writer, &tmp, MAGIC, &mut check_control)?;
             for snapshot in snapshots {
-                writeln!(writer, "{}", snapshot.as_tsv()).map_err(|err| GfmError::io(&tmp, err))?;
+                write_progress_line_checked(
+                    &mut writer,
+                    &tmp,
+                    &snapshot.as_tsv(),
+                    &mut check_control,
+                )?;
             }
+            check_control()?;
             writer.flush().map_err(|err| GfmError::io(&tmp, err))?;
+            check_control()?;
+            writer
+                .get_ref()
+                .sync_all()
+                .map_err(|err| GfmError::io(&tmp, err))?;
+            check_control()?;
+            fs::rename(&tmp, &self.path).map_err(|err| GfmError::io(&self.path, err))?;
+            check_control()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
         }
-        fs::rename(&tmp, &self.path).map_err(|err| GfmError::io(&self.path, err))
+        result
     }
 
     pub fn upsert(&self, snapshot: JobProgressSnapshot) -> Result<bool> {
-        let mut snapshots = self.read()?;
+        self.upsert_checked(snapshot, || Ok(()))
+    }
+
+    pub fn upsert_checked(
+        &self,
+        snapshot: JobProgressSnapshot,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<bool> {
+        let mut snapshots = self.read_checked(&mut check_control)?;
+        check_control()?;
         if let Some(existing) = snapshots
             .iter_mut()
             .find(|existing| existing.id == snapshot.id)
@@ -207,7 +245,9 @@ impl JobProgressStore {
             snapshots.push(snapshot);
         }
         snapshots.sort_by_key(|snapshot| snapshot.id.value());
-        self.write_all(&snapshots)?;
+        check_control()?;
+        self.write_all_checked(&snapshots, &mut check_control)?;
+        check_control()?;
         Ok(true)
     }
 
@@ -312,7 +352,7 @@ impl JobProgressStore {
         }
         if changed {
             check_control()?;
-            self.write_all(&snapshots)?;
+            self.write_all_checked(&snapshots, &mut check_control)?;
             check_control()?;
         }
         Ok(snapshots
@@ -351,7 +391,7 @@ impl JobProgressStore {
         }
         let updated = snapshot.clone();
         check_control()?;
-        self.write_all(&snapshots)?;
+        self.write_all_checked(&snapshots, &mut check_control)?;
         check_control()?;
         Ok(updated)
     }
@@ -366,6 +406,23 @@ impl JobProgressStore {
         name.push(format!(".{}.{sequence}.tmp", std::process::id()));
         self.path.with_file_name(name)
     }
+}
+
+fn write_progress_line_checked(
+    writer: &mut impl Write,
+    path: &Path,
+    line: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    writer
+        .write_all(line.as_bytes())
+        .map_err(|err| GfmError::io(path, err))?;
+    writer
+        .write_all(b"\n")
+        .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    Ok(())
 }
 
 fn apply_progress_command(
@@ -513,6 +570,54 @@ mod tests {
     }
 
     #[test]
+    fn write_all_checked_honors_pre_cancelled_control_before_file_create() {
+        let path = temp_path("write-all-pre-cancel");
+        let store = JobProgressStore::new(&path);
+        let snapshot = sample_running_progress(1);
+
+        let result = store.write_all_checked(&[snapshot], || Err(GfmError::Cancelled));
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(!path.exists());
+        assert!(!has_progress_temp_file(&path));
+    }
+
+    #[test]
+    fn write_all_checked_removes_temp_file_after_cancelled_snapshot_write() {
+        let path = temp_path("write-all-temp-cancel");
+        let store = JobProgressStore::new(&path);
+        let snapshots = vec![sample_running_progress(1), sample_running_progress(2)];
+        let mut checks = 0usize;
+
+        let result = store.write_all_checked(&snapshots, || {
+            checks += 1;
+            if checks >= 5 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(checks >= 5);
+        assert!(!path.exists());
+        assert!(!has_progress_temp_file(&path));
+    }
+
+    #[test]
+    fn upsert_checked_honors_cancelled_control_before_mutation() {
+        let path = temp_path("upsert-pre-cancel");
+        let store = JobProgressStore::new(&path);
+        let snapshot = sample_running_progress(1);
+
+        let result = store.upsert_checked(snapshot, || Err(GfmError::Cancelled));
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(!path.exists());
+        assert!(!has_progress_temp_file(&path));
+    }
+
+    #[test]
     fn restorable_streams_only_active_snapshots_but_validates_terminal_rows() {
         let path = temp_path("restorable-filtered");
         let store = JobProgressStore::new(&path);
@@ -554,6 +659,63 @@ mod tests {
         );
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn progress_store_checked_write_honors_pre_cancelled_control_before_mutation() {
+        let path = temp_path("write-pre-cancel");
+        let store = JobProgressStore::new(&path);
+        let original = JobProgressSnapshot::new(
+            JobId::from_raw(1),
+            JobClass::Background,
+            Priority::Background,
+            "existing progress",
+            None,
+            1,
+        )
+        .with_progress(JobProgressState::Running, 0, "existing", 1);
+        store.write_all(std::slice::from_ref(&original)).unwrap();
+        let replacement = original
+            .clone()
+            .with_progress(JobProgressState::Completed, 1, "done", 2);
+
+        let result = store.write_all_checked(std::slice::from_ref(&replacement), || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(store.read().unwrap(), vec![original]);
+        assert!(!has_progress_temp_file(&path));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn progress_store_checked_write_removes_temp_file_after_cancellation() {
+        let path = temp_path("write-temp-cancel");
+        let store = JobProgressStore::new(&path);
+        let snapshot = JobProgressSnapshot::new(
+            JobId::from_raw(1),
+            JobClass::Background,
+            Priority::Background,
+            "cancelled progress write",
+            None,
+            1,
+        );
+        let mut checks = 0usize;
+
+        let result = store.write_all_checked(std::slice::from_ref(&snapshot), || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 4);
+        assert!(!path.exists());
+        assert!(!has_progress_temp_file(&path));
     }
 
     #[test]
@@ -659,5 +821,36 @@ mod tests {
             "gfm-job-progress-{label}-{}-{nanos}.gfmprogress",
             std::process::id()
         ))
+    }
+
+    fn sample_running_progress(id: u64) -> JobProgressSnapshot {
+        JobProgressSnapshot::new(
+            JobId::from_raw(id),
+            JobClass::Foreground,
+            Priority::Interactive,
+            "copy selected files",
+            Some(VolumeId(2)),
+            100,
+        )
+        .with_progress(JobProgressState::Running, 12, "copying", 1)
+    }
+
+    fn has_progress_temp_file(path: &Path) -> bool {
+        let Some(parent) = path.parent() else {
+            return false;
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        let prefix = format!("{file_name}.{}.", std::process::id());
+        fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".tmp"))
+            })
     }
 }

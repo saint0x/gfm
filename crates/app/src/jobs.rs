@@ -260,7 +260,7 @@ fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
         cancellation.check()?;
         let store = JobProgressStore::new(&path);
         for snapshot in sample_progress_snapshots() {
-            store.upsert(snapshot)?;
+            store.upsert_checked(snapshot, || cancellation.check())?;
         }
         cancellation.check()?;
         let lines = store
