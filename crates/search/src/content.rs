@@ -2,8 +2,11 @@ use super::{
     normalize, rarest_term_postings, tokenize, QueryProximity, RankAccumulator, RecordColumns,
     SearchIndex, CONTENT,
 };
+use gfm_jobs::Cancellation;
 use gfm_types::{FileId, MatchReason};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+const CANCELLATION_STRIDE: usize = 256;
 
 impl SearchIndex {
     pub(super) fn content_has(&self, id: FileId, term: &str) -> bool {
@@ -16,16 +19,22 @@ impl SearchIndex {
         &self,
         scores: &mut HashMap<FileId, RankAccumulator>,
         term: &str,
-    ) {
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<()> {
+        cancellation.check()?;
         let Some(positions) = self.content_terms.get(term) else {
-            return;
+            return Ok(());
         };
-        for id in positions.keys() {
+        for (index, id) in positions.keys().enumerate() {
+            if index % CANCELLATION_STRIDE == 0 {
+                cancellation.check()?;
+            }
             scores
                 .entry(*id)
                 .and_modify(|score| score.add(CONTENT, MatchReason::Content))
                 .or_insert_with(|| RankAccumulator::new(CONTENT, MatchReason::Content));
         }
+        Ok(())
     }
 
     pub(super) fn content_frequency(&self, id: FileId, term: &str) -> usize {

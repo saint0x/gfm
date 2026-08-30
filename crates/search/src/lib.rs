@@ -42,7 +42,7 @@ use ranking::{
     RankAccumulator, CONTENT, EXACT_NAME, EXTENSION, FUZZY_NAME, NAME_TOKEN, PATH_COMPONENT,
     PHRASE, PREFIX_NAME, PROXIMITY, SUBSTRING_NAME, TAG,
 };
-use scoring::{add_scores, seed_scores};
+use scoring::{add_scores_cancellable, seed_scores_cancellable};
 pub use session::SearchSupersession;
 pub use shard::{SearchVolumeScope, ShardedSearchIndex};
 use terms::substring_grams;
@@ -320,36 +320,66 @@ impl SearchIndex {
 
         if !text.is_empty() {
             if let Some(ids) = self.name_exact.get(&text) {
-                add_scores(&mut scores, ids, EXACT_NAME, MatchReason::ExactName);
+                add_scores_cancellable(
+                    &mut scores,
+                    ids,
+                    EXACT_NAME,
+                    MatchReason::ExactName,
+                    cancellation,
+                )?;
             }
         }
 
         if !text.is_empty() {
             let ids = self.name_prefix_ids(&text, lookup, budget, &mut telemetry)?;
             if !ids.is_empty() {
-                add_scores(&mut scores, &ids, PREFIX_NAME, MatchReason::PrefixName);
+                add_scores_cancellable(
+                    &mut scores,
+                    &ids,
+                    PREFIX_NAME,
+                    MatchReason::PrefixName,
+                    cancellation,
+                )?;
             }
         }
 
         for term in &query.terms {
             cancellation.check()?;
             if let Some(ids) = self.name_terms.get(term) {
-                add_scores(&mut scores, ids, NAME_TOKEN, MatchReason::SubstringName);
+                add_scores_cancellable(
+                    &mut scores,
+                    ids,
+                    NAME_TOKEN,
+                    MatchReason::SubstringName,
+                    cancellation,
+                )?;
             }
             if let Some(ids) = self.path_terms.get(term) {
-                add_scores(&mut scores, ids, PATH_COMPONENT, MatchReason::PathComponent);
+                add_scores_cancellable(
+                    &mut scores,
+                    ids,
+                    PATH_COMPONENT,
+                    MatchReason::PathComponent,
+                    cancellation,
+                )?;
             }
             if let Some(ids) = self.metadata_terms.get(term) {
-                add_scores(&mut scores, ids, TAG, MatchReason::Tag);
+                add_scores_cancellable(&mut scores, ids, TAG, MatchReason::Tag, cancellation)?;
             }
             if let Some(ids) = self.extension.get(term) {
-                add_scores(&mut scores, ids, EXTENSION, MatchReason::Extension);
+                add_scores_cancellable(
+                    &mut scores,
+                    ids,
+                    EXTENSION,
+                    MatchReason::Extension,
+                    cancellation,
+                )?;
             }
             if let Some(ids) = self.tags.get(term) {
-                add_scores(&mut scores, ids, TAG, MatchReason::Tag);
+                add_scores_cancellable(&mut scores, ids, TAG, MatchReason::Tag, cancellation)?;
             }
             if pass.includes_deep() {
-                self.add_content_scores(&mut scores, term);
+                self.add_content_scores(&mut scores, term, cancellation)?;
             }
         }
 
@@ -431,7 +461,7 @@ impl SearchIndex {
         }
 
         if let Some(ids) = &expression_candidates {
-            seed_scores(&mut scores, ids);
+            seed_scores_cancellable(&mut scores, ids, cancellation)?;
         }
 
         if !intent.is_empty() {

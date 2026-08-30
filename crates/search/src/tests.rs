@@ -887,6 +887,32 @@ fn cancelled_queries_stop_before_returning_hits() {
 }
 
 #[test]
+fn score_seeding_honors_cancelled_tokens_before_touching_large_postings() {
+    let ids = (1..=2048)
+        .map(|node| FileId::new(VolumeId(1), node))
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut scores = std::collections::HashMap::new();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let add_result = add_scores_cancellable(
+        &mut scores,
+        &ids,
+        1,
+        MatchReason::SubstringName,
+        &cancellation,
+    );
+
+    assert!(matches!(add_result, Err(GfmError::Cancelled)));
+    assert!(scores.is_empty());
+
+    let seed_result = seed_scores_cancellable(&mut scores, &ids, &cancellation);
+
+    assert!(matches!(seed_result, Err(GfmError::Cancelled)));
+    assert!(scores.is_empty());
+}
+
+#[test]
 fn supersession_cancels_stale_query_tokens() {
     let supersession = SearchSupersession::new();
     let first = supersession.begin();

@@ -5,8 +5,11 @@ use super::ranking::{
     NAME_TOKEN, PATH_COMPONENT, PATH_FREQUENCY, PREFIX_NAME, TAG, USER_PINNED,
 };
 use super::{SearchIndex, SearchPass, SearchQuery};
+use gfm_jobs::Cancellation;
 use gfm_types::{FileId, FileRecord, MatchReason};
 use std::collections::{BTreeSet, HashMap};
+
+const CANCELLATION_STRIDE: usize = 256;
 
 impl SearchIndex {
     pub(super) fn score_plain_multi_term_record(
@@ -113,24 +116,39 @@ impl SearchIndex {
     }
 }
 
-pub(super) fn add_scores(
+pub(super) fn add_scores_cancellable(
     scores: &mut HashMap<FileId, RankAccumulator>,
     ids: &BTreeSet<FileId>,
     points: i64,
     reason: MatchReason,
-) {
-    for id in ids {
+    cancellation: &Cancellation,
+) -> gfm_types::Result<()> {
+    cancellation.check()?;
+    for (index, id) in ids.iter().enumerate() {
+        if index % CANCELLATION_STRIDE == 0 {
+            cancellation.check()?;
+        }
         scores
             .entry(*id)
             .and_modify(|score| score.add(points, reason.clone()))
             .or_insert_with(|| RankAccumulator::new(points, reason.clone()));
     }
+    Ok(())
 }
 
-pub(super) fn seed_scores(scores: &mut HashMap<FileId, RankAccumulator>, ids: &BTreeSet<FileId>) {
-    for id in ids {
+pub(super) fn seed_scores_cancellable(
+    scores: &mut HashMap<FileId, RankAccumulator>,
+    ids: &BTreeSet<FileId>,
+    cancellation: &Cancellation,
+) -> gfm_types::Result<()> {
+    cancellation.check()?;
+    for (index, id) in ids.iter().enumerate() {
+        if index % CANCELLATION_STRIDE == 0 {
+            cancellation.check()?;
+        }
         scores
             .entry(*id)
             .or_insert_with(|| RankAccumulator::new(0, MatchReason::PathComponent));
     }
+    Ok(())
 }

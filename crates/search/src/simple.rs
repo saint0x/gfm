@@ -5,7 +5,7 @@ use crate::ranking::{
     RankAccumulator, CONTENT, EXACT_NAME, EXTENSION, FUZZY_NAME, NAME_TOKEN, PATH_COMPONENT,
     PREFIX_NAME, TAG,
 };
-use crate::scoring::add_scores;
+use crate::scoring::add_scores_cancellable;
 use crate::{QueryIntent, SearchIndex, SearchQuery, SearchQueryReport};
 use gfm_jobs::Cancellation;
 use gfm_types::{FileId, MatchReason, SearchHit};
@@ -36,11 +36,23 @@ impl SearchIndex {
         let mut scores: HashMap<FileId, RankAccumulator> = HashMap::new();
         let mut telemetry = SearchLookupTelemetry::default();
         if let Some(ids) = self.name_exact.get(term) {
-            add_scores(&mut scores, ids, EXACT_NAME, MatchReason::ExactName);
+            add_scores_cancellable(
+                &mut scores,
+                ids,
+                EXACT_NAME,
+                MatchReason::ExactName,
+                cancellation,
+            )?;
         }
         let ids = self.name_prefix_ids(term, lookup, budget, &mut telemetry)?;
         if !ids.is_empty() {
-            add_scores(&mut scores, &ids, PREFIX_NAME, MatchReason::PrefixName);
+            add_scores_cancellable(
+                &mut scores,
+                &ids,
+                PREFIX_NAME,
+                MatchReason::PrefixName,
+                cancellation,
+            )?;
         }
         for postings in [
             self.name_terms
@@ -60,7 +72,13 @@ impl SearchIndex {
         .into_iter()
         .flatten()
         {
-            add_scores(&mut scores, postings.0, postings.1, postings.2);
+            add_scores_cancellable(
+                &mut scores,
+                postings.0,
+                postings.1,
+                postings.2,
+                cancellation,
+            )?;
         }
         if pass.includes_deep() {
             for id in self.fuzzy_ids(term, lookup, budget, &mut telemetry)? {
