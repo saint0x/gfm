@@ -559,6 +559,68 @@ fn cached_extractor_hits_for_unchanged_file_identity_and_signature() {
 }
 
 #[test]
+fn extraction_cache_key_checked_honors_pre_cancelled_control_before_file_open() {
+    let root = unique_temp_dir("gfm-content-cache-key-cancel");
+    let path = root.join("cache.md");
+    let record = FileRecord {
+        id: FileId::new(VolumeId(1), 1),
+        parent: None,
+        path: path.clone(),
+        name: "cache.md".to_string(),
+        kind: FileKind::File,
+        len: 13,
+        mode: 0,
+        owner: 0,
+        group: 0,
+        xattrs_digest: 0,
+        created: None,
+        modified: None,
+        changed: None,
+        hidden: false,
+        tags: Vec::new(),
+        finder_comment: None,
+    };
+
+    let result = ExtractionCacheKey::for_record_checked(&record, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cached_extractor_checked_honors_pre_cancelled_control_before_file_open() {
+    let root = unique_temp_dir("gfm-cached-extractor-cancel");
+    let path = root.join("cache.md");
+    let record = FileRecord {
+        id: FileId::new(VolumeId(1), 1),
+        parent: None,
+        path: path.clone(),
+        name: "cache.md".to_string(),
+        kind: FileKind::File,
+        len: 13,
+        mode: 0,
+        owner: 0,
+        group: 0,
+        xattrs_digest: 0,
+        created: None,
+        modified: None,
+        changed: None,
+        hidden: false,
+        tags: Vec::new(),
+        finder_comment: None,
+    };
+    let mut cached = CachedExtractor::default();
+
+    let result = cached.extract_record_report_checked(&record, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+    assert_eq!(cached.cache_len(), 0);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extraction_cache_keys_use_format_scoped_versions() {
     let root = unique_temp_dir("gfm-content-cache-format-versions");
     let text_path = root.join("cache.md");

@@ -33,7 +33,8 @@ pub use contentmerge::{
 pub use contentquery::MmapContentSet;
 pub use contentrecover::{
     content_manifest_recovery_action_name, content_manifest_recovery_reason_name,
-    plan_content_manifest_recovery, recover_content_manifest, ContentArchiveHealth,
+    plan_content_manifest_recovery, plan_content_manifest_recovery_checked,
+    recover_content_manifest, recover_content_manifest_checked, ContentArchiveHealth,
     ContentManifestRecovery, ContentManifestRecoveryAction, ContentManifestRecoveryPlan,
     ContentManifestRecoveryReason,
 };

@@ -99,93 +99,109 @@ pub fn plan_content_manifest_recovery(
     manifest_path: impl AsRef<Path>,
     discovered_archives: &[ContentArchiveManifestEntry],
 ) -> ContentManifestRecoveryPlan {
+    plan_content_manifest_recovery_checked(manifest_path, discovered_archives, || Ok(()))
+        .expect("uncancellable content manifest recovery planning cannot be cancelled")
+}
+
+pub fn plan_content_manifest_recovery_checked(
+    manifest_path: impl AsRef<Path>,
+    discovered_archives: &[ContentArchiveManifestEntry],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ContentManifestRecoveryPlan> {
     let manifest_path = manifest_path.as_ref().to_path_buf();
+    check_control()?;
     let manifest_exists = match manifest_path.try_exists() {
         Ok(exists) => exists,
         Err(err) => {
-            return ContentManifestRecoveryPlan {
+            return Ok(ContentManifestRecoveryPlan {
                 action: ContentManifestRecoveryAction::CannotRecover,
                 reason: ContentManifestRecoveryReason::UnreadableManifest,
                 manifest_path,
                 valid_archives: Vec::new(),
                 invalid_archives: Vec::new(),
                 detail: Some(format!("content manifest existence unavailable: {err}")),
-            }
+            });
         }
     };
+    check_control()?;
     if !manifest_exists {
         let (valid, invalid) = classify_archives(&manifest_path, discovered_archives);
-        return plan_from_discovered(
+        check_control()?;
+        return Ok(plan_from_discovered(
             manifest_path,
             valid,
             invalid,
             ContentManifestRecoveryReason::MissingManifest,
             None,
-        );
+        ));
     }
 
-    let manifest = match ContentArchiveManifest::read(&manifest_path) {
+    let manifest = match ContentArchiveManifest::read_checked(&manifest_path, &mut check_control) {
         Ok(manifest) => manifest,
         Err(err) => {
             let (valid, invalid) = classify_archives(&manifest_path, discovered_archives);
-            return plan_from_discovered(
+            check_control()?;
+            return Ok(plan_from_discovered(
                 manifest_path,
                 valid,
                 invalid,
                 ContentManifestRecoveryReason::UnreadableManifest,
                 Some(err.to_string()),
-            );
+            ));
         }
     };
+    check_control()?;
 
     let (valid, invalid) = classify_archives(&manifest_path, &manifest.archives);
+    check_control()?;
     if invalid.is_empty() {
-        return ContentManifestRecoveryPlan {
+        return Ok(ContentManifestRecoveryPlan {
             action: ContentManifestRecoveryAction::Ready,
             reason: ContentManifestRecoveryReason::Healthy,
             manifest_path,
             valid_archives: valid,
             invalid_archives: invalid,
             detail: None,
-        };
+        });
     }
 
     if !valid.is_empty() {
-        return ContentManifestRecoveryPlan {
+        return Ok(ContentManifestRecoveryPlan {
             action: ContentManifestRecoveryAction::PruneInvalidArchives,
             reason: invalid_reason(&invalid),
             manifest_path,
             valid_archives: valid,
             invalid_archives: invalid,
             detail: None,
-        };
+        });
     }
 
     let (discovered_valid, discovered_invalid) =
         classify_archives(&manifest_path, discovered_archives);
+    check_control()?;
     if !discovered_valid.is_empty() {
         let mut invalid_archives = invalid;
         invalid_archives.extend(discovered_invalid);
-        return ContentManifestRecoveryPlan {
+        return Ok(ContentManifestRecoveryPlan {
             action: ContentManifestRecoveryAction::WriteDiscoveredManifest,
             reason: invalid_reason(&invalid_archives),
             manifest_path,
             valid_archives: discovered_valid,
             invalid_archives,
             detail: Some("manifest contains no usable active archives".to_string()),
-        };
+        });
     }
 
     let mut invalid_archives = invalid;
     invalid_archives.extend(discovered_invalid);
-    ContentManifestRecoveryPlan {
+    Ok(ContentManifestRecoveryPlan {
         action: ContentManifestRecoveryAction::CannotRecover,
         reason: ContentManifestRecoveryReason::NoUsableArchives,
         manifest_path,
         valid_archives: Vec::new(),
         invalid_archives,
         detail: Some("no valid content archives are available for recovery".to_string()),
-    }
+    })
 }
 
 pub fn recover_content_manifest(
@@ -193,9 +209,29 @@ pub fn recover_content_manifest(
     discovered_archives: &[ContentArchiveManifestEntry],
     quarantine_dir: impl AsRef<Path>,
 ) -> Result<ContentManifestRecovery> {
+    recover_content_manifest_checked(
+        manifest_path,
+        discovered_archives,
+        quarantine_dir,
+        || Ok(()),
+    )
+}
+
+pub fn recover_content_manifest_checked(
+    manifest_path: impl AsRef<Path>,
+    discovered_archives: &[ContentArchiveManifestEntry],
+    quarantine_dir: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ContentManifestRecovery> {
     let manifest_path = manifest_path.as_ref();
     let quarantine_dir = quarantine_dir.as_ref();
-    let before = plan_content_manifest_recovery(manifest_path, discovered_archives);
+    check_control()?;
+    let before = plan_content_manifest_recovery_checked(
+        manifest_path,
+        discovered_archives,
+        &mut check_control,
+    )?;
+    check_control()?;
     let mut wrote_manifest = false;
     let mut quarantined_manifest_path = None;
 
@@ -203,13 +239,18 @@ pub fn recover_content_manifest(
         ContentManifestRecoveryAction::Ready => {}
         ContentManifestRecoveryAction::WriteDiscoveredManifest
         | ContentManifestRecoveryAction::PruneInvalidArchives => {
+            check_control()?;
             write_recovered_manifest(manifest_path, &before)?;
+            check_control()?;
             wrote_manifest = true;
         }
         ContentManifestRecoveryAction::QuarantineManifestAndWriteDiscovered => {
+            check_control()?;
             let quarantine_path = quarantine_manifest(manifest_path, quarantine_dir)?;
+            check_control()?;
             quarantined_manifest_path = Some(quarantine_path);
             write_recovered_manifest(manifest_path, &before)?;
+            check_control()?;
             wrote_manifest = true;
         }
         ContentManifestRecoveryAction::CannotRecover => {
@@ -224,7 +265,8 @@ pub fn recover_content_manifest(
         }
     }
 
-    let after = plan_content_manifest_recovery(manifest_path, discovered_archives);
+    let after =
+        plan_content_manifest_recovery_checked(manifest_path, discovered_archives, check_control)?;
     Ok(ContentManifestRecovery {
         before,
         after,
@@ -383,6 +425,43 @@ mod tests {
             ContentArchiveManifest::read(&manifest).unwrap().archives,
             discovered
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn checked_content_manifest_recovery_plan_honors_pre_cancelled_control_before_manifest_probe() {
+        let dir = temp_dir("gfm-content-recovery-plan-cancel");
+        fs::create_dir_all(&dir).unwrap();
+        let manifest = dir.join("content.gfmmanifest");
+
+        let result =
+            plan_content_manifest_recovery_checked(&manifest, &[], || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!manifest.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn checked_content_manifest_recovery_honors_pre_cancelled_control_before_mutation() {
+        let dir = temp_dir("gfm-content-recovery-cancel");
+        let manifest = dir.join("content.gfmmanifest");
+        let hot = dir.join("hot.gfmcontent");
+        let quarantine = dir.join("quarantine");
+        fs::create_dir_all(&dir).unwrap();
+        write_content_postings(&hot, &[]).unwrap();
+        let discovered = vec![ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Hot,
+            path: PathBuf::from("hot.gfmcontent"),
+        }];
+
+        let result = recover_content_manifest_checked(&manifest, &discovered, &quarantine, || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!manifest.exists());
+        assert!(!quarantine.exists());
         fs::remove_dir_all(dir).unwrap();
     }
 

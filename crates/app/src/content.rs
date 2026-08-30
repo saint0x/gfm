@@ -809,9 +809,13 @@ fn run_extraction_cache(path: PathBuf) -> Result<String> {
         let record = record_for_path(&path, None, false)?;
         cancellation.check()?;
         let mut cached = CachedExtractor::default();
-        let first = cached.extract_record_report(&record)?.as_tsv();
+        let first = cached
+            .extract_record_report_checked(&record, || cancellation.check())?
+            .as_tsv();
         cancellation.check()?;
-        let second = cached.extract_record_report(&record)?.as_tsv();
+        let second = cached
+            .extract_record_report_checked(&record, || cancellation.check())?
+            .as_tsv();
         Ok(format!("{first}\n{second}\n"))
     })
 }

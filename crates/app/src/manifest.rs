@@ -9,10 +9,10 @@ use gfm_jobs::Priority;
 use gfm_mac::AccessIntent;
 use gfm_store::{
     cleanup_inactive_content_archives_checked, content_manifest_promotion_journal_path,
-    plan_content_manifest_promotion_recovery_checked, plan_content_manifest_recovery,
+    plan_content_manifest_promotion_recovery_checked, plan_content_manifest_recovery_checked,
     plan_inactive_content_archive_cleanup_checked, promote_content_archive_manifest_checked,
-    recover_content_manifest, recover_content_manifest_promotion_checked, ContentArchiveHealth,
-    ContentManifestPromotionJournal, MmapContentSet,
+    recover_content_manifest_checked, recover_content_manifest_promotion_checked,
+    ContentArchiveHealth, ContentManifestPromotionJournal, MmapContentSet,
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
@@ -466,7 +466,10 @@ fn run_manifest_recovery_plan(
             cancellation.check()?;
             let _access = retain_manifest_recovery_plan_access(&manifest_path, discovered.iter())?;
             cancellation.check()?;
-            let plan = plan_content_manifest_recovery(&manifest_path, &discovered);
+            let plan = plan_content_manifest_recovery_checked(&manifest_path, &discovered, || {
+                cancellation.check()
+            })?;
+            cancellation.check()?;
             let mut lines = vec![plan.as_tsv()];
             lines.extend(format_content_archive_health(
                 "invalid",
@@ -515,7 +518,11 @@ fn run_manifest_recover(
             let _access =
                 retain_manifest_recovery_access(&manifest_path, &quarantine, discovered.iter())?;
             cancellation.check()?;
-            let report = recover_content_manifest(&manifest_path, &discovered, &quarantine)?;
+            let report =
+                recover_content_manifest_checked(&manifest_path, &discovered, &quarantine, || {
+                    cancellation.check()
+                })?;
+            cancellation.check()?;
             let mut lines = vec![
                 report.before.as_tsv(),
                 format!(
