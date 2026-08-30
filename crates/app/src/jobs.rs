@@ -15,9 +15,11 @@ use gfm_mac::AccessIntent;
 use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::HashMap;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+const RUNTIME_RETRY_STATE_MAX_BYTES: usize = 64 * 1024;
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
@@ -637,11 +639,7 @@ fn parse_optional_timestamp_ms(command: &str, value: Option<String>) -> Result<u
 
 fn runtime_retry_probe_cancellable(state: &Path, cancellation: &Cancellation) -> Result<usize> {
     cancellation.check()?;
-    let attempt = std::fs::read_to_string(state)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(0)
-        + 1;
+    let attempt = read_runtime_retry_attempt_checked(state, || cancellation.check())? + 1;
     cancellation.check()?;
     std::fs::write(state, attempt.to_string()).map_err(|err| GfmError::io(state, err))?;
     cancellation.check()?;
@@ -649,5 +647,60 @@ fn runtime_retry_probe_cancellable(state: &Path, cancellation: &Cancellation) ->
         Err(GfmError::Format("temporary runtime probe busy".to_string()))
     } else {
         Ok(attempt)
+    }
+}
+
+fn read_runtime_retry_attempt_checked(
+    state: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<usize> {
+    check_control()?;
+    let mut file = match fs::File::open(state) {
+        Ok(file) => file,
+        Err(_) => return Ok(0),
+    };
+    check_control()?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        check_control()?;
+        let read = match file.read(&mut buffer) {
+            Ok(read) => read,
+            Err(_) => return Ok(0),
+        };
+        check_control()?;
+        if read == 0 {
+            break;
+        }
+        if bytes.len().saturating_add(read) > RUNTIME_RETRY_STATE_MAX_BYTES {
+            return Ok(0);
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    let Ok(value) = std::str::from_utf8(&bytes) else {
+        return Ok(0);
+    };
+    Ok(value.trim().parse::<usize>().unwrap_or(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_retry_attempt_read_honors_pre_cancelled_control_before_file_open() {
+        let state = std::env::temp_dir().join(format!(
+            "gfm-runtime-retry-attempt-cancel-{}-{}.state",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        let result = read_runtime_retry_attempt_checked(&state, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!state.exists());
     }
 }
