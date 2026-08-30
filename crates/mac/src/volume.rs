@@ -855,8 +855,8 @@ pub struct VolumeTopologyDiff {
 
 impl VolumeTopologyDiff {
     pub fn evaluate(previous: &VolumeDiscoveryReport, current: &VolumeDiscoveryReport) -> Self {
-        let previous = volume_map(&previous.volumes);
-        let current = volume_map(&current.volumes);
+        let previous = normalized_volume_map(&previous.volumes);
+        let current = normalized_volume_map(&current.volumes);
         let mut changes = Vec::new();
 
         for (stable_identity, previous_volume) in &previous {
@@ -1288,7 +1288,8 @@ fn description_change_invalidates_policy(reason: &str) -> bool {
 }
 
 impl VolumeEventState {
-    pub fn new(report: VolumeDiscoveryReport) -> Self {
+    pub fn new(mut report: VolumeDiscoveryReport) -> Self {
+        normalize_discovered_volumes(&mut report.volumes);
         let mut state = Self {
             report,
             stable_index: BTreeMap::new(),
@@ -1870,9 +1871,13 @@ fn disabled_command_reason(
     })
 }
 
-fn volume_map(volumes: &[VolumeDescriptor]) -> BTreeMap<String, &VolumeDescriptor> {
+fn normalized_volume_map(volumes: &[VolumeDescriptor]) -> BTreeMap<String, &VolumeDescriptor> {
+    let mut volumes: Vec<_> = volumes.iter().collect();
+    volumes.sort_by(|left, right| compare_volume_descriptors(left, right));
+    let mut seen = BTreeSet::new();
     volumes
-        .iter()
+        .into_iter()
+        .filter(|volume| seen.insert(volume.stable_identity.clone()))
         .map(|volume| (volume.stable_identity.clone(), volume))
         .collect()
 }
@@ -1886,18 +1891,23 @@ fn unique_volume_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 fn normalize_discovered_volumes(volumes: &mut Vec<VolumeDescriptor>) {
-    volumes.sort_by(|left, right| {
-        left.path
-            .cmp(&right.path)
-            .then(left.label.cmp(&right.label))
-            .then(left.id.cmp(&right.id))
-    });
+    volumes.sort_by(compare_volume_descriptors);
     let mut seen_identity = BTreeSet::new();
     let mut seen_descriptor = BTreeSet::new();
     volumes.retain(|volume| {
         seen_descriptor.insert((volume.id, volume.path.clone()))
             && seen_identity.insert(volume.stable_identity.clone())
     });
+}
+
+fn compare_volume_descriptors(
+    left: &VolumeDescriptor,
+    right: &VolumeDescriptor,
+) -> std::cmp::Ordering {
+    left.path
+        .cmp(&right.path)
+        .then(left.label.cmp(&right.label))
+        .then(left.id.cmp(&right.id))
 }
 
 fn topology_change_reason(
@@ -3023,6 +3033,75 @@ mod tests {
         assert_eq!(volumes.len(), 1);
         assert_eq!(volumes[0].stable_identity, "diskarbitration:uuid:DUPLICATE");
         assert_eq!(volumes[0].path, expected_path);
+
+        fs::remove_dir_all(first).unwrap();
+        fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_normalizes_duplicate_stable_identities_before_mapping() {
+        let first = unique_temp_dir("gfm-volume-topology-duplicate-first");
+        let second = unique_temp_dir("gfm-volume-topology-duplicate-second");
+        fs::write(first.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        fs::write(second.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        let mut first_volume = VolumeDescriptor::for_path(&first).unwrap();
+        let mut second_volume = VolumeDescriptor::for_path(&second).unwrap();
+        first_volume.stable_identity = "diskarbitration:uuid:DUPLICATE-TOPOLOGY".to_string();
+        second_volume.stable_identity = first_volume.stable_identity.clone();
+        let retained = if first_volume.path <= second_volume.path {
+            first_volume.clone()
+        } else {
+            second_volume.clone()
+        };
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![second_volume, first_volume],
+        };
+        let mut current_volume = retained.clone();
+        current_volume.label = "Renamed Duplicate".to_string();
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(
+            diff.changes[0].stable_identity,
+            "diskarbitration:uuid:DUPLICATE-TOPOLOGY"
+        );
+        assert_eq!(diff.changes[0].path, retained.path);
+        assert_eq!(diff.changes[0].reason, "volume-label-changed");
+
+        fs::remove_dir_all(first).unwrap();
+        fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
+    fn volume_event_state_normalizes_duplicate_stable_identities_before_indexing() {
+        let first = unique_temp_dir("gfm-volume-state-duplicate-first");
+        let second = unique_temp_dir("gfm-volume-state-duplicate-second");
+        fs::write(first.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        fs::write(second.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        let mut first_volume = VolumeDescriptor::for_path(&first).unwrap();
+        let mut second_volume = VolumeDescriptor::for_path(&second).unwrap();
+        first_volume.stable_identity = "diskarbitration:uuid:DUPLICATE-STATE".to_string();
+        second_volume.stable_identity = first_volume.stable_identity.clone();
+        let retained = if first_volume.path <= second_volume.path {
+            first_volume.clone()
+        } else {
+            second_volume.clone()
+        };
+
+        let state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: vec![second_volume, first_volume],
+        });
+
+        assert_eq!(state.report().volumes.len(), 1);
+        assert_eq!(
+            state.report().volumes[0].stable_identity,
+            retained.stable_identity
+        );
+        assert_eq!(state.report().volumes[0].path, retained.path);
 
         fs::remove_dir_all(first).unwrap();
         fs::remove_dir_all(second).unwrap();
