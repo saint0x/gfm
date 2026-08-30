@@ -604,13 +604,7 @@ impl VolumeDiscoveryReport {
             .into_iter()
             .filter_map(|path| VolumeDescriptor::for_path(path).ok())
             .collect();
-        volumes.sort_by(|left, right| {
-            left.path
-                .cmp(&right.path)
-                .then(left.label.cmp(&right.label))
-                .then(left.id.cmp(&right.id))
-        });
-        volumes.dedup_by(|left, right| left.id == right.id && left.path == right.path);
+        normalize_discovered_volumes(&mut volumes);
         Self { volumes }
     }
 
@@ -620,13 +614,7 @@ impl VolumeDiscoveryReport {
         for path in paths {
             volumes.push(VolumeDescriptor::for_path(path)?);
         }
-        volumes.sort_by(|left, right| {
-            left.path
-                .cmp(&right.path)
-                .then(left.label.cmp(&right.label))
-                .then(left.id.cmp(&right.id))
-        });
-        volumes.dedup_by(|left, right| left.id == right.id && left.path == right.path);
+        normalize_discovered_volumes(&mut volumes);
         Ok(Self { volumes })
     }
 
@@ -1897,6 +1885,21 @@ fn unique_volume_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
         .collect()
 }
 
+fn normalize_discovered_volumes(volumes: &mut Vec<VolumeDescriptor>) {
+    volumes.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.label.cmp(&right.label))
+            .then(left.id.cmp(&right.id))
+    });
+    let mut seen_identity = BTreeSet::new();
+    let mut seen_descriptor = BTreeSet::new();
+    volumes.retain(|volume| {
+        seen_descriptor.insert((volume.id, volume.path.clone()))
+            && seen_identity.insert(volume.stable_identity.clone())
+    });
+}
+
 fn topology_change_reason(
     previous: &VolumeDescriptor,
     current: &VolumeDescriptor,
@@ -3000,6 +3003,29 @@ mod tests {
         assert_eq!(report.volumes[0].kind, VolumeKind::Network);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_discovery_deduplicates_stable_identities_before_topology_maps() {
+        let first = unique_temp_dir("gfm-volume-discovery-stable-first");
+        let second = unique_temp_dir("gfm-volume-discovery-stable-second");
+        fs::write(first.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        fs::write(second.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        let mut first_volume = VolumeDescriptor::for_path(&first).unwrap();
+        let mut second_volume = VolumeDescriptor::for_path(&second).unwrap();
+        first_volume.stable_identity = "diskarbitration:uuid:DUPLICATE".to_string();
+        second_volume.stable_identity = first_volume.stable_identity.clone();
+        let expected_path = first_volume.path.clone().min(second_volume.path.clone());
+        let mut volumes = vec![second_volume, first_volume];
+
+        normalize_discovered_volumes(&mut volumes);
+
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].stable_identity, "diskarbitration:uuid:DUPLICATE");
+        assert_eq!(volumes[0].path, expected_path);
+
+        fs::remove_dir_all(first).unwrap();
+        fs::remove_dir_all(second).unwrap();
     }
 
     #[test]
