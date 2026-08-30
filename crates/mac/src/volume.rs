@@ -641,15 +641,18 @@ impl VolumeDiscoveryReport {
 
     pub fn volume_for_path(&self, path: &Path) -> Option<&VolumeDescriptor> {
         let lookup_path = normalized_lookup_path(path);
-        self.volumes
-            .iter()
-            .filter(|volume| volume_contains_path(volume, path, lookup_path.as_deref()))
-            .max_by_key(|volume| {
-                normalized_lookup_path(&volume.path)
-                    .unwrap_or_else(|| volume.path.clone())
-                    .components()
-                    .count()
-            })
+        let mut best = None;
+        let mut best_depth = 0;
+        for volume in &self.volumes {
+            let Some(depth) = volume_match_depth(volume, path, lookup_path.as_deref()) else {
+                continue;
+            };
+            if depth >= best_depth {
+                best = Some(volume);
+                best_depth = depth;
+            }
+        }
+        best
     }
 
     pub fn as_tsv(&self) -> String {
@@ -2534,20 +2537,29 @@ fn marker_stable_identity(marker: &str, id: VolumeId, path: &Path) -> String {
     )
 }
 
-fn volume_contains_path(
+fn volume_match_depth(
     volume: &VolumeDescriptor,
     path: &Path,
     normalized_path: Option<&Path>,
-) -> bool {
-    if path.starts_with(&volume.path) {
-        return true;
+) -> Option<usize> {
+    let direct_match = path.starts_with(&volume.path);
+    let normalized_volume_path = (direct_match || normalized_path.is_some())
+        .then(|| normalized_lookup_path(&volume.path))
+        .flatten();
+    if direct_match {
+        return Some(
+            normalized_volume_path
+                .as_deref()
+                .unwrap_or(&volume.path)
+                .components()
+                .count(),
+        );
     }
-    let Some(normalized_path) = normalized_path else {
-        return false;
-    };
-    normalized_lookup_path(&volume.path)
-        .as_deref()
-        .is_some_and(|volume_path| normalized_path.starts_with(volume_path))
+    let normalized_path = normalized_path?;
+    let normalized_volume_path = normalized_volume_path?;
+    normalized_path
+        .starts_with(&normalized_volume_path)
+        .then(|| normalized_volume_path.components().count())
 }
 
 fn normalized_lookup_path(path: &Path) -> Option<PathBuf> {
@@ -2933,6 +2945,32 @@ mod tests {
         assert_eq!(volume.kind, VolumeKind::Network);
 
         fs::remove_dir_all(volume.path.clone()).unwrap();
+    }
+
+    #[test]
+    fn volume_lookup_prefers_deepest_matching_volume() {
+        let root = unique_temp_dir("gfm-volume-deepest-root");
+        let nested_root = root.join("Nested Volume");
+        let file = nested_root.join("Project").join("Plan.md");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        fs::write(nested_root.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        fs::write(&file, "plan").unwrap();
+        let root_volume = VolumeDescriptor::for_path(&root).unwrap();
+        let nested_volume = VolumeDescriptor::for_path(&nested_root).unwrap();
+        let report = VolumeDiscoveryReport {
+            volumes: vec![root_volume, nested_volume.clone()],
+        };
+
+        let volume = report
+            .volume_for_path(&file)
+            .expect("nested file should resolve to a containing volume");
+
+        assert_eq!(volume.path, nested_root);
+        assert_eq!(volume.kind, VolumeKind::Network);
+        assert_eq!(volume.stable_identity, nested_volume.stable_identity);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
