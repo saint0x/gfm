@@ -614,15 +614,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?)?;
             let previous_path = required_path(args.next(), "volume-invalidation requires a path")?;
             let current = current_index_volume_descriptor(&previous_path)?;
-            let previous = IndexVolumeDescriptor::new(
-                previous_path
-                    .file_name()
-                    .and_then(|label| label.to_str())
-                    .unwrap_or("Volume"),
-                previous_path.clone(),
-                previous_class,
-                previous_mount,
-            );
+            let previous = previous_index_volume_descriptor_from_args(
+                IndexVolumeDescriptor::new(
+                    previous_path
+                        .file_name()
+                        .and_then(|label| label.to_str())
+                        .unwrap_or("Volume"),
+                    previous_path.clone(),
+                    previous_class,
+                    previous_mount,
+                ),
+                args,
+            )?;
             println!(
                 "{}",
                 VolumeInvalidationReport::evaluate(Some(&previous), current.as_ref()).as_tsv()
@@ -1269,6 +1272,34 @@ fn current_index_volume_descriptor(path: &Path) -> Result<Option<IndexVolumeDesc
             format!("volume invalidation current path existence unavailable: {err}"),
         )),
     }
+}
+
+fn previous_index_volume_descriptor_from_args(
+    mut previous: IndexVolumeDescriptor,
+    args: &mut impl Iterator<Item = String>,
+) -> Result<IndexVolumeDescriptor> {
+    if let Some(read_only) = optional_platform_bool(args.next(), "previous read-only")? {
+        previous = previous.with_read_only(Some(read_only));
+    }
+    if let Some(writable) = optional_platform_bool(args.next(), "previous writable")? {
+        previous = previous.with_writable(Some(writable));
+    }
+    if let Some(ejectable) = optional_platform_bool(args.next(), "previous ejectable")? {
+        previous = previous.with_ejectable(Some(ejectable));
+    }
+    if let Some(mountable) = optional_platform_bool(args.next(), "previous mountable")? {
+        previous = previous.with_mountable(Some(mountable));
+    }
+    if let Some(case_sensitive) = optional_platform_bool(args.next(), "previous case-sensitive")? {
+        previous = previous.with_case_sensitive(Some(case_sensitive));
+    }
+    if let Some(stable_identity) = optional_platform_string(args.next()) {
+        previous = previous.with_stable_identity(stable_identity);
+    }
+    if let Some(filesystem_signature) = optional_platform_string(args.next()) {
+        previous = previous.with_filesystem_signature(filesystem_signature);
+    }
+    Ok(previous)
 }
 
 fn parse_fileprovider_event(kind: &str, path: PathBuf, to: Option<PathBuf>) -> Result<FileEvent> {
@@ -2281,6 +2312,17 @@ fn parse_platform_bool(value: &str, name: &str) -> Result<bool> {
             "{name} must be true or false; got `{value}`"
         ))),
     }
+}
+
+fn optional_platform_bool(value: Option<String>, name: &str) -> Result<Option<bool>> {
+    value
+        .filter(|value| value != "-")
+        .map(|value| parse_platform_bool(&value, name))
+        .transpose()
+}
+
+fn optional_platform_string(value: Option<String>) -> Option<String> {
+    value.filter(|value| value != "-")
 }
 
 #[cfg(test)]

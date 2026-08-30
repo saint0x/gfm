@@ -4112,6 +4112,44 @@ fn reports_volume_invalidation_from_binary() {
 }
 
 #[test]
+fn volume_invalidation_accepts_previous_capability_snapshot_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-invalidation-capability-{}",
+        std::process::id()
+    ));
+    let external = root.join("Work Drive");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-invalidation")
+        .arg("external")
+        .arg("mounted")
+        .arg(&external)
+        .args(["true", "false", "true", "false", "-", "-", "-"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-invalidation\tpath="));
+    assert!(stdout.contains("\tprevious-read-only=true\t"));
+    assert!(stdout.contains("\tcurrent-read-only=false\t"));
+    assert!(stdout.contains("\tprevious-writable=false\t"));
+    assert!(stdout.contains("\tcurrent-writable=true\t"));
+    assert!(stdout.contains("\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.contains("\treason=volume-read-only-changed\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn volume_invalidation_surfaces_unavailable_current_path_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-invalidation-unavailable-{}",

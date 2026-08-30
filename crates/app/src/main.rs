@@ -843,7 +843,7 @@ fn print_usage() {
   gfm volume-operation <eject|unmount|mount> <path>
   gfm volume-mount-bsd <bsd-name>
   gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]
-  gfm volume-invalidation <previous-class> <previous-mount> <path>
+  gfm volume-invalidation <previous-class> <previous-mount> <path> [previous-read-only previous-writable previous-ejectable previous-mountable previous-case-sensitive previous-stable-id previous-filesystem-signature]
   gfm volume-event-index-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-event-state-index-invalidation <previous-paths...> -- <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-case-sensitivity-invalidation <previous:true|false> <current:true|false>
