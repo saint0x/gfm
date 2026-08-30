@@ -2719,52 +2719,6 @@ fn sidebar_fileprovider_rename_deduplicates_repeated_event_path_admission_from_b
 }
 
 #[test]
-fn sidebar_fileprovider_rename_deduplicates_repeated_event_path_admission_from_binary() {
-    let root = std::env::temp_dir().join(format!(
-        "gfm-sidebar-fileprovider-rename-dedup-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    let state = root.join("fileprovider-state.tsv");
-    let item = root.join("Remote.icloud-placeholder");
-    std::fs::write(&item, "placeholder").unwrap();
-    mark_evicted_fixture(&item);
-    std::fs::write(
-        &state,
-        format!("gfm-fileprovider-state-v1\nevicted\t{}\n", item.display()),
-    )
-    .unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
-        .arg("ui-sidebar-fileprovider-observed-invalidation")
-        .arg(&state)
-        .arg("rename")
-        .arg(&item)
-        .arg(&item)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert_eq!(
-        worker_admission_count_with_intent(
-            &stderr,
-            "ui fileprovider sidebar observed invalidation",
-            &root,
-            "read",
-        ),
-        1,
-        "{stderr}"
-    );
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
 fn reports_sidebar_fileprovider_observer_probe_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-sidebar-fileprovider-observer-probe-{}",
