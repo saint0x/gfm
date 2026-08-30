@@ -1,6 +1,6 @@
 use crate::{IndexSnapshot, IndexVolumeState};
 use gfm_jobs::Cancellation;
-use gfm_store::read_records;
+use gfm_store::read_records_checked;
 use gfm_types::{GfmError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -156,7 +156,7 @@ fn plan_persistent_index_recovery_checked(
     }
 
     check_control()?;
-    let records = match read_records(&records_path) {
+    let records = match read_records_checked(&records_path, &mut check_control) {
         Ok(records) => records,
         Err(err) => {
             return Ok(PersistentIndexPlan {
@@ -349,7 +349,7 @@ where
         PersistentIndexAction::Ready => {}
         PersistentIndexAction::RebuildState | PersistentIndexAction::MigrateState => {
             check_control()?;
-            write_state_from_records(root, records_path, state_path)?;
+            write_state_from_records(root, records_path, state_path, &mut check_control)?;
             check_control()?;
             rebuilt_state = true;
         }
@@ -385,15 +385,25 @@ where
     })
 }
 
-fn write_state_from_records(root: &Path, records_path: &Path, state_path: &Path) -> Result<()> {
-    let records = read_records(records_path)?;
+fn write_state_from_records(
+    root: &Path,
+    records_path: &Path,
+    state_path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let records = read_records_checked(records_path, &mut check_control)?;
+    check_control()?;
     let snapshot = IndexSnapshot {
         root: root.to_path_buf(),
         records,
         inaccessible: Vec::new(),
     };
+    check_control()?;
     let previous = IndexVolumeState::read(state_path).ok();
+    check_control()?;
     let state = snapshot.volume_state(records_path.to_path_buf(), previous.as_ref())?;
+    check_control()?;
     state.write(state_path)
 }
 

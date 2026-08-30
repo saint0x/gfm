@@ -30,7 +30,7 @@ use gfm_jobs::{
     TaskStatus, WorkerPool,
 };
 use gfm_mac::AccessIntent;
-use gfm_store::{read_records, ContentArchiveManifest};
+use gfm_store::{read_records_checked, ContentArchiveManifest};
 use gfm_types::{GfmError, Result, SearchHit};
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
@@ -1591,7 +1591,7 @@ pub(crate) fn run_content_job(
                     &job_spec.content_path,
                     "background content index",
                 )? {
-                    read_records(&job_spec.records_path)?
+                    read_records_checked(&job_spec.records_path, || cancellation.check())?
                 } else {
                     Vec::new()
                 };
