@@ -1,5 +1,6 @@
 use crate::access::{
-    preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
+    preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
+    preflight_volume_access_scope, preflight_volume_access_scope_with_report, ScopedAccessGuard,
 };
 use crate::content::run_content_search;
 use crate::extract::extraction_budget_profile;
@@ -16,7 +17,7 @@ use gfm_index::{
 };
 use gfm_jobs::Cancellation;
 use gfm_jobs::Priority;
-use gfm_mac::AccessIntent;
+use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_store::{
     atomic_write_checked, ContentArchive, ContentArchiveManifest, MetadataField,
     MmapContentArchive, MmapContentSet, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive,
@@ -2132,17 +2133,52 @@ impl OwnedSidecarIndexAccessPaths {
             content: &self.content,
         }
     }
+}
 
-    fn paths_with_roles(&self) -> [(&Path, &'static str); 7] {
-        [
-            (&self.records, "records"),
-            (&self.columns, "columns"),
-            (&self.metadata, "metadata"),
-            (&self.prefixes, "prefixes"),
-            (&self.substrings, "substrings"),
-            (&self.fuzzy, "fuzzy"),
-            (&self.content, "content"),
-        ]
+#[derive(Clone)]
+struct SidecarVolumeAccessReport {
+    path: PathBuf,
+    role: &'static str,
+    volume_report: VolumeDiscoveryReport,
+}
+
+#[derive(Clone)]
+struct SidecarVolumeAccessReports {
+    entries: Vec<SidecarVolumeAccessReport>,
+}
+
+impl SidecarVolumeAccessReports {
+    fn for_paths(paths: SidecarIndexAccessPaths<'_>) -> Self {
+        let entries = unique_sidecar_search_paths(paths.paths_with_roles())
+            .into_iter()
+            .map(|(path, role)| SidecarVolumeAccessReport {
+                path: path.to_path_buf(),
+                role,
+                volume_report: VolumeDiscoveryReport::for_containing_path(path),
+            })
+            .collect();
+        Self { entries }
+    }
+
+    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+        for entry in &self.entries {
+            preflight_volume_access_scope_with_report(
+                &entry.path,
+                AccessIntent::Read,
+                &format!("{worker} {}", entry.role),
+                &entry.volume_report,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.entries.iter().find_map(|entry| {
+            entry
+                .volume_report
+                .volume_for_path(&entry.path)
+                .map(|volume| volume.id)
+        })
     }
 }
 
@@ -2162,11 +2198,11 @@ fn run_sidecar_index_search(
     retry_probe: Option<PathBuf>,
 ) -> Result<SidecarSearchOutput> {
     const WORKER: &str = "sidecar search";
-    preflight_sidecar_index_volume_access(&paths, WORKER)?;
+    let volume_reports = preflight_sidecar_index_volume_access(&paths, WORKER)?;
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
     }
-    let volume = sidecar_index_volume(&paths);
+    let volume = volume_reports.first_volume();
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -2181,7 +2217,7 @@ fn run_sidecar_index_search(
                 fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
             }
             let _access =
-                preflight_sidecar_index_search_access_checked(paths.borrowed(), WORKER, || {
+                preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
                     cancellation.check()
                 })?;
             cancellation.check()?;
@@ -2250,11 +2286,11 @@ fn run_sidecar_index_session(
     retry_probe: Option<PathBuf>,
 ) -> Result<SidecarSessionOutput> {
     const WORKER: &str = "sidecar session";
-    preflight_sidecar_index_volume_access(&paths, WORKER)?;
+    let volume_reports = preflight_sidecar_index_volume_access(&paths, WORKER)?;
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
     }
-    let volume = sidecar_index_volume(&paths);
+    let volume = volume_reports.first_volume();
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -2269,7 +2305,7 @@ fn run_sidecar_index_session(
                 fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
             }
             let _access =
-                preflight_sidecar_index_search_access_checked(paths.borrowed(), WORKER, || {
+                preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
                     cancellation.check()
                 })?;
             cancellation.check()?;
@@ -2320,11 +2356,11 @@ fn run_sidecar_index_budget(
     retry_probe: Option<PathBuf>,
 ) -> Result<SidecarSearchOutput> {
     const WORKER: &str = "sidecar budget";
-    preflight_sidecar_index_volume_access(&paths, WORKER)?;
+    let volume_reports = preflight_sidecar_index_volume_access(&paths, WORKER)?;
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
     }
-    let volume = sidecar_index_volume(&paths);
+    let volume = volume_reports.first_volume();
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -2339,7 +2375,7 @@ fn run_sidecar_index_budget(
                 fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
             }
             let _access =
-                preflight_sidecar_index_search_access_checked(paths.borrowed(), WORKER, || {
+                preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
                     cancellation.check()
                 })?;
             cancellation.check()?;
@@ -2369,11 +2405,11 @@ fn run_sidecar_index_volume_scope(
     retry_probe: Option<PathBuf>,
 ) -> Result<SidecarSearchOutput> {
     const WORKER: &str = "sidecar volume scope";
-    preflight_sidecar_index_volume_access(&paths, WORKER)?;
+    let volume_reports = preflight_sidecar_index_volume_access(&paths, WORKER)?;
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
     }
-    let volume = sidecar_index_volume(&paths);
+    let volume = volume_reports.first_volume();
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -2389,7 +2425,7 @@ fn run_sidecar_index_volume_scope(
                 fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
             }
             let _access =
-                preflight_sidecar_index_search_access_checked(paths.borrowed(), WORKER, || {
+                preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
                     cancellation.check()
                 })?;
             cancellation.check()?;
@@ -2444,31 +2480,24 @@ fn open_sidecar_index_query_session(
 fn preflight_sidecar_index_volume_access(
     paths: &OwnedSidecarIndexAccessPaths,
     worker: &str,
-) -> Result<()> {
-    for (path, role) in unique_sidecar_search_paths(paths.paths_with_roles()) {
-        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} {role}"))?;
-    }
-    Ok(())
-}
-
-fn sidecar_index_volume(paths: &OwnedSidecarIndexAccessPaths) -> Option<VolumeId> {
-    paths
-        .paths_with_roles()
-        .into_iter()
-        .find_map(|(path, _)| path_volume(path))
+) -> Result<SidecarVolumeAccessReports> {
+    let reports = SidecarVolumeAccessReports::for_paths(paths.borrowed());
+    reports.preflight_volumes(worker)?;
+    Ok(reports)
 }
 
 fn preflight_sidecar_index_search_access_checked(
-    paths: SidecarIndexAccessPaths<'_>,
+    volume_reports: &SidecarVolumeAccessReports,
     worker: &str,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::new();
-    for (path, role) in unique_sidecar_search_paths(paths.paths_with_roles()) {
-        guards.push(preflight_access_scope_checked(
-            path,
+    for entry in &volume_reports.entries {
+        guards.push(preflight_access_scope_checked_with_volume_report(
+            &entry.path,
             AccessIntent::Read,
-            &format!("{worker} {role}"),
+            &format!("{worker} {}", entry.role),
+            &entry.volume_report,
             &mut check_control,
         )?);
     }
@@ -2946,8 +2975,9 @@ mod tests {
             content: root.join("content.gfmcontent"),
         };
 
+        let volume_reports = SidecarVolumeAccessReports::for_paths(paths.borrowed());
         let result = preflight_sidecar_index_search_access_checked(
-            paths.borrowed(),
+            &volume_reports,
             "sidecar index access",
             || Err(GfmError::Cancelled),
         );
