@@ -71,7 +71,7 @@ pub(crate) fn refresh_permission_state_at_path_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<PermissionStateInvalidationReport> {
     check_control()?;
-    let probe_path = write_probe_existing_ancestor(path)?;
+    let probe_path = write_probe_existing_ancestor_checked(path, &mut check_control)?;
     check_control()?;
     let report = VolumeDiscoveryReport::for_containing_path(&probe_path);
     check_control()?;
@@ -220,7 +220,11 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
     }
 }
 
-fn write_probe_existing_ancestor(path: &Path) -> Result<std::path::PathBuf> {
+fn write_probe_existing_ancestor_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<std::path::PathBuf> {
+    check_control()?;
     let mut candidate = write_probe_path(path)?.to_path_buf();
     while !candidate.try_exists().map_err(|err| {
         GfmError::io(
@@ -228,6 +232,7 @@ fn write_probe_existing_ancestor(path: &Path) -> Result<std::path::PathBuf> {
             format!("permission state ancestor existence unavailable: {err}"),
         )
     })? {
+        check_control()?;
         let Some(parent) = candidate.parent() else {
             break;
         };
@@ -235,7 +240,9 @@ fn write_probe_existing_ancestor(path: &Path) -> Result<std::path::PathBuf> {
             break;
         }
         candidate = parent.to_path_buf();
+        check_control()?;
     }
+    check_control()?;
     Ok(candidate)
 }
 
@@ -421,6 +428,49 @@ mod tests {
             })
             .count();
         assert_eq!(leftovers, 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_state_honors_pre_cancelled_control_before_ancestor_probe() {
+        let state = std::env::temp_dir()
+            .join(format!(
+                "gfm-permission-refresh-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("runtime")
+            .join("permission-state.tsv");
+
+        let err = refresh_permission_state_at_path_checked(&state, || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!state.exists());
+        assert!(!state.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn write_probe_existing_ancestor_checked_can_cancel_while_climbing() {
+        let root = unique_temp_dir("gfm-permission-refresh-ancestor-cancel");
+        let state = root
+            .join("missing")
+            .join("deep")
+            .join("permission-state.tsv");
+        let mut checks = 0usize;
+
+        let err = write_probe_existing_ancestor_checked(&state, || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(checks >= 3);
+        assert!(!root.join("missing").exists());
         fs::remove_dir_all(root).unwrap();
     }
 
