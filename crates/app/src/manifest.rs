@@ -341,7 +341,7 @@ fn run_manifest_write(
         let _access = retain_manifest_write_access(&manifest_path, &archives)?;
         cancellation.check()?;
         let manifest = ContentArchiveManifest::new(archives)?;
-        manifest.write(&manifest_path)?;
+        manifest.write_checked(&manifest_path, || cancellation.check())?;
         Ok(format!(
             "content-manifest\tarchives={}",
             manifest.archives.len()

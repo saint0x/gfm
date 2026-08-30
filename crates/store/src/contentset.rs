@@ -210,21 +210,33 @@ impl ContentArchiveManifest {
     }
 
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        self.write_checked(path, || Ok(()))
+    }
+
+    pub fn write_checked(
+        &self,
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
         let path = path.as_ref();
+        check_control()?;
         if self.archives.is_empty() {
             return Err(GfmError::Format(
                 "content manifest requires at least one archive".to_string(),
             ));
         }
-        durable::atomic_write(path, |writer| {
-            writeln!(writer, "{CONTENT_MANIFEST_HEADER}")?;
+        durable::atomic_write_checked(path, &mut check_control, |writer, check_control| {
+            writeln!(writer, "{CONTENT_MANIFEST_HEADER}").map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
             for archive in &self.archives {
+                check_control()?;
                 writeln!(
                     writer,
                     "archive\t{}\t{}",
                     tier_name(archive.tier),
                     escape(&archive.path.to_string_lossy())
-                )?;
+                )
+                .map_err(|err| GfmError::io(path, err))?;
             }
             Ok(())
         })
@@ -571,25 +583,46 @@ impl ContentManifestPromotionJournal {
     }
 
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        self.write_checked(path, || Ok(()))
+    }
+
+    pub fn write_checked(
+        &self,
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
         let path = path.as_ref();
-        durable::atomic_write(path, |writer| {
-            writeln!(writer, "{CONTENT_PROMOTION_JOURNAL_HEADER}")?;
+        check_control()?;
+        durable::atomic_write_checked(path, &mut check_control, |writer, check_control| {
+            writeln!(writer, "{CONTENT_PROMOTION_JOURNAL_HEADER}")
+                .map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
             for archive in &self.previous.archives {
+                check_control()?;
                 writeln!(
                     writer,
                     "previous\t{}\t{}",
                     tier_name(archive.tier),
                     escape(&archive.path.to_string_lossy())
-                )?;
+                )
+                .map_err(|err| GfmError::io(path, err))?;
             }
+            check_control()?;
             writeln!(
                 writer,
                 "new\t{}\t{}",
                 tier_name(self.new_archive.tier),
                 escape(&self.new_archive.path.to_string_lossy())
-            )?;
-            for path in &self.retired_paths {
-                writeln!(writer, "retire\t{}", escape(&path.to_string_lossy()))?;
+            )
+            .map_err(|err| GfmError::io(path, err))?;
+            for retired_path in &self.retired_paths {
+                check_control()?;
+                writeln!(
+                    writer,
+                    "retire\t{}",
+                    escape(&retired_path.to_string_lossy())
+                )
+                .map_err(|err| GfmError::io(path, err))?;
             }
             Ok(())
         })
@@ -615,6 +648,14 @@ pub fn write_content_archive_manifest(
     manifest: &ContentArchiveManifest,
 ) -> Result<()> {
     manifest.write(path)
+}
+
+pub fn write_content_archive_manifest_checked(
+    path: impl AsRef<Path>,
+    manifest: &ContentArchiveManifest,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    manifest.write_checked(path, check_control)
 }
 
 pub fn read_content_archive_manifest(path: impl AsRef<Path>) -> Result<ContentArchiveManifest> {
@@ -651,14 +692,16 @@ pub fn promote_content_archive_manifest_checked(
     )?;
     let journal_path = content_manifest_promotion_journal_path(manifest_path);
     check_control()?;
-    journal.write(&journal_path)?;
+    journal.write_checked(&journal_path, &mut check_control)?;
     check_control()?;
     let promotion =
         manifest.promote_archive_checked(manifest_path, new_archive, &retired_paths, || {
             check_control()
         })?;
     check_control()?;
-    promotion.manifest.write(manifest_path)?;
+    promotion
+        .manifest
+        .write_checked(manifest_path, &mut check_control)?;
     check_control()?;
     remove_journal_if_exists(&journal_path)?;
     Ok(promotion)
@@ -805,7 +848,9 @@ pub fn recover_content_manifest_promotion_checked(
             check_control()?;
             let promotion = journal.promotion_checked(manifest_path, &mut check_control)?;
             check_control()?;
-            promotion.manifest.write(manifest_path)?;
+            promotion
+                .manifest
+                .write_checked(manifest_path, &mut check_control)?;
             check_control()?;
             remove_journal_if_exists(&before.journal_path)?;
             check_control()?;

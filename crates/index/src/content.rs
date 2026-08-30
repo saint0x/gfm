@@ -649,7 +649,9 @@ impl BackgroundContentIndexer {
             },
             &[] as &[PathBuf],
         )?;
-        promotion.manifest.write(manifest_path)?;
+        promotion
+            .manifest
+            .write_checked(manifest_path, || cancellation.check())?;
         let cleanup_plan = promotion.manifest.plan_inactive_archive_cleanup(
             manifest_path,
             &promotion.retired_archives,

@@ -48,11 +48,11 @@ pub use contentset::{
     plan_inactive_content_archive_cleanup_checked, promote_content_archive_manifest,
     promote_content_archive_manifest_checked, read_content_archive_manifest,
     recover_content_manifest_promotion, recover_content_manifest_promotion_checked,
-    write_content_archive_manifest, ContentArchiveCleanupAction, ContentArchiveCleanupPlan,
-    ContentArchiveCleanupPolicy, ContentArchiveCleanupReport, ContentArchiveManifest,
-    ContentArchiveManifestEntry, ContentManifestPromotion, ContentManifestPromotionJournal,
-    ContentManifestPromotionRecovery, ContentManifestPromotionRecoveryAction,
-    ContentManifestPromotionRecoveryPlan,
+    write_content_archive_manifest, write_content_archive_manifest_checked,
+    ContentArchiveCleanupAction, ContentArchiveCleanupPlan, ContentArchiveCleanupPolicy,
+    ContentArchiveCleanupReport, ContentArchiveManifest, ContentArchiveManifestEntry,
+    ContentManifestPromotion, ContentManifestPromotionJournal, ContentManifestPromotionRecovery,
+    ContentManifestPromotionRecoveryAction, ContentManifestPromotionRecoveryPlan,
 };
 pub use dictionary::{
     dictionary_term_report_from_records, dictionary_terms_from_records, read_dictionary,

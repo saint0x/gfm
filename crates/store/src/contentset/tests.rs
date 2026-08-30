@@ -273,6 +273,45 @@ fn content_archive_manifest_checked_read_honors_pre_cancelled_control_before_fil
 }
 
 #[test]
+fn checked_content_archive_manifest_write_preserves_existing_file_when_cancelled_before_publish() {
+    let dir = temp_dir("gfm-content-manifest-write-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: PathBuf::from("stable.gfmcontent"),
+    }])
+    .unwrap();
+    let replacement = ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Warm,
+        path: PathBuf::from("replacement.gfmcontent"),
+    }])
+    .unwrap();
+    original.write(&manifest_path).unwrap();
+    let before = std::fs::read(&manifest_path).unwrap();
+    let mut checks = 0usize;
+
+    let result = replacement.write_checked(&manifest_path, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert_eq!(std::fs::read(&manifest_path).unwrap(), before);
+    assert_eq!(
+        ContentArchiveManifest::read(&manifest_path).unwrap(),
+        original
+    );
+    assert!(!has_contentset_atomic_temp_file(&manifest_path));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn mmap_content_set_checked_manifest_open_can_cancel_before_archive_probe() {
     let dir = temp_dir("gfm-content-manifest-set-open-cancel");
     let manifest_path = dir.join("content.gfmmanifest");
@@ -562,6 +601,59 @@ fn content_promotion_journal_checked_read_honors_pre_cancelled_control_before_fi
 
     assert!(matches!(result, Err(GfmError::Cancelled)));
     assert!(!journal_path.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checked_content_promotion_journal_write_preserves_existing_file_when_cancelled_before_publish() {
+    let dir = temp_dir("gfm-content-promotion-journal-write-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+    std::fs::create_dir_all(&dir).unwrap();
+    let previous = ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: PathBuf::from("stable.gfmcontent"),
+    }])
+    .unwrap();
+    let original = ContentManifestPromotionJournal::new(
+        previous.clone(),
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: PathBuf::from("new-stable.gfmcontent"),
+        },
+        vec![PathBuf::from("retired-stable.gfmcontent")],
+    )
+    .unwrap();
+    let replacement = ContentManifestPromotionJournal::new(
+        previous,
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Cold,
+            path: PathBuf::from("replacement.gfmcontent"),
+        },
+        vec![PathBuf::from("retired-replacement.gfmcontent")],
+    )
+    .unwrap();
+    original.write(&journal_path).unwrap();
+    let before = std::fs::read(&journal_path).unwrap();
+    let mut checks = 0usize;
+
+    let result = replacement.write_checked(&journal_path, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert_eq!(std::fs::read(&journal_path).unwrap(), before);
+    assert_eq!(
+        ContentManifestPromotionJournal::read(&journal_path).unwrap(),
+        original
+    );
+    assert!(!has_contentset_atomic_temp_file(&journal_path));
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -1016,4 +1108,23 @@ fn temp_dir(prefix: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ))
+}
+
+fn has_contentset_atomic_temp_file(path: &std::path::Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let prefix = format!(".{file_name}.{}.", std::process::id());
+    std::fs::read_dir(parent)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".tmp"))
+        })
 }

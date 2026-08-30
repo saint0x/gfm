@@ -240,7 +240,7 @@ pub fn recover_content_manifest_checked(
         ContentManifestRecoveryAction::WriteDiscoveredManifest
         | ContentManifestRecoveryAction::PruneInvalidArchives => {
             check_control()?;
-            write_recovered_manifest(manifest_path, &before)?;
+            write_recovered_manifest_checked(manifest_path, &before, &mut check_control)?;
             check_control()?;
             wrote_manifest = true;
         }
@@ -249,7 +249,7 @@ pub fn recover_content_manifest_checked(
             let quarantine_path = quarantine_manifest(manifest_path, quarantine_dir)?;
             check_control()?;
             quarantined_manifest_path = Some(quarantine_path);
-            write_recovered_manifest(manifest_path, &before)?;
+            write_recovered_manifest_checked(manifest_path, &before, &mut check_control)?;
             check_control()?;
             wrote_manifest = true;
         }
@@ -307,16 +307,17 @@ fn plan_from_discovered(
     }
 }
 
-fn write_recovered_manifest(
+fn write_recovered_manifest_checked(
     manifest_path: &Path,
     plan: &ContentManifestRecoveryPlan,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<()> {
     let entries = plan
         .valid_archives
         .iter()
         .map(|health| health.entry.clone())
         .collect::<Vec<_>>();
-    ContentArchiveManifest::new(entries)?.write(manifest_path)
+    ContentArchiveManifest::new(entries)?.write_checked(manifest_path, check_control)
 }
 
 fn classify_archives(
