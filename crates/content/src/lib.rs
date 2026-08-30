@@ -118,12 +118,13 @@ impl Extractor {
             return Ok(None);
         };
         check_control()?;
-        Ok(build_snippet(
+        build_snippet_checked(
             &document.text,
             terms,
             phrases,
             context_bytes.max(1),
-        ))
+            &mut check_control,
+        )
     }
 
     pub fn extract_path(&self, path: impl AsRef<Path>) -> Result<Option<ContentDocument>> {
@@ -345,13 +346,14 @@ fn report_without_metadata(
     }
 }
 
-fn build_snippet(
+fn build_snippet_checked(
     text: &str,
     terms: &[String],
     phrases: &[String],
     context_bytes: usize,
-) -> Option<SearchSnippet> {
-    let normalized = text.to_lowercase();
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<Option<SearchSnippet>> {
+    let normalized = lowercase_checked(text, check_control)?;
     let mut needles: Vec<_> = phrases
         .iter()
         .chain(terms.iter())
@@ -360,26 +362,43 @@ fn build_snippet(
             (!needle.is_empty()).then_some(needle)
         })
         .collect();
+    check_control()?;
     needles.sort_by_key(|needle| std::cmp::Reverse(needle.len()));
 
-    let (match_start, match_end) = needles.iter().find_map(|needle| {
-        normalized
-            .find(needle)
-            .map(|start| (start, start + needle.len()))
-    })?;
+    let mut matched = None;
+    for needle in &needles {
+        check_control()?;
+        if let Some(start) = normalized.find(needle) {
+            matched = Some((start, start + needle.len()));
+            break;
+        }
+    }
+    let Some((match_start, match_end)) = matched else {
+        return Ok(None);
+    };
+    check_control()?;
     let snippet_start = floor_char_boundary(text, match_start.saturating_sub(context_bytes));
     let snippet_end = ceil_char_boundary(text, (match_end + context_bytes).min(text.len()));
     let snippet_text = text[snippet_start..snippet_end].to_string();
     let highlight_start = match_start.saturating_sub(snippet_start);
     let highlight_end = match_end.saturating_sub(snippet_start);
 
-    Some(SearchSnippet {
+    Ok(Some(SearchSnippet {
         text: snippet_text,
         highlights: vec![SnippetHighlight {
             start: highlight_start,
             end: highlight_end,
         }],
-    })
+    }))
+}
+
+fn lowercase_checked(input: &str, check_control: &mut dyn FnMut() -> Result<()>) -> Result<String> {
+    let mut output = String::with_capacity(input.len());
+    for ch in input.chars() {
+        check_control()?;
+        output.extend(ch.to_lowercase());
+    }
+    Ok(output)
 }
 
 fn floor_char_boundary(text: &str, mut index: usize) -> usize {

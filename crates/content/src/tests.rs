@@ -317,6 +317,37 @@ fn extracts_bounded_snippet_with_highlight() {
 }
 
 #[test]
+fn snippet_for_record_checked_can_cancel_while_lowercasing_document_text() {
+    let root = unique_temp_dir("gfm-content-snippet-cancel");
+    let path = root.join("large.md");
+    fs::write(
+        &path,
+        format!("{} exact snippet marker", "before ".repeat(64 * 1024)),
+    )
+    .unwrap();
+    let record = record_for_path(&path);
+    let mut checks = 0usize;
+
+    let result = Extractor::default().snippet_for_record_checked(
+        &record,
+        &["marker".to_string()],
+        &[],
+        8,
+        || {
+            checks += 1;
+            if checks >= 512 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extracts_uncompressed_pdf_text() {
     let root = unique_temp_dir("gfm-content-pdf");
     let path = root.join("brief.pdf");
