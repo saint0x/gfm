@@ -1389,15 +1389,28 @@ fn strong_provider_path_hint(path: &Path) -> bool {
 
 impl FileProviderOperationReport {
     pub fn execute(path: impl AsRef<Path>, operation: FileProviderOperation) -> Result<Self> {
+        Self::execute_checked(path, operation, || Ok(()))
+    }
+
+    pub fn execute_checked(
+        path: impl AsRef<Path>,
+        operation: FileProviderOperation,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
         let path = path.as_ref().to_path_buf();
-        let before = FileProviderStateReport::read_path(&path)?;
+        check_control()?;
+        let before = FileProviderStateReport::read_path_checked(&path, &mut check_control)?;
+        check_control()?;
         let command = match operation {
             FileProviderOperation::Download => before.commands.download,
             FileProviderOperation::Evict => before.commands.evict,
         };
+        check_control()?;
         if path.try_exists().ok() == Some(false) {
             return Ok(Self::missing(path, operation, before));
         }
+        check_control()?;
         if before.storage_state == CloudStorageState::Conflict {
             return Ok(Self::refused(
                 path,
@@ -1406,6 +1419,7 @@ impl FileProviderOperationReport {
                 "provider-conflict-requires-resolution",
             ));
         }
+        check_control()?;
         if before.commands.reason.as_deref() == Some("not-native-provider-backed") {
             return Ok(Self::refused(
                 path,
@@ -1414,6 +1428,7 @@ impl FileProviderOperationReport {
                 "not-native-provider-backed",
             ));
         }
+        check_control()?;
         if command != CloudCommandState::Enabled {
             return Ok(Self::refused(
                 path,
@@ -1422,6 +1437,7 @@ impl FileProviderOperationReport {
                 "operation-disabled-for-current-state",
             ));
         }
+        check_control()?;
         if before.domain == FileProviderDomain::Local || !before.source_contains_native_resource() {
             return Ok(Self::refused(
                 path,
@@ -1431,13 +1447,15 @@ impl FileProviderOperationReport {
             ));
         }
 
+        check_control()?;
         let result = match operation {
             FileProviderOperation::Download => start_downloading_ubiquitous_item(&path),
             FileProviderOperation::Evict => evict_ubiquitous_item(&path),
         };
         match result.status {
             NativeFileProviderOperationStatus::Completed => {
-                let after = FileProviderStateReport::read_path(&path).ok();
+                let after =
+                    FileProviderStateReport::read_path_checked(&path, &mut check_control).ok();
                 Ok(Self {
                     path,
                     operation,
@@ -4675,6 +4693,23 @@ mod tests {
         assert_eq!(evict.before.storage_state, CloudStorageState::LocalOnly);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_operation_honors_pre_cancelled_work_before_path_probe() {
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-fileprovider-operation-cancelled\0path".to_vec(),
+        ));
+
+        let err = FileProviderOperationReport::execute_checked(
+            &path,
+            FileProviderOperation::Download,
+            || Err(GfmError::Cancelled),
+        )
+        .expect_err("pre-cancelled FileProvider operation must stop before probing path");
+
+        assert_eq!(err, GfmError::Cancelled);
     }
 
     #[test]

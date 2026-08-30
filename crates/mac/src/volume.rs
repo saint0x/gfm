@@ -5,12 +5,14 @@ use gfm_mac_sys::{
 use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
 const VOLUME_MARKER: &str = ".gfm-volume-kind";
+const VOLUME_MARKER_LINE_LIMIT: u64 = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VolumeKind {
@@ -2588,8 +2590,13 @@ fn marker_kind(path: &Path) -> Option<String> {
     if !marker_fixture_path_allowed(path) {
         return None;
     }
-    let value = fs::read_to_string(path.join(VOLUME_MARKER)).ok()?;
-    let value = value.lines().next()?.trim().to_ascii_lowercase();
+    let file = fs::File::open(path.join(VOLUME_MARKER)).ok()?;
+    let mut value = String::new();
+    BufReader::new(file)
+        .take(VOLUME_MARKER_LINE_LIMIT)
+        .read_line(&mut value)
+        .ok()?;
+    let value = value.trim().to_ascii_lowercase();
     (!value.is_empty()).then_some(value)
 }
 

@@ -1744,7 +1744,7 @@ fn run_fileprovider_operation(
             cancellation.check()
         })?;
         cancellation.check()?;
-        FileProviderOperationReport::execute(path, operation)
+        FileProviderOperationReport::execute_checked(path, operation, || cancellation.check())
     })
 }
 
