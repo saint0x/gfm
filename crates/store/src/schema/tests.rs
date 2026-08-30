@@ -5,7 +5,7 @@ use crate::{
     write_record_columns, write_records, write_substring_postings, ContentArchiveManifestEntry,
     ContentMergeTier, MetadataField, MetadataPosting,
 };
-use gfm_types::{ContentPosting, FileId, FileKind, FileRecord, VolumeId};
+use gfm_types::{ContentPosting, FileId, FileKind, FileRecord, GfmError, VolumeId};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -116,6 +116,19 @@ fn archive_schema_inspection_surfaces_path_probe_failures() {
         .detail
         .as_deref()
         .is_some_and(|detail| detail.contains("archive schema existence unavailable")));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checked_archive_schema_inspection_honors_pre_cancelled_control_before_probe() {
+    let dir = temp_dir("gfm-schema-cancel");
+    let path = dir.join("archive-schema-unavailable".repeat(64));
+
+    let result = inspect_archive_schema_checked(ArchiveSchemaKind::Records, &path, || {
+        Err(GfmError::Cancelled)
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
     std::fs::remove_dir_all(dir).unwrap();
 }
 

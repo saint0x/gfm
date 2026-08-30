@@ -326,17 +326,118 @@ pub fn inspect_archive_schema(
     kind: ArchiveSchemaKind,
     path: impl AsRef<Path>,
 ) -> ArchiveSchemaReport {
+    inspect_archive_schema_checked(kind, path, || Ok(()))
+        .expect("uncancellable archive schema inspection cannot be cancelled")
+}
+
+pub fn inspect_archive_schema_checked(
+    kind: ArchiveSchemaKind,
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ArchiveSchemaReport> {
     let path = path.as_ref();
-    match inspect_archive_schema_result(kind, path) {
-        Ok(report) => report,
-        Err(detail) => ArchiveSchemaReport {
+    check_control()?;
+    match inspect_archive_schema_result_checked(kind, path, &mut check_control) {
+        Ok(report) => {
+            check_control()?;
+            Ok(report)
+        }
+        Err(detail) => {
+            check_control()?;
+            Ok(ArchiveSchemaReport {
+                kind,
+                path: path.to_path_buf(),
+                status: ArchiveSchemaStatus::Unreadable,
+                schema: None,
+                current_schema: kind.current_schema(),
+                detail: Some(detail.to_string()),
+            })
+        }
+    }
+}
+
+fn inspect_archive_schema_result_checked(
+    kind: ArchiveSchemaKind,
+    path: &Path,
+    check_control: &mut impl FnMut() -> Result<()>,
+) -> Result<ArchiveSchemaReport> {
+    check_control()?;
+    if !path
+        .try_exists()
+        .map_err(|err| GfmError::io(path, format!("archive schema existence unavailable: {err}")))?
+    {
+        return Ok(report(kind, path, ArchiveSchemaStatus::Missing, None, None));
+    }
+    check_control()?;
+    match kind {
+        ArchiveSchemaKind::Records => inspect_line_schema_checked(
             kind,
-            path: path.to_path_buf(),
-            status: ArchiveSchemaStatus::Unreadable,
-            schema: None,
-            current_schema: kind.current_schema(),
-            detail: Some(detail.to_string()),
-        },
+            path,
+            &[RECORD_CURRENT],
+            RECORD_LEGACY,
+            check_control,
+            |check_control| MmapRecordArchive::open_checked(path, check_control).map(|_| ()),
+        ),
+        ArchiveSchemaKind::Columns => inspect_magic_schema_checked(
+            kind,
+            path,
+            &[COLUMNS_CURRENT],
+            COLUMNS_LEGACY,
+            check_control,
+            |check_control| MmapRecordColumns::open_checked(path, check_control).map(|_| ()),
+        ),
+        ArchiveSchemaKind::Metadata => inspect_magic_schema_checked(
+            kind,
+            path,
+            &[METADATA_CURRENT],
+            METADATA_LEGACY,
+            check_control,
+            |check_control| MmapMetadataArchive::open_checked(path, check_control).map(|_| ()),
+        ),
+        ArchiveSchemaKind::Prefixes => inspect_magic_schema_checked(
+            kind,
+            path,
+            &[PREFIX_CURRENT],
+            &[],
+            check_control,
+            |check_control| MmapPrefixArchive::open_checked(path, check_control).map(|_| ()),
+        ),
+        ArchiveSchemaKind::Substrings => inspect_magic_schema_checked(
+            kind,
+            path,
+            &[SUBSTRING_CURRENT],
+            &[],
+            check_control,
+            |check_control| MmapSubstringArchive::open_checked(path, check_control).map(|_| ()),
+        ),
+        ArchiveSchemaKind::Fuzzy => inspect_magic_schema_checked(
+            kind,
+            path,
+            &[FUZZY_CURRENT],
+            &[],
+            check_control,
+            |check_control| MmapFuzzyArchive::open_checked(path, check_control).map(|_| ()),
+        ),
+        ArchiveSchemaKind::Dictionary => inspect_magic_schema_checked(
+            kind,
+            path,
+            &[DICTIONARY_CURRENT],
+            &[],
+            check_control,
+            |check_control| MmapDictionary::open_checked(path, check_control).map(|_| ()),
+        ),
+        ArchiveSchemaKind::Content => inspect_content_schema_checked(kind, path, check_control),
+        ArchiveSchemaKind::ContentManifest => inspect_line_schema_checked(
+            kind,
+            path,
+            &[CONTENT_MANIFEST_CURRENT],
+            &[],
+            check_control,
+            |check_control| {
+                check_control()?;
+                ContentArchiveManifest::read(path).map(|_| ())
+            },
+        ),
     }
 }
 
@@ -577,60 +678,11 @@ pub fn migrate_metadata_archive(
     })
 }
 
-fn inspect_archive_schema_result(
+fn inspect_content_schema_checked(
     kind: ArchiveSchemaKind,
     path: &Path,
+    check_control: &mut impl FnMut() -> Result<()>,
 ) -> Result<ArchiveSchemaReport> {
-    if !path
-        .try_exists()
-        .map_err(|err| GfmError::io(path, format!("archive schema existence unavailable: {err}")))?
-    {
-        return Ok(report(kind, path, ArchiveSchemaStatus::Missing, None, None));
-    }
-    match kind {
-        ArchiveSchemaKind::Records => {
-            inspect_line_schema(kind, path, &[RECORD_CURRENT], RECORD_LEGACY, || {
-                MmapRecordArchive::open(path).map(|_| ())
-            })
-        }
-        ArchiveSchemaKind::Columns => {
-            inspect_magic_schema(kind, path, &[COLUMNS_CURRENT], COLUMNS_LEGACY, || {
-                MmapRecordColumns::open(path).map(|_| ())
-            })
-        }
-        ArchiveSchemaKind::Metadata => {
-            inspect_magic_schema(kind, path, &[METADATA_CURRENT], METADATA_LEGACY, || {
-                MmapMetadataArchive::open(path).map(|_| ())
-            })
-        }
-        ArchiveSchemaKind::Prefixes => {
-            inspect_magic_schema(kind, path, &[PREFIX_CURRENT], &[], || {
-                MmapPrefixArchive::open(path).map(|_| ())
-            })
-        }
-        ArchiveSchemaKind::Substrings => {
-            inspect_magic_schema(kind, path, &[SUBSTRING_CURRENT], &[], || {
-                MmapSubstringArchive::open(path).map(|_| ())
-            })
-        }
-        ArchiveSchemaKind::Fuzzy => inspect_magic_schema(kind, path, &[FUZZY_CURRENT], &[], || {
-            MmapFuzzyArchive::open(path).map(|_| ())
-        }),
-        ArchiveSchemaKind::Dictionary => {
-            inspect_magic_schema(kind, path, &[DICTIONARY_CURRENT], &[], || {
-                MmapDictionary::open(path).map(|_| ())
-            })
-        }
-        ArchiveSchemaKind::Content => inspect_content_schema(kind, path),
-        ArchiveSchemaKind::ContentManifest => {
-            inspect_line_schema(kind, path, &[CONTENT_MANIFEST_CURRENT], &[], || {
-                ContentArchiveManifest::read(path).map(|_| ())
-            })
-        }
-    }
-}
-
-fn inspect_content_schema(kind: ArchiveSchemaKind, path: &Path) -> Result<ArchiveSchemaReport> {
     let max_len = CONTENT_LEGACY
         .iter()
         .chain([CONTENT_CURRENT].iter())
@@ -638,28 +690,36 @@ fn inspect_content_schema(kind: ArchiveSchemaKind, path: &Path) -> Result<Archiv
         .max()
         .unwrap_or(0);
     let mut bytes = vec![0; max_len];
+    check_control()?;
     let mut file = File::open(path).map_err(|err| gfm_types::GfmError::io(path, err))?;
+    check_control()?;
     let len = file
         .read(&mut bytes)
         .map_err(|err| gfm_types::GfmError::io(path, err))?;
     bytes.truncate(len);
+    check_control()?;
 
     if let Some(schema) = matching_magic(&bytes, &[CONTENT_CURRENT]) {
-        return validated_report(
+        return validated_report_checked(
             kind,
             path,
             ArchiveSchemaStatus::Current,
             Some(schema),
-            || MmapContentArchive::open(path).map(|_| ()),
+            check_control,
+            |check_control| MmapContentArchive::open_checked(path, check_control).map(|_| ()),
         );
     }
     if let Some(schema) = matching_magic(&bytes, CONTENT_LEGACY) {
-        return validated_report(
+        return validated_report_checked(
             kind,
             path,
             ArchiveSchemaStatus::Legacy,
             Some(schema),
-            || ContentArchive::open(path).map(|_| ()),
+            check_control,
+            |check_control| {
+                check_control()?;
+                ContentArchive::open(path).map(|_| ())
+            },
         );
     }
     Ok(report(
@@ -671,14 +731,17 @@ fn inspect_content_schema(kind: ArchiveSchemaKind, path: &Path) -> Result<Archiv
     ))
 }
 
-fn inspect_line_schema(
+fn inspect_line_schema_checked(
     kind: ArchiveSchemaKind,
     path: &Path,
     current: &[&str],
     legacy: &[&str],
-    validate: impl FnOnce() -> Result<()>,
+    check_control: &mut impl FnMut() -> Result<()>,
+    validate: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<()>,
 ) -> Result<ArchiveSchemaReport> {
+    check_control()?;
     let file = File::open(path).map_err(|err| gfm_types::GfmError::io(path, err))?;
+    check_control()?;
     let mut lines = BufReader::new(file).lines();
     let Some(line) = lines.next() else {
         return Ok(report(
@@ -690,6 +753,7 @@ fn inspect_line_schema(
         ));
     };
     let schema = line.map_err(|err| gfm_types::GfmError::io(path, err))?;
+    check_control()?;
     let status = if current.contains(&schema.as_str()) {
         ArchiveSchemaStatus::Current
     } else if legacy.contains(&schema.as_str()) {
@@ -703,15 +767,16 @@ fn inspect_line_schema(
             None,
         ));
     };
-    validated_report(kind, path, status, Some(schema), validate)
+    validated_report_checked(kind, path, status, Some(schema), check_control, validate)
 }
 
-fn inspect_magic_schema(
+fn inspect_magic_schema_checked(
     kind: ArchiveSchemaKind,
     path: &Path,
     current: &[&[u8]],
     legacy: &[&[u8]],
-    validate: impl FnOnce() -> Result<()>,
+    check_control: &mut impl FnMut() -> Result<()>,
+    validate: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<()>,
 ) -> Result<ArchiveSchemaReport> {
     let max_len = current
         .iter()
@@ -720,27 +785,32 @@ fn inspect_magic_schema(
         .max()
         .unwrap_or(0);
     let mut bytes = vec![0; max_len];
+    check_control()?;
     let mut file = File::open(path).map_err(|err| gfm_types::GfmError::io(path, err))?;
+    check_control()?;
     let len = file
         .read(&mut bytes)
         .map_err(|err| gfm_types::GfmError::io(path, err))?;
     bytes.truncate(len);
+    check_control()?;
 
     if let Some(schema) = matching_magic(&bytes, current) {
-        return validated_report(
+        return validated_report_checked(
             kind,
             path,
             ArchiveSchemaStatus::Current,
             Some(schema),
+            check_control,
             validate,
         );
     }
     if let Some(schema) = matching_magic(&bytes, legacy) {
-        return validated_report(
+        return validated_report_checked(
             kind,
             path,
             ArchiveSchemaStatus::Legacy,
             Some(schema),
+            check_control,
             validate,
         );
     }
@@ -753,22 +823,31 @@ fn inspect_magic_schema(
     ))
 }
 
-fn validated_report(
+fn validated_report_checked(
     kind: ArchiveSchemaKind,
     path: &Path,
     status: ArchiveSchemaStatus,
     schema: Option<String>,
-    validate: impl FnOnce() -> Result<()>,
+    check_control: &mut impl FnMut() -> Result<()>,
+    validate: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<()>,
 ) -> Result<ArchiveSchemaReport> {
-    match validate() {
-        Ok(()) => Ok(report(kind, path, status, schema, None)),
-        Err(err) => Ok(report(
-            kind,
-            path,
-            ArchiveSchemaStatus::Unreadable,
-            schema,
-            Some(err.to_string()),
-        )),
+    check_control()?;
+    let mut validator_check = || check_control();
+    match validate(&mut validator_check) {
+        Ok(()) => {
+            check_control()?;
+            Ok(report(kind, path, status, schema, None))
+        }
+        Err(err) => {
+            check_control()?;
+            Ok(report(
+                kind,
+                path,
+                ArchiveSchemaStatus::Unreadable,
+                schema,
+                Some(err.to_string()),
+            ))
+        }
     }
 }
 

@@ -72,12 +72,13 @@ pub use rebuild::{
     DerivedSidecarRebuild, DerivedSidecarRebuildAction, DerivedSidecarRebuildPlan,
 };
 pub use schema::{
-    inspect_archive_schema, migrate_content_archive, migrate_metadata_archive,
-    migrate_record_archive, plan_content_archive_migration, plan_metadata_archive_migration,
-    plan_record_archive_migration, ArchiveSchemaKind, ArchiveSchemaReport, ArchiveSchemaStatus,
-    ContentArchiveMigration, ContentArchiveMigrationAction, ContentArchiveMigrationPlan,
-    MetadataArchiveMigration, MetadataArchiveMigrationAction, MetadataArchiveMigrationPlan,
-    RecordArchiveMigration, RecordArchiveMigrationAction, RecordArchiveMigrationPlan,
+    inspect_archive_schema, inspect_archive_schema_checked, migrate_content_archive,
+    migrate_metadata_archive, migrate_record_archive, plan_content_archive_migration,
+    plan_metadata_archive_migration, plan_record_archive_migration, ArchiveSchemaKind,
+    ArchiveSchemaReport, ArchiveSchemaStatus, ContentArchiveMigration,
+    ContentArchiveMigrationAction, ContentArchiveMigrationPlan, MetadataArchiveMigration,
+    MetadataArchiveMigrationAction, MetadataArchiveMigrationPlan, RecordArchiveMigration,
+    RecordArchiveMigrationAction, RecordArchiveMigrationPlan,
 };
 pub use sidecar::{
     plan_sidecar_recovery, recover_sidecars, recover_sidecars_checked, sidecar_kind_name,

@@ -10,17 +10,17 @@ use gfm_index::{ContentArchiveManifestEntry, ContentMergeTier};
 use gfm_jobs::{Cancellation, Priority};
 use gfm_mac::AccessIntent;
 use gfm_store::{
-    dictionary_term_report_from_records, fuzzy_postings_from_records, inspect_archive_schema,
-    metadata_postings_from_records, migrate_content_archive, migrate_metadata_archive,
-    migrate_record_archive, plan_archive_rebuilds, plan_columns_archive_rebuild,
-    plan_content_archive_migration, plan_derived_sidecar_rebuild, plan_metadata_archive_migration,
-    plan_record_archive_migration, plan_sidecar_recovery, prefix_postings_from_records,
-    rebuild_columns_archive, rebuild_derived_sidecar_checked, recover_sidecars_checked,
-    sidecar_kind_name, substring_postings_from_records, write_dictionary, write_fuzzy_postings,
-    write_metadata_postings, write_prefix_postings, write_record_columns, write_substring_postings,
-    ArchiveRebuildInputs, ArchiveSchemaKind, ColumnsArchiveRebuild, MmapRecordArchive,
-    MmapRecordColumns, SidecarHealth, SidecarKind, SidecarPaths, SidecarRecovery,
-    SidecarRecoveryPlan,
+    dictionary_term_report_from_records, fuzzy_postings_from_records,
+    inspect_archive_schema_checked, metadata_postings_from_records, migrate_content_archive,
+    migrate_metadata_archive, migrate_record_archive, plan_archive_rebuilds,
+    plan_columns_archive_rebuild, plan_content_archive_migration, plan_derived_sidecar_rebuild,
+    plan_metadata_archive_migration, plan_record_archive_migration, plan_sidecar_recovery,
+    prefix_postings_from_records, rebuild_columns_archive, rebuild_derived_sidecar_checked,
+    recover_sidecars_checked, sidecar_kind_name, substring_postings_from_records, write_dictionary,
+    write_fuzzy_postings, write_metadata_postings, write_prefix_postings, write_record_columns,
+    write_substring_postings, ArchiveRebuildInputs, ArchiveSchemaKind, ColumnsArchiveRebuild,
+    MmapRecordArchive, MmapRecordColumns, SidecarHealth, SidecarKind, SidecarPaths,
+    SidecarRecovery, SidecarRecoveryPlan,
 };
 use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
 use std::fs;
@@ -67,7 +67,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let report =
                 run_archive_read_cancellable(path, "archive schema", move |path, cancellation| {
                     cancellation.check()?;
-                    let report = inspect_archive_schema(kind, path).as_tsv();
+                    let report =
+                        inspect_archive_schema_checked(kind, path, || cancellation.check())?
+                            .as_tsv();
                     cancellation.check()?;
                     Ok(report)
                 })?;
