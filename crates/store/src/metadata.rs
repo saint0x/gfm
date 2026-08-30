@@ -257,8 +257,18 @@ impl MmapMetadataArchive {
     }
 
     pub fn ids_for(&self, field: MetadataField, term: &str) -> Result<Vec<FileId>> {
+        self.ids_for_checked(field, term, || Ok(()))
+    }
+
+    pub fn ids_for_checked(
+        &self,
+        field: MetadataField,
+        term: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<FileId>> {
+        check_control()?;
         Ok(self
-            .posting_for(field, term)?
+            .posting_for_checked(field, term, &mut check_control)?
             .map(|posting| posting.ids)
             .unwrap_or_default())
     }
@@ -269,10 +279,22 @@ impl MmapMetadataArchive {
         term: &str,
         limit: usize,
     ) -> Result<(Vec<FileId>, bool)> {
+        self.ids_for_limit_checked(field, term, limit, || Ok(()))
+    }
+
+    pub fn ids_for_limit_checked(
+        &self,
+        field: MetadataField,
+        term: &str,
+        limit: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<(Vec<FileId>, bool)> {
+        check_control()?;
         let term = normalize(term);
         if term.is_empty() || limit == 0 {
             return Ok((Vec::new(), false));
         }
+        check_control()?;
         let Some(entry) = self
             .directory
             .binary_search_by(|entry| {
@@ -283,6 +305,7 @@ impl MmapMetadataArchive {
         else {
             return Ok((Vec::new(), false));
         };
+        check_control()?;
         let posting = self.limited_posting_for_entry(entry, limit)?;
         Ok((posting.posting.ids, posting.truncated))
     }
@@ -302,8 +325,22 @@ impl MmapMetadataArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_checked(field, terms, || Ok(()))
+    }
+
+    pub fn postings_for_checked<I, S>(
+        &self,
+        field: MetadataField,
+        terms: I,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<MetadataPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let mut selected = BTreeSet::new();
         for term in terms {
+            check_control()?;
             let term = normalize(term.as_ref());
             if !term.is_empty() {
                 selected.insert(term);
@@ -312,7 +349,10 @@ impl MmapMetadataArchive {
 
         selected
             .into_iter()
-            .filter_map(|term| self.posting_for(field, &term).transpose())
+            .filter_map(|term| {
+                self.posting_for_checked(field, &term, &mut check_control)
+                    .transpose()
+            })
             .collect()
     }
 
@@ -326,6 +366,21 @@ impl MmapMetadataArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_sorted_terms_limit_checked(field, terms, limit_per_term, || Ok(()))
+    }
+
+    pub fn postings_for_sorted_terms_limit_checked<I, S>(
+        &self,
+        field: MetadataField,
+        terms: I,
+        limit_per_term: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<LimitedMetadataPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        check_control()?;
         if limit_per_term == 0 {
             return Ok(Vec::new());
         }
@@ -335,6 +390,7 @@ impl MmapMetadataArchive {
         let mut previous: Option<String> = None;
 
         for term in terms {
+            check_control()?;
             let term = normalize(term.as_ref());
             if term.is_empty() {
                 continue;
@@ -352,6 +408,7 @@ impl MmapMetadataArchive {
             }
 
             while let Some(entry) = self.directory.get(directory_index) {
+                check_control()?;
                 if (entry.field, entry.term.as_str()) >= (field, term.as_str()) {
                     break;
                 }
@@ -360,12 +417,14 @@ impl MmapMetadataArchive {
 
             if let Some(entry) = self.directory.get(directory_index) {
                 if entry.field == field && entry.term.as_str() == term.as_str() {
+                    check_control()?;
                     postings.push(self.limited_posting_for_entry(entry, limit_per_term)?);
                 }
             }
             previous = Some(term);
         }
 
+        check_control()?;
         Ok(postings)
     }
 
@@ -379,15 +438,30 @@ impl MmapMetadataArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_limit_checked(field, terms, limit_per_term, || Ok(()))
+    }
+
+    pub fn postings_for_limit_checked<I, S>(
+        &self,
+        field: MetadataField,
+        terms: I,
+        limit_per_term: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<MetadataPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let mut selected = BTreeSet::new();
         for term in terms {
+            check_control()?;
             let term = normalize(term.as_ref());
             if !term.is_empty() {
                 selected.insert(term);
             }
         }
 
-        self.postings_for_sorted_terms_limit(field, selected, limit_per_term)
+        self.postings_for_sorted_terms_limit_checked(field, selected, limit_per_term, check_control)
             .map(|postings| {
                 postings
                     .into_iter()
@@ -397,10 +471,21 @@ impl MmapMetadataArchive {
     }
 
     pub fn posting_for(&self, field: MetadataField, term: &str) -> Result<Option<MetadataPosting>> {
+        self.posting_for_checked(field, term, || Ok(()))
+    }
+
+    pub fn posting_for_checked(
+        &self,
+        field: MetadataField,
+        term: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<MetadataPosting>> {
+        check_control()?;
         let term = normalize(term);
         if term.is_empty() {
             return Ok(None);
         }
+        check_control()?;
         let Some(entry) = self
             .directory
             .binary_search_by(|entry| {
@@ -411,6 +496,7 @@ impl MmapMetadataArchive {
         else {
             return Ok(None);
         };
+        check_control()?;
         let bytes = self.posting_bytes(entry)?;
         let posting = read_metadata_posting(Cursor::new(bytes), &self.path, self.version)?;
         if posting.field == field && posting.term == term {

@@ -166,17 +166,37 @@ impl MmapSubstringArchive {
     }
 
     pub fn ids_for(&self, gram: &str) -> Result<Vec<FileId>> {
+        self.ids_for_checked(gram, || Ok(()))
+    }
+
+    pub fn ids_for_checked(
+        &self,
+        gram: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<FileId>> {
+        check_control()?;
         Ok(self
-            .posting_for(gram)?
+            .posting_for_checked(gram, &mut check_control)?
             .map(|posting| posting.ids)
             .unwrap_or_default())
     }
 
     pub fn ids_for_limit(&self, gram: &str, limit: usize) -> Result<(Vec<FileId>, bool)> {
+        self.ids_for_limit_checked(gram, limit, || Ok(()))
+    }
+
+    pub fn ids_for_limit_checked(
+        &self,
+        gram: &str,
+        limit: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<(Vec<FileId>, bool)> {
+        check_control()?;
         let gram = normalize(gram);
         if !is_substring_gram(&gram) || limit == 0 {
             return Ok((Vec::new(), false));
         }
+        check_control()?;
         let Some(entry) = self
             .directory
             .binary_search_by(|entry| entry.gram.as_str().cmp(gram.as_str()))
@@ -185,6 +205,7 @@ impl MmapSubstringArchive {
         else {
             return Ok((Vec::new(), false));
         };
+        check_control()?;
         let posting = self.limited_posting_for_entry(entry, limit)?;
         Ok((posting.posting.ids, posting.truncated))
     }
@@ -195,10 +216,22 @@ impl MmapSubstringArchive {
         volume: VolumeId,
         limit: usize,
     ) -> Result<(Vec<FileId>, bool)> {
+        self.ids_for_volume_limit_checked(gram, volume, limit, || Ok(()))
+    }
+
+    pub fn ids_for_volume_limit_checked(
+        &self,
+        gram: &str,
+        volume: VolumeId,
+        limit: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<(Vec<FileId>, bool)> {
+        check_control()?;
         let gram = normalize(gram);
         if !is_substring_gram(&gram) || limit == 0 {
             return Ok((Vec::new(), false));
         }
+        check_control()?;
         let Some(entry) = self
             .directory
             .binary_search_by(|entry| entry.gram.as_str().cmp(gram.as_str()))
@@ -207,6 +240,7 @@ impl MmapSubstringArchive {
         else {
             return Ok((Vec::new(), false));
         };
+        check_control()?;
         let bytes = self.posting_bytes(entry)?;
         let mut cursor = Cursor::new(bytes);
         let posting_gram = read_substring_posting_header(&mut cursor, &self.path)?;
@@ -221,6 +255,7 @@ impl MmapSubstringArchive {
         let ids_bytes = bytes
             .get(ids_start..)
             .ok_or_else(|| substring_format_error(&self.path, "substring ids out of bounds"))?;
+        check_control()?;
         read_blocked_file_ids_for_volume_limited_from_slice(ids_bytes, volume, limit, &self.path)
     }
 
@@ -233,6 +268,20 @@ impl MmapSubstringArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_sorted_grams_limit_checked(grams, limit_per_gram, || Ok(()))
+    }
+
+    pub fn postings_for_sorted_grams_limit_checked<I, S>(
+        &self,
+        grams: I,
+        limit_per_gram: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<LimitedSubstringPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        check_control()?;
         if limit_per_gram == 0 {
             return Ok(Vec::new());
         }
@@ -242,6 +291,7 @@ impl MmapSubstringArchive {
         let mut previous: Option<String> = None;
 
         for gram in grams {
+            check_control()?;
             let gram = normalize(gram.as_ref());
             if !is_substring_gram(&gram) {
                 continue;
@@ -259,6 +309,7 @@ impl MmapSubstringArchive {
             }
 
             while let Some(entry) = self.directory.get(directory_index) {
+                check_control()?;
                 if entry.gram.as_str() >= gram.as_str() {
                     break;
                 }
@@ -267,12 +318,14 @@ impl MmapSubstringArchive {
 
             if let Some(entry) = self.directory.get(directory_index) {
                 if entry.gram.as_str() == gram.as_str() {
+                    check_control()?;
                     postings.push(self.limited_posting_for_entry(entry, limit_per_gram)?);
                 }
             }
             previous = Some(gram);
         }
 
+        check_control()?;
         Ok(postings)
     }
 
@@ -291,8 +344,21 @@ impl MmapSubstringArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_checked(grams, || Ok(()))
+    }
+
+    pub fn postings_for_checked<I, S>(
+        &self,
+        grams: I,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<SubstringPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let mut selected = BTreeSet::new();
         for gram in grams {
+            check_control()?;
             let gram = normalize(gram.as_ref());
             if is_substring_gram(&gram) {
                 selected.insert(gram);
@@ -301,7 +367,10 @@ impl MmapSubstringArchive {
 
         selected
             .into_iter()
-            .filter_map(|gram| self.posting_for(&gram).transpose())
+            .filter_map(|gram| {
+                self.posting_for_checked(&gram, &mut check_control)
+                    .transpose()
+            })
             .collect()
     }
 
@@ -314,15 +383,29 @@ impl MmapSubstringArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_limit_checked(grams, limit_per_gram, || Ok(()))
+    }
+
+    pub fn postings_for_limit_checked<I, S>(
+        &self,
+        grams: I,
+        limit_per_gram: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<SubstringPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let mut selected = BTreeSet::new();
         for gram in grams {
+            check_control()?;
             let gram = normalize(gram.as_ref());
             if is_substring_gram(&gram) {
                 selected.insert(gram);
             }
         }
 
-        self.postings_for_sorted_grams_limit(selected, limit_per_gram)
+        self.postings_for_sorted_grams_limit_checked(selected, limit_per_gram, check_control)
             .map(|postings| {
                 postings
                     .into_iter()
@@ -332,10 +415,20 @@ impl MmapSubstringArchive {
     }
 
     pub fn posting_for(&self, gram: &str) -> Result<Option<SubstringPosting>> {
+        self.posting_for_checked(gram, || Ok(()))
+    }
+
+    pub fn posting_for_checked(
+        &self,
+        gram: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<SubstringPosting>> {
+        check_control()?;
         let gram = normalize(gram);
         if !is_substring_gram(&gram) {
             return Ok(None);
         }
+        check_control()?;
         let Some(entry) = self
             .directory
             .binary_search_by(|entry| entry.gram.as_str().cmp(gram.as_str()))
@@ -344,6 +437,7 @@ impl MmapSubstringArchive {
         else {
             return Ok(None);
         };
+        check_control()?;
         let bytes = self.posting_bytes(entry)?;
         let posting = read_substring_posting(Cursor::new(bytes), &self.path)?;
         if posting.gram == gram {
@@ -922,6 +1016,30 @@ mod tests {
         assert!(archive
             .postings_for_sorted_grams_limit(["pro", "alp"], 3)
             .is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_substring_archive_checked_lookup_honors_pre_cancelled_control() {
+        let path = temp_path("gfm-substring-checked-lookup-cancel", "gfmsubstr");
+        write_substring_postings(
+            &path,
+            &[SubstringPosting {
+                gram: "pro".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 42)],
+            }],
+        )
+        .unwrap();
+        let archive = MmapSubstringArchive::open(&path).unwrap();
+
+        assert!(matches!(
+            archive.ids_for_checked("pro", || Err(GfmError::Cancelled)),
+            Err(GfmError::Cancelled)
+        ));
+        assert!(matches!(
+            archive.postings_for_limit_checked(["pro"], 8, || Err(GfmError::Cancelled)),
+            Err(GfmError::Cancelled)
+        ));
         std::fs::remove_file(path).unwrap();
     }
 

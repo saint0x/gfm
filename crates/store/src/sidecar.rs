@@ -156,7 +156,7 @@ pub fn plan_sidecar_recovery_checked(
     let records_path = records_path.as_ref().to_path_buf();
     check_control()?;
     let records = match MmapRecordArchive::open_checked(&records_path, &mut check_control)
-        .and_then(|archive| archive.records())
+        .and_then(|archive| archive.records_checked(&mut check_control))
     {
         Ok(records) => {
             check_control()?;
@@ -232,8 +232,8 @@ pub fn recover_sidecars_checked(
     let mut quarantined_sidecars = Vec::new();
     if before.action == SidecarRecoveryAction::Rebuild {
         check_control()?;
-        let records =
-            MmapRecordArchive::open_checked(records_path, &mut check_control)?.records()?;
+        let records = MmapRecordArchive::open_checked(records_path, &mut check_control)?
+            .records_checked(&mut check_control)?;
         check_control()?;
         for health in &before.invalid_sidecars {
             check_control()?;

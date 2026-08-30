@@ -125,7 +125,6 @@ pub struct SidecarIndexQuerySession {
     columns: MmapRecordColumns,
     metadata: MmapMetadataArchive,
     lookup: SearchArchiveLookup,
-    substrings: MmapSubstringArchive,
     content: MmapContentArchive,
     content_cache: Mutex<LookupCache<Option<ContentPosting>>>,
     content_cache_hits: AtomicUsize,
@@ -182,8 +181,6 @@ impl SidecarIndexQuerySession {
         let lookup =
             SearchArchiveLookup::open_cancellable(prefixes, substrings, fuzzy, cancellation)?;
         cancellation.check()?;
-        let substrings = MmapSubstringArchive::open_checked(substrings, || cancellation.check())?;
-        cancellation.check()?;
         let content = MmapContentArchive::open_checked(content, || cancellation.check())?;
         cancellation.check()?;
         Ok(Self {
@@ -191,7 +188,6 @@ impl SidecarIndexQuerySession {
             columns,
             metadata,
             lookup,
-            substrings,
             content,
             content_cache: Mutex::new(LookupCache::new(SIDECAR_CONTENT_POSTING_CACHE_CAPACITY)),
             content_cache_hits: AtomicUsize::new(0),
@@ -372,7 +368,6 @@ impl SidecarIndexQuerySession {
             SidecarImportSources {
                 metadata: &self.metadata,
                 lookup: &self.lookup,
-                substrings: &self.substrings,
             },
             parsed,
             SidecarContentImport {
@@ -945,7 +940,7 @@ impl SearchArchiveLookup {
         cancellation.check()?;
         let loaded = self
             .prefixes
-            .postings_for_sorted_prefixes_limit(&misses, limit)?
+            .postings_for_sorted_prefixes_limit_checked(&misses, limit, || cancellation.check())?
             .into_iter()
             .map(|limited| {
                 (
@@ -1032,7 +1027,7 @@ impl SearchArchiveLookup {
         cancellation.check()?;
         let loaded = self
             .fuzzy
-            .postings_for_sorted_keys_limit(&misses, limit)?
+            .postings_for_sorted_keys_limit_checked(&misses, limit, || cancellation.check())?
             .into_iter()
             .map(|limited| {
                 (
@@ -1057,6 +1052,64 @@ impl SearchArchiveLookup {
 
         postings.sort_by(|left, right| left.key.cmp(&right.key));
         Ok(postings)
+    }
+
+    fn prefix_ids_for_volume_bounded_cancellable(
+        &self,
+        prefix: &str,
+        volume: VolumeId,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupIds> {
+        self.prefix_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupIds::new(Vec::new(), false));
+        }
+        let cache_key = volume_cache_key(prefix, volume);
+        if let Some(mut ids) = self.prefix_cache_lock().get(&cache_key) {
+            self.prefix_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = ids.len() > limit;
+            ids.truncate(limit);
+            return Ok(SearchLookupIds::new(ids, truncated));
+        }
+        cancellation.check()?;
+        self.prefix_misses.fetch_add(1, Ordering::Relaxed);
+        let (ids, truncated) =
+            self.prefixes
+                .ids_for_volume_limit_checked(prefix, volume, limit, || cancellation.check())?;
+        if !truncated {
+            self.prefix_cache_lock().insert(cache_key, ids.clone());
+        }
+        Ok(SearchLookupIds::new(ids, truncated))
+    }
+
+    fn substring_ids_for_volume_bounded_cancellable(
+        &self,
+        gram: &str,
+        volume: VolumeId,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupIds> {
+        self.substring_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupIds::new(Vec::new(), false));
+        }
+        let cache_key = volume_cache_key(gram, volume);
+        if let Some(mut ids) = self.substring_cache_lock().get(&cache_key) {
+            self.substring_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = ids.len() > limit;
+            ids.truncate(limit);
+            return Ok(SearchLookupIds::new(ids, truncated));
+        }
+        cancellation.check()?;
+        self.substring_misses.fetch_add(1, Ordering::Relaxed);
+        let (ids, truncated) =
+            self.substrings
+                .ids_for_volume_limit_checked(gram, volume, limit, || cancellation.check())?;
+        if !truncated {
+            self.substring_cache_lock().insert(cache_key, ids.clone());
+        }
+        Ok(SearchLookupIds::new(ids, truncated))
     }
 
     fn prefix_cache_lock(&self) -> MutexGuard<'_, LookupCache<Vec<FileId>>> {
@@ -1339,24 +1392,19 @@ struct SidecarContentImport {
 struct SidecarImportSources<'a> {
     metadata: &'a MmapMetadataArchive,
     lookup: &'a SearchArchiveLookup,
-    substrings: &'a MmapSubstringArchive,
 }
 
 fn query_sidecar_imports_with_content_postings(
     metadata: &MmapMetadataArchive,
     lookup: &SearchArchiveLookup,
-    substrings: &MmapSubstringArchive,
+    _substrings: &MmapSubstringArchive,
     parsed: &gfm_search::SearchQuery,
     content: SidecarContentImport,
     budget: SearchLookupBudget,
     cancellation: &Cancellation,
 ) -> Result<SidecarQueryImport> {
     query_sidecar_imports_with_content_postings_scoped(
-        SidecarImportSources {
-            metadata,
-            lookup,
-            substrings,
-        },
+        SidecarImportSources { metadata, lookup },
         parsed,
         content,
         budget,
@@ -1389,16 +1437,18 @@ fn query_sidecar_imports_with_content_postings_scoped(
     let mut candidate_ids = BTreeSet::new();
 
     cancellation.check()?;
-    let mut selected_metadata = sources.metadata.postings_for_limit(
+    let mut selected_metadata = sources.metadata.postings_for_limit_checked(
         MetadataField::Comment,
         comment_terms,
         budget.max_metadata_ids_per_term,
+        || cancellation.check(),
     )?;
     cancellation.check()?;
-    selected_metadata.extend(sources.metadata.postings_for_limit(
+    selected_metadata.extend(sources.metadata.postings_for_limit_checked(
         MetadataField::Tag,
         tag_terms.clone(),
         budget.max_metadata_ids_per_term,
+        || cancellation.check(),
     )?);
     let metadata = selected_metadata
         .into_iter()
@@ -1418,7 +1468,7 @@ fn query_sidecar_imports_with_content_postings_scoped(
 
     cancellation.check()?;
     let substrings = scoped_substring_postings(
-        sources.substrings,
+        sources.lookup,
         substring_grams,
         budget.max_substring_ids_per_gram,
         scope,
@@ -1568,7 +1618,12 @@ fn scoped_prefix_postings(
                     cancellation.check()?;
                     ids.extend(
                         lookup
-                            .prefix_ids_for_volume_bounded(&prefix, *volume, limit)?
+                            .prefix_ids_for_volume_bounded_cancellable(
+                                &prefix,
+                                *volume,
+                                limit,
+                                cancellation,
+                            )?
                             .ids,
                     );
                 }
@@ -1583,15 +1638,16 @@ fn scoped_prefix_postings(
 }
 
 fn scoped_substring_postings(
-    substrings: &MmapSubstringArchive,
+    lookup: &SearchArchiveLookup,
     grams: Vec<String>,
     limit: usize,
     scope: &SearchVolumeScope,
     cancellation: &Cancellation,
 ) -> Result<Vec<SearchSubstringPosting>> {
     match scope {
-        SearchVolumeScope::All => Ok(substrings
-            .postings_for_limit(grams, limit)?
+        SearchVolumeScope::All => Ok(lookup
+            .substrings
+            .postings_for_limit_checked(grams, limit, || cancellation.check())?
             .into_iter()
             .map(|posting| SearchSubstringPosting {
                 gram: posting.gram,
@@ -1613,7 +1669,16 @@ fn scoped_substring_postings(
                 let mut ids = Vec::new();
                 for volume in volumes {
                     cancellation.check()?;
-                    ids.extend(substrings.ids_for_volume_limit(&gram, *volume, limit)?.0);
+                    ids.extend(
+                        lookup
+                            .substring_ids_for_volume_bounded_cancellable(
+                                &gram,
+                                *volume,
+                                limit,
+                                cancellation,
+                            )?
+                            .ids,
+                    );
                 }
                 ids.sort();
                 ids.dedup();
@@ -1868,7 +1933,7 @@ mod tests {
         let result = query_sidecar_imports_cancellable(
             &session.metadata,
             &session.lookup,
-            &session.substrings,
+            &session.lookup.substrings,
             &session.content,
             "finderlatency",
             SearchLookupBudget::default(),

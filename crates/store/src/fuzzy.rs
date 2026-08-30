@@ -168,17 +168,37 @@ impl MmapFuzzyArchive {
     }
 
     pub fn terms_for(&self, key: &str) -> Result<Vec<String>> {
+        self.terms_for_checked(key, || Ok(()))
+    }
+
+    pub fn terms_for_checked(
+        &self,
+        key: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<String>> {
+        check_control()?;
         Ok(self
-            .posting_for(key)?
+            .posting_for_checked(key, &mut check_control)?
             .map(|posting| posting.terms)
             .unwrap_or_default())
     }
 
     pub fn terms_for_limit(&self, key: &str, limit: usize) -> Result<(Vec<String>, bool)> {
+        self.terms_for_limit_checked(key, limit, || Ok(()))
+    }
+
+    pub fn terms_for_limit_checked(
+        &self,
+        key: &str,
+        limit: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<(Vec<String>, bool)> {
+        check_control()?;
         let key = normalize(key);
         if key.is_empty() || limit == 0 {
             return Ok((Vec::new(), false));
         }
+        check_control()?;
         let Some(entry) = self
             .directory
             .binary_search_by(|entry| entry.key.as_str().cmp(key.as_str()))
@@ -187,6 +207,7 @@ impl MmapFuzzyArchive {
         else {
             return Ok((Vec::new(), false));
         };
+        check_control()?;
         let posting = self.limited_posting_for_entry(entry, limit)?;
         Ok((posting.posting.terms, posting.truncated))
     }
@@ -200,6 +221,20 @@ impl MmapFuzzyArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_sorted_keys_limit_checked(keys, limit_per_key, || Ok(()))
+    }
+
+    pub fn postings_for_sorted_keys_limit_checked<I, S>(
+        &self,
+        keys: I,
+        limit_per_key: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<LimitedFuzzyPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        check_control()?;
         if limit_per_key == 0 {
             return Ok(Vec::new());
         }
@@ -209,6 +244,7 @@ impl MmapFuzzyArchive {
         let mut previous: Option<String> = None;
 
         for key in keys {
+            check_control()?;
             let key = normalize(key.as_ref());
             if key.is_empty() {
                 continue;
@@ -226,6 +262,7 @@ impl MmapFuzzyArchive {
             }
 
             while let Some(entry) = self.directory.get(directory_index) {
+                check_control()?;
                 if entry.key.as_str() >= key.as_str() {
                     break;
                 }
@@ -234,12 +271,14 @@ impl MmapFuzzyArchive {
 
             if let Some(entry) = self.directory.get(directory_index) {
                 if entry.key.as_str() == key.as_str() {
+                    check_control()?;
                     postings.push(self.limited_posting_for_entry(entry, limit_per_key)?);
                 }
             }
             previous = Some(key);
         }
 
+        check_control()?;
         Ok(postings)
     }
 
@@ -258,15 +297,28 @@ impl MmapFuzzyArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_checked(keys, || Ok(()))
+    }
+
+    pub fn postings_for_checked<I, S>(
+        &self,
+        keys: I,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<FuzzyPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let mut selected = BTreeSet::new();
         for key in keys {
+            check_control()?;
             let key = normalize(key.as_ref());
             if !key.is_empty() {
                 selected.insert(key);
             }
         }
 
-        self.postings_for_sorted_keys_limit(selected, usize::MAX)
+        self.postings_for_sorted_keys_limit_checked(selected, usize::MAX, check_control)
             .map(|postings| {
                 postings
                     .into_iter()
@@ -276,10 +328,20 @@ impl MmapFuzzyArchive {
     }
 
     pub fn posting_for(&self, key: &str) -> Result<Option<FuzzyPosting>> {
+        self.posting_for_checked(key, || Ok(()))
+    }
+
+    pub fn posting_for_checked(
+        &self,
+        key: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<FuzzyPosting>> {
+        check_control()?;
         let key = normalize(key);
         if key.is_empty() {
             return Ok(None);
         }
+        check_control()?;
         let Some(entry) = self
             .directory
             .binary_search_by(|entry| entry.key.as_str().cmp(key.as_str()))
@@ -288,6 +350,7 @@ impl MmapFuzzyArchive {
         else {
             return Ok(None);
         };
+        check_control()?;
         let bytes = self.posting_bytes(entry)?;
         let posting = read_fuzzy_posting(Cursor::new(bytes), &self.path)?;
         if posting.key == key {
@@ -726,6 +789,32 @@ mod tests {
         assert!(archive
             .postings_for_sorted_keys_limit(["projet", "aplha"], 2)
             .is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_fuzzy_archive_checked_lookup_honors_pre_cancelled_control() {
+        let path = temp_path("gfm-fuzzy-checked-lookup-cancel", "gfmfuzzy");
+        write_fuzzy_postings(
+            &path,
+            &[FuzzyPosting {
+                key: "projet".to_string(),
+                terms: vec!["project".to_string()],
+            }],
+        )
+        .unwrap();
+        let archive = MmapFuzzyArchive::open(&path).unwrap();
+
+        assert!(matches!(
+            archive.terms_for_checked("projet", || Err(GfmError::Cancelled)),
+            Err(GfmError::Cancelled)
+        ));
+        assert!(matches!(
+            archive.postings_for_sorted_keys_limit_checked(["projet"], 8, || {
+                Err(GfmError::Cancelled)
+            }),
+            Err(GfmError::Cancelled)
+        ));
         std::fs::remove_file(path).unwrap();
     }
 

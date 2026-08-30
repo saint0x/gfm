@@ -165,17 +165,37 @@ impl MmapPrefixArchive {
     }
 
     pub fn ids_for(&self, prefix: &str) -> Result<Vec<FileId>> {
+        self.ids_for_checked(prefix, || Ok(()))
+    }
+
+    pub fn ids_for_checked(
+        &self,
+        prefix: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<FileId>> {
+        check_control()?;
         Ok(self
-            .posting_for(prefix)?
+            .posting_for_checked(prefix, &mut check_control)?
             .map(|posting| posting.ids)
             .unwrap_or_default())
     }
 
     pub fn ids_for_limit(&self, prefix: &str, limit: usize) -> Result<(Vec<FileId>, bool)> {
+        self.ids_for_limit_checked(prefix, limit, || Ok(()))
+    }
+
+    pub fn ids_for_limit_checked(
+        &self,
+        prefix: &str,
+        limit: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<(Vec<FileId>, bool)> {
+        check_control()?;
         let prefix = normalize(prefix);
         if prefix.is_empty() || limit == 0 {
             return Ok((Vec::new(), false));
         }
+        check_control()?;
         let Some(entry) = self
             .directory
             .binary_search_by(|entry| entry.prefix.as_str().cmp(prefix.as_str()))
@@ -184,6 +204,7 @@ impl MmapPrefixArchive {
         else {
             return Ok((Vec::new(), false));
         };
+        check_control()?;
         let posting = self.limited_posting_for_entry(entry, limit)?;
         Ok((posting.posting.ids, posting.truncated))
     }
@@ -194,10 +215,22 @@ impl MmapPrefixArchive {
         volume: VolumeId,
         limit: usize,
     ) -> Result<(Vec<FileId>, bool)> {
+        self.ids_for_volume_limit_checked(prefix, volume, limit, || Ok(()))
+    }
+
+    pub fn ids_for_volume_limit_checked(
+        &self,
+        prefix: &str,
+        volume: VolumeId,
+        limit: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<(Vec<FileId>, bool)> {
+        check_control()?;
         let prefix = normalize(prefix);
         if prefix.is_empty() || limit == 0 {
             return Ok((Vec::new(), false));
         }
+        check_control()?;
         let Some(entry) = self
             .directory
             .binary_search_by(|entry| entry.prefix.as_str().cmp(prefix.as_str()))
@@ -206,6 +239,7 @@ impl MmapPrefixArchive {
         else {
             return Ok((Vec::new(), false));
         };
+        check_control()?;
         let bytes = self.posting_bytes(entry)?;
         let mut cursor = Cursor::new(bytes);
         let posting_prefix = read_prefix_posting_header(&mut cursor, &self.path)?;
@@ -220,6 +254,7 @@ impl MmapPrefixArchive {
         let ids_bytes = bytes
             .get(ids_start..)
             .ok_or_else(|| prefix_format_error(&self.path, "prefix ids out of bounds"))?;
+        check_control()?;
         read_blocked_file_ids_for_volume_limited_from_slice(ids_bytes, volume, limit, &self.path)
     }
 
@@ -232,6 +267,20 @@ impl MmapPrefixArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_sorted_prefixes_limit_checked(prefixes, limit_per_prefix, || Ok(()))
+    }
+
+    pub fn postings_for_sorted_prefixes_limit_checked<I, S>(
+        &self,
+        prefixes: I,
+        limit_per_prefix: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<LimitedPrefixPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        check_control()?;
         if limit_per_prefix == 0 {
             return Ok(Vec::new());
         }
@@ -241,6 +290,7 @@ impl MmapPrefixArchive {
         let mut previous: Option<String> = None;
 
         for prefix in prefixes {
+            check_control()?;
             let prefix = normalize(prefix.as_ref());
             if prefix.is_empty() {
                 continue;
@@ -258,6 +308,7 @@ impl MmapPrefixArchive {
             }
 
             while let Some(entry) = self.directory.get(directory_index) {
+                check_control()?;
                 if entry.prefix.as_str() >= prefix.as_str() {
                     break;
                 }
@@ -266,12 +317,14 @@ impl MmapPrefixArchive {
 
             if let Some(entry) = self.directory.get(directory_index) {
                 if entry.prefix.as_str() == prefix.as_str() {
+                    check_control()?;
                     postings.push(self.limited_posting_for_entry(entry, limit_per_prefix)?);
                 }
             }
             previous = Some(prefix);
         }
 
+        check_control()?;
         Ok(postings)
     }
 
@@ -290,8 +343,21 @@ impl MmapPrefixArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_checked(prefixes, || Ok(()))
+    }
+
+    pub fn postings_for_checked<I, S>(
+        &self,
+        prefixes: I,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<PrefixPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let mut selected = BTreeSet::new();
         for prefix in prefixes {
+            check_control()?;
             let prefix = normalize(prefix.as_ref());
             if !prefix.is_empty() {
                 selected.insert(prefix);
@@ -300,15 +366,28 @@ impl MmapPrefixArchive {
 
         selected
             .into_iter()
-            .filter_map(|prefix| self.posting_for(&prefix).transpose())
+            .filter_map(|prefix| {
+                self.posting_for_checked(&prefix, &mut check_control)
+                    .transpose()
+            })
             .collect()
     }
 
     pub fn posting_for(&self, prefix: &str) -> Result<Option<PrefixPosting>> {
+        self.posting_for_checked(prefix, || Ok(()))
+    }
+
+    pub fn posting_for_checked(
+        &self,
+        prefix: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<PrefixPosting>> {
+        check_control()?;
         let prefix = normalize(prefix);
         if prefix.is_empty() {
             return Ok(None);
         }
+        check_control()?;
         let Some(entry) = self
             .directory
             .binary_search_by(|entry| entry.prefix.as_str().cmp(prefix.as_str()))
@@ -317,6 +396,7 @@ impl MmapPrefixArchive {
         else {
             return Ok(None);
         };
+        check_control()?;
         let bytes = self.posting_bytes(entry)?;
         let posting = read_prefix_posting(Cursor::new(bytes), &self.path)?;
         if posting.prefix == prefix {
@@ -833,6 +913,32 @@ mod tests {
         assert!(archive
             .postings_for_sorted_prefixes_limit(["project", "alpha"], 3)
             .is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_prefix_archive_checked_lookup_honors_pre_cancelled_control() {
+        let path = temp_path("gfm-prefix-checked-lookup-cancel", "gfmprefix");
+        write_prefix_postings(
+            &path,
+            &[PrefixPosting {
+                prefix: "project".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 42)],
+            }],
+        )
+        .unwrap();
+        let archive = MmapPrefixArchive::open(&path).unwrap();
+
+        assert!(matches!(
+            archive.ids_for_checked("project", || Err(GfmError::Cancelled)),
+            Err(GfmError::Cancelled)
+        ));
+        assert!(matches!(
+            archive.postings_for_sorted_prefixes_limit_checked(["project"], 8, || {
+                Err(GfmError::Cancelled)
+            }),
+            Err(GfmError::Cancelled)
+        ));
         std::fs::remove_file(path).unwrap();
     }
 

@@ -222,6 +222,33 @@ fn mmap_metadata_archive_reads_bounded_selected_postings_for_query_import() {
 }
 
 #[test]
+fn mmap_metadata_archive_checked_lookup_honors_pre_cancelled_control() {
+    let path = temp_path("gfm-metadata-checked-lookup-cancel", "gfmmeta");
+    write_metadata_postings(
+        &path,
+        &[MetadataPosting {
+            field: MetadataField::Tag,
+            term: "important".to_string(),
+            ids: vec![FileId::new(VolumeId(12), 10_000)],
+        }],
+    )
+    .unwrap();
+    let archive = MmapMetadataArchive::open(&path).unwrap();
+
+    assert!(matches!(
+        archive.ids_for_checked(MetadataField::Tag, "important", || Err(GfmError::Cancelled)),
+        Err(GfmError::Cancelled)
+    ));
+    assert!(matches!(
+        archive.postings_for_limit_checked(MetadataField::Tag, ["important"], 8, || Err(
+            GfmError::Cancelled
+        )),
+        Err(GfmError::Cancelled)
+    ));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn mmap_metadata_archive_reads_bounded_sorted_terms_in_one_pass() {
     let path = temp_path("gfm-metadata-batch-postings", "gfmmeta");
     let postings = vec![

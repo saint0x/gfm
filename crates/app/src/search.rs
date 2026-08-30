@@ -661,7 +661,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 move |fuzzy, cancellation| {
                     let archive = MmapFuzzyArchive::open_checked(fuzzy, || cancellation.check())?;
                     cancellation.check()?;
-                    let terms = archive.terms_for(&key)?;
+                    let terms = archive.terms_for_checked(&key, || cancellation.check())?;
                     cancellation.check()?;
                     Ok(terms)
                 },
@@ -700,7 +700,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let archive =
                         MmapPrefixArchive::open_checked(prefixes, || cancellation.check())?;
                     cancellation.check()?;
-                    let ids = archive.ids_for(&prefix)?;
+                    let ids = archive.ids_for_checked(&prefix, || cancellation.check())?;
                     cancellation.check()?;
                     Ok(ids)
                 },
@@ -759,7 +759,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let archive =
                         MmapSubstringArchive::open_checked(substrings, || cancellation.check())?;
                     cancellation.check()?;
-                    let ids = archive.ids_for(&gram)?;
+                    let ids = archive.ids_for_checked(&gram, || cancellation.check())?;
                     cancellation.check()?;
                     Ok(ids)
                 },
@@ -874,7 +874,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let archive =
                         MmapMetadataArchive::open_checked(metadata, || cancellation.check())?;
                     cancellation.check()?;
-                    let ids = archive.ids_for(field, &term)?;
+                    let ids = archive.ids_for_checked(field, &term, || cancellation.check())?;
                     cancellation.check()?;
                     Ok(ids)
                 },
