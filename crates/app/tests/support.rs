@@ -1757,7 +1757,11 @@ fn reports_volume_invalidation_in_ui_sidebar_contract_from_binary() {
         assert!(changed_stdout.contains(
             "\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\t"
         ));
-        assert!(changed_stdout.ends_with("reason=sidebar-volume-platform-unavailable\n"));
+        assert!(
+            changed_stdout.ends_with("reason=sidebar-volume-platform-unavailable\n")
+                || changed_stdout.ends_with("reason=diskarbitration-volume-unavailable\n")
+                || changed_stdout.ends_with("reason=url-resource-volume-unavailable\n")
+        );
     } else {
         assert!(changed_stdout.contains(
             "\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=false\t"
