@@ -723,13 +723,14 @@ impl Indexer {
         let resume =
             FseventsResumePlan::read_checked(&volume, cursor_path, || cancellation.check())?;
         cancellation.check()?;
-        Ok(RepairSchedule::evaluate(
+        RepairSchedule::evaluate_checked(
             &volume,
             resume,
             observed_event_ids,
             dropped_roots,
             explicit_reason,
-        ))
+            || cancellation.check(),
+        )
     }
 
     pub fn load(&self, path: impl AsRef<Path>) -> Result<IndexSnapshot> {

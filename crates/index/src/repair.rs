@@ -1,4 +1,5 @@
 use crate::{FseventsResumeAction, FseventsResumePlan, IndexVolumeState};
+use gfm_types::Result;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -87,8 +88,29 @@ impl RepairSchedule {
         dropped_roots: &[PathBuf],
         explicit_reason: Option<&str>,
     ) -> Self {
+        Self::evaluate_checked(
+            volume,
+            resume,
+            observed_event_ids,
+            dropped_roots,
+            explicit_reason,
+            || Ok(()),
+        )
+        .expect("uncancellable repair schedule evaluation cannot be cancelled")
+    }
+
+    pub fn evaluate_checked(
+        volume: &IndexVolumeState,
+        resume: FseventsResumePlan,
+        observed_event_ids: &[u64],
+        dropped_roots: &[PathBuf],
+        explicit_reason: Option<&str>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
         let mut jobs = Vec::new();
         if resume.action == FseventsResumeAction::Rescan {
+            check_control()?;
             jobs.push(SubtreeRepairJob::new(
                 volume.root.clone(),
                 RepairReason::ResumeRequired(resume.reason.clone()),
@@ -97,6 +119,7 @@ impl RepairSchedule {
 
         let mut expected = resume.from_event_id;
         for observed in observed_event_ids.iter().copied() {
+            check_control()?;
             if let Some(next_expected) = expected {
                 if observed > next_expected {
                     jobs.push(SubtreeRepairJob::new(
@@ -113,17 +136,19 @@ impl RepairSchedule {
 
         let reason = explicit_reason.unwrap_or("stream-drop");
         for root in dropped_roots {
+            check_control()?;
             jobs.push(SubtreeRepairJob::new(
                 normalize_repair_path(&volume.root, root),
                 RepairReason::ExplicitDrop(reason.to_string()),
             ));
         }
 
-        Self {
+        check_control()?;
+        Ok(Self {
             resume,
-            jobs: coalesce_jobs(jobs),
+            jobs: coalesce_jobs_checked(jobs, &mut check_control)?,
             highest_observed_event_id: observed_event_ids.iter().copied().max(),
-        }
+        })
     }
 
     pub fn as_tsv(&self) -> String {
@@ -147,7 +172,11 @@ impl RepairSchedule {
     }
 }
 
-fn coalesce_jobs(mut jobs: Vec<SubtreeRepairJob>) -> Vec<SubtreeRepairJob> {
+fn coalesce_jobs_checked(
+    mut jobs: Vec<SubtreeRepairJob>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<SubtreeRepairJob>> {
+    check_control()?;
     jobs.sort_by(|a, b| {
         a.path
             .cmp(&b.path)
@@ -156,6 +185,7 @@ fn coalesce_jobs(mut jobs: Vec<SubtreeRepairJob>) -> Vec<SubtreeRepairJob> {
     });
     let mut coalesced: Vec<SubtreeRepairJob> = Vec::new();
     for job in jobs {
+        check_control()?;
         if coalesced
             .iter()
             .any(|existing| job.path.starts_with(&existing.path))
@@ -165,7 +195,8 @@ fn coalesce_jobs(mut jobs: Vec<SubtreeRepairJob>) -> Vec<SubtreeRepairJob> {
         coalesced.retain(|existing| !existing.path.starts_with(&job.path));
         coalesced.push(job);
     }
-    coalesced
+    check_control()?;
+    Ok(coalesced)
 }
 
 fn normalize_repair_path(root: &Path, path: &Path) -> PathBuf {
@@ -176,5 +207,65 @@ fn normalize_repair_path(root: &Path, path: &Path) -> PathBuf {
         path.to_path_buf()
     } else {
         root.join(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gfm_types::GfmError;
+
+    fn volume() -> IndexVolumeState {
+        IndexVolumeState {
+            schema_version: 1,
+            root: PathBuf::from("/Volumes/Data"),
+            records_path: PathBuf::from("/tmp/data.gfmidx"),
+            volume_id: gfm_types::VolumeId(1),
+            mount_id: "mount:1".to_string(),
+            scan_epoch: 1,
+            record_count: 20,
+            inaccessible_count: 0,
+        }
+    }
+
+    fn resume(action: FseventsResumeAction) -> FseventsResumePlan {
+        FseventsResumePlan {
+            action,
+            from_event_id: Some(10),
+            reason: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn repair_schedule_checked_honors_pre_cancelled_control() {
+        let result = RepairSchedule::evaluate_checked(
+            &volume(),
+            resume(FseventsResumeAction::Continue),
+            &[11, 12],
+            &[PathBuf::from("Projects")],
+            Some("drop"),
+            || Err(GfmError::Cancelled),
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn repair_schedule_evaluate_keeps_existing_uncancellable_behavior() {
+        let schedule = RepairSchedule::evaluate(
+            &volume(),
+            resume(FseventsResumeAction::Continue),
+            &[11, 14],
+            &[PathBuf::from("Projects")],
+            Some("drop"),
+        );
+
+        assert_eq!(schedule.jobs.len(), 1);
+        assert_eq!(schedule.highest_observed_event_id, Some(14));
+        assert!(schedule
+            .jobs
+            .iter()
+            .any(|job| matches!(job.reason, RepairReason::EventIdGap { .. })));
+        assert_eq!(schedule.jobs[0].path, PathBuf::from("/Volumes/Data"));
     }
 }

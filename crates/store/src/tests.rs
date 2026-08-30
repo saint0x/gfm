@@ -99,6 +99,36 @@ fn mmap_record_archive_hydrates_records_from_immutable_map() {
 }
 
 #[test]
+fn mmap_record_archive_checked_record_honors_pre_cancelled_control() {
+    let path = temp_path("gfm-store-mmap-record-cancel", "idx");
+    let records = vec![FileRecord {
+        id: FileId::new(VolumeId(4), 12),
+        parent: Some(FileId::new(VolumeId(4), 1)),
+        path: PathBuf::from("/tmp/a/report.txt"),
+        name: "report.txt".to_string(),
+        kind: FileKind::File,
+        len: 42,
+        mode: 0o100644,
+        owner: 501,
+        group: 20,
+        xattrs_digest: 99,
+        created: Some(UNIX_EPOCH + Duration::from_secs(1)),
+        modified: Some(UNIX_EPOCH + Duration::from_secs(10)),
+        changed: None,
+        hidden: false,
+        tags: vec!["Important".to_string()],
+        finder_comment: Some("notes".to_string()),
+    }];
+    write_records(&path, &records).unwrap();
+    let archive = MmapRecordArchive::open(&path).unwrap();
+
+    let result = archive.record_checked(0, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn mmap_record_archive_finds_records_when_rows_are_not_id_sorted() {
     let path = temp_path("gfm-store-mmap-find", "idx");
     let records = vec![

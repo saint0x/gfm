@@ -182,7 +182,7 @@ impl LiveIndex {
         if import.report.requires_full_record_hydration {
             for index in 0..records.len() {
                 cancellation.check()?;
-                let record = records.record(index)?;
+                let record = records.record_checked(index, || cancellation.check())?;
                 if insert_mmap_record_with_columns_checked(
                     &mut live,
                     columns,
@@ -259,7 +259,8 @@ impl LiveIndex {
         if full_hydration {
             for index in 0..records.len() {
                 cancellation.check()?;
-                live.index.insert(records.record(index)?);
+                live.index
+                    .insert(records.record_checked(index, || cancellation.check())?);
                 loaded += 1;
             }
         } else {

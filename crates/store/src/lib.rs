@@ -312,12 +312,22 @@ impl MmapRecordArchive {
     }
 
     pub fn record(&self, index: usize) -> Result<FileRecord> {
+        self.record_checked(index, || Ok(()))
+    }
+
+    pub fn record_checked(
+        &self,
+        index: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<FileRecord> {
+        check_control()?;
         let range = self.records.get(index).ok_or_else(|| {
             GfmError::Format(format!(
                 "{} record index {index} out of bounds",
                 self.path.display()
             ))
         })?;
+        check_control()?;
         let line = std::str::from_utf8(&self.mmap[range.clone()]).map_err(|err| {
             GfmError::Format(format!(
                 "{} line {} invalid UTF-8: {err}",
@@ -325,6 +335,7 @@ impl MmapRecordArchive {
                 index + 2
             ))
         })?;
+        check_control()?;
         parse_record(line, self.version).map_err(|err| {
             GfmError::Format(format!(
                 "{} line {}: {}",
@@ -397,7 +408,7 @@ impl MmapRecordArchive {
             match self.directory.get(directory_index) {
                 Some(entry) if record_id_key(entry.id) == key => {
                     check_control()?;
-                    records.push(self.record(entry.index)?);
+                    records.push(self.record_checked(entry.index, &mut check_control)?);
                 }
                 _ => missing += 1,
             }
@@ -418,7 +429,7 @@ impl MmapRecordArchive {
         (0..self.len())
             .map(|index| {
                 check_control()?;
-                self.record(index)
+                self.record_checked(index, &mut check_control)
             })
             .collect()
     }

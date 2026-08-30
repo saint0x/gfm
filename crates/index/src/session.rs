@@ -381,7 +381,10 @@ impl ContentIndexQuerySession {
         let mut records = Vec::with_capacity(self.records.len());
         for index in 0..self.records.len() {
             cancellation.check()?;
-            records.push(self.records.record(index)?);
+            records.push(
+                self.records
+                    .record_checked(index, || cancellation.check())?,
+            );
         }
         Ok((records, 0))
     }
