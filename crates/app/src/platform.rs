@@ -534,6 +534,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .as_tsv()
             );
         }
+        "volume-event-transition-removable-media" => {
+            println!("{}", volume_event_transition_removable_media()?.as_tsv());
+        }
         "volume-event-transition-api-status" => {
             println!("{}", volume_event_transition_api_status()?.as_tsv());
         }
@@ -737,6 +740,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 topology_case_sensitivity_diff(previous_case_sensitive, current_case_sensitive)?
                     .as_tsv()
             );
+        }
+        "volume-topology-removable-media" => {
+            println!("{}", topology_removable_media_diff()?.as_tsv());
         }
         "volume-topology-api-status" => {
             println!("{}", topology_api_status_diff()?.as_tsv());
@@ -997,6 +1003,26 @@ fn topology_case_sensitivity_diff(
     ))
 }
 
+fn topology_removable_media_diff() -> Result<VolumeTopologyDiff> {
+    let mut previous = VolumeDescriptor::for_path("/")?;
+    previous.stable_identity = "diskarbitration:uuid:REMOVABLE-TOPOLOGY".to_string();
+    previous.label = "Removable Topology".to_string();
+    previous.path = PathBuf::from("/Volumes/Removable Topology");
+    previous.kind = gfm_mac::VolumeKind::External;
+    previous.removable = false;
+    previous.ejectable = true;
+    let mut current = previous.clone();
+    current.removable = true;
+    Ok(VolumeTopologyDiff::evaluate(
+        &VolumeDiscoveryReport {
+            volumes: vec![previous],
+        },
+        &VolumeDiscoveryReport {
+            volumes: vec![current],
+        },
+    ))
+}
+
 fn topology_api_status_diff() -> Result<VolumeTopologyDiff> {
     let mut previous = VolumeDescriptor::for_path("/")?;
     previous.stable_identity = "diskarbitration:uuid:API-STATUS".to_string();
@@ -1072,6 +1098,28 @@ fn volume_event_transition_case_sensitivity(
     previous.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
     let mut current = previous.clone();
     current.case_sensitive = Some(current_case_sensitive);
+    Ok(VolumeEventInvalidationReport::from_transition(
+        VolumeEventKind::DescriptionChanged,
+        gfm_mac::NativeVolumeStatus::Available,
+        Some(&previous),
+        Some(&current),
+        None,
+    ))
+}
+
+fn volume_event_transition_removable_media() -> Result<VolumeEventInvalidationReport> {
+    let mut previous = VolumeDescriptor::for_path("/")?;
+    previous.stable_identity = "diskarbitration:uuid:REMOVABLE-EVENT".to_string();
+    previous.label = "Removable Event".to_string();
+    previous.path = PathBuf::from("/Volumes/Removable Event");
+    previous.kind = gfm_mac::VolumeKind::External;
+    previous.removable = false;
+    previous.ejectable = true;
+    previous.native_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    previous.resource_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    previous.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    let mut current = previous.clone();
+    current.removable = true;
     Ok(VolumeEventInvalidationReport::from_transition(
         VolumeEventKind::DescriptionChanged,
         gfm_mac::NativeVolumeStatus::Available,

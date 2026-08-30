@@ -5130,6 +5130,17 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-topology-removable-media"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-topology-diff\tcount=1\nvolume-topology\tchanged\tstable-id=diskarbitration:uuid:REMOVABLE-TOPOLOGY\tlabel=Removable Topology\tpath=/Volumes/Removable Topology\tprevious-kind=external\tcurrent-kind=external\tprevious-mount=mounted\tcurrent-mount=mounted\tprevious-case-sensitive=false\tcurrent-case-sensitive=false\tprevious-native-status=available\tcurrent-native-status=available\tprevious-resource-status=available\tcurrent-resource-status=available\tprevious-mount-status=available\tcurrent-mount-status=available\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-media-truth-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-topology-api-status"
       ],
       "exit_code": 0,
@@ -5145,6 +5156,17 @@
       ],
       "exit_code": 0,
       "stdout": "volume-event-invalidation\tkind=description-changed\tnative-status=unavailable\tpath=/Volumes/API Description\tprevious-kind=-\tprevious-mount=-\tprevious-case-sensitive=-\tprevious-native-status=-\tprevious-resource-status=-\tprevious-mount-status=-\tcurrent-kind=external\tcurrent-mount=mounted\tcurrent-case-sensitive=false\tcurrent-native-status=unavailable\tcurrent-resource-status=unavailable\tcurrent-mount-status=unavailable\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=diskarbitration-volume-unavailable\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-event-transition-removable-media"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-invalidation\tkind=description-changed\tnative-status=available\tpath=/Volumes/Removable Event\tprevious-kind=external\tprevious-mount=mounted\tprevious-case-sensitive=false\tprevious-native-status=available\tprevious-resource-status=available\tprevious-mount-status=available\tcurrent-kind=external\tcurrent-mount=mounted\tcurrent-case-sensitive=false\tcurrent-native-status=available\tcurrent-resource-status=available\tcurrent-mount-status=available\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\treason=volume-media-truth-changed\n",
       "stderr": "",
       "times": 1
     },

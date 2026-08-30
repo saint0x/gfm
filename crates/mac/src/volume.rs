@@ -768,6 +768,7 @@ impl VolumeTopologyChange {
                 | "volume-access-changed"
                 | "volume-locality-changed"
                 | "volume-ejectability-changed"
+                | "volume-media-truth-changed"
                 | "volume-identity-changed"
                 | "volume-case-sensitivity-changed"
                 | "volume-api-status-changed"
@@ -782,6 +783,8 @@ impl VolumeTopologyChange {
                 | "volume-kind-changed"
                 | "volume-access-changed"
                 | "volume-locality-changed"
+                | "volume-ejectability-changed"
+                | "volume-media-truth-changed"
                 | "volume-identity-changed"
                 | "volume-case-sensitivity-changed"
                 | "volume-api-status-changed"
@@ -1943,6 +1946,8 @@ fn topology_change_reason(
         Some("volume-locality-changed")
     } else if previous.ejectable != current.ejectable || previous.commands != current.commands {
         Some("volume-ejectability-changed")
+    } else if previous.removable != current.removable {
+        Some("volume-media-truth-changed")
     } else if previous.volume_uuid != current.volume_uuid
         || previous.media_uuid != current.media_uuid
         || previous.resource_uuid != current.resource_uuid
@@ -3837,6 +3842,34 @@ mod tests {
     }
 
     #[test]
+    fn topology_diff_reports_removable_media_truth_changes() {
+        let root = unique_temp_dir("gfm-volume-topology-removable-media");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        previous_volume.removable = false;
+        previous_volume.ejectable = true;
+        let mut current_volume = previous_volume.clone();
+        current_volume.removable = true;
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].reason, "volume-media-truth-changed");
+        assert!(diff.changes[0].invalidate_sidebar);
+        assert!(diff.changes[0].invalidate_operation_policy);
+        assert!(diff.changes[0].invalidate_index_admission);
+        assert!(diff.changes[0].rescan_index);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn topology_diff_reports_native_mount_table_trait_changes() {
         let root = unique_temp_dir("gfm-volume-topology-mount-table");
         fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
@@ -4088,6 +4121,41 @@ mod tests {
         assert!(report
             .as_tsv()
             .contains("\tcurrent-native-status=available\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_transition_reports_removable_media_truth_changes() {
+        let root = unique_temp_dir("gfm-volume-event-removable-media-change");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous = VolumeDescriptor::for_path(&root).unwrap();
+        previous.removable = false;
+        previous.ejectable = true;
+        previous.native_status = Some(NativeVolumeStatus::Available);
+        previous.resource_status = Some(NativeVolumeStatus::Available);
+        previous.mount_table_status = Some(NativeVolumeStatus::Available);
+        let mut current = previous.clone();
+        current.removable = true;
+
+        let report = VolumeEventInvalidationReport::from_transition(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Available,
+            Some(&previous),
+            Some(&current),
+            None,
+        );
+
+        assert_eq!(report.reason, "volume-media-truth-changed");
+        assert_eq!(report.previous_kind, Some(VolumeKind::External));
+        assert_eq!(report.current_kind, Some(VolumeKind::External));
+        assert!(report.invalidate_sidebar);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.as_tsv().contains(
+            "\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\t"
+        ));
 
         fs::remove_dir_all(root).unwrap();
     }

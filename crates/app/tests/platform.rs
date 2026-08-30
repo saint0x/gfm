@@ -4745,6 +4745,27 @@ fn reports_volume_topology_case_sensitivity_diff_from_binary() {
 }
 
 #[test]
+fn reports_volume_topology_removable_media_diff_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-topology-removable-media")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-topology-diff\tcount=1\n"));
+    assert!(stdout.contains("volume-topology\tchanged\t"));
+    assert!(stdout.contains("\tstable-id=diskarbitration:uuid:REMOVABLE-TOPOLOGY\t"));
+    assert!(stdout.contains("\tprevious-kind=external\tcurrent-kind=external\t"));
+    assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.ends_with("reason=volume-media-truth-changed\n"));
+}
+
+#[test]
 fn reports_volume_topology_api_status_diff_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-topology-api-status")
@@ -4934,6 +4955,29 @@ fn reports_volume_event_transition_case_sensitivity_from_binary() {
     assert!(stdout.contains("\tcurrent-case-sensitive=true\t"));
     assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
     assert!(stdout.ends_with("reason=volume-case-sensitivity-changed\n"));
+}
+
+#[test]
+fn reports_volume_event_transition_removable_media_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-transition-removable-media")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "volume-event-invalidation\tkind=description-changed\tnative-status=available\t"
+    ));
+    assert!(stdout.contains("\tpath=/Volumes/Removable Event\t"));
+    assert!(stdout.contains("\tprevious-kind=external\tprevious-mount=mounted\t"));
+    assert!(stdout.contains("\tcurrent-kind=external\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.ends_with("reason=volume-media-truth-changed\n"));
 }
 
 #[test]
