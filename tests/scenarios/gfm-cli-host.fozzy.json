@@ -7193,14 +7193,18 @@
       "times": 1
     },
     {
-      "type": "fs_read_assert",
-      "path": "tmp/gfm-fozzy-operation-retry-destination.txt",
-      "equals": "operation retry source\n"
-    },
-    {
-      "type": "fs_read_assert",
-      "path": "tmp/gfm-fozzy-operation-retry.state",
-      "equals": "2"
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_OPS_JOURNAL": "tmp/gfm-fozzy-operation-retry.journal"
+      },
+      "args": [
+        "copy-retry-probe",
+        "tmp/gfm-fozzy-operation-retry-source.txt",
+        "tmp/gfm-fozzy-operation-retry-destination.txt",
+        "tmp/gfm-fozzy-operation-retry.state"
+      ],
+      "expect_exit": 0
     },
     {
       "type": "fs_write",
@@ -7217,6 +7221,16 @@
       ],
       "exit_code": 0,
       "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index",
+        "tmp/gfm-fozzy-search-retry-root",
+        "tmp/gfm-fozzy-search-retry.gfmidx"
+      ],
+      "expect_exit": 0
     },
     {
       "type": "proc_when",
@@ -7236,9 +7250,20 @@
       "times": 1
     },
     {
-      "type": "fs_read_assert",
-      "path": "tmp/gfm-fozzy-search-retry.state",
-      "equals": "2"
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-search-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-search-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-search-retry.progress"
+      },
+      "args": [
+        "search-index-retry-probe",
+        "tmp/gfm-fozzy-search-retry.gfmidx",
+        "retrysearch",
+        "tmp/gfm-fozzy-search-retry.state"
+      ],
+      "expect_exit": 0
     }
   ]
 }
