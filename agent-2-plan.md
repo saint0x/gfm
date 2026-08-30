@@ -1,6 +1,6 @@
 # Agent 2 Remaining Work
 
-Date: 2026-08-27
+Date: 2026-08-30
 
 This is an undone-only handoff. Remove an item only when the whole item is implemented in production code, verified at the stated scope, committed, pushed to `origin/main`, and followed by a clean `git status --branch --short`.
 
