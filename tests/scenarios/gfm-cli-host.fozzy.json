@@ -4364,6 +4364,16 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-security-bookmarks.tsv",
+      "data": "gfm-security-bookmarks-v1\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/broken-security-bookmarks.tsv",
+      "data": "not a bookmark store\n"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-offline-volume/trash-metadata.tsv",
       "data": "gfm-fozzy-trash-entry.txt\ttmp/gfm-fozzy-restored-entry.txt\t7\ttrue\ttrue\t\n"
     },
@@ -4414,6 +4424,32 @@
         "security-bookmark-create",
         "tmp/gfm-fozzy-offline-volume/SecurityBookmarkTarget.md",
         "read"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_SECURITY_BOOKMARKS": "tmp/gfm-fozzy-security-bookmarks.tsv"
+      },
+      "args": [
+        "security-bookmark-reconcile"
+      ],
+      "exit_code": 0,
+      "stdout": "security-bookmark-store\ttmp/gfm-fozzy-security-bookmarks.tsv\trecords=0\trepaired=0\tunavailable=0\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_SECURITY_BOOKMARKS": "tmp/gfm-fozzy-offline-volume/broken-security-bookmarks.tsv"
+      },
+      "args": [
+        "security-bookmark-reconcile"
       ],
       "exit_code": 1,
       "times": 1

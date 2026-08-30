@@ -823,6 +823,7 @@ fn print_usage() {
   gfm security-worker-admission <worker-label> <path> [read|write|index|preview|operate]
   gfm security-worker-admission-unavailable-volume-api <worker-label> <path> <volume-root> [read|write|index|preview|operate]
   gfm security-bookmark-create <path> [read|write|index|preview|operate]
+  gfm security-bookmark-reconcile
   gfm mac-bridges
   gfm native-icon <path>
   gfm native-icon-bridge <path>

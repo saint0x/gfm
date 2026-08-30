@@ -914,6 +914,66 @@ fn bookmark_required_preview_refuses_unreachable_store_before_reading_from_binar
 }
 
 #[test]
+fn security_bookmark_reconcile_reports_store_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-security-bookmark-reconcile");
+    let bookmarks = root.join("bookmarks.tsv");
+    fs::write(&bookmarks, "gfm-security-bookmarks-v1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .arg("security-bookmark-reconcile")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        format!(
+            "security-bookmark-store\t{}\trecords=0\trepaired=0\tunavailable=0\n",
+            bookmarks.display()
+        )
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn security_bookmark_reconcile_refuses_unreachable_store_before_reading_from_binary() {
+    let offline = unique_temp_dir("gfm-cli-security-bookmark-reconcile-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let bookmarks = offline.join("bookmarks.tsv");
+    fs::write(&bookmarks, "not a bookmark store\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .arg("security-bookmark-reconcile")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("security-bookmark-store\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "security bookmark reconcile volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("unsupported security bookmark store"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn quicklook_preflight_retains_security_scoped_bookmark_from_binary() {
     let root = unique_temp_dir("gfm-cli-quicklook-bookmark");
     let home = root.join("home");

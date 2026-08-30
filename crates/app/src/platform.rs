@@ -120,6 +120,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 println!("{line}");
             }
         }
+        "security-bookmark-reconcile" => {
+            println!("{}", run_security_bookmark_reconcile()?.as_tsv());
+        }
         "mac-bridges" => {
             println!("{}", MacBridgeContract::finder_required().as_tsv());
         }
@@ -1748,6 +1751,22 @@ fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<V
         cancellation.check()?;
         let store_report = store.upsert(bookmark)?;
         Ok(vec![report.as_tsv(), store_report.as_tsv()])
+    })
+}
+
+fn run_security_bookmark_reconcile() -> Result<gfm_mac::SecurityScopedBookmarkStoreReport> {
+    const WORKER: &str = "security bookmark reconcile";
+    let store = SecurityScopedBookmarkStore::new(crate::runtime::default_security_bookmarks_path());
+    let store_probe = write_probe_path(store.path())?.to_path_buf();
+    preflight_volume_access_scope(&store_probe, AccessIntent::Write, WORKER)?;
+    run_volume_task_cancellable(parent_volume(&store_probe), Priority::Visible, WORKER, {
+        let store_probe = store_probe.clone();
+        move |cancellation| {
+            cancellation.check()?;
+            let _store_access = preflight_access_scope(&store_probe, AccessIntent::Write, WORKER)?;
+            cancellation.check()?;
+            store.reconcile()
+        }
     })
 }
 
