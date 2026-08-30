@@ -2345,6 +2345,11 @@
       "data": "icloud downloaded false"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-state-false.icloud.md",
+      "data": "icloud conflict false"
+    },
+    {
       "type": "proc_when",
       "cmd": "/usr/bin/xattr",
       "args": [
@@ -2366,6 +2371,20 @@
         "com.apple.fileprovider.state",
         "isDownloaded=false; isDownloading=false",
         "tmp/gfm-fozzy-downloaded-false.icloud.md"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/usr/bin/xattr",
+      "args": [
+        "-w",
+        "com.apple.fileprovider.state",
+        "hasUnresolvedConflicts=false",
+        "tmp/gfm-fozzy-state-false.icloud.md"
       ],
       "exit_code": 0,
       "stdout": "",
@@ -2398,6 +2417,16 @@
       "args": [
         "fileprovider-state",
         "tmp/gfm-fozzy-downloaded-false.icloud.md"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-state",
+        "tmp/gfm-fozzy-state-false.icloud.md"
       ],
       "exit_code": 0,
       "times": 1

@@ -1789,20 +1789,59 @@ fn storage_state_for_path(
 
     let name = file_name_lower(path);
     let attr_blob = xattr_signal_blob(hints);
-    if name.contains("conflict") || attr_blob.contains("conflict") {
+    if name.contains("conflict")
+        || contains_state_phrase_without_false_marker(
+            &attr_blob,
+            &["unresolved-conflict", "unresolved conflict", "conflict"],
+            &[
+                "conflict",
+                "conflicts",
+                "unresolved-conflicts",
+                "hasunresolvedconflicts",
+            ],
+        )
+    {
         CloudStorageState::Conflict
-    } else if name.contains("offline") || attr_blob.contains("offline") {
+    } else if name.contains("offline")
+        || contains_state_phrase_without_false_marker(
+            &attr_blob,
+            &["offline", "network-unavailable", "network unavailable"],
+            &["offline", "network-offline"],
+        )
+    {
         CloudStorageState::Offline
     } else if has_evicted_materialization_evidence(path, hints)
         || attr_blob.contains("placeholder")
         || attr_blob.contains("evict")
     {
         CloudStorageState::Evicted
-    } else if name.contains("downloading") || attr_blob.contains("downloading") {
+    } else if name.contains("downloading")
+        || contains_state_phrase_without_false_marker(
+            &attr_blob,
+            &[
+                "download-in-progress",
+                "download in progress",
+                "downloading",
+            ],
+            &["downloading", "isdownloading"],
+        )
+    {
         CloudStorageState::Downloading
-    } else if name.contains("uploading") || attr_blob.contains("uploading") {
+    } else if name.contains("uploading")
+        || contains_state_phrase_without_false_marker(
+            &attr_blob,
+            &["upload-in-progress", "upload in progress", "uploading"],
+            &["uploading", "isuploading"],
+        )
+    {
         CloudStorageState::Uploading
-    } else if name.contains("waiting") || attr_blob.contains("waiting") {
+    } else if name.contains("waiting")
+        || contains_state_phrase_without_false_marker(
+            &attr_blob,
+            &["waiting", "queued", "requested"],
+            &["waiting", "queued", "requested", "downloadrequested"],
+        )
+    {
         CloudStorageState::Waiting
     } else if (hints.native_identity.status == NativeFileProviderIdentityStatus::Available
         && !native_has_ubiquitous_materialization_evidence(&hints.native))
@@ -5164,6 +5203,38 @@ mod tests {
             report.materialization,
             CloudMaterialization::RemotePlaceholder
         );
+    }
+
+    #[test]
+    fn xattr_value_conflict_false_alone_keeps_materialized_state() {
+        let root = unique_temp_dir();
+        let path = root.join("Remote.icloud.md");
+        fs::write(&path, "remote").unwrap();
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: vec!["com.apple.fileprovider.state".to_string()],
+            xattr_values: vec!["hasUnresolvedConflicts=false".to_string()],
+            provider_identifier: None,
+            source: "fixture-name+xattr".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.storage_state, CloudStorageState::Downloaded);
+        assert!(!report.conflict);
+        assert_eq!(report.materialization, CloudMaterialization::Materialized);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::XattrFallback
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
