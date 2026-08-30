@@ -32,7 +32,7 @@ use gfm_ui::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -1668,9 +1668,14 @@ fn read_trash_restore_metadata(path: &Path) -> Result<BTreeMap<String, TrashEntr
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
+            let _access = crate::access::preflight_access_scope_checked(
+                &path,
+                AccessIntent::Read,
+                WORKER,
+                || cancellation.check(),
+            )?;
             cancellation.check()?;
-            parse_trash_restore_metadata(&path)
+            parse_trash_restore_metadata_checked(&path, || cancellation.check())
         },
     )
 }
@@ -1694,10 +1699,18 @@ fn read_finder_metadata(path: PathBuf) -> Result<FinderMetadataReport> {
     )
 }
 
-fn parse_trash_restore_metadata(path: &Path) -> Result<BTreeMap<String, TrashEntryMetadata>> {
-    let text = std::fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+fn parse_trash_restore_metadata_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<BTreeMap<String, TrashEntryMetadata>> {
+    check_control()?;
+    let file = fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    let reader = BufReader::new(file);
     let mut metadata = BTreeMap::new();
-    for (line_index, line) in text.lines().enumerate() {
+    for (line_index, line) in reader.lines().enumerate() {
+        check_control()?;
+        let line = line.map_err(|err| GfmError::io(path, err))?;
         if line.trim().is_empty() || line.starts_with('#') {
             continue;
         }
@@ -1725,7 +1738,9 @@ fn parse_trash_restore_metadata(path: &Path) -> Result<BTreeMap<String, TrashEnt
                 permission_issue,
             },
         );
+        check_control()?;
     }
+    check_control()?;
     Ok(metadata)
 }
 
@@ -1853,6 +1868,48 @@ mod tests {
         access.prompt_source = "missing-path".to_string();
 
         assert!(permission_access_requires_surface(&access));
+    }
+
+    #[test]
+    fn trash_restore_metadata_parser_honors_pre_cancelled_token_before_open() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-interface-trash-metadata-pre-cancelled-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let err =
+            parse_trash_restore_metadata_checked(&path, || Err(GfmError::Cancelled)).unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn trash_restore_metadata_parser_returns_cancelled_between_lines() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-interface-trash-metadata-cancelled-{}",
+            std::process::id()
+        ));
+        let line = "report.md\t/Users/me/report.md\t2026-08-30\ttrue\ttrue\t\n";
+        let text = line.repeat(128);
+        std::fs::write(&path, &text).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let mut checks = 0usize;
+
+        let err = parse_trash_restore_metadata_checked(&path, || {
+            checks += 1;
+            if checks >= 6 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
