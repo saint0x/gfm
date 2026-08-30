@@ -608,49 +608,77 @@ impl JobPayloadCatalog {
     }
 
     pub fn write_all(&self, records: &[JobPayloadRecord]) -> Result<()> {
+        self.write_all_checked(records, || Ok(()))
+    }
+
+    pub fn write_all_checked(
+        &self,
+        records: &[JobPayloadRecord],
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
         let parent = real_parent_or_cwd(&self.path);
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+        check_control()?;
         let temporary = self.temp_path();
-        {
+        let result = (|| {
             let file = File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
+            check_control()?;
             let mut writer = BufWriter::new(file);
-            writeln!(writer, "gfm-job-payload-catalog-v1")
-                .map_err(|err| GfmError::io(&temporary, err))?;
+            write_payload_catalog_line_checked(
+                &mut writer,
+                &temporary,
+                "gfm-job-payload-catalog-v1",
+                &mut check_control,
+            )?;
             for record in records {
-                writeln!(writer, "{}", record.as_tsv())
-                    .map_err(|err| GfmError::io(&temporary, err))?;
+                write_payload_catalog_line_checked(
+                    &mut writer,
+                    &temporary,
+                    &record.as_tsv(),
+                    &mut check_control,
+                )?;
             }
+            check_control()?;
             writer
                 .flush()
                 .map_err(|err| GfmError::io(&temporary, err))?;
-        }
-        if let Err(err) = fs::rename(&temporary, &self.path) {
+            check_control()?;
+            writer
+                .get_ref()
+                .sync_all()
+                .map_err(|err| GfmError::io(&temporary, err))?;
+            check_control()?;
+            fs::rename(&temporary, &self.path).map_err(|err| GfmError::io(&self.path, err))?;
+            Ok(())
+        })();
+        if result.is_err() {
             let _ = fs::remove_file(&temporary);
-            return Err(GfmError::io(&self.path, err));
         }
-        Ok(())
+        result
     }
 
     pub fn append(&self, record: &JobPayloadRecord) -> Result<()> {
-        if !path_exists(&self.path, "job payload catalog")? {
-            self.write_all(&[])?;
-        }
-        if self.contains_id(record.id)? {
-            let mut records = self.read()?;
-            if let Some(existing) = records.iter_mut().find(|existing| existing.id == record.id) {
-                if existing == record {
-                    return Ok(());
-                }
-                *existing = record.clone();
+        self.append_checked(record, || Ok(()))
+    }
+
+    pub fn append_checked(
+        &self,
+        record: &JobPayloadRecord,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        let mut records = self.read_checked(&mut check_control)?;
+        check_control()?;
+        if let Some(existing) = records.iter_mut().find(|existing| existing.id == record.id) {
+            if existing == record {
+                return Ok(());
             }
-            self.write_all(&records)?;
-            return Ok(());
+            *existing = record.clone();
+        } else {
+            records.push(record.clone());
         }
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(&self.path)
-            .map_err(|err| GfmError::io(&self.path, err))?;
-        writeln!(file, "{}", record.as_tsv()).map_err(|err| GfmError::io(&self.path, err))
+        check_control()?;
+        self.write_all_checked(&records, &mut check_control)
     }
 
     pub fn read(&self) -> Result<Vec<JobPayloadRecord>> {
@@ -739,42 +767,6 @@ impl JobPayloadCatalog {
         }
         check_control()?;
         Ok(records)
-    }
-
-    fn contains_id(&self, id: JobId) -> Result<bool> {
-        if !path_exists(&self.path, "job payload catalog")? {
-            return Ok(false);
-        }
-        let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
-        let mut lines = BufReader::new(file).lines();
-        let header = lines
-            .next()
-            .transpose()
-            .map_err(|err| GfmError::io(&self.path, err))?
-            .ok_or_else(|| {
-                GfmError::Format(format!("empty payload catalog {}", self.path.display()))
-            })?;
-        if header != "gfm-job-payload-catalog-v1" {
-            return Err(GfmError::Format(format!(
-                "unsupported payload catalog header `{header}` in {}",
-                self.path.display()
-            )));
-        }
-        for (line_index, line) in lines.enumerate() {
-            let line = line.map_err(|err| GfmError::io(&self.path, err))?;
-            let record = parse_payload_record(&line).map_err(|err| {
-                GfmError::Format(format!(
-                    "{} line {}: {}",
-                    self.path.display(),
-                    line_index + 2,
-                    err
-                ))
-            })?;
-            if record.id == id {
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 
     fn temp_path(&self) -> PathBuf {
@@ -1340,6 +1332,23 @@ fn parse_payload_record(line: &str) -> std::result::Result<JobPayloadRecord, Str
         volume,
         summary,
     })
+}
+
+fn write_payload_catalog_line_checked(
+    writer: &mut impl Write,
+    path: &Path,
+    line: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    writer
+        .write_all(line.as_bytes())
+        .map_err(|err| GfmError::io(path, err))?;
+    writer
+        .write_all(b"\n")
+        .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    Ok(())
 }
 
 fn escape(input: &str) -> String {

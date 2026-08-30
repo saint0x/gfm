@@ -1,6 +1,6 @@
 use crate::*;
 use gfm_types::{GfmError, VolumeId};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
@@ -1448,6 +1448,108 @@ fn payload_catalog_temp_paths_are_unique_within_process() {
 }
 
 #[test]
+fn payload_catalog_write_all_checked_honors_pre_cancelled_control_before_file_create() {
+    let path = temp_path("gfm-job-payload-catalog-write-pre-cancel", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+    let record = sample_payload_record(1);
+
+    let result = catalog.write_all_checked(&[record], || Err(GfmError::Cancelled));
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(!path.exists());
+    assert!(!has_payload_catalog_temp_file(&path));
+}
+
+#[test]
+fn payload_catalog_write_all_checked_removes_temp_file_after_cancelled_record_write() {
+    let path = temp_path("gfm-job-payload-catalog-write-temp-cancel", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+    let records = vec![sample_payload_record(1), sample_payload_record(2)];
+    let mut checks = 0usize;
+
+    let result = catalog.write_all_checked(&records, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert!(!path.exists());
+    assert!(!has_payload_catalog_temp_file(&path));
+}
+
+#[test]
+fn payload_catalog_write_all_checked_preserves_existing_catalog_when_cancelled_before_publish() {
+    let path = temp_path("gfm-job-payload-catalog-write-preserve", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+    let existing = sample_payload_record(1);
+    let replacement = sample_payload_record(2);
+    catalog.write_all(std::slice::from_ref(&existing)).unwrap();
+    let before = std::fs::read_to_string(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = catalog.write_all_checked(std::slice::from_ref(&replacement), || {
+        checks += 1;
+        if checks >= 9 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 9);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    assert_eq!(catalog.read().unwrap(), vec![existing]);
+    assert!(!has_payload_catalog_temp_file(&path));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn payload_catalog_append_checked_honors_pre_cancelled_control_before_file_create() {
+    let path = temp_path("gfm-job-payload-catalog-append-pre-cancel", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+    let record = sample_payload_record(1);
+
+    let result = catalog.append_checked(&record, || Err(GfmError::Cancelled));
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(!path.exists());
+    assert!(!has_payload_catalog_temp_file(&path));
+}
+
+#[test]
+fn payload_catalog_append_checked_preserves_existing_catalog_when_cancelled_before_publish() {
+    let path = temp_path("gfm-job-payload-catalog-append-preserve", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+    let existing = sample_payload_record(1);
+    let appended = sample_payload_record(2);
+    catalog.write_all(std::slice::from_ref(&existing)).unwrap();
+    let before = std::fs::read_to_string(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = catalog.append_checked(&appended, || {
+        checks += 1;
+        if checks >= 11 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 11);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    assert_eq!(catalog.read().unwrap(), vec![existing]);
+    assert!(!has_payload_catalog_temp_file(&path));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn payload_catalog_reads_requested_records_only() {
     let path = temp_path("gfm-job-payload-catalog-filtered", "gfmjobs");
     let catalog = JobPayloadCatalog::new(&path);
@@ -1669,6 +1771,36 @@ fn temp_dir(prefix: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn sample_payload_record(id: u64) -> JobPayloadRecord {
+    JobPayloadRecord::new(
+        JobId::from_raw(id),
+        JobPayloadKind::Preview,
+        "quicklook preview",
+        format!("preview/{id}.gfmjob"),
+        Some(VolumeId(7)),
+        format!("preview item {id}"),
+    )
+}
+
+fn has_payload_catalog_temp_file(path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let prefix = format!("{file_name}.{}.", std::process::id());
+    std::fs::read_dir(parent)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".tmp"))
+        })
 }
 
 fn unprobeable_child_path(root: &std::path::Path, prefix: &str, extension: &str) -> PathBuf {

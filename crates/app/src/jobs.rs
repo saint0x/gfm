@@ -237,7 +237,7 @@ fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
         cancellation.check()?;
         let catalog = JobPayloadCatalog::new(&path);
         let records = sample_payload_catalog_records();
-        catalog.write_all(&records)?;
+        catalog.write_all_checked(&records, || cancellation.check())?;
         cancellation.check()?;
         let lines = catalog
             .read_checked(|| cancellation.check())?
