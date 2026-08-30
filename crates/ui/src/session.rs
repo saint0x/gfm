@@ -1,12 +1,12 @@
 use crate::AppLaunchSpec;
 use gpui::{bounds, point, px, size, Bounds, Pixels, WindowBounds};
 use std::env;
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const CASCADE_OFFSET_PX: f32 = 24.0;
 const MAX_CASCADE_STEPS: u32 = 8;
@@ -206,26 +206,91 @@ impl WindowSessionStore {
     }
 
     pub fn load_window_bounds(&self) -> io::Result<Option<WindowPlacement>> {
-        let content = match fs::read_to_string(&self.path) {
-            Ok(content) => content,
+        self.load_window_bounds_checked(|| Ok(()))
+    }
+
+    pub fn load_window_bounds_checked(
+        &self,
+        mut check_control: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<Option<WindowPlacement>> {
+        const CHUNK_BYTES: usize = 64 * 1024;
+
+        check_control()?;
+        let mut file = match File::open(&self.path) {
+            Ok(file) => file,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err),
         };
+        check_control()?;
+        let mut bytes = Vec::new();
+        let mut buffer = [0; CHUNK_BYTES];
+        loop {
+            check_control()?;
+            let read = file.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+            check_control()?;
+        }
+        check_control()?;
+        let content = String::from_utf8(bytes)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         Ok(parse_store(&content))
     }
 
     pub fn save_window_bounds(&self, bounds: WindowBounds) -> io::Result<()> {
+        self.save_window_bounds_checked(bounds, || Ok(()))
+    }
+
+    pub fn save_window_bounds_checked(
+        &self,
+        bounds: WindowBounds,
+        mut check_control: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<()> {
+        check_control()?;
         let placement = WindowPlacement::from_bounds(bounds.get_bounds());
         if !placement.is_valid() {
             return Ok(());
         }
+        check_control()?;
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let tmp = self.path.with_extension("tmp");
-        fs::write(&tmp, format!("main-window\t{}\n", placement.as_field()))?;
-        fs::rename(tmp, &self.path)?;
-        Ok(())
+        check_control()?;
+        let tmp = self.temp_path();
+        let content = format!("main-window\t{}\n", placement.as_field());
+        let result = (|| {
+            let mut file = File::create(&tmp)?;
+            check_control()?;
+            for chunk in content.as_bytes().chunks(64 * 1024) {
+                check_control()?;
+                file.write_all(chunk)?;
+            }
+            check_control()?;
+            file.sync_all()?;
+            check_control()?;
+            fs::rename(&tmp, &self.path)?;
+            sync_parent(&self.path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        result
+    }
+
+    fn temp_path(&self) -> PathBuf {
+        let file_name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("window-session.tsv");
+        self.path.with_file_name(format!(
+            ".{file_name}.{}.{nonce}.tmp",
+            std::process::id(),
+            nonce = now_nanos()
+        ))
     }
 }
 
@@ -291,6 +356,21 @@ fn default_store_path() -> PathBuf {
         .join("Library/Application Support/GFM/window-session.tsv")
 }
 
+fn sync_parent(path: &Path) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    File::open(parent).and_then(|file| file.sync_all())
+}
+
+fn now_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,6 +409,91 @@ mod tests {
     }
 
     #[test]
+    fn store_temp_paths_are_unique_within_process() {
+        let root = unique_temp_dir("gfm-session-unique-temp");
+        let store = WindowSessionStore::new(root.join("window-session.tsv"));
+
+        let first = store.temp_path();
+        let second = store.temp_path();
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(root.as_path()));
+        assert_eq!(second.parent(), Some(root.as_path()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn load_window_bounds_checked_honors_pre_cancelled_control_before_open() {
+        let root = unique_temp_dir("gfm-session-load-pre-cancel");
+        let store = WindowSessionStore::new(root.join("window-session.tsv"));
+
+        let err = store
+            .load_window_bounds_checked(|| Err(cancelled_io()))
+            .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn save_window_bounds_checked_honors_pre_cancelled_control_before_file_create() {
+        let root = unique_temp_dir("gfm-session-save-pre-cancel");
+        let store = WindowSessionStore::new(root.join("window-session.tsv"));
+        let bounds = WindowBounds::Windowed(bounds(
+            point(px(10.0), px(20.0)),
+            size(px(1040.0), px(720.0)),
+        ));
+
+        let err = store
+            .save_window_bounds_checked(bounds, || Err(cancelled_io()))
+            .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+        assert!(!store.path().exists());
+        assert_eq!(session_temp_count(store.path()), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn save_window_bounds_checked_preserves_existing_bounds_on_cancel() {
+        let root = unique_temp_dir("gfm-session-save-cancel-preserve");
+        let store = WindowSessionStore::new(root.join("window-session.tsv"));
+        let original = WindowBounds::Windowed(bounds(
+            point(px(10.0), px(20.0)),
+            size(px(1040.0), px(720.0)),
+        ));
+        let replacement = WindowBounds::Windowed(bounds(
+            point(px(30.0), px(40.0)),
+            size(px(1200.0), px(800.0)),
+        ));
+        store.save_window_bounds(original).unwrap();
+        let before = fs::read(store.path()).unwrap();
+        let mut checks = 0usize;
+
+        let err = store
+            .save_window_bounds_checked(replacement, || {
+                checks += 1;
+                if checks >= 5 {
+                    Err(cancelled_io())
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+        assert!(checks >= 5);
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+        assert_eq!(
+            store.load_window_bounds().unwrap().unwrap().as_field(),
+            "10,20,1040,720"
+        );
+        assert_eq!(session_temp_count(store.path()), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn restored_windows_cascade_by_ordinal() {
         let placement = WindowPlacement {
             x: 10.0,
@@ -344,5 +509,31 @@ mod tests {
     fn invalid_store_content_is_ignored() {
         assert_eq!(parse_store("main-window\tbad\n"), None);
         assert_eq!(parse_store("other\t1,2,3,4\n"), None);
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let path =
+            env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), now_nanos()));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn cancelled_io() -> io::Error {
+        io::Error::new(io::ErrorKind::Interrupted, "cancelled")
+    }
+
+    fn session_temp_count(path: &Path) -> usize {
+        let Some(parent) = path.parent() else {
+            return 0;
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            return 0;
+        };
+        let prefix = format!(".{file_name}.{}.", std::process::id());
+        fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+            .count()
     }
 }

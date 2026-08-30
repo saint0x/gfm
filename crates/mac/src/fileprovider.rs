@@ -10,7 +10,7 @@ use gfm_mac_sys::{
 use gfm_types::{FileEvent, FileEventKind, GfmError, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{ErrorKind, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 const ICLOUD_DRIVE_COMPONENT: &str = "com~apple~CloudDocs";
@@ -904,10 +904,15 @@ impl FileProviderStateSnapshot {
     ) -> Result<Self> {
         let path = path.as_ref();
         check_control()?;
-        let text = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+        let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
         check_control()?;
-        let mut lines = text.lines();
-        match lines.next() {
+        let mut lines = BufReader::new(file).lines();
+        let header = lines
+            .next()
+            .transpose()
+            .map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
+        match header.as_deref() {
             Some("gfm-fileprovider-state-v1") => {}
             Some(other) => {
                 return Err(GfmError::Format(format!(
@@ -926,6 +931,7 @@ impl FileProviderStateSnapshot {
         let mut seen_paths = BTreeSet::new();
         for (line_index, line) in lines.enumerate() {
             check_control()?;
+            let line = line.map_err(|err| GfmError::io(path, err))?;
             if line.trim().is_empty() {
                 continue;
             }
