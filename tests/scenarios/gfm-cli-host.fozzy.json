@@ -3564,6 +3564,17 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-removable-media-invalidation"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-index-invalidation\tkind=description-changed\tpath=/Volumes/Removable Test\tprevious-volume=43\tprevious-class=external\tprevious-mount=mounted\tprevious-reachable=true\tprevious-read-only=-\tcurrent-volume=43\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tcurrent-read-only=-\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=true\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\tprevious-writable=-\tprevious-ejectable=true\tprevious-mountable=-\tprevious-case-sensitive=-\tcurrent-writable=-\tcurrent-ejectable=true\tcurrent-mountable=-\tcurrent-case-sensitive=-\twritable-changed=false\tejectable-changed=false\tmountable-changed=false\tcase-sensitive-changed=false\treason=volume-event-filesystem-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-event-index-invalidation",
         "appeared",
         "tmp/gfm-fozzy-dist"

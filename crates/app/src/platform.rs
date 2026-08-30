@@ -579,6 +579,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .as_tsv()
             );
         }
+        "volume-removable-media-invalidation" => {
+            println!("{}", volume_removable_media_invalidation().as_tsv());
+        }
         "volume-event-runtime-invalidation" => {
             let report = volume_event_index_invalidation_from_args(args)?;
             println!("{}", report.as_tsv());
@@ -1307,6 +1310,38 @@ fn volume_case_sensitivity_invalidation(
     VolumeEventIndexInvalidationReport::from_event(
         IndexVolumeEventKind::DescriptionChanged,
         Some(PathBuf::from("/Volumes/Case Test")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    )
+}
+
+fn volume_removable_media_invalidation() -> VolumeEventIndexInvalidationReport {
+    let previous = IndexVolumeDescriptor::new(
+        "Removable Test",
+        "/Volumes/Removable Test",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(43))
+    .with_stable_identity("diskarbitration:uuid:REMOVABLE-TEST")
+    .with_ejectable(Some(true))
+    .with_filesystem_signature("fs=apfs|ejectable=1|removable=0");
+    let current = IndexVolumeDescriptor::new(
+        "Removable Test",
+        "/Volumes/Removable Test",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(43))
+    .with_stable_identity("diskarbitration:uuid:REMOVABLE-TEST")
+    .with_ejectable(Some(true))
+    .with_filesystem_signature("fs=apfs|ejectable=1|removable=1");
+
+    VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/Removable Test")),
         Some(&previous),
         Some(&current),
         false,

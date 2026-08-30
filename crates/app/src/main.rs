@@ -354,6 +354,7 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
     push_signature_bool(&mut tokens, "read-only", Some(volume.read_only));
     push_signature_bool(&mut tokens, "mount-read-only", volume.mount_read_only);
     push_signature_bool(&mut tokens, "ejectable", Some(volume.ejectable));
+    push_signature_bool(&mut tokens, "removable", Some(volume.removable));
     push_signature_bool(&mut tokens, "mountable", volume.mountable);
     push_signature_str(
         &mut tokens,
@@ -1063,6 +1064,7 @@ mod tests {
     fn index_volume_descriptor_carries_operation_capabilities() {
         let root = unique_temp_dir("gfm-app-volume-operation-descriptor");
         let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.removable = true;
         volume.writable = false;
         volume.read_only = true;
         volume.ejectable = true;
@@ -1076,6 +1078,32 @@ mod tests {
         assert_eq!(descriptor.ejectable, Some(true));
         assert_eq!(descriptor.mountable, Some(false));
         assert_eq!(descriptor.case_sensitive, Some(true));
+        assert!(descriptor
+            .filesystem_signature
+            .as_deref()
+            .unwrap_or_default()
+            .contains("removable=1"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_volume_filesystem_signature_tracks_removable_media_truth() {
+        let root = unique_temp_dir("gfm-app-volume-removable-signature");
+        let mut previous = VolumeDescriptor::for_path(&root).unwrap();
+        previous.removable = false;
+        previous.ejectable = true;
+        let mut current = previous.clone();
+        current.removable = true;
+
+        let previous_signature = index_volume_filesystem_signature(&previous);
+        let current_signature = index_volume_filesystem_signature(&current);
+
+        assert_ne!(previous_signature, current_signature);
+        assert!(previous_signature.contains("removable=0"));
+        assert!(current_signature.contains("removable=1"));
+        assert!(previous_signature.contains("ejectable=1"));
+        assert!(current_signature.contains("ejectable=1"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
