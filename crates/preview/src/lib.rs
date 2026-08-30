@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 mod icon;
 mod quicklook;
@@ -379,16 +379,9 @@ impl PreviewCache {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<()> {
         let path = self.disk_path(&entry.key);
-        let tmp = path.with_extension("tmp");
-        if let Err(err) = write_disk_entry_bytes_checked(&tmp, &entry.bytes, &mut check_control) {
-            let _ = fs::remove_file(&tmp);
-            return Err(err);
-        }
-        if let Err(err) = check_control() {
-            let _ = fs::remove_file(&tmp);
-            return Err(err);
-        }
-        fs::rename(&tmp, &path).map_err(|err| GfmError::io(&path, err))
+        publish_preview_file_checked(&path, &mut check_control, |temporary, check_control| {
+            write_disk_entry_bytes_checked(temporary, &entry.bytes, check_control)
+        })
     }
 
     fn write_disk_index_entry_cancellable(
@@ -655,7 +648,6 @@ fn write_disk_index_checked(
 ) -> Result<()> {
     check_control()?;
     let path = preview_cache_index_path(config);
-    let tmp = path.with_extension("tmp");
     let mut lines = Vec::new();
     for key in index.values() {
         check_control()?;
@@ -663,17 +655,42 @@ fn write_disk_index_checked(
     }
     lines.sort();
     check_control()?;
-    if let Err(err) =
-        write_disk_index_contents_checked(&tmp, lines.join("\n").as_bytes(), &mut check_control)
-    {
-        let _ = fs::remove_file(&tmp);
-        return Err(err);
+    let contents = lines.join("\n");
+    publish_preview_file_checked(&path, &mut check_control, |temporary, check_control| {
+        write_disk_index_contents_checked(temporary, contents.as_bytes(), check_control)
+    })
+}
+
+fn publish_preview_file_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+    write_temporary: impl FnOnce(&Path, &mut dyn FnMut() -> Result<()>) -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let temporary = preview_cache_temporary_path(path);
+    let result = (|| {
+        write_temporary(&temporary, &mut check_control)?;
+        check_control()?;
+        fs::rename(&temporary, path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    if let Err(err) = check_control() {
-        let _ = fs::remove_file(&tmp);
-        return Err(err);
-    }
-    fs::rename(&tmp, &path).map_err(|err| GfmError::io(&path, err))
+    result
+}
+
+fn preview_cache_temporary_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("preview-cache");
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    path.with_file_name(format!(".{file_name}.{}.{nonce}.tmp", std::process::id()))
 }
 
 fn format_disk_index_line(key: &PreviewRequestKey) -> String {
@@ -1137,7 +1154,6 @@ mod tests {
         .unwrap();
         let key = key("cancelled-large.png", PreviewKind::Thumbnail);
         let disk_path = cache.disk_path(&key);
-        let tmp_path = disk_path.with_extension("tmp");
         let bytes = vec![7; 300 * 1024];
         let calls = Cell::new(0usize);
 
@@ -1153,7 +1169,7 @@ mod tests {
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(!disk_path.exists());
-        assert!(!tmp_path.exists());
+        assert_eq!(preview_cache_temp_count(&disk_path), 0);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1344,7 +1360,6 @@ mod tests {
             index.insert((key.path.clone(), key.kind), key);
         }
         let index_path = preview_cache_index_path(&config);
-        let tmp_path = index_path.with_extension("tmp");
         let calls = Cell::new(0usize);
 
         let result = write_disk_index_checked(&config, &index, || {
@@ -1359,7 +1374,7 @@ mod tests {
 
         assert_eq!(result, Err(GfmError::Cancelled));
         assert!(!index_path.exists());
-        assert!(!tmp_path.exists());
+        assert_eq!(preview_cache_temp_count(&index_path), 0);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1894,5 +1909,20 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn preview_cache_temp_count(path: &Path) -> usize {
+        let Some(parent) = path.parent() else {
+            return 0;
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            return 0;
+        };
+        let prefix = format!(".{file_name}.{}.", std::process::id());
+        fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+            .count()
     }
 }
