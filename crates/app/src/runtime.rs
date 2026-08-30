@@ -411,15 +411,6 @@ impl RuntimeJobHandle {
         )
     }
 
-    pub(crate) fn progress(
-        &self,
-        state: JobProgressState,
-        completed_units: u64,
-        detail: impl Into<String>,
-    ) -> Result<()> {
-        self.progress_checked(state, completed_units, detail, || Ok(()))
-    }
-
     pub(crate) fn progress_checked(
         &self,
         state: JobProgressState,

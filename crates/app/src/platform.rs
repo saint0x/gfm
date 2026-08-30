@@ -227,10 +227,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!("{}", report.as_tsv());
         }
-        "fileprovider-progress-job" => {
+        "fileprovider-progress-job" | "fileprovider-progress-job-cancel-after-access" => {
+            let cancel_after_access = command == "fileprovider-progress-job-cancel-after-access";
             let path = required_path(args.next(), "fileprovider-progress-job requires a path")?;
             let _runtime_access = preflight_runtime_job_state("fileprovider progress job")?;
-            let report = run_fileprovider_progress_job(path)?;
+            let report = match run_fileprovider_progress_job(path, cancel_after_access) {
+                Ok(report) => report,
+                Err(GfmError::Cancelled) if cancel_after_access => {
+                    println!(
+                        "fileprovider-progress\tstatus=cancelled\treason=cancelled-after-access"
+                    );
+                    return Ok(true);
+                }
+                Err(err) => return Err(err),
+            };
             println!("{}", report.as_tsv());
         }
         "fileprovider-operation" => {
@@ -1274,8 +1284,11 @@ fn volume_event_description_api_status() -> Result<VolumeEventInvalidationReport
     ))
 }
 
-fn publish_fileprovider_progress_job(path: PathBuf) -> Result<FileProviderProgressReport> {
-    let report = FileProviderProgressReport::read_path(&path)?;
+fn publish_fileprovider_progress_job(
+    path: PathBuf,
+    cancellation: &Cancellation,
+) -> Result<FileProviderProgressReport> {
+    let report = FileProviderProgressReport::read_path_checked(&path, || cancellation.check())?;
     let mut scheduler = Scheduler::new();
     let label = fileprovider_progress_label(report.state.progress.direction);
     let volume = detect_volume_id(&path).ok();
@@ -1293,10 +1306,11 @@ fn publish_fileprovider_progress_job(path: PathBuf) -> Result<FileProviderProgre
         fileprovider_progress_total_units(&report),
         detail.clone(),
     )?;
-    runtime.progress(
+    runtime.progress_checked(
         fileprovider_progress_job_state(&report),
         u64::from(report.state.progress.percent_milli.unwrap_or(0)),
         detail,
+        || cancellation.check(),
     )?;
     Ok(report)
 }
@@ -1718,7 +1732,10 @@ where
     })
 }
 
-fn run_fileprovider_progress_job(path: PathBuf) -> Result<FileProviderProgressReport> {
+fn run_fileprovider_progress_job(
+    path: PathBuf,
+    cancel_after_access: bool,
+) -> Result<FileProviderProgressReport> {
     const WORKER: &str = "fileprovider progress job";
     preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
     let volume = detect_volume_id(&path).ok();
@@ -1728,7 +1745,10 @@ fn run_fileprovider_progress_job(path: PathBuf) -> Result<FileProviderProgressRe
             cancellation.check()
         })?;
         cancellation.check()?;
-        publish_fileprovider_progress_job(path)
+        if cancel_after_access {
+            cancellation.cancel();
+        }
+        publish_fileprovider_progress_job(path, &cancellation)
     })
 }
 

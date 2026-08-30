@@ -559,8 +559,18 @@ pub struct FileProviderProgressReport {
 
 impl FileProviderProgressReport {
     pub fn read_path(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_path_checked(path, || Ok(()))
+    }
+
+    pub fn read_path_checked(
+        path: impl AsRef<Path>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
         let path = path.as_ref().to_path_buf();
-        let state = FileProviderStateReport::read_path(&path)?;
+        check()?;
+        let state = FileProviderStateReport::read_path_checked(&path, &mut check)?;
+        check()?;
         Ok(Self { path, state })
     }
 
@@ -4848,6 +4858,43 @@ mod tests {
             .as_tsv()
             .contains("\tprogress-direction=download\tprogress-milli=-\t"));
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_progress_report_honors_pre_cancelled_work_before_path_probe() {
+        let root = unique_temp_dir();
+        let downloading = root.join("Downloading.icloud-downloading.md");
+        fs::write(&downloading, "downloading").unwrap();
+
+        let err = FileProviderProgressReport::read_path_checked(&downloading, || {
+            Err(GfmError::Cancelled)
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_progress_report_can_cancel_during_state_read() {
+        let root = unique_temp_dir();
+        let downloading = root.join("Downloading.icloud-downloading.md");
+        fs::write(&downloading, "downloading").unwrap();
+        xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
+        let mut checks = 0usize;
+
+        let err = FileProviderProgressReport::read_path_checked(&downloading, || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
         fs::remove_dir_all(root).unwrap();
     }
 

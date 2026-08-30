@@ -1911,6 +1911,46 @@ fn publishes_fileprovider_progress_to_runtime_job_store_from_binary() {
 }
 
 #[test]
+fn fileprovider_progress_job_cancel_after_access_stops_before_runtime_publish_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-progress-job-cancel-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let downloading = root.join("Downloading.icloud-downloading.md");
+    let progress = root.join("progress.gfmprogress");
+    let catalog = root.join("payloads.gfmjobs");
+    std::fs::write(&downloading, "downloading").unwrap();
+    xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .arg("fileprovider-progress-job-cancel-after-access")
+        .arg(&downloading)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "fileprovider progress job", &downloading);
+    assert_eq!(
+        stdout,
+        "fileprovider-progress\tstatus=cancelled\treason=cancelled-after-access\n"
+    );
+    assert!(!progress.exists());
+    assert!(!catalog.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_progress_job_refuses_unreachable_runtime_store_before_provider_read_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-progress-runtime-blocked-{}",
