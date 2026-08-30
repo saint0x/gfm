@@ -781,9 +781,9 @@ impl Indexer {
         cancellation: &Cancellation,
     ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
         cancellation.check()?;
-        let records = MmapRecordArchive::open(records_path)?;
+        let records = MmapRecordArchive::open_checked(records_path, || cancellation.check())?;
         cancellation.check()?;
-        let content = MmapContentArchive::open(content_path)?;
+        let content = MmapContentArchive::open_checked(content_path, || cancellation.check())?;
         cancellation.check()?;
         let postings = content.postings_for_terms_limit(
             content_query_terms(query),
@@ -894,9 +894,9 @@ impl Indexer {
         cancellation: &Cancellation,
     ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
         cancellation.check()?;
-        let records = MmapRecordArchive::open(records_path)?;
+        let records = MmapRecordArchive::open_checked(records_path, || cancellation.check())?;
         cancellation.check()?;
-        let content = MmapContentSet::open(content_paths)?;
+        let content = MmapContentSet::open_checked(content_paths, || cancellation.check())?;
         cancellation.check()?;
         let postings = content.postings_for_terms_limit(
             content_query_terms(query),
@@ -932,9 +932,10 @@ impl Indexer {
         cancellation: &Cancellation,
     ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
         cancellation.check()?;
-        let records = MmapRecordArchive::open(records_path)?;
+        let records = MmapRecordArchive::open_checked(records_path, || cancellation.check())?;
         cancellation.check()?;
-        let content = MmapContentSet::open_manifest(manifest_path)?;
+        let content =
+            MmapContentSet::open_manifest_checked(manifest_path, || cancellation.check())?;
         cancellation.check()?;
         let postings = content.postings_for_terms_limit(
             content_query_terms(query),

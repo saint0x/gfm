@@ -715,7 +715,7 @@ impl LiveIndex {
         cancellation: &Cancellation,
     ) -> Result<usize> {
         cancellation.check()?;
-        let content = MmapContentArchive::open(path)?;
+        let content = MmapContentArchive::open_checked(path, || cancellation.check())?;
         cancellation.check()?;
         let postings = content.postings_for_terms_limit(
             content_query_terms(query),
@@ -743,7 +743,7 @@ impl LiveIndex {
         cancellation: &Cancellation,
     ) -> Result<usize> {
         cancellation.check()?;
-        let content = MmapContentSet::open(paths)?;
+        let content = MmapContentSet::open_checked(paths, || cancellation.check())?;
         cancellation.check()?;
         let postings = content.postings_for_terms(content_query_terms(query))?;
         cancellation.check()?;
@@ -775,7 +775,7 @@ impl LiveIndex {
         cancellation: &Cancellation,
     ) -> Result<usize> {
         cancellation.check()?;
-        let content = MmapContentSet::open(paths)?;
+        let content = MmapContentSet::open_checked(paths, || cancellation.check())?;
         cancellation.check()?;
         let postings = content.postings_for_terms_limit(
             content_query_terms(query),
@@ -807,7 +807,8 @@ impl LiveIndex {
         cancellation: &Cancellation,
     ) -> Result<usize> {
         cancellation.check()?;
-        let content = MmapContentSet::open_manifest(manifest_path)?;
+        let content =
+            MmapContentSet::open_manifest_checked(manifest_path, || cancellation.check())?;
         cancellation.check()?;
         let postings = content.postings_for_terms(content_query_terms(query))?;
         cancellation.check()?;
@@ -839,7 +840,8 @@ impl LiveIndex {
         cancellation: &Cancellation,
     ) -> Result<usize> {
         cancellation.check()?;
-        let content = MmapContentSet::open_manifest(manifest_path)?;
+        let content =
+            MmapContentSet::open_manifest_checked(manifest_path, || cancellation.check())?;
         cancellation.check()?;
         let postings = content.postings_for_terms_limit(
             content_query_terms(query),

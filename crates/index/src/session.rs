@@ -73,9 +73,9 @@ impl ContentIndexQuerySession {
         P: AsRef<Path>,
     {
         cancellation.check()?;
-        let records = MmapRecordArchive::open(records_path)?;
+        let records = MmapRecordArchive::open_checked(records_path, || cancellation.check())?;
         cancellation.check()?;
-        let content = MmapContentSet::open(content_paths)?;
+        let content = MmapContentSet::open_checked(content_paths, || cancellation.check())?;
         cancellation.check()?;
         Ok(Self {
             records,
@@ -105,9 +105,10 @@ impl ContentIndexQuerySession {
         cancellation: &Cancellation,
     ) -> Result<Self> {
         cancellation.check()?;
-        let records = MmapRecordArchive::open(records_path)?;
+        let records = MmapRecordArchive::open_checked(records_path, || cancellation.check())?;
         cancellation.check()?;
-        let content = MmapContentSet::open_manifest(manifest_path)?;
+        let content =
+            MmapContentSet::open_manifest_checked(manifest_path, || cancellation.check())?;
         cancellation.check()?;
         Ok(Self {
             records,
