@@ -15,7 +15,7 @@ use gfm_mac::AccessIntent;
 use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -647,7 +647,7 @@ fn runtime_retry_probe_cancellable(state: &Path, cancellation: &Cancellation) ->
     cancellation.check()?;
     let attempt = read_runtime_retry_attempt_checked(state, || cancellation.check())? + 1;
     cancellation.check()?;
-    std::fs::write(state, attempt.to_string()).map_err(|err| GfmError::io(state, err))?;
+    write_runtime_retry_attempt_checked(state, attempt, || cancellation.check())?;
     cancellation.check()?;
     if attempt == 1 {
         Err(GfmError::Format("temporary runtime probe busy".to_string()))
@@ -689,6 +689,54 @@ fn read_runtime_retry_attempt_checked(
     Ok(value.trim().parse::<usize>().unwrap_or(0))
 }
 
+fn write_runtime_retry_attempt_checked(
+    state: &Path,
+    attempt: usize,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    const CHUNK_BYTES: usize = 4096;
+
+    check_control()?;
+    let temporary = runtime_retry_attempt_temp_path(state);
+    let encoded = attempt.to_string();
+    let result = (|| {
+        let mut file = fs::File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
+        check_control()?;
+        for chunk in encoded.as_bytes().chunks(CHUNK_BYTES) {
+            check_control()?;
+            file.write_all(chunk)
+                .map_err(|err| GfmError::io(&temporary, err))?;
+            check_control()?;
+        }
+        file.flush().map_err(|err| GfmError::io(&temporary, err))?;
+        check_control()?;
+        drop(file);
+        fs::rename(&temporary, state).map_err(|err| GfmError::io(state, err))?;
+        check_control()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn runtime_retry_attempt_temp_path(state: &Path) -> PathBuf {
+    let file_name = state
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("retry.state");
+    let temporary_name = format!(
+        ".{file_name}.{}-{}.tmp",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    state.with_file_name(temporary_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,5 +756,65 @@ mod tests {
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(!state.exists());
+    }
+
+    #[test]
+    fn runtime_retry_attempt_write_honors_pre_cancelled_control_before_mutation() {
+        let state = std::env::temp_dir().join(format!(
+            "gfm-runtime-retry-attempt-write-cancel-{}-{}.state",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&state, "5").unwrap();
+
+        let result = write_runtime_retry_attempt_checked(&state, 6, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(fs::read_to_string(&state).unwrap(), "5");
+        fs::remove_file(state).unwrap();
+    }
+
+    #[test]
+    fn runtime_retry_attempt_write_removes_temporary_file_after_cancellation() {
+        let state = std::env::temp_dir().join(format!(
+            "gfm-runtime-retry-attempt-write-temp-cancel-{}-{}.state",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut checks = 0usize;
+
+        let result = write_runtime_retry_attempt_checked(&state, 6, || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 3);
+        assert!(!state.exists());
+        let temp_prefix = format!(
+            ".{}.{}-",
+            state.file_name().unwrap().to_string_lossy(),
+            std::process::id()
+        );
+        let leaked_temp = fs::read_dir(state.parent().unwrap())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(&temp_prefix))
+            });
+        assert!(!leaked_temp);
     }
 }
