@@ -21,6 +21,7 @@ const SEARCH_ARCHIVE_LOOKUP_CACHE_CAPACITY: usize = 512;
 const SIDECAR_RECORD_CACHE_CAPACITY: usize = 8192;
 const SIDECAR_CONTENT_POSTING_CACHE_CAPACITY: usize = 512;
 const SIDECAR_QUERY_RESULT_CACHE_CAPACITY: usize = 256;
+const SIDECAR_CONTENT_TERM_CHECK_STRIDE: usize = 256;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SidecarQueryImport {
@@ -431,7 +432,7 @@ impl SidecarIndexQuerySession {
         let mut selected = BTreeSet::new();
         for term in terms {
             cancellation.check()?;
-            let term = term.trim().to_lowercase();
+            let term = canonical_content_query_term_checked(&term, || cancellation.check())?;
             if !term.is_empty() {
                 selected.insert(term);
             }
@@ -548,7 +549,7 @@ impl SidecarIndexQuerySession {
         let mut selected = BTreeSet::new();
         for term in terms {
             cancellation.check()?;
-            let term = term.trim().to_lowercase();
+            let term = canonical_content_query_term_checked(&term, || cancellation.check())?;
             if !term.is_empty() {
                 selected.insert(term);
             }
@@ -1698,6 +1699,22 @@ pub(crate) fn sidecar_candidate_ids_cancellable(
     import.candidate_ids_cancellable(cancellation)
 }
 
+fn canonical_content_query_term_checked(
+    term: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<String> {
+    check_control()?;
+    let mut canonical = String::new();
+    for (index, ch) in term.trim().chars().enumerate() {
+        if index.is_multiple_of(SIDECAR_CONTENT_TERM_CHECK_STRIDE) {
+            check_control()?;
+        }
+        canonical.extend(ch.to_lowercase());
+    }
+    check_control()?;
+    Ok(canonical)
+}
+
 fn bounded_substring_grams(terms: &[String], budget: SearchLookupBudget) -> Vec<String> {
     let mut grams = BTreeSet::new();
     for term in terms {
@@ -1922,6 +1939,22 @@ mod tests {
         let result = sidecar_candidate_ids_cancellable(&import, &cancellation);
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn sidecar_content_query_term_canonicalization_honors_checked_control() {
+        let mut checks = 0usize;
+        let result = canonical_content_query_term_checked(&"FinderLatency".repeat(256), || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 3);
     }
 
     #[test]

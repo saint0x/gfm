@@ -16,6 +16,7 @@ const PREFIX_MAGIC_V1: &[u8] = b"gfm-prefix-v1\n";
 const PREFIX_INDEX_FOOTER: &[u8] = b"gfm-prefix-index-v1\n";
 const PREFIX_CHECKSUM_FOOTER: &[u8] = b"gfm-prefix-checksum-v1\n";
 const PREFIX_MAX_TERM_LEN: usize = 32;
+const PREFIX_NORMALIZE_CHECK_STRIDE: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrefixPosting {
@@ -216,7 +217,7 @@ impl MmapPrefixArchive {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<(Vec<FileId>, bool)> {
         check_control()?;
-        let prefix = normalize(prefix);
+        let prefix = normalize_checked(prefix, &mut check_control)?;
         if prefix.is_empty() || limit == 0 {
             return Ok((Vec::new(), false));
         }
@@ -251,7 +252,7 @@ impl MmapPrefixArchive {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<(Vec<FileId>, bool)> {
         check_control()?;
-        let prefix = normalize(prefix);
+        let prefix = normalize_checked(prefix, &mut check_control)?;
         if prefix.is_empty() || limit == 0 {
             return Ok((Vec::new(), false));
         }
@@ -316,7 +317,7 @@ impl MmapPrefixArchive {
 
         for prefix in prefixes {
             check_control()?;
-            let prefix = normalize(prefix.as_ref());
+            let prefix = normalize_checked(prefix.as_ref(), &mut check_control)?;
             if prefix.is_empty() {
                 continue;
             }
@@ -383,7 +384,7 @@ impl MmapPrefixArchive {
         let mut selected = BTreeSet::new();
         for prefix in prefixes {
             check_control()?;
-            let prefix = normalize(prefix.as_ref());
+            let prefix = normalize_checked(prefix.as_ref(), &mut check_control)?;
             if !prefix.is_empty() {
                 selected.insert(prefix);
             }
@@ -408,7 +409,7 @@ impl MmapPrefixArchive {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Option<PrefixPosting>> {
         check_control()?;
-        let prefix = normalize(prefix);
+        let prefix = normalize_checked(prefix, &mut check_control)?;
         if prefix.is_empty() {
             return Ok(None);
         }
@@ -666,6 +667,19 @@ fn prefix_indexed_len_from_slice(bytes: &[u8], path: &Path) -> Result<usize> {
 
 fn normalize(value: &str) -> String {
     value.trim().to_ascii_lowercase()
+}
+
+fn normalize_checked(value: &str, mut check_control: impl FnMut() -> Result<()>) -> Result<String> {
+    check_control()?;
+    let mut normalized = String::new();
+    for (index, ch) in value.trim().chars().enumerate() {
+        if index.is_multiple_of(PREFIX_NORMALIZE_CHECK_STRIDE) {
+            check_control()?;
+        }
+        normalized.push(ch.to_ascii_lowercase());
+    }
+    check_control()?;
+    Ok(normalized)
 }
 
 fn tokenize(value: &str) -> Vec<String> {
@@ -964,6 +978,34 @@ mod tests {
             }),
             Err(GfmError::Cancelled)
         ));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_prefix_archive_checked_lookup_can_cancel_during_normalization() {
+        let path = temp_path("gfm-prefix-checked-normalize-cancel", "gfmprefix");
+        write_prefix_postings(
+            &path,
+            &[PrefixPosting {
+                prefix: "project".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 42)],
+            }],
+        )
+        .unwrap();
+        let archive = MmapPrefixArchive::open(&path).unwrap();
+        let mut checks = 0usize;
+
+        let result = archive.ids_for_limit_checked(&"P".repeat(1_024), 8, || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(checks, 3);
         std::fs::remove_file(path).unwrap();
     }
 

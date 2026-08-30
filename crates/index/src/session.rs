@@ -11,6 +11,7 @@ use std::sync::{Mutex, MutexGuard};
 const CONTENT_RECORD_CACHE_CAPACITY: usize = 8192;
 const CONTENT_POSTING_CACHE_CAPACITY: usize = 512;
 const CONTENT_QUERY_RESULT_CACHE_CAPACITY: usize = 256;
+const CONTENT_QUERY_TERM_CHECK_STRIDE: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentQuerySessionReport {
@@ -275,7 +276,7 @@ impl ContentIndexQuerySession {
         let mut selected = BTreeSet::new();
         for term in terms {
             cancellation.check()?;
-            let term = term.trim().to_lowercase();
+            let term = canonical_query_term_checked(&term, || cancellation.check())?;
             if !term.is_empty() {
                 selected.insert(term);
             }
@@ -461,6 +462,22 @@ fn content_candidate_ids_cancellable(
         }
     }
     Ok(ids)
+}
+
+fn canonical_query_term_checked(
+    term: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<String> {
+    check_control()?;
+    let mut canonical = String::new();
+    for (index, ch) in term.trim().chars().enumerate() {
+        if index.is_multiple_of(CONTENT_QUERY_TERM_CHECK_STRIDE) {
+            check_control()?;
+        }
+        canonical.extend(ch.to_lowercase());
+    }
+    check_control()?;
+    Ok(canonical)
 }
 
 fn empty_content_query_session_report() -> ContentQuerySessionReport {
@@ -721,6 +738,22 @@ mod tests {
         let result = content_candidate_ids_cancellable(&[posting], &cancellation);
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn content_query_term_canonicalization_honors_checked_control() {
+        let mut checks = 0usize;
+        let result = canonical_query_term_checked(&"Needle".repeat(512), || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 3);
     }
 
     fn poison_posting_cache(session: &ContentIndexQuerySession) {

@@ -16,6 +16,7 @@ const SUBSTRING_MAGIC_V1: &[u8] = b"gfm-substring-v1\n";
 const SUBSTRING_INDEX_FOOTER: &[u8] = b"gfm-substring-index-v1\n";
 const SUBSTRING_CHECKSUM_FOOTER: &[u8] = b"gfm-substring-checksum-v1\n";
 const SUBSTRING_GRAM_CHARS: usize = 3;
+const SUBSTRING_NORMALIZE_CHECK_STRIDE: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubstringPosting {
@@ -217,7 +218,7 @@ impl MmapSubstringArchive {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<(Vec<FileId>, bool)> {
         check_control()?;
-        let gram = normalize(gram);
+        let gram = normalize_checked(gram, &mut check_control)?;
         if !is_substring_gram(&gram) || limit == 0 {
             return Ok((Vec::new(), false));
         }
@@ -252,7 +253,7 @@ impl MmapSubstringArchive {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<(Vec<FileId>, bool)> {
         check_control()?;
-        let gram = normalize(gram);
+        let gram = normalize_checked(gram, &mut check_control)?;
         if !is_substring_gram(&gram) || limit == 0 {
             return Ok((Vec::new(), false));
         }
@@ -317,7 +318,7 @@ impl MmapSubstringArchive {
 
         for gram in grams {
             check_control()?;
-            let gram = normalize(gram.as_ref());
+            let gram = normalize_checked(gram.as_ref(), &mut check_control)?;
             if !is_substring_gram(&gram) {
                 continue;
             }
@@ -384,7 +385,7 @@ impl MmapSubstringArchive {
         let mut selected = BTreeSet::new();
         for gram in grams {
             check_control()?;
-            let gram = normalize(gram.as_ref());
+            let gram = normalize_checked(gram.as_ref(), &mut check_control)?;
             if is_substring_gram(&gram) {
                 selected.insert(gram);
             }
@@ -424,7 +425,7 @@ impl MmapSubstringArchive {
         let mut selected = BTreeSet::new();
         for gram in grams {
             check_control()?;
-            let gram = normalize(gram.as_ref());
+            let gram = normalize_checked(gram.as_ref(), &mut check_control)?;
             if is_substring_gram(&gram) {
                 selected.insert(gram);
             }
@@ -449,7 +450,7 @@ impl MmapSubstringArchive {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Option<SubstringPosting>> {
         check_control()?;
-        let gram = normalize(gram);
+        let gram = normalize_checked(gram, &mut check_control)?;
         if !is_substring_gram(&gram) {
             return Ok(None);
         }
@@ -731,6 +732,19 @@ fn substring_indexed_len_from_slice(bytes: &[u8], path: &Path) -> Result<usize> 
 
 fn normalize(value: &str) -> String {
     value.trim().to_ascii_lowercase()
+}
+
+fn normalize_checked(value: &str, mut check_control: impl FnMut() -> Result<()>) -> Result<String> {
+    check_control()?;
+    let mut normalized = String::new();
+    for (index, ch) in value.trim().chars().enumerate() {
+        if index.is_multiple_of(SUBSTRING_NORMALIZE_CHECK_STRIDE) {
+            check_control()?;
+        }
+        normalized.push(ch.to_ascii_lowercase());
+    }
+    check_control()?;
+    Ok(normalized)
 }
 
 fn substring_grams(value: &str) -> Vec<String> {
@@ -1065,6 +1079,34 @@ mod tests {
             archive.postings_for_limit_checked(["pro"], 8, || Err(GfmError::Cancelled)),
             Err(GfmError::Cancelled)
         ));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_substring_archive_checked_lookup_can_cancel_during_normalization() {
+        let path = temp_path("gfm-substring-checked-normalize-cancel", "gfmsubstr");
+        write_substring_postings(
+            &path,
+            &[SubstringPosting {
+                gram: "pro".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 42)],
+            }],
+        )
+        .unwrap();
+        let archive = MmapSubstringArchive::open(&path).unwrap();
+        let mut checks = 0usize;
+
+        let result = archive.ids_for_limit_checked(&"P".repeat(1_024), 8, || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(checks, 3);
         std::fs::remove_file(path).unwrap();
     }
 
