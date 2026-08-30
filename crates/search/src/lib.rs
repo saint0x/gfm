@@ -331,7 +331,7 @@ impl SearchIndex {
         }
 
         if !text.is_empty() {
-            let ids = self.name_prefix_ids(&text, lookup, budget, &mut telemetry)?;
+            let ids = self.name_prefix_ids(&text, lookup, budget, &mut telemetry, cancellation)?;
             if !ids.is_empty() {
                 add_scores_cancellable(
                     &mut scores,
@@ -386,7 +386,7 @@ impl SearchIndex {
         if pass.includes_deep() {
             for term in &query.terms {
                 cancellation.check()?;
-                for id in self.fuzzy_ids(term, lookup, budget, &mut telemetry)? {
+                for id in self.fuzzy_ids(term, lookup, budget, &mut telemetry, cancellation)? {
                     cancellation.check()?;
                     let Some(record) = self.records.get(&id) else {
                         continue;
@@ -438,7 +438,8 @@ impl SearchIndex {
         }
 
         if scores.len() < limit {
-            let candidates = self.name_substring_ids(&text, lookup, budget, &mut telemetry)?;
+            let candidates =
+                self.name_substring_ids(&text, lookup, budget, &mut telemetry, cancellation)?;
             for id in candidates {
                 cancellation.check()?;
                 let Some(record) = self.records.get(&id) else {

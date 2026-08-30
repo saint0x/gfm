@@ -44,7 +44,7 @@ impl SearchIndex {
                 cancellation,
             )?;
         }
-        let ids = self.name_prefix_ids(term, lookup, budget, &mut telemetry)?;
+        let ids = self.name_prefix_ids(term, lookup, budget, &mut telemetry, cancellation)?;
         if !ids.is_empty() {
             add_scores_cancellable(
                 &mut scores,
@@ -81,7 +81,7 @@ impl SearchIndex {
             )?;
         }
         if pass.includes_deep() {
-            for id in self.fuzzy_ids(term, lookup, budget, &mut telemetry)? {
+            for id in self.fuzzy_ids(term, lookup, budget, &mut telemetry, cancellation)? {
                 cancellation.check()?;
                 let Some(record) = self.records.get(&id) else {
                     continue;
@@ -170,13 +170,14 @@ impl SearchIndex {
 
         let text = query.terms.join(" ");
         let mut telemetry = SearchLookupTelemetry::default();
-        let full_text_prefix_ids = self.name_prefix_ids(&text, lookup, budget, &mut telemetry)?;
+        let full_text_prefix_ids =
+            self.name_prefix_ids(&text, lookup, budget, &mut telemetry, cancellation)?;
         let mut fuzzy_by_term = Vec::with_capacity(query.terms.len());
         let mut candidate_sets = Vec::with_capacity(query.terms.len());
         for term in &query.terms {
             cancellation.check()?;
             let fuzzy_ids = if pass.includes_deep() {
-                self.fuzzy_ids(term, lookup, budget, &mut telemetry)?
+                self.fuzzy_ids(term, lookup, budget, &mut telemetry, cancellation)?
             } else {
                 BTreeSet::new()
             };

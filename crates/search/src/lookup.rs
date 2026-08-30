@@ -2,8 +2,11 @@ use super::fuzzy::{bounded_levenshtein, deletion_keys};
 use super::query::normalize;
 use super::terms::{is_fuzzy_term, is_prefix_term, substring_grams, SUBSTRING_GRAM_CHARS};
 use super::SearchIndex;
+use gfm_jobs::Cancellation;
 use gfm_types::{FileId, GfmError, VolumeId};
 use std::collections::BTreeSet;
+
+const CANCELLATION_STRIDE: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchLookupBudget {
@@ -304,7 +307,9 @@ impl SearchIndex {
         lookup: &dyn SearchLookup,
         budget: SearchLookupBudget,
         telemetry: &mut SearchLookupTelemetry,
+        cancellation: &Cancellation,
     ) -> gfm_types::Result<BTreeSet<FileId>> {
+        cancellation.check()?;
         if !is_fuzzy_term(term) {
             return Ok(BTreeSet::new());
         }
@@ -314,7 +319,14 @@ impl SearchIndex {
         if keys.len() > budget.max_fuzzy_keys_per_term {
             telemetry.fuzzy_term_truncated_keys += 1;
         }
-        for key in keys.into_iter().take(budget.max_fuzzy_keys_per_term) {
+        for (key_index, key) in keys
+            .into_iter()
+            .take(budget.max_fuzzy_keys_per_term)
+            .enumerate()
+        {
+            if key_index % CANCELLATION_STRIDE == 0 {
+                cancellation.check()?;
+            }
             telemetry.fuzzy_keys += 1;
             let mut candidates = self.fuzzy_terms.get(&key).cloned().unwrap_or_default();
             let mut candidate_truncated = false;
@@ -330,7 +342,9 @@ impl SearchIndex {
                 .saturating_sub(candidates.len());
             if remaining_candidates > 0 {
                 let lookup_limit = budget.max_fuzzy_terms_per_key.min(remaining_candidates);
+                cancellation.check()?;
                 let lookup_terms = lookup.fuzzy_terms_bounded(&key, lookup_limit)?;
+                cancellation.check()?;
                 telemetry.fuzzy_lookup_terms += lookup_terms.terms.len();
                 if lookup_terms.truncated {
                     telemetry.fuzzy_key_truncated_terms += 1;
@@ -347,7 +361,10 @@ impl SearchIndex {
             if candidate_truncated {
                 telemetry.fuzzy_candidate_truncated_terms += 1;
             }
-            for candidate in candidates {
+            for (candidate_index, candidate) in candidates.into_iter().enumerate() {
+                if candidate_index % CANCELLATION_STRIDE == 0 {
+                    cancellation.check()?;
+                }
                 telemetry.fuzzy_verified_candidates += 1;
                 if bounded_levenshtein(&candidate, term, 2).is_some() {
                     if let Some(matches) = self.name_terms.get(&candidate) {
@@ -365,7 +382,9 @@ impl SearchIndex {
         lookup: &dyn SearchLookup,
         budget: SearchLookupBudget,
         telemetry: &mut SearchLookupTelemetry,
+        cancellation: &Cancellation,
     ) -> gfm_types::Result<BTreeSet<FileId>> {
+        cancellation.check()?;
         if !is_prefix_term(term) {
             return Ok(BTreeSet::new());
         }
@@ -384,17 +403,21 @@ impl SearchIndex {
             telemetry.prefix_candidate_ids += ids.len();
             return Ok(ids);
         }
+        cancellation.check()?;
         let lookup_ids = lookup.prefix_ids_bounded(term, remaining)?;
+        cancellation.check()?;
         telemetry.prefix_lookup_ids += lookup_ids.ids.len();
         if lookup_ids.truncated {
             telemetry.prefix_truncated_terms += 1;
         }
-        ids.extend(
-            lookup_ids
-                .ids
-                .into_iter()
-                .filter(|id| self.records.contains_key(id)),
-        );
+        for (index, id) in lookup_ids.ids.into_iter().enumerate() {
+            if index % CANCELLATION_STRIDE == 0 {
+                cancellation.check()?;
+            }
+            if self.records.contains_key(&id) {
+                ids.insert(id);
+            }
+        }
         telemetry.prefix_candidate_ids += ids.len();
         Ok(ids)
     }
@@ -405,7 +428,9 @@ impl SearchIndex {
         lookup: &dyn SearchLookup,
         budget: SearchLookupBudget,
         telemetry: &mut SearchLookupTelemetry,
+        cancellation: &Cancellation,
     ) -> gfm_types::Result<BTreeSet<FileId>> {
+        cancellation.check()?;
         if term.is_empty() {
             return Ok(BTreeSet::new());
         }
@@ -424,7 +449,14 @@ impl SearchIndex {
         }
 
         let mut gram_sets = Vec::new();
-        for gram in grams.into_iter().take(budget.max_substring_grams_per_term) {
+        for (gram_index, gram) in grams
+            .into_iter()
+            .take(budget.max_substring_grams_per_term)
+            .enumerate()
+        {
+            if gram_index % CANCELLATION_STRIDE == 0 {
+                cancellation.check()?;
+            }
             telemetry.substring_grams += 1;
             let mut ids = self.name_substrings.get(&gram).cloned().unwrap_or_default();
             let mut gram_truncated = false;
@@ -437,17 +469,21 @@ impl SearchIndex {
             }
             let remaining = budget.max_substring_ids_per_gram.saturating_sub(ids.len());
             if remaining > 0 {
+                cancellation.check()?;
                 let lookup_ids = lookup.substring_ids_bounded(&gram, remaining)?;
+                cancellation.check()?;
                 telemetry.substring_lookup_ids += lookup_ids.ids.len();
                 if lookup_ids.truncated {
                     gram_truncated = true;
                 }
-                ids.extend(
-                    lookup_ids
-                        .ids
-                        .into_iter()
-                        .filter(|id| self.records.contains_key(id)),
-                );
+                for (index, id) in lookup_ids.ids.into_iter().enumerate() {
+                    if index % CANCELLATION_STRIDE == 0 {
+                        cancellation.check()?;
+                    }
+                    if self.records.contains_key(&id) {
+                        ids.insert(id);
+                    }
+                }
             }
             if gram_truncated {
                 telemetry.substring_truncated_grams += 1;
@@ -461,7 +497,10 @@ impl SearchIndex {
         gram_sets.sort_by_key(|ids| ids.len());
         let mut gram_sets = gram_sets.into_iter();
         let mut candidates = gram_sets.next().unwrap_or_default();
-        for ids in gram_sets {
+        for (index, ids) in gram_sets.enumerate() {
+            if index % CANCELLATION_STRIDE == 0 {
+                cancellation.check()?;
+            }
             candidates.retain(|id| ids.contains(id));
             if candidates.is_empty() {
                 break;

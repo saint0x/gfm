@@ -913,6 +913,26 @@ fn score_seeding_honors_cancelled_tokens_before_touching_large_postings() {
 }
 
 #[test]
+fn lookup_expansion_honors_cancelled_tokens_before_sidecar_requests() {
+    let index = SearchIndex::new();
+    let lookup = PanicLookup;
+    let mut telemetry = SearchLookupTelemetry::default();
+    let budget = SearchLookupBudget::default();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let prefix = index.name_prefix_ids("needle", &lookup, budget, &mut telemetry, &cancellation);
+    assert!(matches!(prefix, Err(GfmError::Cancelled)));
+
+    let substring =
+        index.name_substring_ids("needle", &lookup, budget, &mut telemetry, &cancellation);
+    assert!(matches!(substring, Err(GfmError::Cancelled)));
+
+    let fuzzy = index.fuzzy_ids("needle", &lookup, budget, &mut telemetry, &cancellation);
+    assert!(matches!(fuzzy, Err(GfmError::Cancelled)));
+}
+
+#[test]
 fn supersession_cancels_stale_query_tokens() {
     let supersession = SearchSupersession::new();
     let first = supersession.begin();
@@ -2738,6 +2758,46 @@ impl SearchLookup for StaticLookup {
             self.fuzzy_terms.iter().take(limit).cloned().collect(),
             self.fuzzy_terms.len() > limit,
         ))
+    }
+}
+
+struct PanicLookup;
+
+impl SearchLookup for PanicLookup {
+    fn prefix_ids(&self, _prefix: &str) -> gfm_types::Result<Vec<FileId>> {
+        panic!("cancelled prefix expansion must not use unbounded lookup")
+    }
+
+    fn prefix_ids_bounded(
+        &self,
+        _prefix: &str,
+        _limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        panic!("cancelled prefix expansion must not use sidecar lookup")
+    }
+
+    fn substring_ids(&self, _gram: &str) -> gfm_types::Result<Vec<FileId>> {
+        panic!("cancelled substring expansion must not use unbounded lookup")
+    }
+
+    fn substring_ids_bounded(
+        &self,
+        _gram: &str,
+        _limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        panic!("cancelled substring expansion must not use sidecar lookup")
+    }
+
+    fn fuzzy_terms(&self, _key: &str) -> gfm_types::Result<Vec<String>> {
+        panic!("cancelled fuzzy expansion must not use unbounded lookup")
+    }
+
+    fn fuzzy_terms_bounded(
+        &self,
+        _key: &str,
+        _limit: usize,
+    ) -> gfm_types::Result<SearchLookupTerms> {
+        panic!("cancelled fuzzy expansion must not use sidecar lookup")
     }
 }
 
