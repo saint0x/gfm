@@ -35,7 +35,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 records,
                 "records verify",
                 move |records, cancellation| {
-                    let archive = MmapRecordArchive::open(records)?;
+                    let archive =
+                        MmapRecordArchive::open_checked(records, || cancellation.check())?;
                     cancellation.check()?;
                     let report = format!(
                         "records-verify\trecords={}\tbytes={}\tchecksum={}",
@@ -282,7 +283,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 columns,
                 "columns verify",
                 move |columns, cancellation| {
-                    let archive = MmapRecordColumns::open(columns)?;
+                    let archive =
+                        MmapRecordColumns::open_checked(columns, || cancellation.check())?;
                     cancellation.check()?;
                     let report = format!(
                         "columns-verify\trecords={}\tbytes={}\tchecksum={}",
@@ -308,7 +310,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 columns,
                 "columns lookup",
                 move |columns, cancellation| {
-                    let archive = MmapRecordColumns::open(columns)?;
+                    let archive =
+                        MmapRecordColumns::open_checked(columns, || cancellation.check())?;
                     cancellation.check()?;
                     let report = match archive.find(FileId::new(VolumeId(volume), node))? {
                         Some(column) => format!(
@@ -663,7 +666,8 @@ where
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         let _access = retain_record_sidecar_build_access(&records, &output, worker)?;
         cancellation.check()?;
-        let archive = MmapRecordArchive::open(records)?;
+        let archive = MmapRecordArchive::open_checked(records, || cancellation.check())?;
+        cancellation.check()?;
         let records = archive.records()?;
         cancellation.check()?;
         build(output, records)

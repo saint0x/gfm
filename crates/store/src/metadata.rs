@@ -207,20 +207,34 @@ pub fn read_metadata_postings(path: impl AsRef<Path>) -> Result<Vec<MetadataPost
 
 impl MmapMetadataArchive {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_checked(path, || Ok(()))
+    }
+
+    pub fn open_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mmap = {
             // SAFETY: The metadata archive is mapped read-only and accessed only
             // through bounds-checked immutable slices. Writers publish archives by
             // atomic rename, so this API never observes in-place mutation.
             unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
         };
+        check_control()?;
         let magic = mmap
             .get(..METADATA_MAGIC_V1.len())
             .ok_or_else(|| metadata_format_error(path, "unsupported metadata header"))?;
+        check_control()?;
         let version = metadata_version(magic, path)?;
+        check_control()?;
         verify_metadata_checksum_from_slice(&mmap, path, version)?;
+        check_control()?;
         let directory = read_metadata_directory_from_slice(&mmap, path)?;
+        check_control()?;
         Ok(Self {
             path: path.to_path_buf(),
             mmap,

@@ -120,18 +120,31 @@ pub fn read_substring_postings(path: impl AsRef<Path>) -> Result<Vec<SubstringPo
 
 impl MmapSubstringArchive {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_checked(path, || Ok(()))
+    }
+
+    pub fn open_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mmap = {
             // SAFETY: Substring archives are immutable after atomic publication and
             // this reader only exposes bounds-checked immutable slices.
             unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
         };
+        check_control()?;
         if mmap.get(..SUBSTRING_MAGIC_V1.len()) != Some(SUBSTRING_MAGIC_V1) {
             return Err(substring_format_error(path, "unsupported substring header"));
         }
+        check_control()?;
         verify_substring_checksum_from_slice(&mmap, path)?;
+        check_control()?;
         let directory = read_substring_directory_from_slice(&mmap, path)?;
+        check_control()?;
         Ok(Self {
             path: path.to_path_buf(),
             mmap,
@@ -864,6 +877,16 @@ mod tests {
 
         assert_eq!(por.ids, vec![FileId::new(VolumeId(1), 1)]);
         assert_eq!(ote.ids, vec![FileId::new(VolumeId(1), 2)]);
+    }
+
+    #[test]
+    fn mmap_substring_archive_checked_open_honors_pre_cancelled_control_before_file_open() {
+        let path = temp_path("gfm-substring-open-cancel", "gfmsubstr");
+
+        let result = MmapSubstringArchive::open_checked(&path, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!path.exists());
     }
 
     #[test]

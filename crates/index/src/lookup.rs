@@ -173,18 +173,18 @@ impl SidecarIndexQuerySession {
     ) -> Result<Self> {
         cancellation.check()?;
         let substrings = substrings.as_ref();
-        let records = MmapRecordArchive::open(records)?;
+        let records = MmapRecordArchive::open_checked(records, || cancellation.check())?;
         cancellation.check()?;
-        let columns = MmapRecordColumns::open(columns)?;
+        let columns = MmapRecordColumns::open_checked(columns, || cancellation.check())?;
         cancellation.check()?;
-        let metadata = MmapMetadataArchive::open(metadata)?;
+        let metadata = MmapMetadataArchive::open_checked(metadata, || cancellation.check())?;
         cancellation.check()?;
         let lookup =
             SearchArchiveLookup::open_cancellable(prefixes, substrings, fuzzy, cancellation)?;
         cancellation.check()?;
-        let substrings = MmapSubstringArchive::open(substrings)?;
+        let substrings = MmapSubstringArchive::open_checked(substrings, || cancellation.check())?;
         cancellation.check()?;
-        let content = MmapContentArchive::open(content)?;
+        let content = MmapContentArchive::open_checked(content, || cancellation.check())?;
         cancellation.check()?;
         Ok(Self {
             records,
@@ -830,11 +830,11 @@ impl SearchArchiveLookup {
         cancellation: &Cancellation,
     ) -> Result<SearchArchiveLookup> {
         cancellation.check()?;
-        let prefixes = MmapPrefixArchive::open(prefixes)?;
+        let prefixes = MmapPrefixArchive::open_checked(prefixes, || cancellation.check())?;
         cancellation.check()?;
-        let substrings = MmapSubstringArchive::open(substrings)?;
+        let substrings = MmapSubstringArchive::open_checked(substrings, || cancellation.check())?;
         cancellation.check()?;
-        let fuzzy = MmapFuzzyArchive::open(fuzzy)?;
+        let fuzzy = MmapFuzzyArchive::open_checked(fuzzy, || cancellation.check())?;
         cancellation.check()?;
         Ok(Self {
             prefixes,

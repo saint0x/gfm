@@ -266,6 +266,16 @@ fn checksummed_metadata_archive_rejects_corruption() {
     std::fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn mmap_metadata_archive_checked_open_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-metadata-open-cancel", "gfmmeta");
+
+    let result = MmapMetadataArchive::open_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
 fn temp_path(prefix: &str, extension: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "{}-{}.{}",

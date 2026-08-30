@@ -51,6 +51,16 @@ fn round_trips_content_postings() {
 }
 
 #[test]
+fn mmap_content_archive_checked_open_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-content-open-cancel", "gfmcontent");
+
+    let result = MmapContentArchive::open_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
 fn content_archive_reads_one_term_from_directory() {
     let path = temp_path("gfm-content-archive", "gfmcontent");
     let alpha = FileId::new(VolumeId(4), 12);

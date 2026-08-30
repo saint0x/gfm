@@ -119,18 +119,31 @@ pub fn read_prefix_postings(path: impl AsRef<Path>) -> Result<Vec<PrefixPosting>
 
 impl MmapPrefixArchive {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_checked(path, || Ok(()))
+    }
+
+    pub fn open_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mmap = {
             // SAFETY: Prefix archives are immutable after atomic publication and
             // this reader only exposes bounds-checked immutable slices.
             unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
         };
+        check_control()?;
         if mmap.get(..PREFIX_MAGIC_V1.len()) != Some(PREFIX_MAGIC_V1) {
             return Err(prefix_format_error(path, "unsupported prefix header"));
         }
+        check_control()?;
         verify_prefix_checksum_from_slice(&mmap, path)?;
+        check_control()?;
         let directory = read_prefix_directory_from_slice(&mmap, path)?;
+        check_control()?;
         Ok(Self {
             path: path.to_path_buf(),
             mmap,
@@ -774,6 +787,16 @@ mod tests {
 
         assert_eq!(pro.ids.len(), 2);
         assert_eq!(proj.ids.len(), 1);
+    }
+
+    #[test]
+    fn mmap_prefix_archive_checked_open_honors_pre_cancelled_control_before_file_open() {
+        let path = temp_path("gfm-prefix-open-cancel", "gfmprefix");
+
+        let result = MmapPrefixArchive::open_checked(&path, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!path.exists());
     }
 
     #[test]

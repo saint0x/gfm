@@ -122,18 +122,31 @@ pub fn read_fuzzy_postings(path: impl AsRef<Path>) -> Result<Vec<FuzzyPosting>> 
 
 impl MmapFuzzyArchive {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_checked(path, || Ok(()))
+    }
+
+    pub fn open_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mmap = {
             // SAFETY: Fuzzy archives are immutable after atomic publication and
             // this reader only exposes bounds-checked immutable slices.
             unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
         };
+        check_control()?;
         if mmap.get(..FUZZY_MAGIC_V1.len()) != Some(FUZZY_MAGIC_V1) {
             return Err(fuzzy_format_error(path, "unsupported fuzzy header"));
         }
+        check_control()?;
         verify_fuzzy_checksum_from_slice(&mmap, path)?;
+        check_control()?;
         let directory = read_fuzzy_directory_from_slice(&mmap, path)?;
+        check_control()?;
         Ok(Self {
             path: path.to_path_buf(),
             mmap,
@@ -681,6 +694,16 @@ mod tests {
             .terms
             .iter()
             .any(|term| term == "packageproject00012345")));
+    }
+
+    #[test]
+    fn mmap_fuzzy_archive_checked_open_honors_pre_cancelled_control_before_file_open() {
+        let path = temp_path("gfm-fuzzy-open-cancel", "gfmfuzzy");
+
+        let result = MmapFuzzyArchive::open_checked(&path, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!path.exists());
     }
 
     #[test]

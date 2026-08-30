@@ -245,8 +245,17 @@ impl ContentArchive {
 
 impl MmapContentArchive {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_checked(path, || Ok(()))
+    }
+
+    pub fn open_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mmap = {
             // SAFETY: The returned map is read-only, owns no mutable aliases, and the
             // file handle is kept alive until map creation completes. GFM's archive
@@ -254,15 +263,20 @@ impl MmapContentArchive {
             // mutate the mapped file through this API.
             unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
         };
+        check_control()?;
         let version = mmap_content_version(&mmap, path)?;
+        check_control()?;
         if version == ContentStoreVersion::Legacy {
             return Err(content_format_error(
                 path,
                 "legacy content archives are not mmap indexed",
             ));
         }
+        check_control()?;
         verify_content_checksum_from_slice(&mmap, path, version)?;
+        check_control()?;
         let directory = read_content_directory_from_slice(&mmap, path)?;
+        check_control()?;
         Ok(Self {
             path: path.to_path_buf(),
             mmap,
