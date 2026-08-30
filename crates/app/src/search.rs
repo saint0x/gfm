@@ -6,8 +6,8 @@ use crate::content::run_content_search;
 use crate::extract::extraction_budget_profile;
 use crate::runtime::run_retriable_volume_task_cancellable_with_payload_path;
 use crate::{
-    first_path_volume, parse_required_scheduling_pressure, parse_usize_arg, path_volume,
-    required_path, required_string,
+    parse_required_scheduling_pressure, parse_usize_arg, path_volume, required_path,
+    required_string,
 };
 use gfm_content::Extractor;
 use gfm_index::{
@@ -1292,7 +1292,79 @@ fn preflight_content_archive_access_checked(
     worker: &str,
     check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
-    preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
+    let volume_reports = ArchiveVolumeAccessReports::for_paths([path]);
+    single_archive_access_guard(volume_reports.preflight_access_checked(worker, check_control)?)
+}
+
+#[derive(Clone)]
+struct ArchiveVolumeAccessReport {
+    path: PathBuf,
+    volume_report: VolumeDiscoveryReport,
+}
+
+#[derive(Clone)]
+struct ArchiveVolumeAccessReports {
+    entries: Vec<ArchiveVolumeAccessReport>,
+}
+
+impl ArchiveVolumeAccessReports {
+    fn for_paths<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Self {
+        let owned_paths = paths.into_iter().map(Path::to_path_buf).collect::<Vec<_>>();
+        let entries = unique_search_paths(&owned_paths)
+            .into_iter()
+            .map(|path| ArchiveVolumeAccessReport {
+                path: path.to_path_buf(),
+                volume_report: VolumeDiscoveryReport::for_containing_path(path),
+            })
+            .collect();
+        Self { entries }
+    }
+
+    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+        for entry in &self.entries {
+            preflight_volume_access_scope_with_report(
+                &entry.path,
+                AccessIntent::Read,
+                worker,
+                &entry.volume_report,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn preflight_access_checked(
+        &self,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                preflight_access_scope_checked_with_volume_report(
+                    &entry.path,
+                    AccessIntent::Read,
+                    worker,
+                    &entry.volume_report,
+                    &mut check_control,
+                )
+            })
+            .collect()
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.entries.iter().find_map(|entry| {
+            entry
+                .volume_report
+                .volume_for_path(&entry.path)
+                .map(|volume| volume.id)
+        })
+    }
+}
+
+fn single_archive_access_guard(mut guards: Vec<ScopedAccessGuard>) -> Result<ScopedAccessGuard> {
+    guards.pop().ok_or_else(|| {
+        GfmError::Format("archive access preflight did not produce a guard".to_string())
+    })
 }
 
 fn run_content_archive_read_cancellable<T>(
@@ -1315,11 +1387,12 @@ fn run_content_archive_read_cancellable_with_retry_probe<T>(
 where
     T: Send + 'static,
 {
-    preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    let volume_reports = ArchiveVolumeAccessReports::for_paths([path.as_path()]);
+    volume_reports.preflight_volumes(worker)?;
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
     }
-    let volume = path_volume(&path);
+    let volume = volume_reports.first_volume();
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -1334,7 +1407,7 @@ where
                 fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
             }
             let _access =
-                preflight_content_archive_access_checked(&path, worker, || cancellation.check())?;
+                volume_reports.preflight_access_checked(worker, || cancellation.check())?;
             cancellation.check()?;
             read(path, &cancellation)
         },
@@ -1350,11 +1423,12 @@ fn run_content_archive_set_read_cancellable_with_retry_probe<T>(
 where
     T: Send + 'static,
 {
-    preflight_content_archive_volumes(&paths, worker)?;
+    let volume_reports = ArchiveVolumeAccessReports::for_paths(paths.iter().map(PathBuf::as_path));
+    volume_reports.preflight_volumes(worker)?;
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
     }
-    let volume = first_path_volume(paths.iter());
+    let volume = volume_reports.first_volume();
     let payload_path = paths.first().cloned().unwrap_or_else(|| PathBuf::from("."));
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
@@ -1370,7 +1444,7 @@ where
                 fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
             }
             let _access =
-                preflight_content_archives_access_checked(&paths, worker, || cancellation.check())?;
+                volume_reports.preflight_access_checked(worker, || cancellation.check())?;
             cancellation.check()?;
             read(paths, &cancellation)
         },
@@ -1386,11 +1460,12 @@ fn run_content_manifest_read_cancellable_with_retry_probe<T>(
 where
     T: Send + 'static,
 {
-    preflight_volume_access_scope(&manifest, AccessIntent::Read, worker)?;
+    let volume_reports = ArchiveVolumeAccessReports::for_paths([manifest.as_path()]);
+    volume_reports.preflight_volumes(worker)?;
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
     }
-    let volume = path_volume(&manifest);
+    let volume = volume_reports.first_volume();
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -1404,20 +1479,16 @@ where
             if let Some(retry_probe) = retry_probe.as_ref() {
                 fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
             }
-            let _access = preflight_content_manifest_access_checked(&manifest, worker, || {
-                cancellation.check()
-            })?;
+            let _access = preflight_content_manifest_access_checked_with_volume_report(
+                &manifest,
+                worker,
+                &volume_reports,
+                || cancellation.check(),
+            )?;
             cancellation.check()?;
             read(manifest, &cancellation)
         },
     )
-}
-
-fn preflight_content_archive_volumes(paths: &[PathBuf], worker: &str) -> Result<()> {
-    for path in paths {
-        preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
-    }
-    Ok(())
 }
 
 fn run_search_archive_read_cancellable<T>(
@@ -1440,11 +1511,12 @@ fn run_search_archive_read_cancellable_with_retry_probe<T>(
 where
     T: Send + 'static,
 {
-    preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    let volume_reports = ArchiveVolumeAccessReports::for_paths([path.as_path()]);
+    volume_reports.preflight_volumes(worker)?;
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
     }
-    let volume = path_volume(&path);
+    let volume = volume_reports.first_volume();
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -1458,7 +1530,7 @@ where
                 fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
             }
             let _access =
-                preflight_search_archive_access_checked(&path, worker, || cancellation.check())?;
+                volume_reports.preflight_access_checked(worker, || cancellation.check())?;
             cancellation.check()?;
             read(path, &cancellation)
         },
@@ -2031,12 +2103,22 @@ impl ContentIndexVolumeAccessReports {
     }
 }
 
-fn preflight_search_archive_access_checked(
-    path: &Path,
+fn preflight_content_manifest_access_checked_with_volume_report(
+    manifest_path: &Path,
     worker: &str,
-    check_control: impl FnMut() -> Result<()>,
-) -> Result<ScopedAccessGuard> {
-    preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
+    manifest_volume_reports: &ArchiveVolumeAccessReports,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let mut guards = manifest_volume_reports.preflight_access_checked(worker, &mut check_control)?;
+    check_control()?;
+    let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
+    check_control()?;
+    let archive_volume_reports =
+        ArchiveVolumeAccessReports::for_paths(manifest.resolved_archive_paths(manifest_path));
+    guards.extend(archive_volume_reports.preflight_access_checked(worker, &mut check_control)?);
+    check_control()?;
+    Ok(guards)
 }
 
 fn preflight_search_index_columns_access_checked(
@@ -2570,29 +2652,6 @@ fn unique_sidecar_search_paths<'a>(
         .collect()
 }
 
-fn preflight_content_manifest_access_checked(
-    manifest_path: &Path,
-    worker: &str,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let mut guards = vec![preflight_content_archive_access_checked(
-        manifest_path,
-        worker,
-        &mut check_control,
-    )?];
-    check_control()?;
-    let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
-    check_control()?;
-    guards.extend(preflight_content_archives_access_checked(
-        &manifest.resolved_archive_paths(manifest_path),
-        worker,
-        &mut check_control,
-    )?);
-    check_control()?;
-    Ok(guards)
-}
-
 fn parse_metadata_field(value: &str, name: &str) -> Result<MetadataField> {
     MetadataField::parse(value)
         .ok_or_else(|| gfm_types::GfmError::Format(format!("invalid {name}: {value}")))
@@ -2952,11 +3011,10 @@ mod tests {
             "gfm-search-archive-access-pre-cancel-{}.gfmidx",
             std::process::id()
         ));
+        let volume_reports = ArchiveVolumeAccessReports::for_paths([path.as_path()]);
 
-        let result =
-            preflight_search_archive_access_checked(&path, "search archive access", || {
-                Err(GfmError::Cancelled)
-            });
+        let result = volume_reports
+            .preflight_access_checked("search archive access", || Err(GfmError::Cancelled));
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!path.exists());

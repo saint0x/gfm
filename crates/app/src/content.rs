@@ -1,5 +1,6 @@
 use crate::access::{
-    preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
+    preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
+    preflight_volume_access_scope, preflight_volume_access_scope_with_report, ScopedAccessGuard,
 };
 use crate::extract::{
     extraction_budget_profile, preflight_adaptive_extraction_worker_scratch,
@@ -31,7 +32,7 @@ use gfm_jobs::{
     RecoveryReason, RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure,
     TaskStatus, WorkerPool,
 };
-use gfm_mac::AccessIntent;
+use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_store::{atomic_write_checked, read_records_checked, ContentArchiveManifest};
 use gfm_types::{GfmError, Result, SearchHit};
 use std::collections::{BTreeSet, HashSet};
@@ -56,7 +57,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             } else {
                 None
             };
-            preflight_foreground_content_index_volumes(&root, &records, &content, "content index")?;
+            let access_reports = ForegroundContentIndexAccessReports::for_paths(
+                root.clone(),
+                records.clone(),
+                content.clone(),
+            )?;
+            access_reports.preflight_volumes("content index")?;
             if let Some(retry_probe) = retry_probe.as_ref() {
                 preflight_volume_access_scope(
                     write_probe_path(retry_probe)?,
@@ -87,9 +93,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                             )?;
                         }
                         let _access = retain_foreground_content_index_access_checked(
-                            &root,
-                            &records,
-                            &content,
+                            &access_reports,
                             "content index",
                             || cancellation.check(),
                         )?;
@@ -1425,14 +1429,13 @@ mod tests {
         let root = unique_temp_dir("gfm-content-index-access-pre-cancel");
         let records = root.join("records.gfmidx");
         let content = root.join("content.gfmcontent");
+        let reports =
+            ForegroundContentIndexAccessReports::for_paths(root.clone(), records, content).unwrap();
 
-        let result = retain_foreground_content_index_access_checked(
-            &root,
-            &records,
-            &content,
-            "content index",
-            || Err(GfmError::Cancelled),
-        );
+        let result =
+            retain_foreground_content_index_access_checked(&reports, "content index", || {
+                Err(GfmError::Cancelled)
+            });
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         fs::remove_dir_all(root).unwrap();
@@ -1695,43 +1698,70 @@ fn run_extraction_quarantine(
 }
 
 fn retain_foreground_content_index_access_checked(
-    root: &Path,
-    records: &Path,
-    content: &Path,
+    reports: &ForegroundContentIndexAccessReports,
     worker: &str,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let records_probe = write_probe_path(records)?.to_path_buf();
-    check_control()?;
-    let content_probe = write_probe_path(content)?.to_path_buf();
-    check_control()?;
-    Ok(vec![
-        preflight_access_scope_checked(root, AccessIntent::Index, worker, &mut check_control)?,
-        preflight_access_scope_checked(
-            &records_probe,
-            AccessIntent::Write,
+    let mut guards = Vec::with_capacity(reports.entries.len());
+    for report in &reports.entries {
+        check_control()?;
+        guards.push(preflight_access_scope_checked_with_volume_report(
+            &report.path,
+            report.intent,
             worker,
+            &report.volume_report,
             &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &content_probe,
-            AccessIntent::Write,
-            worker,
-            &mut check_control,
-        )?,
-    ])
+        )?);
+    }
+    check_control()?;
+    Ok(guards)
 }
 
-fn preflight_foreground_content_index_volumes(
-    root: &Path,
-    records: &Path,
-    content: &Path,
-    worker: &str,
-) -> Result<()> {
-    preflight_volume_access_scope(root, AccessIntent::Index, worker)?;
-    preflight_volume_access_scope(write_probe_path(records)?, AccessIntent::Write, worker)?;
-    preflight_volume_access_scope(write_probe_path(content)?, AccessIntent::Write, worker)
+#[derive(Clone)]
+struct ForegroundContentIndexAccessReport {
+    path: PathBuf,
+    intent: AccessIntent,
+    volume_report: VolumeDiscoveryReport,
+}
+
+#[derive(Clone)]
+struct ForegroundContentIndexAccessReports {
+    entries: Vec<ForegroundContentIndexAccessReport>,
+}
+
+impl ForegroundContentIndexAccessReports {
+    fn for_paths(root: PathBuf, records: PathBuf, content: PathBuf) -> Result<Self> {
+        let records_probe = write_probe_path(&records)?.to_path_buf();
+        let content_probe = write_probe_path(&content)?.to_path_buf();
+        Ok(Self {
+            entries: vec![
+                Self::entry(root, AccessIntent::Index),
+                Self::entry(records_probe, AccessIntent::Write),
+                Self::entry(content_probe, AccessIntent::Write),
+            ],
+        })
+    }
+
+    fn entry(path: PathBuf, intent: AccessIntent) -> ForegroundContentIndexAccessReport {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        ForegroundContentIndexAccessReport {
+            path,
+            intent,
+            volume_report,
+        }
+    }
+
+    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+        for report in &self.entries {
+            preflight_volume_access_scope_with_report(
+                &report.path,
+                report.intent,
+                worker,
+                &report.volume_report,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 fn retain_content_segment_index_access_checked(
