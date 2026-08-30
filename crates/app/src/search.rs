@@ -269,8 +269,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "search index mmap",
                 move |index_path, cancellation| {
                     let parsed = SearchQuery::parse(&query);
-                    let live =
-                        LiveIndex::from_records(MmapRecordArchive::open(index_path)?.records()?);
+                    let live = LiveIndex::from_records(
+                        MmapRecordArchive::open_checked(index_path, || cancellation.check())?
+                            .records()?,
+                    );
                     live.search_structured_with_volume_scope_cancellable(
                         &parsed,
                         50,
@@ -575,7 +577,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 content_paths,
                 "content ids mmap set",
                 move |paths, cancellation| {
-                    let archive = MmapContentSet::open(&paths)?;
+                    let archive = MmapContentSet::open_checked(&paths, || cancellation.check())?;
                     cancellation.check()?;
                     let ids = archive.ids_for_term(&term)?;
                     cancellation.check()?;
@@ -594,7 +596,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 manifest,
                 "content ids mmap manifest",
                 move |manifest, cancellation| {
-                    let archive = MmapContentSet::open_manifest(manifest)?;
+                    let archive =
+                        MmapContentSet::open_manifest_checked(manifest, || cancellation.check())?;
                     cancellation.check()?;
                     let ids = archive.ids_for_term(&term)?;
                     cancellation.check()?;
