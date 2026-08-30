@@ -4,6 +4,7 @@ use crate::{
     SupportTier,
 };
 use gfm_types::{FileKind, FileRecord};
+use std::env;
 use std::path::{Path, PathBuf};
 
 const FINDER_INFO_XATTR: &str = "com.apple.FinderInfo";
@@ -86,6 +87,13 @@ pub enum NativeIconBadge {
     Hidden,
     Package,
     Tagged,
+    VolumeDiskImage,
+    VolumeExternal,
+    VolumeNetwork,
+    VolumeOffline,
+    VolumeReadOnly,
+    VolumeRemovable,
+    VolumeUnavailable,
 }
 
 impl NativeIconBadge {
@@ -102,6 +110,13 @@ impl NativeIconBadge {
             Self::Hidden => "hidden",
             Self::Package => "package",
             Self::Tagged => "tagged",
+            Self::VolumeDiskImage => "volume-disk-image",
+            Self::VolumeExternal => "volume-external",
+            Self::VolumeNetwork => "volume-network",
+            Self::VolumeOffline => "volume-offline",
+            Self::VolumeReadOnly => "volume-read-only",
+            Self::VolumeRemovable => "volume-removable",
+            Self::VolumeUnavailable => "volume-unavailable",
         }
     }
 }
@@ -154,7 +169,24 @@ impl NativeIconBridgeContract {
         Self::for_record_with_evaluation(record, &evaluation)
     }
 
+    pub fn for_record_on_host_with_volume(
+        record: &FileRecord,
+        host: &crate::HostProfile,
+        volume: Option<&crate::VolumeDescriptor>,
+    ) -> Self {
+        let evaluation = SupportMatrix::default().evaluate(host);
+        Self::for_record_with_evaluation_and_volume(record, &evaluation, volume)
+    }
+
     pub fn for_record_with_evaluation(record: &FileRecord, evaluation: &SupportEvaluation) -> Self {
+        Self::for_record_with_evaluation_and_volume(record, evaluation, None)
+    }
+
+    pub fn for_record_with_evaluation_and_volume(
+        record: &FileRecord,
+        evaluation: &SupportEvaluation,
+        volume: Option<&crate::VolumeDescriptor>,
+    ) -> Self {
         let decision = match evaluation.tier {
             SupportTier::Primary | SupportTier::Compatible => {
                 NativeIconBridgeDecision::UseNativeBridge
@@ -168,7 +200,7 @@ impl NativeIconBridgeContract {
         };
 
         Self {
-            descriptor: NativeIconDescriptor::for_record(record),
+            descriptor: NativeIconDescriptor::for_record_on_volume(record, volume),
             framework: MacFramework::LaunchServices,
             thread_policy: MacBridgeThreadPolicy::BackgroundSafe,
             support_tier: evaluation.tier,
@@ -248,9 +280,16 @@ impl NativeIconInvalidationReport {
 
 impl NativeIconDescriptor {
     pub fn for_record(record: &FileRecord) -> Self {
+        Self::for_record_on_volume(record, None)
+    }
+
+    pub fn for_record_on_volume(
+        record: &FileRecord,
+        volume: Option<&crate::VolumeDescriptor>,
+    ) -> Self {
         let role = role_for_record(record);
         let provider = provider_for_record(record, role);
-        let mut badges = badges_for_record(record);
+        let mut badges = badges_for_record_on_volume(record, volume);
         badges.sort();
         badges.dedup();
         let type_hint = type_hint_for_record(record);
@@ -316,7 +355,10 @@ fn provider_for_role(role: NativeIconRole) -> NativeIconProvider {
     }
 }
 
-fn badges_for_record(record: &FileRecord) -> Vec<NativeIconBadge> {
+fn badges_for_record_on_volume(
+    record: &FileRecord,
+    volume: Option<&crate::VolumeDescriptor>,
+) -> Vec<NativeIconBadge> {
     let mut badges = Vec::new();
     if record.kind == FileKind::Symlink {
         badges.push(NativeIconBadge::Alias);
@@ -333,6 +375,44 @@ fn badges_for_record(record: &FileRecord) -> Vec<NativeIconBadge> {
     let cloud = FileProviderStateReport::from_path(record.path.clone());
     if cloud.domain != FileProviderDomain::Local {
         badges.extend(cloud.badges.into_iter().map(cloud_badge));
+    }
+    if let Some(volume) = volume.filter(|volume| record_is_volume_root(record, volume)) {
+        badges.extend(volume_badges(volume));
+    }
+    badges
+}
+
+fn record_is_volume_root(record: &FileRecord, volume: &crate::VolumeDescriptor) -> bool {
+    comparable_icon_path(&record.path) == comparable_icon_path(&volume.path)
+}
+
+fn comparable_icon_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    env::current_dir()
+        .map(|cwd| cwd.join(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn volume_badges(volume: &crate::VolumeDescriptor) -> Vec<NativeIconBadge> {
+    let mut badges = match volume.kind {
+        crate::VolumeKind::External => vec![NativeIconBadge::VolumeExternal],
+        crate::VolumeKind::Removable => vec![NativeIconBadge::VolumeRemovable],
+        crate::VolumeKind::Network => vec![NativeIconBadge::VolumeNetwork],
+        crate::VolumeKind::DiskImage => vec![NativeIconBadge::VolumeDiskImage],
+        crate::VolumeKind::System | crate::VolumeKind::Internal | crate::VolumeKind::Unknown => {
+            Vec::new()
+        }
+    };
+    if volume.read_only {
+        badges.push(NativeIconBadge::VolumeReadOnly);
+    }
+    if volume.mount_state != crate::MountState::Mounted || volume.reachable == Some(false) {
+        badges.push(NativeIconBadge::VolumeOffline);
+    }
+    if volume.platform_state_unavailable() {
+        badges.push(NativeIconBadge::VolumeUnavailable);
     }
     badges
 }
@@ -597,6 +677,46 @@ mod tests {
             "document:extension:png:cloud+cloud-downloading"
         );
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn volume_roots_carry_volume_badges_in_cache_key() {
+        let root = temp_path("gfm-native-volume-icon", "network");
+        fs::create_dir_all(&root).unwrap();
+        let mut volume = crate::VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = crate::VolumeKind::Network;
+        volume.network = true;
+        volume.local = Some(false);
+        volume.reachable = Some(true);
+        let mut record = record("network", FileKind::Directory);
+        record.path = root.clone();
+
+        let descriptor = NativeIconDescriptor::for_record_on_volume(&record, Some(&volume));
+
+        assert_eq!(descriptor.role, NativeIconRole::Folder);
+        assert_eq!(descriptor.badges, vec![NativeIconBadge::VolumeNetwork]);
+        assert_eq!(descriptor.cache_key, "folder:public.folder:volume-network");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn non_root_records_do_not_inherit_volume_badges() {
+        let root = temp_path("gfm-native-volume-child-icon", "network");
+        fs::create_dir_all(&root).unwrap();
+        let child = root.join("Report.pdf");
+        fs::write(&child, "pdf").unwrap();
+        let mut volume = crate::VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = crate::VolumeKind::Network;
+        volume.network = true;
+        volume.local = Some(false);
+        let mut record = record("Report.pdf", FileKind::File);
+        record.path = child.clone();
+
+        let descriptor = NativeIconDescriptor::for_record_on_volume(&record, Some(&volume));
+
+        assert!(descriptor.badges.is_empty());
+        assert_eq!(descriptor.cache_key, "document:extension:pdf");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

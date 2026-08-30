@@ -25,6 +25,7 @@ impl IconCacheDisposition {
 pub struct IconPreviewInput {
     pub key: PreviewRequestKey,
     pub record: FileRecord,
+    pub volume: Option<gfm_mac::VolumeDescriptor>,
     pub invalidation_event: PreviewInvalidationEvent,
 }
 
@@ -33,8 +34,14 @@ impl IconPreviewInput {
         Self {
             key,
             record,
+            volume: None,
             invalidation_event: PreviewInvalidationEvent::default(),
         }
+    }
+
+    pub fn with_volume_descriptor(mut self, volume: Option<gfm_mac::VolumeDescriptor>) -> Self {
+        self.volume = volume;
+        self
     }
 
     pub fn with_invalidation(mut self, event: PreviewInvalidationEvent) -> Self {
@@ -53,7 +60,8 @@ pub struct IconPreviewContract {
 
 impl IconPreviewContract {
     pub fn from_input(input: IconPreviewInput) -> Self {
-        let descriptor = NativeIconDescriptor::for_record(&input.record);
+        let descriptor =
+            NativeIconDescriptor::for_record_on_volume(&input.record, input.volume.as_ref());
         let invalidation = decide_invalidation(input.invalidation_event);
         let cache_disposition = icon_cache_disposition(&invalidation);
         Self {
@@ -100,6 +108,7 @@ mod tests {
     use crate::PreviewKind;
     use gfm_mac::{NativeIconBadge, NativeIconProvider, NativeIconRole};
     use gfm_types::{FileId, FileKind, VolumeId};
+    use std::fs;
     use std::path::PathBuf;
 
     #[test]
@@ -156,6 +165,31 @@ mod tests {
         );
         assert!(contract.invalidation.invalidate_memory);
         assert!(!contract.invalidation.invalidate_disk);
+    }
+
+    #[test]
+    fn icon_preview_contract_carries_volume_root_badges() {
+        let root =
+            std::env::temp_dir().join(format!("gfm-preview-icon-volume-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let mut record = record("Network", FileKind::Directory);
+        record.path = root.clone();
+        let mut volume = gfm_mac::VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = gfm_mac::VolumeKind::Network;
+        volume.network = true;
+        volume.local = Some(false);
+
+        let contract = IconPreviewContract::from_input(
+            IconPreviewInput::new(key("Network"), record).with_volume_descriptor(Some(volume)),
+        );
+
+        assert_eq!(
+            contract.descriptor.badges,
+            vec![NativeIconBadge::VolumeNetwork]
+        );
+        assert!(contract.as_tsv().contains("badges=volume-network"));
+        let _ = fs::remove_dir_all(root);
     }
 
     fn key(name: &str) -> PreviewRequestKey {

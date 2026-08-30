@@ -1736,6 +1736,13 @@ fn preview_volume_id_from_report(path: &Path, report: &VolumeDiscoveryReport) ->
     report.volume_for_path(path).map(|volume| volume.id)
 }
 
+fn preview_volume_descriptor_from_report(
+    path: &Path,
+    report: &VolumeDiscoveryReport,
+) -> Option<VolumeDescriptor> {
+    report.volume_for_path(path).cloned()
+}
+
 fn absolute_preview_path(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -2283,47 +2290,85 @@ fn run_fileprovider_operation(
 
 fn run_native_icon(path: PathBuf) -> Result<NativeIconDescriptor> {
     const WORKER: &str = "native icon";
-    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| parent_volume(&path));
+    let volume_path = absolute_preview_path(&path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    preflight_volume_access_scope_with_report(
+        &path,
+        AccessIntent::Preview,
+        WORKER,
+        &volume_report,
+    )?;
+    let volume = preview_volume_id_from_report(&volume_path, &volume_report);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let record =
-            record_for_path_with_access(&path, AccessIntent::Preview, WORKER, &cancellation)?;
+        let record = record_for_path_with_access_in_volume_report(
+            &path,
+            AccessIntent::Preview,
+            WORKER,
+            &volume_report,
+            &cancellation,
+        )?;
         cancellation.check()?;
-        Ok(NativeIconDescriptor::for_record(&record))
+        let volume =
+            preview_volume_descriptor_from_report(&absolute_preview_path(&path), &volume_report);
+        Ok(NativeIconDescriptor::for_record_on_volume(
+            &record,
+            volume.as_ref(),
+        ))
     })
 }
 
 fn run_native_icon_bridge(path: PathBuf) -> Result<NativeIconBridgeContract> {
     const WORKER: &str = "native icon bridge";
-    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| parent_volume(&path));
+    let volume_path = absolute_preview_path(&path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    preflight_volume_access_scope_with_report(
+        &path,
+        AccessIntent::Preview,
+        WORKER,
+        &volume_report,
+    )?;
+    let volume = preview_volume_id_from_report(&volume_path, &volume_report);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let record =
-            record_for_path_with_access(&path, AccessIntent::Preview, WORKER, &cancellation)?;
+        let record = record_for_path_with_access_in_volume_report(
+            &path,
+            AccessIntent::Preview,
+            WORKER,
+            &volume_report,
+            &cancellation,
+        )?;
         cancellation.check()?;
         let host = current_host_profile()?;
         cancellation.check()?;
-        Ok(NativeIconBridgeContract::for_record_on_host(&record, &host))
+        let volume =
+            preview_volume_descriptor_from_report(&absolute_preview_path(&path), &volume_report);
+        Ok(NativeIconBridgeContract::for_record_on_host_with_volume(
+            &record,
+            &host,
+            volume.as_ref(),
+        ))
     })
 }
 
 fn run_icon_preview(path: PathBuf) -> Result<IconPreviewContract> {
     const WORKER: &str = "icon preview";
-    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| parent_volume(&path));
+    let volume_path = absolute_preview_path(&path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    preflight_volume_access_scope_with_report(
+        &path,
+        AccessIntent::Preview,
+        WORKER,
+        &volume_report,
+    )?;
+    let volume = preview_volume_id_from_report(&volume_path, &volume_report);
     run_preview_contract_cancellable_with_payload_path(
         volume,
         WORKER,
         path.clone(),
-        move |cancellation| build_icon_preview_contract(&path, WORKER, &cancellation),
+        move |cancellation| {
+            build_icon_preview_contract(&path, WORKER, &volume_report, &cancellation)
+        },
     )
 }
 
@@ -2332,22 +2377,27 @@ fn run_icon_preview_retry_probe(
     attempt_state: PathBuf,
 ) -> Result<IconPreviewContract> {
     const WORKER: &str = "icon preview";
-    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
+    let volume_path = absolute_preview_path(&path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    preflight_volume_access_scope_with_report(
+        &path,
+        AccessIntent::Preview,
+        WORKER,
+        &volume_report,
+    )?;
     preflight_volume_access_scope(
         write_probe_path(&attempt_state)?,
         AccessIntent::Write,
         WORKER,
     )?;
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| parent_volume(&path));
+    let volume = preview_volume_id_from_report(&volume_path, &volume_report);
     run_preview_contract_cancellable_with_payload_path(
         volume,
         WORKER,
         path.clone(),
         move |cancellation| {
             fail_first_retry_probe_attempt(&attempt_state, WORKER, &cancellation)?;
-            build_icon_preview_contract(&path, WORKER, &cancellation)
+            build_icon_preview_contract(&path, WORKER, &volume_report, &cancellation)
         },
     )
 }
@@ -2457,15 +2507,24 @@ fn run_thumbnail_generation_retry_probe(
 fn build_icon_preview_contract(
     path: &Path,
     worker: &str,
+    volume_report: &VolumeDiscoveryReport,
     cancellation: &Cancellation,
 ) -> Result<IconPreviewContract> {
     cancellation.check()?;
-    let record = record_for_path_with_access(path, AccessIntent::Preview, worker, cancellation)?;
+    let record = record_for_path_with_access_in_volume_report(
+        path,
+        AccessIntent::Preview,
+        worker,
+        volume_report,
+        cancellation,
+    )?;
+    let volume = preview_volume_descriptor_from_report(&absolute_preview_path(path), volume_report);
     cancellation.check()?;
     let input = IconPreviewInput::new(
         PreviewRequestKey::new(record.id, path.to_path_buf(), PreviewKind::Icon),
         record,
     )
+    .with_volume_descriptor(volume)
     .with_invalidation(PreviewInvalidationEvent {
         tags_changed: true,
         ..PreviewInvalidationEvent::default()

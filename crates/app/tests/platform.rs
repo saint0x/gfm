@@ -1520,6 +1520,84 @@ fn reports_custom_finder_icon_descriptor_from_binary() {
 }
 
 #[test]
+fn native_icon_and_icon_preview_report_volume_badges_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-native-icon-volume-badge-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+
+    let native = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("native-icon")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    let native_stderr = String::from_utf8_lossy(&native.stderr);
+    assert_worker_admitted(&native_stderr, "native icon", &root);
+    let native_stdout = String::from_utf8(native.stdout).unwrap();
+    assert!(native_stdout.starts_with("native-icon\tfolder\tlaunchservices-folder-icon\t"));
+    assert!(
+        native_stdout.contains("\tfolder:public.folder:volume-network\t"),
+        "{native_stdout}"
+    );
+    assert!(
+        native_stdout.contains("\tbadges=volume-network\n"),
+        "{native_stdout}"
+    );
+
+    let bridge = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("native-icon-bridge")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        bridge.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bridge.stderr)
+    );
+    let bridge_stdout = String::from_utf8(bridge.stdout).unwrap();
+    assert!(bridge_stdout.starts_with(
+        "native-icon-bridge\tlaunchservices\tbackground-safe\tlaunchservices-folder-icon\t"
+    ));
+    assert!(
+        bridge_stdout.contains("folder:public.folder:volume-network"),
+        "{bridge_stdout}"
+    );
+
+    let preview = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("icon-preview")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    let preview_stderr = String::from_utf8_lossy(&preview.stderr);
+    assert_worker_admitted(&preview_stderr, "icon preview", &root);
+    let preview_stdout = String::from_utf8(preview.stdout).unwrap();
+    assert!(preview_stdout.starts_with("icon-preview\t"));
+    assert!(
+        preview_stdout.contains("\tbadges=volume-network\t"),
+        "{preview_stdout}"
+    );
+    assert!(
+        preview_stdout.contains("\tcache=refresh-memory-only\t"),
+        "{preview_stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_spotlight_reconciliation_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-spotlight-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
