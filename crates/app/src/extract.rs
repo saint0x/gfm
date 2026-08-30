@@ -124,49 +124,23 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
             "could not resolve current executable for extraction worker: {err}"
         ))
     })?;
-    let stdout_path = worker_temp_path("stdout");
-    let stderr_path = worker_temp_path("stderr");
-    let permission_state_dir = worker_temp_dir("permission-state");
-    let permission_state_path = permission_state_dir.join("state.tsv");
-    let _scratch_access =
-        retain_worker_scratch_access(&stdout_path, &stderr_path, &permission_state_dir)?;
-    std::fs::File::create(&stdout_path).map_err(|err| GfmError::io(&stdout_path, err))?;
-    std::fs::File::create(&stderr_path).map_err(|err| GfmError::io(&stderr_path, err))?;
-    if let Err(err) = std::fs::create_dir(&permission_state_dir) {
-        let _ = std::fs::remove_file(&stdout_path);
-        let _ = std::fs::remove_file(&stderr_path);
-        return Err(GfmError::io(&permission_state_dir, err));
-    }
-    if let Err(err) =
-        refresh_permission_state_at_path_checked(&permission_state_path, || cancellation.check())
-    {
-        let _ = std::fs::remove_file(&stdout_path);
-        let _ = std::fs::remove_file(&stderr_path);
-        let _ = std::fs::remove_dir_all(&permission_state_dir);
-        return Err(err);
-    }
-    if let Err(err) = cancellation.check() {
-        let _ = std::fs::remove_file(&stdout_path);
-        let _ = std::fs::remove_file(&stderr_path);
-        let _ = std::fs::remove_dir_all(&permission_state_dir);
-        return Err(err);
-    }
+    let scratch = WorkerScratch::prepare_checked(|| cancellation.check())?;
     let sandbox = WorkerSandbox::new_checked(
         &exe,
         path,
-        &stdout_path,
-        &stderr_path,
-        &permission_state_path,
+        &scratch.stdout_path,
+        &scratch.stderr_path,
+        &scratch.permission_state_path,
         || cancellation.check(),
     )?;
-    let mut command = sandbox.command(&exe, path, pressure, &permission_state_path);
+    let mut command = sandbox.command(&exe, path, pressure, &scratch.permission_state_path);
     let output = run_supervised_worker(
         &mut command,
         path,
         timeout,
-        &stdout_path,
-        &stderr_path,
-        &permission_state_dir,
+        scratch.stdout_path(),
+        scratch.stderr_path(),
+        scratch.permission_state_dir(),
         cancellation,
     )?;
     if !output.status.success() {
@@ -192,6 +166,83 @@ pub(crate) fn preflight_adaptive_extraction_worker_scratch() -> Result<Vec<Scope
     let stderr_path = worker_temp_path("stderr-probe");
     let permission_state_dir = worker_temp_dir("permission-state-probe");
     retain_worker_scratch_access(&stdout_path, &stderr_path, &permission_state_dir)
+}
+
+struct WorkerScratch {
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+    permission_state_dir: PathBuf,
+    permission_state_path: PathBuf,
+    _access_guards: Vec<ScopedAccessGuard>,
+}
+
+impl WorkerScratch {
+    fn prepare_checked(mut check_control: impl FnMut() -> Result<()>) -> Result<Self> {
+        let stdout_path = worker_temp_path("stdout");
+        let stderr_path = worker_temp_path("stderr");
+        let permission_state_dir = worker_temp_dir("permission-state");
+        let permission_state_path = permission_state_dir.join("state.tsv");
+        let access_guards =
+            retain_worker_scratch_access(&stdout_path, &stderr_path, &permission_state_dir)?;
+        check_control()?;
+        let scratch = Self {
+            stdout_path,
+            stderr_path,
+            permission_state_dir,
+            permission_state_path,
+            _access_guards: access_guards,
+        };
+        scratch.create_checked(&mut check_control)?;
+        Ok(scratch)
+    }
+
+    fn create_checked(&self, mut check_control: impl FnMut() -> Result<()>) -> Result<()> {
+        if let Err(err) = self.create_files_checked(&mut check_control) {
+            self.cleanup();
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn create_files_checked(&self, mut check_control: impl FnMut() -> Result<()>) -> Result<()> {
+        check_control()?;
+        std::fs::File::create(&self.stdout_path)
+            .map_err(|err| GfmError::io(&self.stdout_path, err))?;
+        check_control()?;
+        std::fs::File::create(&self.stderr_path)
+            .map_err(|err| GfmError::io(&self.stderr_path, err))?;
+        check_control()?;
+        std::fs::create_dir(&self.permission_state_dir)
+            .map_err(|err| GfmError::io(&self.permission_state_dir, err))?;
+        check_control()?;
+        refresh_permission_state_at_path_checked(&self.permission_state_path, &mut check_control)?;
+        check_control()?;
+        Ok(())
+    }
+
+    fn stdout_path(&self) -> &Path {
+        &self.stdout_path
+    }
+
+    fn stderr_path(&self) -> &Path {
+        &self.stderr_path
+    }
+
+    fn permission_state_dir(&self) -> &Path {
+        &self.permission_state_dir
+    }
+
+    fn cleanup(&self) {
+        let _ = std::fs::remove_file(&self.stdout_path);
+        let _ = std::fs::remove_file(&self.stderr_path);
+        let _ = std::fs::remove_dir_all(&self.permission_state_dir);
+    }
+}
+
+impl Drop for WorkerScratch {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
 }
 
 pub(crate) fn run_quarantined_adaptive_extraction_worker_cancellable(
@@ -968,6 +1019,25 @@ mod tests {
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(checks >= 6);
+        assert_eq!(scratch_before, worker_scratch_entries());
+    }
+
+    #[test]
+    fn worker_scratch_prepare_removes_partial_outputs_after_cancellation() {
+        let scratch_before = worker_scratch_entries();
+        let mut checks = 0usize;
+
+        let result = WorkerScratch::prepare_checked(|| {
+            checks += 1;
+            if checks >= 5 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 5);
         assert_eq!(scratch_before, worker_scratch_entries());
     }
 
