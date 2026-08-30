@@ -1,5 +1,8 @@
 use crate::{
-    access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard},
+    access::{
+        preflight_access_scope, preflight_access_scope_checked, preflight_volume_access_scope,
+        ScopedAccessGuard,
+    },
     parse_u64_arg, parse_usize_arg, path_volume, required_path,
     runtime::run_volume_task_cancellable,
 };
@@ -30,7 +33,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "directory listing",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = preflight_index_read(&path, "directory listing")?;
+                    let _access = preflight_index_read_checked(&path, "directory listing", || {
+                        cancellation.check()
+                    })?;
                     cancellation.check()?;
                     read_directory_checked(path, || cancellation.check())
                 },
@@ -59,7 +64,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Visible,
                 "index",
                 move |cancellation| {
-                    let _root_access = enforce_index_access(&root)?;
+                    let _root_access =
+                        enforce_index_access_checked(&root, || cancellation.check())?;
+                    cancellation.check()?;
+                    let _output_access =
+                        preflight_index_write_checked(&output, "index records", || {
+                            cancellation.check()
+                        })?;
+                    cancellation.check()?;
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let record_count = snapshot.records.len();
                     let inaccessible_count = snapshot.inaccessible.len();
@@ -86,7 +98,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Visible,
                 "index",
                 move |cancellation| {
-                    let _root_access = enforce_index_access(&root)?;
+                    let _root_access =
+                        enforce_index_access_checked(&root, || cancellation.check())?;
+                    cancellation.check()?;
+                    let _records_access =
+                        preflight_index_write_checked(&records, "index records", || {
+                            cancellation.check()
+                        })?;
+                    let _state_access =
+                        preflight_index_write_checked(&state, "index state", || {
+                            cancellation.check()
+                        })?;
+                    cancellation.check()?;
                     Indexer::default().build_persistent_cancellable(
                         root,
                         records,
@@ -124,7 +147,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Visible,
                 "index",
                 move |cancellation| {
-                    let _root_access = enforce_index_access(&root)?;
+                    let _root_access =
+                        enforce_index_access_checked(&root, || cancellation.check())?;
+                    cancellation.check()?;
+                    let _records_access =
+                        preflight_index_write_checked(&records, "scan progress records", || {
+                            cancellation.check()
+                        })?;
+                    let _progress_access = preflight_index_write_checked(
+                        &progress,
+                        "scan progress checkpoint",
+                        || cancellation.check(),
+                    )?;
+                    cancellation.check()?;
                     Indexer::default().build_with_progress_cancellable(
                         root,
                         records,
@@ -159,11 +194,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Visible,
                 "index",
                 move |cancellation| {
-                    let _root_access = enforce_index_access(&root)?;
+                    let _root_access =
+                        enforce_index_access_checked(&root, || cancellation.check())?;
                     let _visible_accesses = visible_roots
                         .iter()
-                        .map(|visible_root| enforce_index_access(visible_root))
+                        .map(|visible_root| {
+                            enforce_index_access_checked(visible_root, || cancellation.check())
+                        })
                         .collect::<Result<Vec<_>>>()?;
+                    cancellation.check()?;
                     Indexer::default().build_fair_cancellable(
                         root,
                         &visible_roots,
@@ -197,14 +236,23 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Visible,
                 "index",
                 move |cancellation| {
-                    let _root_access = enforce_index_access(&root)?;
-                    let _from_access = preflight_index_write(&from, "rename correlation source")?;
-                    let _to_access = preflight_index_write(&to, "rename correlation destination")?;
+                    let _root_access =
+                        enforce_index_access_checked(&root, || cancellation.check())?;
+                    let _from_access =
+                        preflight_index_write_checked(&from, "rename correlation source", || {
+                            cancellation.check()
+                        })?;
+                    let _to_access = preflight_index_write_checked(
+                        &to,
+                        "rename correlation destination",
+                        || cancellation.check(),
+                    )?;
+                    cancellation.check()?;
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     cancellation.check()?;
                     std::fs::rename(&from, &to).map_err(|err| GfmError::io(&from, err))?;
                     let mut live = LiveIndex::from_records(snapshot.records);
-                    live.apply_rename(&from, &to)
+                    live.apply_rename_cancellable(&from, &to, &cancellation)
                 },
             )?;
             println!("{}", report.as_tsv());
@@ -226,12 +274,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Visible,
                 "index",
                 move |cancellation| {
-                    let _root_access = enforce_index_access(&root)?;
+                    let _root_access =
+                        enforce_index_access_checked(&root, || cancellation.check())?;
                     let _path_access = if append.is_some() {
-                        Some(preflight_index_write(&path, "metadata update")?)
+                        Some(preflight_index_write_checked(
+                            &path,
+                            "metadata update",
+                            || cancellation.check(),
+                        )?)
                     } else {
                         None
                     };
+                    cancellation.check()?;
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     if let Some(append) = append {
                         cancellation.check()?;
@@ -243,7 +297,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                             .map_err(|err| GfmError::io(&path, err))?;
                     }
                     let mut live = LiveIndex::from_records(snapshot.records);
-                    live.apply_metadata_update(&path)
+                    live.apply_metadata_update_cancellable(&path, &cancellation)
                 },
             )?;
             println!("{}", report.as_tsv());
@@ -422,8 +476,14 @@ fn run_fsevents_cursor_checkpoint(
         "fsevents cursor checkpoint",
         move |cancellation| {
             cancellation.check()?;
-            let _state_access = preflight_index_read(&state, "fsevents cursor checkpoint state")?;
-            let _cursor_access = preflight_index_write(&cursor, "fsevents cursor checkpoint")?;
+            let _state_access =
+                preflight_index_read_checked(&state, "fsevents cursor checkpoint state", || {
+                    cancellation.check()
+                })?;
+            let _cursor_access =
+                preflight_index_write_checked(&cursor, "fsevents cursor checkpoint", || {
+                    cancellation.check()
+                })?;
             cancellation.check()?;
             Indexer::default().checkpoint_fsevents_cursor_cancellable(
                 state,
@@ -449,8 +509,14 @@ fn run_fsevents_cursor_resume(
         "fsevents cursor resume",
         move |cancellation| {
             cancellation.check()?;
-            let _state_access = preflight_index_read(&state, "fsevents cursor resume state")?;
-            let _cursor_access = preflight_index_read(&cursor, "fsevents cursor resume")?;
+            let _state_access =
+                preflight_index_read_checked(&state, "fsevents cursor resume state", || {
+                    cancellation.check()
+                })?;
+            let _cursor_access =
+                preflight_index_read_checked(&cursor, "fsevents cursor resume", || {
+                    cancellation.check()
+                })?;
             cancellation.check()?;
             Indexer::default().fsevents_resume_plan_cancellable(state, cursor, &cancellation)
         },
@@ -470,25 +536,36 @@ fn run_fsevents_repair_schedule(
         AccessIntent::Read,
         "fsevents repair schedule cursor",
     )?;
-    let existing_dropped_roots = existing_dropped_roots(&dropped_roots)?;
     let volume = path_volume(&state)
         .or_else(|| path_volume(&cursor))
-        .or_else(|| {
-            existing_dropped_roots
-                .iter()
-                .find_map(|root| path_volume(root))
-        });
+        .or_else(|| dropped_roots.iter().find_map(|root| path_volume(root)));
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
         "fsevents repair schedule",
         move |cancellation| {
             cancellation.check()?;
-            let _state_access = preflight_index_read(&state, "fsevents repair schedule state")?;
-            let _cursor_access = preflight_index_read(&cursor, "fsevents repair schedule cursor")?;
+            let existing_dropped_roots =
+                existing_dropped_roots_checked(&dropped_roots, || cancellation.check())?;
+            cancellation.check()?;
+            let _state_access =
+                preflight_index_read_checked(&state, "fsevents repair schedule state", || {
+                    cancellation.check()
+                })?;
+            let _cursor_access =
+                preflight_index_read_checked(&cursor, "fsevents repair schedule cursor", || {
+                    cancellation.check()
+                })?;
             let _dropped_access = existing_dropped_roots
                 .iter()
-                .map(|root| preflight_index_read(root, "fsevents repair schedule dropped root"))
+                .map(|root| {
+                    cancellation.check()?;
+                    preflight_index_read_checked(
+                        root,
+                        "fsevents repair schedule dropped root",
+                        || cancellation.check(),
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?;
             cancellation.check()?;
             Indexer::default().repair_schedule_cancellable(
@@ -503,9 +580,13 @@ fn run_fsevents_repair_schedule(
     )
 }
 
-fn existing_dropped_roots(dropped_roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
+fn existing_dropped_roots_checked(
+    dropped_roots: &[PathBuf],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<PathBuf>> {
     let mut existing = Vec::new();
     for root in dropped_roots {
+        check_control()?;
         if !root.try_exists().map_err(|err| {
             GfmError::io(
                 root,
@@ -514,13 +595,16 @@ fn existing_dropped_roots(dropped_roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
         })? {
             continue;
         }
+        check_control()?;
         preflight_volume_access_scope(
             root,
             AccessIntent::Read,
             "fsevents repair schedule dropped root",
         )?;
+        check_control()?;
         existing.push(root.clone());
     }
+    check_control()?;
     Ok(existing)
 }
 
@@ -536,7 +620,7 @@ where
     let volume = path_volume(&path);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_index_read(&path, worker)?;
+        let _access = preflight_index_read_checked(&path, worker, || cancellation.check())?;
         cancellation.check()?;
         read(path, &cancellation)
     })
@@ -546,16 +630,38 @@ fn enforce_index_access(root: &Path) -> Result<ScopedAccessGuard> {
     preflight_access_scope(root, AccessIntent::Index, "index")
 }
 
+fn enforce_index_access_checked(
+    root: &Path,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    preflight_access_scope_checked(root, AccessIntent::Index, "index", check_control)
+}
+
 fn preflight_index_volume_access(root: &Path) -> Result<()> {
     preflight_volume_access_scope(root, AccessIntent::Index, "index")
 }
 
-fn preflight_index_read(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(path, AccessIntent::Read, worker)
+fn preflight_index_read_checked(
+    path: &Path,
+    worker: &str,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
 }
 
 fn preflight_index_write(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
     preflight_access_scope(write_probe_path(path)?, AccessIntent::Write, worker)
+}
+
+fn preflight_index_write_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    check_control()?;
+    let probe_path = write_probe_path(path)?;
+    check_control()?;
+    preflight_access_scope_checked(probe_path, AccessIntent::Write, worker, check_control)
 }
 
 fn preflight_index_write_volume(path: &Path, worker: &str) -> Result<()> {
@@ -624,5 +730,41 @@ mod tests {
 
         assert_eq!(result, Err(GfmError::Cancelled));
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn dropped_repair_root_filter_honors_pre_cancelled_control_before_probe() {
+        let path = std::env::temp_dir()
+            .join(format!("gfm-repair-root-cancel-{}", std::process::id()))
+            .join("root-that-should-not-be-probed");
+
+        let result = existing_dropped_roots_checked(&[path], || Err(GfmError::Cancelled));
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+    }
+
+    #[test]
+    fn dropped_repair_root_filter_can_cancel_between_roots() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-repair-root-filter-cancel-{}",
+            std::process::id()
+        ));
+        let first = root.join("first");
+        let second = root.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        let mut checks = 0;
+
+        let result = existing_dropped_roots_checked(&[first, second], || {
+            checks += 1;
+            if checks > 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        fs::remove_dir_all(root).unwrap();
     }
 }
