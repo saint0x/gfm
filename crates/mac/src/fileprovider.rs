@@ -2472,19 +2472,17 @@ fn is_evicted_placeholder_path(path: &Path) -> bool {
     name.ends_with(".icloud")
 }
 
-fn has_evicted_materialization_evidence(path: &Path, hints: &CloudHints) -> bool {
-    path.extension().and_then(|value| value.to_str()) == Some("icloud")
-        || hints.xattrs.iter().any(|attr| {
-            let attr = attr.to_ascii_lowercase();
-            attr.contains("placeholder") || attr.contains("evict")
-        })
-        || hints.xattr_values.iter().any(|value| {
-            let value = value.to_ascii_lowercase();
-            value.contains("not-downloaded")
-                || value.contains("not_downloaded")
-                || value.contains("placeholder")
-                || value.contains("evict")
-        })
+fn has_evicted_materialization_evidence(_path: &Path, hints: &CloudHints) -> bool {
+    hints.xattrs.iter().any(|attr| {
+        let attr = attr.to_ascii_lowercase();
+        attr.contains("placeholder") || attr.contains("evict")
+    }) || hints.xattr_values.iter().any(|value| {
+        let value = value.to_ascii_lowercase();
+        value.contains("not-downloaded")
+            || value.contains("not_downloaded")
+            || value.contains("placeholder")
+            || value.contains("evict")
+    })
 }
 
 fn xattr_signal_blob(hints: &CloudHints) -> String {
@@ -2826,6 +2824,42 @@ mod tests {
         assert_eq!(
             report.materialization_reason.as_deref(),
             Some("unknown-provider-state")
+        );
+        assert_eq!(report.commands.download, CloudCommandState::Disabled);
+        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+    }
+
+    #[test]
+    fn icloud_extension_without_materialization_evidence_stays_unknown_when_native_missing() {
+        let path = PathBuf::from("/tmp/Remote.icloud");
+        let mut native = native_values();
+        native.status = NativeFileProviderStatus::Missing;
+        native.reason = Some("native FileProvider URL resource path missing".to_string());
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "icloud-extension".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResourceMissing
+        );
+        assert_eq!(
+            report.materialization_confidence,
+            CloudMaterializationConfidence::Native
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native FileProvider URL resource path missing")
         );
         assert_eq!(report.commands.download, CloudCommandState::Disabled);
         assert_eq!(report.commands.evict, CloudCommandState::Disabled);

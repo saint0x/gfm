@@ -2519,6 +2519,7 @@
         "tmp/gfm-fozzy-downloaded.icloud.md"
       ],
       "exit_code": 0,
+      "stdout": "fileprovider-state\ttmp/gfm-fozzy-downloaded.icloud.md\tdomain=local\tstate=local-only\tmaterialization=not-provider-backed\tmaterialization-source=filesystem\tmaterialization-confidence=filesystem\tmaterialization-reason=not-fileprovider-backed\toffline=false\tconflict=false\tbadges=\tprogress-direction=idle\tprogress-milli=-\tprogress-requested=false\tprogress-complete=false\tprogress-indeterminate=false\tprogress-source=state\tprogress-reason=not-fileprovider-backed\tdownload=hidden\tevict=hidden\treveal-conflict=hidden\tprovider=-\tsource=fixture-name\treason=not-fileprovider-backed\n",
       "times": 1
     },
     {
