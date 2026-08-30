@@ -363,6 +363,80 @@ fn permission_invalidation_refuses_read_only_state_before_persisting_from_binary
 }
 
 #[test]
+fn permission_invalidation_refuses_unavailable_volume_api_state_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-permission-invalidation-api-unavailable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("runtime").join("permission-state.tsv");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation-unavailable-volume-api")
+        .arg(&state)
+        .arg(&root)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("permission-invalidation\t"), "{stdout}");
+    assert!(
+        stderr.contains("permission state volume access blocked: unavailable volume network"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("native-status=unavailable"), "{stderr}");
+    assert!(stderr.contains("resource-status=unavailable"), "{stderr}");
+    assert!(stderr.contains("mount-status=unavailable"), "{stderr}");
+    assert!(!state.exists());
+    assert!(!state.parent().unwrap().exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn security_worker_admission_refuses_unavailable_volume_api_state_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-security-admission-api-unavailable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("Preview.pdf");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("security-worker-admission-unavailable-volume-api")
+        .arg("preview worker")
+        .arg(&path)
+        .arg(&root)
+        .arg("preview")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("security-worker-admission\tworker=preview worker\t"));
+    assert!(stdout.contains(&format!("\tpath={}\t", path.display())));
+    assert!(stdout.contains("\tintent=preview\t"));
+    assert!(stdout.contains("\tprobe=unknown\t"));
+    assert!(stdout.contains("\taccess-action=deny\tworker-action=deny\t"));
+    assert!(stdout.contains("\tcan-touch-filesystem=false\t"));
+    assert!(stdout.contains("\trefresh-on-permission-change=true\t"));
+    assert!(stdout.contains("unavailable volume network"));
+    assert!(stdout.contains("native-status=unavailable"));
+    assert!(stdout.contains("resource-status=unavailable"));
+    assert!(stdout.contains("mount-status=unavailable"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn permission_invalidation_compare_reports_removed_scope_as_unavailable_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-permission-invalidation-removed-{}",

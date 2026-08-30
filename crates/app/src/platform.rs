@@ -75,6 +75,40 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 worker_admission_with_volume_gate(&path, intent, worker).as_tsv()
             );
         }
+        "security-worker-admission-unavailable-volume-api" => {
+            let worker = required_string(
+                args.next(),
+                "security-worker-admission-unavailable-volume-api requires a worker label",
+            )?;
+            let path = required_path(
+                args.next(),
+                "security-worker-admission-unavailable-volume-api requires a path",
+            )?;
+            let root = required_path(
+                args.next(),
+                "security-worker-admission-unavailable-volume-api requires a volume root",
+            )?;
+            let intent = args
+                .next()
+                .map(|value| AccessIntent::parse(&value))
+                .transpose()?
+                .unwrap_or(AccessIntent::Read);
+            let mut volume = VolumeDescriptor::for_path(&root)?;
+            volume.kind = gfm_mac::VolumeKind::Network;
+            volume.mount_state = gfm_mac::MountState::Mounted;
+            volume.reachable = Some(true);
+            volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            let report = VolumeDiscoveryReport {
+                volumes: vec![volume],
+            };
+            println!(
+                "{}",
+                crate::access::worker_admission_with_volume_report(&path, intent, worker, &report,)
+                    .as_tsv()
+            );
+        }
         "security-bookmark-create" => {
             let path = required_path(args.next(), "security-bookmark-create requires a path")?;
             let intent = args
@@ -580,6 +614,33 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "volume-mount-bsd requires a BSD disk name such as disk4s1",
             )?;
             println!("{}", VolumeMountIdentityReport::execute(bsd_name).as_tsv());
+        }
+        "permission-invalidation-unavailable-volume-api" => {
+            let state = required_path(
+                args.next(),
+                "permission-invalidation-unavailable-volume-api requires a permission state path",
+            )?;
+            let root = required_path(
+                args.next(),
+                "permission-invalidation-unavailable-volume-api requires a volume root",
+            )?;
+            let mut volume = VolumeDescriptor::for_path(&root)?;
+            volume.kind = gfm_mac::VolumeKind::Network;
+            volume.mount_state = gfm_mac::MountState::Mounted;
+            volume.reachable = Some(true);
+            volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            let report = VolumeDiscoveryReport {
+                volumes: vec![volume],
+            };
+            println!(
+                "{}",
+                crate::permission_refresh::refresh_permission_state_at_path_with_report(
+                    &state, &root, &report,
+                )?
+                .as_tsv()
+            );
         }
         "volume-index-policy" => {
             let external = parse_volume_indexing_policy(&required_string(

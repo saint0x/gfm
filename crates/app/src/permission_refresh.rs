@@ -63,7 +63,17 @@ pub(crate) fn refresh_permission_state(
 pub(crate) fn refresh_permission_state_at_path(
     path: &Path,
 ) -> Result<PermissionStateInvalidationReport> {
-    preflight_permission_state_volume(path)?;
+    let probe_path = write_probe_existing_ancestor(path)?;
+    let report = VolumeDiscoveryReport::for_containing_path(&probe_path);
+    refresh_permission_state_at_path_with_report(path, &probe_path, &report)
+}
+
+pub(crate) fn refresh_permission_state_at_path_with_report(
+    path: &Path,
+    probe_path: &Path,
+    report: &VolumeDiscoveryReport,
+) -> Result<PermissionStateInvalidationReport> {
+    preflight_permission_state_volume_with_report(path, probe_path, report)?;
     let previous = if permission_state_is_file(path)? {
         Some(PermissionStateSnapshot::read(path)?)
     } else {
@@ -73,12 +83,6 @@ pub(crate) fn refresh_permission_state_at_path(
     let report = PermissionStateInvalidationReport::evaluate(previous.as_ref(), &current);
     current.write(path)?;
     Ok(report)
-}
-
-fn preflight_permission_state_volume(path: &Path) -> Result<()> {
-    let probe_path = write_probe_existing_ancestor(path)?;
-    let report = VolumeDiscoveryReport::for_containing_path(&probe_path);
-    preflight_permission_state_volume_with_report(path, &probe_path, &report)
 }
 
 fn preflight_permission_state_volume_with_report(

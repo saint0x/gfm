@@ -5237,6 +5237,30 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "permission-invalidation-unavailable-volume-api",
+        "tmp/gfm-fozzy-dist/runtime/permission-state.tsv",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "security-worker-admission-unavailable-volume-api",
+        "preview worker",
+        "tmp/gfm-fozzy-dist/Missing.pdf",
+        "tmp/gfm-fozzy-dist",
+        "preview"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-security.md",
       "data": "security scoped probe"

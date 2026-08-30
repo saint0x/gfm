@@ -138,6 +138,28 @@ fn volume_access_block_reason_in_report(
             volume.mount_state.as_str()
         ));
     }
+    if volume_platform_state_unavailable(volume) {
+        return Some(format!(
+            "{worker} volume access blocked: unavailable volume {}; label={}; root={}; stable-id={}; mount={}; native-status={}; resource-status={}; mount-status={}",
+            volume.kind.as_str(),
+            volume.label,
+            volume.path.display(),
+            volume.stable_identity,
+            volume.mount_state.as_str(),
+            volume
+                .native_status
+                .map(gfm_mac::NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            volume
+                .resource_status
+                .map(gfm_mac::NativeVolumeStatus::as_str)
+                .unwrap_or("-"),
+            volume
+                .mount_table_status
+                .map(gfm_mac::NativeVolumeStatus::as_str)
+                .unwrap_or("-")
+        ));
+    }
     if mutating_intent(intent)
         && volume.read_only
         && !broad_system_root_allows_path(volume, volume_path, intent)
@@ -152,6 +174,12 @@ fn volume_access_block_reason_in_report(
         ));
     }
     None
+}
+
+fn volume_platform_state_unavailable(volume: &gfm_mac::VolumeDescriptor) -> bool {
+    volume.native_status == Some(gfm_mac::NativeVolumeStatus::Unavailable)
+        && volume.resource_status == Some(gfm_mac::NativeVolumeStatus::Unavailable)
+        && volume.mount_table_status == Some(gfm_mac::NativeVolumeStatus::Unavailable)
 }
 
 const fn mutating_intent(intent: AccessIntent) -> bool {
@@ -397,6 +425,81 @@ mod tests {
         assert!(admission.reason.contains("mount=stale"));
         assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
         assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_gate_refuses_unavailable_volume_api_state() {
+        let root = unique_temp_dir("gfm-access-admission-unavailable-api");
+        let path = root.join("Missing.pdf");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::Network;
+        volume.reachable = Some(true);
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let admission = worker_admission_with_volume_report(
+            &path,
+            AccessIntent::Preview,
+            "preview worker",
+            &report,
+        );
+
+        assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
+        assert!(!admission.can_touch_filesystem);
+        assert!(!admission.needs_bookmark_access);
+        assert!(admission.refresh_on_permission_change);
+        assert_eq!(admission.access.probe, gfm_mac::AccessProbeState::Unknown);
+        assert_eq!(admission.access.action, SecurityDecisionAction::Deny);
+        assert!(admission
+            .reason
+            .contains("preview worker volume access blocked"));
+        assert!(admission.reason.contains("unavailable volume network"));
+        assert!(admission.reason.contains("native-status=unavailable"));
+        assert!(admission.reason.contains("resource-status=unavailable"));
+        assert!(admission.reason.contains("mount-status=unavailable"));
+        assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
+        assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_preflight_refuses_unavailable_volume_api_state() {
+        let root = unique_temp_dir("gfm-access-preflight-unavailable-api");
+        let file = root.join("Preview.pdf");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::Network;
+        volume.reachable = Some(true);
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let err = preflight_volume_access_in_report(
+            &file,
+            &file,
+            AccessIntent::Read,
+            "quicklook preview",
+            &report,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err
+            .to_string()
+            .contains("quicklook preview volume access blocked"));
+        assert!(err.to_string().contains("unavailable volume network"));
+        assert!(err.to_string().contains("native-status=unavailable"));
+        assert!(err.to_string().contains("resource-status=unavailable"));
+        assert!(err.to_string().contains("mount-status=unavailable"));
 
         fs::remove_dir_all(root).unwrap();
     }

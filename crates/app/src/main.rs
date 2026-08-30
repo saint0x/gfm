@@ -806,9 +806,11 @@ fn print_usage() {
   gfm support-check
   gfm permission-onboarding
   gfm permission-invalidation [permission-state.tsv]
+  gfm permission-invalidation-unavailable-volume-api <permission-state.tsv> <volume-root>
   gfm permission-invalidation-compare <previous-state.tsv> <current-state.tsv>
   gfm security-scope <path> [read|write|index|preview|operate]
   gfm security-worker-admission <worker-label> <path> [read|write|index|preview|operate]
+  gfm security-worker-admission-unavailable-volume-api <worker-label> <path> <volume-root> [read|write|index|preview|operate]
   gfm security-bookmark-create <path> [read|write|index|preview|operate]
   gfm mac-bridges
   gfm native-icon <path>
