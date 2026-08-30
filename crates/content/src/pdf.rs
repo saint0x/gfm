@@ -1,4 +1,4 @@
-use crate::{normalize_text, ContentDocument, ExtractionPolicy};
+use crate::{normalize_text_checked, ContentDocument, ExtractionPolicy};
 use flate2::read::ZlibDecoder;
 use gfm_types::{GfmError, Result};
 use std::io::Read;
@@ -66,18 +66,20 @@ pub(crate) fn extract_pdf_checked(
                 policy.max_pdf_stream_bytes,
                 &mut check_control,
             ) {
-                Ok(decoded) => extract_text_stream(&decoded, &mut text),
+                Ok(decoded) => {
+                    extract_text_stream_checked(&decoded, &mut text, &mut check_control)?
+                }
                 Err(InflateError::TooLarge) => return Ok((PdfExtractStatus::TooLarge, None)),
                 Err(InflateError::Corrupt) => return Ok((PdfExtractStatus::Corrupt, None)),
                 Err(InflateError::Control(err)) => return Err(err),
             }
         } else {
-            extract_text_stream(stream.body, &mut text);
+            extract_text_stream_checked(stream.body, &mut text, &mut check_control)?;
         }
         check_control()?;
     }
 
-    let text = normalize_text(text.trim());
+    let text = normalize_text_checked(text.trim(), &mut check_control)?;
     if text.is_empty() {
         return Ok((PdfExtractStatus::Unsupported, None));
     }
@@ -172,24 +174,35 @@ fn trim_stream_body(mut body: &[u8]) -> &[u8] {
     body
 }
 
-fn extract_text_stream(bytes: &[u8], output: &mut String) {
+fn extract_text_stream_checked(
+    bytes: &[u8],
+    output: &mut String,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<()> {
     let mut cursor = 0;
     while let Some(begin) = find_from(bytes, b"BT", cursor) {
+        check_control()?;
         let text_start = begin + 2;
         let Some(end) = find_from(bytes, b"ET", text_start) else {
             break;
         };
-        extract_text_section(&bytes[text_start..end], output);
+        extract_text_section_checked(&bytes[text_start..end], output, check_control)?;
         cursor = end + 2;
     }
+    Ok(())
 }
 
-fn extract_text_section(bytes: &[u8], output: &mut String) {
+fn extract_text_section_checked(
+    bytes: &[u8],
+    output: &mut String,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<()> {
     let mut cursor = 0;
     while cursor < bytes.len() {
+        check_control()?;
         match bytes[cursor] {
             b'(' => {
-                if let Some((value, next)) = parse_literal(bytes, cursor) {
+                if let Some((value, next)) = parse_literal_checked(bytes, cursor, check_control)? {
                     push_pdf_text(output, &value);
                     cursor = next;
                 } else {
@@ -197,7 +210,7 @@ fn extract_text_section(bytes: &[u8], output: &mut String) {
                 }
             }
             b'<' if bytes.get(cursor + 1) != Some(&b'<') => {
-                if let Some((value, next)) = parse_hex(bytes, cursor) {
+                if let Some((value, next)) = parse_hex_checked(bytes, cursor, check_control)? {
                     push_pdf_text(output, &value);
                     cursor = next;
                 } else {
@@ -211,16 +224,24 @@ fn extract_text_section(bytes: &[u8], output: &mut String) {
             _ => cursor += 1,
         }
     }
+    Ok(())
 }
 
-fn parse_literal(bytes: &[u8], start: usize) -> Option<(String, usize)> {
+fn parse_literal_checked(
+    bytes: &[u8],
+    start: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<Option<(String, usize)>> {
     let mut cursor = start + 1;
     let mut depth = 1usize;
     let mut value = Vec::new();
     while cursor < bytes.len() {
+        check_control()?;
         match bytes[cursor] {
             b'\\' => {
-                let escaped = *bytes.get(cursor + 1)?;
+                let Some(escaped) = bytes.get(cursor + 1).copied() else {
+                    return Ok(None);
+                };
                 match escaped {
                     b'n' => value.push(b'\n'),
                     b'r' => value.push(b'\r'),
@@ -252,7 +273,7 @@ fn parse_literal(bytes: &[u8], start: usize) -> Option<(String, usize)> {
                 depth -= 1;
                 cursor += 1;
                 if depth == 0 {
-                    return Some((String::from_utf8_lossy(&value).into_owned(), cursor));
+                    return Ok(Some((String::from_utf8_lossy(&value).into_owned(), cursor)));
                 }
                 value.push(b')');
             }
@@ -262,7 +283,7 @@ fn parse_literal(bytes: &[u8], start: usize) -> Option<(String, usize)> {
             }
         }
     }
-    None
+    Ok(None)
 }
 
 fn parse_octal(bytes: &[u8], start: usize) -> (u8, usize) {
@@ -278,16 +299,28 @@ fn parse_octal(bytes: &[u8], start: usize) -> (u8, usize) {
     (value.min(255) as u8, cursor)
 }
 
-fn parse_hex(bytes: &[u8], start: usize) -> Option<(String, usize)> {
+fn parse_hex_checked(
+    bytes: &[u8],
+    start: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<Option<(String, usize)>> {
     let end = bytes[start + 1..]
         .iter()
         .position(|byte| *byte == b'>')
-        .map(|offset| start + 1 + offset)?;
-    let mut nibbles: Vec<_> = bytes[start + 1..end]
-        .iter()
-        .filter(|byte| !byte.is_ascii_whitespace())
-        .filter_map(|byte| hex_value(*byte))
-        .collect();
+        .map(|offset| start + 1 + offset);
+    let Some(end) = end else {
+        return Ok(None);
+    };
+    let mut nibbles = Vec::new();
+    for byte in &bytes[start + 1..end] {
+        check_control()?;
+        if byte.is_ascii_whitespace() {
+            continue;
+        }
+        if let Some(value) = hex_value(*byte) {
+            nibbles.push(value);
+        }
+    }
     if nibbles.len() % 2 == 1 {
         nibbles.push(0);
     }
@@ -295,7 +328,10 @@ fn parse_hex(bytes: &[u8], start: usize) -> Option<(String, usize)> {
         .chunks(2)
         .map(|pair| (pair[0] << 4) | pair[1])
         .collect();
-    Some((String::from_utf8_lossy(&decoded).into_owned(), end + 1))
+    Ok(Some((
+        String::from_utf8_lossy(&decoded).into_owned(),
+        end + 1,
+    )))
 }
 
 fn hex_value(byte: u8) -> Option<u8> {
@@ -486,6 +522,41 @@ endobj
             let next = checks.get() + 1;
             checks.set(next);
             if next >= 6 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn checked_extraction_can_cancel_while_parsing_uncompressed_text_stream() {
+        let mut pdf = b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Contents 2 0 R >>
+endobj
+2 0 obj
+<< /Length 65536 >>
+stream
+BT "
+        .to_vec();
+        for index in 0..4096 {
+            pdf.extend(format!("(pdfneedle-{index}) Tj ").as_bytes());
+        }
+        pdf.extend(
+            b"ET
+endstream
+endobj
+%%EOF",
+        );
+        let checks = Cell::new(0);
+
+        let result = extract_pdf_checked(&pdf, &ExtractionPolicy::default(), || {
+            let next = checks.get() + 1;
+            checks.set(next);
+            if next >= 512 {
                 Err(GfmError::Cancelled)
             } else {
                 Ok(())
