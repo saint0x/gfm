@@ -1,4 +1,6 @@
-use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
+use crate::access::{
+    preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
+};
 use crate::{parent_volume, runtime::run_volume_task_cancellable};
 use gfm_jobs::Priority;
 use gfm_mac::AccessIntent;
@@ -142,7 +144,8 @@ fn run_release_validate(spec: ReleaseArtifactSpec) -> Result<ReleaseArtifactRepo
     let volume = parent_volume(&spec.app_path);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_packaging_read_access(&spec.app_path, WORKER)?;
+        let _access =
+            retain_packaging_read_access_checked(&spec.app_path, WORKER, || cancellation.check())?;
         cancellation.check()?;
         if spec.require_signed || spec.require_notarized || spec.assess_gatekeeper {
             require_release_xcode_toolchain()?;
@@ -160,7 +163,10 @@ fn run_bundle_app(spec: AppBundleSpec) -> Result<AppBundle> {
         .or_else(|| parent_volume(&spec.icon));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_bundle_access(&spec.executable, &spec.icon, &spec.output_dir)?;
+        let _access =
+            retain_bundle_access_checked(&spec.executable, &spec.icon, &spec.output_dir, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
         if spec.signing_identity != SigningIdentity::Unsigned {
             require_codesign_toolchain()?;
@@ -175,7 +181,10 @@ fn run_register_app(app_path: PathBuf) -> Result<()> {
     let volume = parent_volume(&app_path);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope(&app_path, AccessIntent::Operate, WORKER)?;
+        let _access =
+            preflight_access_scope_checked(&app_path, AccessIntent::Operate, WORKER, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
         register_launch_services(&app_path)
     })
@@ -188,15 +197,24 @@ fn run_notarize_app(spec: NotarizationSpec) -> Result<NotarizationTicket> {
     let volume = parent_volume(&output_probe).or_else(|| parent_volume(&spec.app_path));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_notarize_access(&spec.app_path, &spec.output_dir, &spec.credentials)?;
+        let _access = retain_notarize_access_checked(
+            &spec.app_path,
+            &spec.output_dir,
+            &spec.credentials,
+            || cancellation.check(),
+        )?;
         cancellation.check()?;
         require_release_xcode_toolchain()?;
         notarize_app_bundle(&spec)
     })
 }
 
-fn retain_packaging_read_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(path, AccessIntent::Read, worker)
+fn retain_packaging_read_access_checked(
+    path: &Path,
+    worker: &str,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
 }
 
 fn preflight_bundle_volumes(spec: &AppBundleSpec) -> Result<()> {
@@ -213,18 +231,27 @@ fn preflight_bundle_volumes(spec: &AppBundleSpec) -> Result<()> {
     )
 }
 
-fn retain_bundle_access(
+fn retain_bundle_access_checked(
     executable: &Path,
     icon: &Path,
     output_dir: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let output_probe = write_probe_path(output_dir)?.to_path_buf();
+    check_control()?;
     Ok(vec![
-        retain_packaging_read_access(executable, "bundle app executable")?,
-        retain_packaging_read_access(icon, "bundle app icon")?,
-        preflight_access_scope(
-            write_probe_path(output_dir)?,
+        retain_packaging_read_access_checked(
+            executable,
+            "bundle app executable",
+            &mut check_control,
+        )?,
+        retain_packaging_read_access_checked(icon, "bundle app icon", &mut check_control)?,
+        preflight_access_scope_checked(
+            &output_probe,
             AccessIntent::Write,
             "bundle app output",
+            &mut check_control,
         )?,
     ])
 }
@@ -242,22 +269,33 @@ fn preflight_notarize_volumes(spec: &NotarizationSpec) -> Result<()> {
     Ok(())
 }
 
-fn retain_notarize_access(
+fn retain_notarize_access_checked(
     app_path: &Path,
     output_dir: &Path,
     credentials: &NotarizationCredentials,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let output_probe = write_probe_path(output_dir)?.to_path_buf();
+    check_control()?;
     let mut guards = vec![
-        retain_packaging_read_access(app_path, "notarize app")?,
-        preflight_access_scope(
-            write_probe_path(output_dir)?,
+        retain_packaging_read_access_checked(app_path, "notarize app", &mut check_control)?,
+        preflight_access_scope_checked(
+            &output_probe,
             AccessIntent::Write,
             "notarize output",
+            &mut check_control,
         )?,
     ];
     if let NotarizationCredentials::ApiKey { key_path, .. } = credentials {
-        guards.push(retain_packaging_read_access(key_path, "notarize api key")?);
+        check_control()?;
+        guards.push(retain_packaging_read_access_checked(
+            key_path,
+            "notarize api key",
+            &mut check_control,
+        )?);
     }
+    check_control()?;
     Ok(guards)
 }
 
@@ -348,4 +386,68 @@ fn required_path(value: Option<String>, message: &str) -> Result<PathBuf> {
     value
         .map(PathBuf::from)
         .ok_or_else(|| GfmError::Format(message.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn bundle_access_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-bundle-access-pre-cancel");
+        let executable = root.join("gfm");
+        let icon = root.join("gfm.icns");
+        let output = root.join("GFM.app");
+
+        let result =
+            retain_bundle_access_checked(&executable, &icon, &output, || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn notarize_access_checked_can_cancel_before_api_key_probe() {
+        let root = unique_temp_dir("gfm-notarize-access-cancel");
+        let app = root.join("GFM.app");
+        let output = root.join("notary");
+        let key_path = root.join("AuthKey.p8");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(&key_path, "key").unwrap();
+        let credentials = NotarizationCredentials::ApiKey {
+            key_id: "KEY".to_string(),
+            issuer_id: "ISSUER".to_string(),
+            key_path,
+        };
+        let mut checks = 0usize;
+
+        let result = retain_notarize_access_checked(&app, &output, &credentials, || {
+            checks += 1;
+            if checks >= 5 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 5);
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "{}-{}-{}",
+            prefix,
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
 }

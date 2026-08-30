@@ -1,6 +1,6 @@
 use crate::access::{
-    preflight_access_scope, preflight_volume_access_scope, worker_admission_with_volume_gate,
-    worker_admission_with_volume_report, ScopedAccessGuard,
+    preflight_access_scope_checked, preflight_volume_access_scope,
+    worker_admission_with_volume_gate, worker_admission_with_volume_report, ScopedAccessGuard,
 };
 use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
 use crate::runtime::{
@@ -274,7 +274,8 @@ fn recover_operations_from_journal(
     let volume = control_file_volume(&journal_probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _journal_access = preflight_operation_journal_write(&journal)?;
+        let _journal_access =
+            preflight_operation_journal_write_checked(&journal, || cancellation.check())?;
         cancellation.check()?;
         Operator::new(OperationContext::new(journal)).recover_with_policy(policy)
     })
@@ -432,7 +433,7 @@ fn restore_destination_from_metadata(trashed_path: &Path) -> Result<PathBuf> {
             ))
         })?;
     let metadata_path = default_trash_metadata_path();
-    let _metadata_access = preflight_trash_metadata_read(&metadata_path)?;
+    let _metadata_access = preflight_trash_metadata_read_checked(&metadata_path, || Ok(()))?;
     let metadata = read_trash_metadata(&metadata_path)?;
     metadata
         .get(&name)
@@ -453,10 +454,6 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
     let _ = refresh_permission_state(PermissionRefreshAudience::Operations, label)?;
     let volume_report = operation_volume_report(&operation);
     let access_gate = operation_access_gate(&operation, &volume_report);
-    preflight_operation_target_probe(&operation)?;
-    let _journal_access = preflight_operation_journal_write(&journal)?;
-    let _trash_metadata_access =
-        retain_operation_trash_metadata_access(&operation, &trash_metadata)?;
     let volume_copy_policy = operation_volume_copy_policy_from_report(&operation, &volume_report);
     let volume = operation_volume(&operation);
     let entry = run_volume_task_cancellable_with_runtime(
@@ -464,6 +461,18 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
         Priority::Interactive,
         label,
         move |cancellation, runtime| {
+            cancellation.check()?;
+            preflight_operation_target_probe(&operation)?;
+            cancellation.check()?;
+            let _journal_access =
+                preflight_operation_journal_write_checked(&journal, || cancellation.check())?;
+            cancellation.check()?;
+            let _trash_metadata_access = retain_operation_trash_metadata_access_checked(
+                &operation,
+                &trash_metadata,
+                || cancellation.check(),
+            )?;
+            cancellation.check()?;
             if access_gate.check(&operation).is_ok() {
                 let _security_scope = operation_security_accesses(&operation)?;
                 let conflict_report = OperationConflictReport::evaluate(&operation, conflict)?;
@@ -663,14 +672,15 @@ fn preflight_operation_volume_policy_access(operation: &Operation) -> Result<()>
     }
 }
 
-fn retain_operation_trash_metadata_access(
+fn retain_operation_trash_metadata_access_checked(
     operation: &Operation,
     path: &Path,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<Option<ScopedAccessGuard>> {
     if !operation_uses_trash_metadata(operation) {
         return Ok(None);
     }
-    preflight_trash_metadata_write(path).map(Some)
+    preflight_trash_metadata_write_checked(path, check_control).map(Some)
 }
 
 fn operation_uses_trash_metadata(operation: &Operation) -> bool {
@@ -683,24 +693,36 @@ fn operation_uses_trash_metadata(operation: &Operation) -> bool {
     )
 }
 
-fn preflight_operation_journal_write(path: &Path) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(
-        write_probe_path(path)?,
+fn preflight_operation_journal_write_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    preflight_access_scope_checked(
+        &probe,
         AccessIntent::Write,
         "operation journal",
+        check_control,
     )
 }
 
-fn preflight_trash_metadata_read(path: &Path) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(path, AccessIntent::Read, "trash metadata")
+fn preflight_trash_metadata_read_checked(
+    path: &Path,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    preflight_access_scope_checked(path, AccessIntent::Read, "trash metadata", check_control)
 }
 
-fn preflight_trash_metadata_write(path: &Path) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(
-        write_probe_path(path)?,
-        AccessIntent::Write,
-        "trash metadata",
-    )
+fn preflight_trash_metadata_write_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    preflight_access_scope_checked(&probe, AccessIntent::Write, "trash metadata", check_control)
 }
 
 fn preflight_operation_target_probe(operation: &Operation) -> Result<()> {
@@ -2016,6 +2038,43 @@ mod tests {
         assert!(decision.reason.contains("bookmark=missing"));
         assert!(decision.refresh_on_permission_change);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_journal_write_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-app-op-journal-pre-cancel");
+        let journal = root.join("ops.journal");
+
+        let result =
+            preflight_operation_journal_write_checked(&journal, || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!journal.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_trash_metadata_access_checked_can_cancel_before_write_probe() {
+        let root = unique_temp_dir("gfm-app-op-trash-metadata-cancel");
+        let metadata = root.join("trash.tsv");
+        let operation = Operation::Trash {
+            path: root.join("target.txt"),
+        };
+        let mut checks = 0usize;
+
+        let result = retain_operation_trash_metadata_access_checked(&operation, &metadata, || {
+            checks += 1;
+            if checks >= 2 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 2);
+        assert!(!metadata.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
