@@ -290,6 +290,7 @@ impl PermissionStateSnapshot {
 
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
+        validate_unique_permission_scopes(path, &self.readiness)?;
         let mut output = String::from("gfm-permission-state-v1\n");
         for item in &self.readiness {
             output.push_str(&format!(
@@ -302,6 +303,20 @@ impl PermissionStateSnapshot {
         }
         atomic_write_text(path, &output)
     }
+}
+
+fn validate_unique_permission_scopes(path: &Path, readiness: &[PermissionReadiness]) -> Result<()> {
+    let mut seen_scopes = BTreeSet::new();
+    for item in readiness {
+        if !seen_scopes.insert(item.scope) {
+            return Err(GfmError::Format(format!(
+                "duplicate permission state scope `{}` before writing {}",
+                item.scope.as_str(),
+                path.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl PermissionStateInvalidationReport {
@@ -727,6 +742,36 @@ mod tests {
         assert!(err
             .to_string()
             .contains("duplicate permission state scope `documents`"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permission_state_snapshot_write_rejects_duplicate_scopes_before_persisting() {
+        let root = temp_root("permissions-snapshot-write-duplicate-scope");
+        let path = root.join("permission-state.tsv");
+        let snapshot = PermissionStateSnapshot {
+            readiness: vec![
+                PermissionReadiness {
+                    scope: PermissionScope::Documents,
+                    path: root.join("Documents"),
+                    state: PermissionState::Granted,
+                    reason: "readable".to_string(),
+                },
+                PermissionReadiness {
+                    scope: PermissionScope::Documents,
+                    path: root.join("Documents"),
+                    state: PermissionState::Denied,
+                    reason: "macOS denied read access".to_string(),
+                },
+            ],
+        };
+
+        let err = snapshot.write(&path).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("duplicate permission state scope `documents` before writing"));
+        assert!(!path.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
