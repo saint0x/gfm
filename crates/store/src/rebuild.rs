@@ -900,6 +900,36 @@ mod tests {
     }
 
     #[test]
+    fn checked_derived_sidecar_rebuild_cancels_during_record_open_before_sidecar_probe() {
+        let dir = temp_dir("gfm-derived-sidecar-rebuild-record-open-cancel");
+        let records = dir.join("records.gfmidx");
+        let sidecar = dir.join("x".repeat(512));
+        let backup = dir.join("backup");
+        write_records(&records, &[record()]).unwrap();
+        let mut checks = 0_u32;
+
+        let result = rebuild_derived_sidecar_checked(
+            &records,
+            SidecarKind::Prefixes,
+            &sidecar,
+            &backup,
+            || {
+                checks += 1;
+                if checks >= 5 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(checks, 5);
+        assert!(!backup.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn plans_rebuild_routes_across_all_archive_types() {
         let dir = temp_dir("gfm-archive-rebuild-plan-all");
         let records = dir.join("records.gfmidx");
