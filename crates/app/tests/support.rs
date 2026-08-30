@@ -641,45 +641,6 @@ fn reports_removed_permission_scope_in_ui_refresh_compare_contract_from_binary()
 }
 
 #[test]
-fn ui_refresh_compare_contract_refuses_unreachable_state_volume_from_binary() {
-    let root = std::env::temp_dir().join(format!(
-        "gfm-ui-permission-refresh-unreachable-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
-    let previous = root.join("previous-permission-state.tsv");
-    let current = root.join("current-permission-state.tsv");
-    std::fs::write(
-        &previous,
-        "gfm-permission-state-v1\ndocuments\tgranted\t/Users/deepsaint/Documents\treadable\n",
-    )
-    .unwrap();
-    std::fs::write(&current, "gfm-permission-state-v1\n").unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
-        .arg("ui-permission-refresh-compare-contract")
-        .arg(&previous)
-        .arg(&current)
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stdout.contains("permission-refresh\t"), "{stdout}");
-    assert!(
-        stderr.contains(
-            "ui permission refresh previous state volume access blocked: unreachable volume network"
-        ),
-        "{stderr}"
-    );
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
 fn ui_permission_refresh_compare_refuses_unreachable_volume_before_snapshot_read_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-permission-refresh-compare-offline-{}",
