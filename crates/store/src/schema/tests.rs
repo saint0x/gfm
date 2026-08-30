@@ -1,9 +1,10 @@
 use super::*;
 use crate::{
     metadata_postings_from_records, prefix_postings_from_records, read_content_postings,
-    write_content_postings, write_dictionary, write_fuzzy_postings, write_metadata_postings,
-    write_prefix_postings, write_record_columns, write_records, write_substring_postings,
-    ContentArchiveManifestEntry, ContentMergeTier, MetadataField, MetadataPosting,
+    read_metadata_postings, read_records, write_content_postings, write_dictionary,
+    write_fuzzy_postings, write_metadata_postings, write_prefix_postings, write_record_columns,
+    write_records, write_substring_postings, ContentArchiveManifestEntry, ContentMergeTier,
+    MetadataField, MetadataPosting,
 };
 use gfm_types::{ContentPosting, FileId, FileKind, FileRecord, GfmError, VolumeId};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -226,6 +227,74 @@ fn checked_content_archive_migration_cancels_before_legacy_posting_read() {
     assert_eq!(std::fs::read(&content).unwrap(), original);
     assert!(!backup.exists());
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checked_record_archive_migration_honors_pre_cancelled_control_before_probe() {
+    let dir = temp_dir("gfm-schema-record-migration-pre-cancelled");
+    let records = dir.join("legacy.gfmidx");
+    let backup = dir.join("backup");
+    std::fs::write(
+        &records,
+        "gfm-store-v1\n1\t2\t0\tf\t1\t0\t0\t0\t0\t/tmp/legacy.txt\n",
+    )
+    .unwrap();
+    let original = std::fs::read(&records).unwrap();
+
+    let result = migrate_record_archive_checked(&records, &backup, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert_eq!(std::fs::read(&records).unwrap(), original);
+    assert!(!backup.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checked_metadata_archive_migration_honors_pre_cancelled_control_before_probe() {
+    let dir = temp_dir("gfm-schema-metadata-migration-pre-cancelled");
+    let metadata = dir.join("legacy.gfmmeta");
+    let backup = dir.join("backup");
+    let postings = vec![MetadataPosting {
+        field: MetadataField::Tag,
+        term: "important".to_string(),
+        ids: vec![FileId::new(VolumeId(1), 2)],
+    }];
+    write_legacy_metadata_archive(&metadata, &postings);
+    let original = std::fs::read(&metadata).unwrap();
+
+    let result = migrate_metadata_archive_checked(&metadata, &backup, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert_eq!(std::fs::read(&metadata).unwrap(), original);
+    assert!(!backup.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checked_record_archive_migration_plan_honors_pre_cancelled_control_before_probe() {
+    let path = temp_path("gfm-schema-record-plan-pre-cancelled", "gfmidx");
+    let result = plan_record_archive_migration_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
+fn checked_content_archive_migration_plan_honors_pre_cancelled_control_before_probe() {
+    let path = temp_path("gfm-schema-content-plan-pre-cancelled", "gfmcontent");
+    let result = plan_content_archive_migration_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
+fn checked_metadata_archive_migration_plan_honors_pre_cancelled_control_before_probe() {
+    let path = temp_path("gfm-schema-metadata-plan-pre-cancelled", "gfmmeta");
+    let result = plan_metadata_archive_migration_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
 }
 
 #[test]

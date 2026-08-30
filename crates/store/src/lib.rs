@@ -61,8 +61,8 @@ pub use fuzzy::{
 };
 pub use metadata::{
     metadata_postings_from_records, metadata_postings_from_records_and_secondary,
-    read_metadata_postings, write_metadata_postings, LimitedMetadataPosting, MetadataField,
-    MetadataPosting, MmapMetadataArchive,
+    read_metadata_postings, read_metadata_postings_checked, write_metadata_postings,
+    LimitedMetadataPosting, MetadataField, MetadataPosting, MmapMetadataArchive,
 };
 pub use prefix::{
     prefix_postings_from_records, read_prefix_postings, write_prefix_postings,
@@ -77,18 +77,21 @@ pub use rebuild::{
 };
 pub use schema::{
     inspect_archive_schema, inspect_archive_schema_checked, migrate_content_archive,
-    migrate_content_archive_checked, migrate_metadata_archive, migrate_record_archive,
-    plan_content_archive_migration, plan_metadata_archive_migration, plan_record_archive_migration,
-    ArchiveSchemaKind, ArchiveSchemaReport, ArchiveSchemaStatus, ContentArchiveMigration,
-    ContentArchiveMigrationAction, ContentArchiveMigrationPlan, MetadataArchiveMigration,
-    MetadataArchiveMigrationAction, MetadataArchiveMigrationPlan, RecordArchiveMigration,
-    RecordArchiveMigrationAction, RecordArchiveMigrationPlan,
+    migrate_content_archive_checked, migrate_metadata_archive, migrate_metadata_archive_checked,
+    migrate_record_archive, migrate_record_archive_checked, plan_content_archive_migration,
+    plan_content_archive_migration_checked, plan_metadata_archive_migration,
+    plan_metadata_archive_migration_checked, plan_record_archive_migration,
+    plan_record_archive_migration_checked, ArchiveSchemaKind, ArchiveSchemaReport,
+    ArchiveSchemaStatus, ContentArchiveMigration, ContentArchiveMigrationAction,
+    ContentArchiveMigrationPlan, MetadataArchiveMigration, MetadataArchiveMigrationAction,
+    MetadataArchiveMigrationPlan, RecordArchiveMigration, RecordArchiveMigrationAction,
+    RecordArchiveMigrationPlan,
 };
 pub use sidecar::{
-    plan_sidecar_recovery, recover_sidecars, recover_sidecars_checked, sidecar_kind_name,
-    sidecar_recovery_action_name, sidecar_recovery_reason_name, SidecarHealth, SidecarKind,
-    SidecarPaths, SidecarRecovery, SidecarRecoveryAction, SidecarRecoveryPlan,
-    SidecarRecoveryReason,
+    plan_sidecar_recovery, plan_sidecar_recovery_checked, recover_sidecars,
+    recover_sidecars_checked, sidecar_kind_name, sidecar_recovery_action_name,
+    sidecar_recovery_reason_name, SidecarHealth, SidecarKind, SidecarPaths, SidecarRecovery,
+    SidecarRecoveryAction, SidecarRecoveryPlan, SidecarRecoveryReason,
 };
 pub use substring::{
     read_substring_postings, substring_postings_from_records, write_substring_postings,
@@ -156,17 +159,37 @@ pub fn write_records(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<(
 }
 
 pub fn read_records(path: impl AsRef<Path>) -> Result<Vec<FileRecord>> {
+    read_records_checked(path, || Ok(()))
+}
+
+pub fn read_records_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<FileRecord>> {
     let path = path.as_ref();
     let mut bytes = Vec::new();
-    File::open(path)
-        .map_err(|err| GfmError::io(path, err))?
-        .read_to_end(&mut bytes)
-        .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    let mut file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    let mut buffer = [0; 1024 * 1024];
+    loop {
+        check_control()?;
+        let len = file
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        if len == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..len]);
+    }
+    check_control()?;
     verify_record_checksum_from_slice(&bytes, path)?;
+    check_control()?;
     let indexed_len = record_indexed_len_from_slice(&bytes);
     let indexed = bytes
         .get(..indexed_len)
         .ok_or_else(|| record_format_error(path, "record indexed range out of bounds"))?;
+    check_control()?;
     let text = std::str::from_utf8(indexed)
         .map_err(|err| GfmError::Format(format!("invalid store {}: {err}", path.display())))?;
     let mut lines = text.lines();
@@ -174,13 +197,16 @@ pub fn read_records(path: impl AsRef<Path>) -> Result<Vec<FileRecord>> {
         .next()
         .ok_or_else(|| GfmError::Format(format!("empty store {}", path.display())))?;
     let version = record_version(header, path)?;
+    check_control()?;
 
     let mut records = Vec::new();
     for (index, line) in lines.enumerate() {
+        check_control()?;
         records.push(parse_record(line, version).map_err(|err| {
             GfmError::Format(format!("{} line {}: {}", path.display(), index + 2, err))
         })?);
     }
+    check_control()?;
     Ok(records)
 }
 

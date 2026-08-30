@@ -12,10 +12,11 @@ use gfm_mac::AccessIntent;
 use gfm_store::{
     dictionary_term_report_from_records, fuzzy_postings_from_records,
     inspect_archive_schema_checked, metadata_postings_from_records,
-    migrate_content_archive_checked, migrate_metadata_archive, migrate_record_archive,
-    plan_archive_rebuilds, plan_columns_archive_rebuild, plan_content_archive_migration,
-    plan_derived_sidecar_rebuild, plan_metadata_archive_migration, plan_record_archive_migration,
-    plan_sidecar_recovery, prefix_postings_from_records, rebuild_columns_archive,
+    migrate_content_archive_checked, migrate_metadata_archive_checked,
+    migrate_record_archive_checked, plan_archive_rebuilds, plan_columns_archive_rebuild,
+    plan_content_archive_migration_checked, plan_derived_sidecar_rebuild,
+    plan_metadata_archive_migration_checked, plan_record_archive_migration_checked,
+    plan_sidecar_recovery_checked, prefix_postings_from_records, rebuild_columns_archive,
     rebuild_derived_sidecar_checked, recover_sidecars_checked, sidecar_kind_name,
     substring_postings_from_records, write_dictionary, write_fuzzy_postings,
     write_metadata_postings, write_prefix_postings, write_record_columns, write_substring_postings,
@@ -130,7 +131,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "records migration plan",
                 move |records, cancellation| {
                     cancellation.check()?;
-                    let report = plan_record_archive_migration(records).as_tsv();
+                    let report =
+                        plan_record_archive_migration_checked(records, || cancellation.check())?
+                            .as_tsv();
                     cancellation.check()?;
                     Ok(report)
                 },
@@ -145,7 +148,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 records,
                 backup_dir,
                 "records migrate",
-                |archive, backup_dir, _cancellation| migrate_record_archive(archive, backup_dir),
+                |archive, backup_dir, cancellation| {
+                    migrate_record_archive_checked(archive, backup_dir, || cancellation.check())
+                },
             )?;
             println!("{}", migration.as_tsv());
         }
@@ -159,7 +164,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "content migration plan",
                 move |content, cancellation| {
                     cancellation.check()?;
-                    let report = plan_content_archive_migration(content).as_tsv();
+                    let report =
+                        plan_content_archive_migration_checked(content, || cancellation.check())?
+                            .as_tsv();
                     cancellation.check()?;
                     Ok(report)
                 },
@@ -190,7 +197,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "metadata migration plan",
                 move |metadata, cancellation| {
                     cancellation.check()?;
-                    let report = plan_metadata_archive_migration(metadata).as_tsv();
+                    let report =
+                        plan_metadata_archive_migration_checked(metadata, || cancellation.check())?
+                            .as_tsv();
                     cancellation.check()?;
                     Ok(report)
                 },
@@ -205,7 +214,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 metadata,
                 backup_dir,
                 "metadata migrate",
-                |archive, backup_dir, _cancellation| migrate_metadata_archive(archive, backup_dir),
+                |archive, backup_dir, cancellation| {
+                    migrate_metadata_archive_checked(archive, backup_dir, || cancellation.check())
+                },
             )?;
             println!("{}", migration.as_tsv());
         }
@@ -623,7 +634,7 @@ fn run_sidecar_recovery_plan(
         cancellation.check()?;
         let _access = retain_sidecar_recovery_plan_access(&records, &sidecars)?;
         cancellation.check()?;
-        Ok(plan_sidecar_recovery(&records, &sidecars))
+        plan_sidecar_recovery_checked(&records, &sidecars, || cancellation.check())
     })
 }
 

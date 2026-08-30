@@ -1,8 +1,9 @@
 use crate::{
-    read_content_postings_checked, read_metadata_postings, read_records, write_content_postings,
-    write_metadata_postings, write_records, ContentArchive, ContentArchiveManifest,
-    MmapContentArchive, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
-    MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
+    read_content_postings_checked, read_metadata_postings_checked, read_records_checked,
+    write_content_postings, write_metadata_postings, write_records, ContentArchive,
+    ContentArchiveManifest, MmapContentArchive, MmapDictionary, MmapFuzzyArchive,
+    MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
+    MmapSubstringArchive,
 };
 use gfm_types::{GfmError, Result};
 use std::fmt;
@@ -442,7 +443,17 @@ fn inspect_archive_schema_result_checked(
 }
 
 pub fn plan_record_archive_migration(path: impl AsRef<Path>) -> RecordArchiveMigrationPlan {
-    let before = inspect_archive_schema(ArchiveSchemaKind::Records, path);
+    plan_record_archive_migration_checked(path, || Ok(()))
+        .expect("uncancellable record archive migration plan cannot be cancelled")
+}
+
+pub fn plan_record_archive_migration_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<RecordArchiveMigrationPlan> {
+    let before =
+        inspect_archive_schema_checked(ArchiveSchemaKind::Records, path, &mut check_control)?;
+    check_control()?;
     let (action, detail) = match before.status {
         ArchiveSchemaStatus::Current => (
             RecordArchiveMigrationAction::Ready,
@@ -465,20 +476,30 @@ pub fn plan_record_archive_migration(path: impl AsRef<Path>) -> RecordArchiveMig
             Some("unreadable record archive must be quarantined and rebuilt".to_string()),
         ),
     };
-    RecordArchiveMigrationPlan {
+    Ok(RecordArchiveMigrationPlan {
         action,
         before,
         detail,
-    }
+    })
 }
 
 pub fn migrate_record_archive(
     path: impl AsRef<Path>,
     backup_dir: impl AsRef<Path>,
 ) -> Result<RecordArchiveMigration> {
+    migrate_record_archive_checked(path, backup_dir, || Ok(()))
+}
+
+pub fn migrate_record_archive_checked(
+    path: impl AsRef<Path>,
+    backup_dir: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<RecordArchiveMigration> {
     let path = path.as_ref();
     let backup_dir = backup_dir.as_ref();
-    let before = plan_record_archive_migration(path);
+    check_control()?;
+    let before = plan_record_archive_migration_checked(path, &mut check_control)?;
+    check_control()?;
     match before.action {
         RecordArchiveMigrationAction::Ready => {
             return Ok(RecordArchiveMigration {
@@ -501,10 +522,14 @@ pub fn migrate_record_archive(
         RecordArchiveMigrationAction::Migrate => {}
     }
 
-    let records = read_records(path)?;
+    let records = read_records_checked(path, &mut check_control)?;
+    check_control()?;
     let backup_path = backup_archive(path, backup_dir, "legacy")?;
+    check_control()?;
     write_records(path, &records)?;
-    let after = inspect_archive_schema(ArchiveSchemaKind::Records, path);
+    check_control()?;
+    let after =
+        inspect_archive_schema_checked(ArchiveSchemaKind::Records, path, &mut check_control)?;
     if after.status != ArchiveSchemaStatus::Current {
         return Err(GfmError::Format(format!(
             "{} migration produced {} instead of current schema",
@@ -521,7 +546,17 @@ pub fn migrate_record_archive(
 }
 
 pub fn plan_content_archive_migration(path: impl AsRef<Path>) -> ContentArchiveMigrationPlan {
-    let before = inspect_archive_schema(ArchiveSchemaKind::Content, path);
+    plan_content_archive_migration_checked(path, || Ok(()))
+        .expect("uncancellable content archive migration plan cannot be cancelled")
+}
+
+pub fn plan_content_archive_migration_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ContentArchiveMigrationPlan> {
+    let before =
+        inspect_archive_schema_checked(ArchiveSchemaKind::Content, path, &mut check_control)?;
+    check_control()?;
     let (action, detail) = match before.status {
         ArchiveSchemaStatus::Current => (
             ContentArchiveMigrationAction::Ready,
@@ -544,11 +579,11 @@ pub fn plan_content_archive_migration(path: impl AsRef<Path>) -> ContentArchiveM
             Some("unreadable content archive must be quarantined and rebuilt".to_string()),
         ),
     };
-    ContentArchiveMigrationPlan {
+    Ok(ContentArchiveMigrationPlan {
         action,
         before,
         detail,
-    }
+    })
 }
 
 pub fn migrate_content_archive(
@@ -566,7 +601,7 @@ pub fn migrate_content_archive_checked(
     let path = path.as_ref();
     let backup_dir = backup_dir.as_ref();
     check_control()?;
-    let before = plan_content_archive_migration(path);
+    let before = plan_content_archive_migration_checked(path, &mut check_control)?;
     check_control()?;
     match before.action {
         ContentArchiveMigrationAction::Ready => {
@@ -596,7 +631,8 @@ pub fn migrate_content_archive_checked(
     check_control()?;
     write_content_postings(path, &postings)?;
     check_control()?;
-    let after = inspect_archive_schema(ArchiveSchemaKind::Content, path);
+    let after =
+        inspect_archive_schema_checked(ArchiveSchemaKind::Content, path, &mut check_control)?;
     if after.status != ArchiveSchemaStatus::Current {
         return Err(GfmError::Format(format!(
             "{} migration produced {} instead of current schema",
@@ -613,7 +649,17 @@ pub fn migrate_content_archive_checked(
 }
 
 pub fn plan_metadata_archive_migration(path: impl AsRef<Path>) -> MetadataArchiveMigrationPlan {
-    let before = inspect_archive_schema(ArchiveSchemaKind::Metadata, path);
+    plan_metadata_archive_migration_checked(path, || Ok(()))
+        .expect("uncancellable metadata archive migration plan cannot be cancelled")
+}
+
+pub fn plan_metadata_archive_migration_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<MetadataArchiveMigrationPlan> {
+    let before =
+        inspect_archive_schema_checked(ArchiveSchemaKind::Metadata, path, &mut check_control)?;
+    check_control()?;
     let (action, detail) = match before.status {
         ArchiveSchemaStatus::Current => (
             MetadataArchiveMigrationAction::Ready,
@@ -636,20 +682,30 @@ pub fn plan_metadata_archive_migration(path: impl AsRef<Path>) -> MetadataArchiv
             Some("unreadable metadata archive must be quarantined and rebuilt".to_string()),
         ),
     };
-    MetadataArchiveMigrationPlan {
+    Ok(MetadataArchiveMigrationPlan {
         action,
         before,
         detail,
-    }
+    })
 }
 
 pub fn migrate_metadata_archive(
     path: impl AsRef<Path>,
     backup_dir: impl AsRef<Path>,
 ) -> Result<MetadataArchiveMigration> {
+    migrate_metadata_archive_checked(path, backup_dir, || Ok(()))
+}
+
+pub fn migrate_metadata_archive_checked(
+    path: impl AsRef<Path>,
+    backup_dir: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<MetadataArchiveMigration> {
     let path = path.as_ref();
     let backup_dir = backup_dir.as_ref();
-    let before = plan_metadata_archive_migration(path);
+    check_control()?;
+    let before = plan_metadata_archive_migration_checked(path, &mut check_control)?;
+    check_control()?;
     match before.action {
         MetadataArchiveMigrationAction::Ready => {
             return Ok(MetadataArchiveMigration {
@@ -672,10 +728,14 @@ pub fn migrate_metadata_archive(
         MetadataArchiveMigrationAction::Migrate => {}
     }
 
-    let postings = read_metadata_postings(path)?;
+    let postings = read_metadata_postings_checked(path, &mut check_control)?;
+    check_control()?;
     let backup_path = backup_archive(path, backup_dir, "legacy")?;
+    check_control()?;
     write_metadata_postings(path, &postings)?;
-    let after = inspect_archive_schema(ArchiveSchemaKind::Metadata, path);
+    check_control()?;
+    let after =
+        inspect_archive_schema_checked(ArchiveSchemaKind::Metadata, path, &mut check_control)?;
     if after.status != ArchiveSchemaStatus::Current {
         return Err(GfmError::Format(format!(
             "{} migration produced {} instead of current schema",

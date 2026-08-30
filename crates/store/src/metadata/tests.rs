@@ -57,6 +57,15 @@ fn mmap_metadata_archive_reads_tags_and_comment_terms() {
 }
 
 #[test]
+fn checked_metadata_postings_read_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-metadata-pre-cancelled-read", "gfmmeta");
+    let result = read_metadata_postings_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
 fn metadata_postings_merge_secondary_spotlight_records() {
     let primary = FileRecord {
         id: FileId::new(VolumeId(4), 12),

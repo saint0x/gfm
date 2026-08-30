@@ -1,9 +1,9 @@
 use crate::{
     dictionary_terms_from_records, fuzzy_postings_from_records, metadata_postings_from_records,
-    prefix_postings_from_records, read_records, substring_postings_from_records, write_dictionary,
+    prefix_postings_from_records, substring_postings_from_records, write_dictionary,
     write_fuzzy_postings, write_metadata_postings, write_prefix_postings, write_record_columns,
     write_substring_postings, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive,
-    MmapPrefixArchive, MmapRecordColumns, MmapSubstringArchive,
+    MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_types::{FileRecord, GfmError, Result};
 use std::fs;
@@ -144,11 +144,26 @@ pub fn plan_sidecar_recovery(
     records_path: impl AsRef<Path>,
     sidecars: &SidecarPaths,
 ) -> SidecarRecoveryPlan {
+    plan_sidecar_recovery_checked(records_path, sidecars, || Ok(()))
+        .expect("infallible sidecar recovery planning cancellation")
+}
+
+pub fn plan_sidecar_recovery_checked(
+    records_path: impl AsRef<Path>,
+    sidecars: &SidecarPaths,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<SidecarRecoveryPlan> {
     let records_path = records_path.as_ref().to_path_buf();
-    let records = match read_records(&records_path) {
-        Ok(records) => records,
+    check_control()?;
+    let records = match MmapRecordArchive::open_checked(&records_path, &mut check_control)
+        .and_then(|archive| archive.records())
+    {
+        Ok(records) => {
+            check_control()?;
+            records
+        }
         Err(err) => {
-            return SidecarRecoveryPlan {
+            return Ok(SidecarRecoveryPlan {
                 action: SidecarRecoveryAction::CannotRecover,
                 reason: SidecarRecoveryReason::UnreadableRecords,
                 records_path,
@@ -156,13 +171,15 @@ pub fn plan_sidecar_recovery(
                 valid_sidecars: Vec::new(),
                 invalid_sidecars: Vec::new(),
                 detail: Some(err.to_string()),
-            }
+            });
         }
     };
 
-    let (valid_sidecars, invalid_sidecars) = classify_sidecars(sidecars);
+    let (valid_sidecars, invalid_sidecars) =
+        classify_sidecars_checked(sidecars, &mut check_control)?;
+    check_control()?;
     if invalid_sidecars.is_empty() {
-        return SidecarRecoveryPlan {
+        return Ok(SidecarRecoveryPlan {
             action: SidecarRecoveryAction::Ready,
             reason: SidecarRecoveryReason::Healthy,
             records_path,
@@ -170,10 +187,10 @@ pub fn plan_sidecar_recovery(
             valid_sidecars,
             invalid_sidecars,
             detail: None,
-        };
+        });
     }
 
-    SidecarRecoveryPlan {
+    Ok(SidecarRecoveryPlan {
         action: SidecarRecoveryAction::Rebuild,
         reason: invalid_sidecar_reason(&invalid_sidecars),
         records_path,
@@ -181,7 +198,7 @@ pub fn plan_sidecar_recovery(
         valid_sidecars,
         invalid_sidecars,
         detail: None,
-    }
+    })
 }
 
 pub fn recover_sidecars(
@@ -201,7 +218,7 @@ pub fn recover_sidecars_checked(
     let records_path = records_path.as_ref();
     let quarantine_dir = quarantine_dir.as_ref();
     check_control()?;
-    let before = plan_sidecar_recovery(records_path, sidecars);
+    let before = plan_sidecar_recovery_checked(records_path, sidecars, &mut check_control)?;
     check_control()?;
     if before.action == SidecarRecoveryAction::CannotRecover {
         return Err(GfmError::Format(format!(
@@ -215,7 +232,8 @@ pub fn recover_sidecars_checked(
     let mut quarantined_sidecars = Vec::new();
     if before.action == SidecarRecoveryAction::Rebuild {
         check_control()?;
-        let records = read_records(records_path)?;
+        let records =
+            MmapRecordArchive::open_checked(records_path, &mut check_control)?.records()?;
         check_control()?;
         for health in &before.invalid_sidecars {
             check_control()?;
@@ -235,8 +253,7 @@ pub fn recover_sidecars_checked(
     }
 
     check_control()?;
-    let after = plan_sidecar_recovery(records_path, sidecars);
-    check_control()?;
+    let after = plan_sidecar_recovery_checked(records_path, sidecars, check_control)?;
     Ok(SidecarRecovery {
         before,
         after,
@@ -245,15 +262,25 @@ pub fn recover_sidecars_checked(
     })
 }
 
-fn classify_sidecars(sidecars: &SidecarPaths) -> (Vec<SidecarHealth>, Vec<SidecarHealth>) {
+fn classify_sidecars_checked(
+    sidecars: &SidecarPaths,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(Vec<SidecarHealth>, Vec<SidecarHealth>)> {
     let mut valid = Vec::new();
     let mut invalid = Vec::new();
     for (kind, path) in sidecars.iter() {
+        check_control()?;
         let detail = match path.try_exists() {
-            Ok(true) => open_sidecar(kind, path).err().map(|err| err.to_string()),
+            Ok(true) => match open_sidecar_checked(kind, path, &mut check_control) {
+                Ok(()) => None,
+                Err(GfmError::Cancelled) => return Err(GfmError::Cancelled),
+                Err(GfmError::Paused) => return Err(GfmError::Paused),
+                Err(err) => Some(err.to_string()),
+            },
             Ok(false) => Some("missing sidecar archive".to_string()),
             Err(err) => Some(format!("sidecar archive existence unavailable: {err}")),
         };
+        check_control()?;
         let health = SidecarHealth {
             kind,
             path: path.clone(),
@@ -266,17 +293,23 @@ fn classify_sidecars(sidecars: &SidecarPaths) -> (Vec<SidecarHealth>, Vec<Sideca
             invalid.push(health);
         }
     }
-    (valid, invalid)
+    Ok((valid, invalid))
 }
 
-fn open_sidecar(kind: SidecarKind, path: &Path) -> Result<()> {
+fn open_sidecar_checked(
+    kind: SidecarKind,
+    path: &Path,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
     match kind {
-        SidecarKind::Columns => MmapRecordColumns::open(path).map(|_| ()),
-        SidecarKind::Metadata => MmapMetadataArchive::open(path).map(|_| ()),
-        SidecarKind::Prefixes => MmapPrefixArchive::open(path).map(|_| ()),
-        SidecarKind::Substrings => MmapSubstringArchive::open(path).map(|_| ()),
-        SidecarKind::Fuzzy => MmapFuzzyArchive::open(path).map(|_| ()),
-        SidecarKind::Dictionary => MmapDictionary::open(path).map(|_| ()),
+        SidecarKind::Columns => MmapRecordColumns::open_checked(path, check_control).map(|_| ()),
+        SidecarKind::Metadata => MmapMetadataArchive::open_checked(path, check_control).map(|_| ()),
+        SidecarKind::Prefixes => MmapPrefixArchive::open_checked(path, check_control).map(|_| ()),
+        SidecarKind::Substrings => {
+            MmapSubstringArchive::open_checked(path, check_control).map(|_| ())
+        }
+        SidecarKind::Fuzzy => MmapFuzzyArchive::open_checked(path, check_control).map(|_| ()),
+        SidecarKind::Dictionary => MmapDictionary::open_checked(path, check_control).map(|_| ()),
     }
 }
 
@@ -423,6 +456,36 @@ mod tests {
             .to_string()
             .contains("sidecar archive existence unavailable"));
         assert!(!quarantine.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn checked_sidecar_recovery_plan_honors_pre_cancelled_control_before_records_open() {
+        let dir = temp_dir("gfm-sidecar-recovery-plan-cancel");
+        let records = dir.join("records.gfmidx");
+        fs::create_dir_all(&dir).unwrap();
+
+        let result = plan_sidecar_recovery_checked(&records, &SidecarPaths::default(), || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!records.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn checked_sidecar_validation_honors_pre_cancelled_control_before_archive_open() {
+        let dir = temp_dir("gfm-sidecar-validation-open-cancel");
+        let dictionary = dir.join("records.gfmdict");
+        fs::create_dir_all(&dir).unwrap();
+
+        let result = open_sidecar_checked(SidecarKind::Dictionary, &dictionary, || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!dictionary.exists());
         fs::remove_dir_all(dir).unwrap();
     }
 

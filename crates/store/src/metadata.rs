@@ -190,18 +190,31 @@ pub fn write_metadata_postings(path: impl AsRef<Path>, postings: &[MetadataPosti
 }
 
 pub fn read_metadata_postings(path: impl AsRef<Path>) -> Result<Vec<MetadataPosting>> {
+    read_metadata_postings_checked(path, || Ok(()))
+}
+
+pub fn read_metadata_postings_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<MetadataPosting>> {
     let path = path.as_ref();
+    check_control()?;
     let mut file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let mut magic = vec![0; METADATA_MAGIC_V1.len()];
     file.read_exact(&mut magic)
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let version = metadata_version(&magic, path)?;
     verify_metadata_checksum_for_file(&mut file, path, version)?;
+    check_control()?;
     let count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
+        check_control()?;
         postings.push(read_metadata_posting(&mut file, path, version)?);
     }
+    check_control()?;
     Ok(postings)
 }
 

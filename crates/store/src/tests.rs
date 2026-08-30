@@ -31,6 +31,15 @@ fn round_trips_records() {
 }
 
 #[test]
+fn checked_record_read_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-store-pre-cancelled-read", "idx");
+    let result = read_records_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
 fn mmap_record_archive_hydrates_records_from_immutable_map() {
     let path = temp_path("gfm-store-mmap", "idx");
     let records = vec![
