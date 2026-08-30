@@ -4177,6 +4177,10 @@ fn searches_persisted_tags_from_binary() {
     let metadata = unique_temp_path("gfm-cli-tags", "gfmmeta");
     let dictionary = unique_temp_path("gfm-cli-tags", "gfmdict");
     let columns = unique_temp_path("gfm-cli-tags", "gfmcols");
+    let column_retry_journal = unique_temp_path("gfm-cli-column-search-retry", "journal");
+    let column_retry_catalog = unique_temp_path("gfm-cli-column-search-retry", "gfmjobs");
+    let column_retry_progress = unique_temp_path("gfm-cli-column-search-retry", "gfmprogress");
+    let column_retry_probe = unique_temp_path("gfm-cli-column-search-retry", "state");
     let prefixes = unique_temp_path("gfm-cli-tags", "gfmprefix");
     let substrings = unique_temp_path("gfm-cli-tags", "gfmsubstr");
     let fuzzy = unique_temp_path("gfm-cli-tags", "gfmfuzzy");
@@ -4628,6 +4632,50 @@ fn searches_persisted_tags_from_binary() {
         "{column_search_stdout}"
     );
 
+    let column_retry_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &column_retry_journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &column_retry_catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &column_retry_progress)
+        .args([
+            "search-index-columns-retry-probe",
+            index.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            "tag:Important",
+            column_retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        column_retry_search.status.success(),
+        "{}",
+        String::from_utf8_lossy(&column_retry_search.stderr)
+    );
+    let column_retry_stdout = String::from_utf8(column_retry_search.stdout).unwrap();
+    assert!(
+        column_retry_stdout.contains("tagged.md"),
+        "{column_retry_stdout}"
+    );
+    assert!(
+        !column_retry_stdout.contains("other.md"),
+        "{column_retry_stdout}"
+    );
+    assert_eq!(fs::read_to_string(&column_retry_probe).unwrap(), "2");
+    let column_retry_journal_text = fs::read_to_string(&column_retry_journal).unwrap();
+    assert!(
+        column_retry_journal_text.contains("1\t1\tstarted\tsearch index columns"),
+        "{column_retry_journal_text}"
+    );
+    assert!(
+        column_retry_journal_text.contains(
+            "1\t1\tfailed:temporary search index columns retry probe busy\tsearch index columns"
+        ),
+        "{column_retry_journal_text}"
+    );
+    assert!(
+        column_retry_journal_text.contains("1\t2\tcompleted\tsearch index columns"),
+        "{column_retry_journal_text}"
+    );
+
     let sidecar_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "search-index-sidecars",
@@ -5018,6 +5066,10 @@ fn searches_persisted_tags_from_binary() {
     fs::remove_file(metadata).unwrap();
     fs::remove_file(dictionary).unwrap();
     fs::remove_file(columns).unwrap();
+    fs::remove_file(column_retry_journal).unwrap();
+    fs::remove_file(column_retry_catalog).unwrap();
+    fs::remove_file(column_retry_progress).unwrap();
+    fs::remove_file(column_retry_probe).unwrap();
     fs::remove_file(prefixes).unwrap();
     fs::remove_file(substrings).unwrap();
     fs::remove_file(fuzzy).unwrap();

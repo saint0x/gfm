@@ -353,14 +353,22 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
-        "search-index-columns" => {
+        "search-index-columns" | "search-index-columns-retry-probe" => {
             let records =
                 required_path(args.next(), "search-index-columns requires a records path")?;
             let columns =
                 required_path(args.next(), "search-index-columns requires a columns path")?;
             let query =
                 required_string(args.next(), "search-index-columns requires a query string")?;
-            let output = run_search_index_columns(records, columns, query)?;
+            let retry_probe = if command == "search-index-columns-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "search-index-columns-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let output = run_search_index_columns(records, columns, query, retry_probe)?;
             eprintln!("columns-indexed {}", output.columns_applied);
             for hit in output.hits {
                 print_hit(&hit);
@@ -1316,16 +1324,29 @@ fn run_search_index_columns(
     records: PathBuf,
     columns: PathBuf,
     query: String,
+    retry_probe: Option<PathBuf>,
 ) -> Result<SearchIndexColumnsOutput> {
+    const WORKER: &str = "search index columns";
     preflight_volume_access_scope(&records, AccessIntent::Read, "search index columns records")?;
     preflight_volume_access_scope(&columns, AccessIntent::Read, "search index columns columns")?;
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    }
     let volume = path_volume(&records).or_else(|| path_volume(&columns));
-    run_volume_task_cancellable(
+    run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
-        "search index columns",
+        WORKER,
+        records.clone(),
         move |cancellation| {
+            let records = records.clone();
+            let columns = columns.clone();
+            let query = query.clone();
+            let retry_probe = retry_probe.clone();
             cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            }
             let _access =
                 preflight_search_index_columns_access_checked(&records, &columns, || {
                     cancellation.check()
