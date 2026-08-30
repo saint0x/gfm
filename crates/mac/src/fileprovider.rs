@@ -114,6 +114,7 @@ pub enum CloudMaterializationSource {
     NativeUrlResourceUnavailable,
     NativeUrlResourceUnsupported,
     NativeFileProviderIdentityUnknown,
+    NativeFileProviderIdentityMissing,
     NativeFileProviderIdentityUnavailable,
     NativeFileProviderIdentityUnsupported,
     XattrFallback,
@@ -130,6 +131,7 @@ impl CloudMaterializationSource {
             Self::NativeUrlResourceUnavailable => "native-url-resource:unavailable",
             Self::NativeUrlResourceUnsupported => "native-url-resource:unsupported",
             Self::NativeFileProviderIdentityUnknown => "nsfileprovidermanager:unknown",
+            Self::NativeFileProviderIdentityMissing => "nsfileprovidermanager:missing",
             Self::NativeFileProviderIdentityUnavailable => "nsfileprovidermanager:unavailable",
             Self::NativeFileProviderIdentityUnsupported => "nsfileprovidermanager:unsupported",
             Self::XattrFallback => "xattr-fallback",
@@ -1788,6 +1790,7 @@ fn native_provider_state_unavailable(hints: &CloudHints) -> bool {
             | NativeFileProviderIdentityStatus::TimedOut
             | NativeFileProviderIdentityStatus::Failed
             | NativeFileProviderIdentityStatus::Unavailable
+            | NativeFileProviderIdentityStatus::Missing
             | NativeFileProviderIdentityStatus::UnsupportedPath
     )
 }
@@ -2136,6 +2139,10 @@ fn materialization_source_for_state(
     {
         CloudMaterializationSource::NativeFileProviderIdentityUnknown
     } else if state == CloudStorageState::Unknown
+        && hints.native_identity.status == NativeFileProviderIdentityStatus::Missing
+    {
+        CloudMaterializationSource::NativeFileProviderIdentityMissing
+    } else if state == CloudStorageState::Unknown
         && matches!(
             hints.native_identity.status,
             NativeFileProviderIdentityStatus::ProviderUnavailable
@@ -2171,6 +2178,7 @@ fn materialization_confidence_for_source(
             CloudMaterializationConfidence::Native
         }
         CloudMaterializationSource::NativeFileProviderIdentityUnknown
+        | CloudMaterializationSource::NativeFileProviderIdentityMissing
         | CloudMaterializationSource::NativeFileProviderIdentityUnavailable
         | CloudMaterializationSource::NativeFileProviderIdentityUnsupported => {
             CloudMaterializationConfidence::ProviderIdentity
@@ -2228,6 +2236,7 @@ fn materialization_reason_for_state(
                 | NativeFileProviderIdentityStatus::TimedOut
                 | NativeFileProviderIdentityStatus::Unavailable
                 | NativeFileProviderIdentityStatus::Failed
+                | NativeFileProviderIdentityStatus::Missing
                 | NativeFileProviderIdentityStatus::UnsupportedPath
         ) {
             return hints.native_identity.reason.clone();
@@ -5280,6 +5289,43 @@ mod tests {
         let report = FileProviderStateReport::from_hints(path, hints);
         assert!(report.as_tsv().contains(
             "\tmaterialization-source=nsfileprovidermanager:unavailable\tmaterialization-confidence=provider-identity\tmaterialization-reason=FileProvider identity path probe unavailable\t"
+        ));
+    }
+
+    #[test]
+    fn native_identity_missing_unknown_state_reports_typed_source() {
+        let path = PathBuf::from("/tmp/Remote.fileprovider");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::Missing,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("FileProvider identity path missing".to_string()),
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+
+        assert_eq!(domain, FileProviderDomain::FileProvider);
+        assert_eq!(state, CloudStorageState::Unknown);
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            CloudMaterializationSource::NativeFileProviderIdentityMissing
+        );
+        assert_eq!(
+            materialization_reason_for_state(state, &hints).as_deref(),
+            Some("FileProvider identity path missing")
+        );
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+        assert!(report.as_tsv().contains(
+            "\tmaterialization-source=nsfileprovidermanager:missing\tmaterialization-confidence=provider-identity\tmaterialization-reason=FileProvider identity path missing\t"
         ));
     }
 
