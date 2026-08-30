@@ -8,7 +8,7 @@ use gfm_mac_sys::{
     NativeUbiquitousDownloadingStatus,
 };
 use gfm_types::{FileEvent, FileEventKind, GfmError, Result};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -916,6 +916,13 @@ impl FileProviderStateSnapshot {
             .map(|entry| entry.state)
     }
 
+    fn state_index(&self) -> BTreeMap<&Path, CloudStorageState> {
+        self.entries
+            .iter()
+            .map(|entry| (entry.path.as_path(), entry.state))
+            .collect()
+    }
+
     fn contains_path(&self, path: &Path) -> bool {
         self.previous_state_for(path).is_some()
     }
@@ -935,10 +942,13 @@ impl FileProviderStateInvalidationReport {
         current_paths: impl IntoIterator<Item = PathBuf>,
     ) -> Result<(Self, FileProviderStateSnapshot)> {
         let initialized = previous.is_none();
+        let previous_states = previous
+            .map(FileProviderStateSnapshot::state_index)
+            .unwrap_or_default();
         let mut changes = Vec::new();
         let mut current_entries = Vec::new();
         for path in current_paths {
-            let previous_state = previous.and_then(|snapshot| snapshot.previous_state_for(&path));
+            let previous_state = previous_states.get(path.as_path()).copied();
             let path_exists = path
                 .try_exists()
                 .map_err(|err| GfmError::io(&path, format!("path existence unavailable: {err}")))?;
@@ -952,9 +962,7 @@ impl FileProviderStateInvalidationReport {
                 None
             };
             let current = current.ok_or_else(|| GfmError::io(&path, "path does not exist"))?;
-            let previous_state = previous
-                .and_then(|snapshot| snapshot.previous_state_for(&path))
-                .unwrap_or(CloudStorageState::LocalOnly);
+            let previous_state = previous_state.unwrap_or(CloudStorageState::LocalOnly);
             let change =
                 FileProviderInvalidationReport::from_current(path.clone(), previous_state, current);
             if change.current.storage_state != CloudStorageState::Removed
