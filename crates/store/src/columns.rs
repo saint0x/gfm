@@ -198,18 +198,37 @@ impl MmapRecordColumns {
     }
 
     pub fn column(&self, index: usize) -> Result<RecordColumn> {
+        self.column_checked(index, || Ok(()))
+    }
+
+    pub fn column_checked(
+        &self,
+        index: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<RecordColumn> {
+        check_control()?;
         let entry = self.directory.get(index).ok_or_else(|| {
             GfmError::Format(format!(
                 "{} record column index {index} out of bounds",
                 self.path.display()
             ))
         })?;
+        check_control()?;
         self.read_entry(entry)
     }
 
     pub fn find(&self, id: FileId) -> Result<Option<RecordColumn>> {
+        self.find_checked(id, || Ok(()))
+    }
+
+    pub fn find_checked(
+        &self,
+        id: FileId,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<RecordColumn>> {
+        check_control()?;
         match self.directory.binary_search_by_key(&id, |entry| entry.id) {
-            Ok(index) => self.column(index).map(Some),
+            Ok(index) => self.column_checked(index, check_control).map(Some),
             Err(_) => Ok(None),
         }
     }
@@ -782,6 +801,32 @@ mod tests {
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn mmap_record_columns_checked_column_honors_pre_cancelled_control() {
+        let path = temp_path("gfm-record-columns-column-cancel", "gfmcols");
+        let records = vec![record(1, "/tmp/Important.md", "Important.md", &[], None)];
+        write_record_columns(&path, &records).unwrap();
+        let archive = MmapRecordColumns::open(&path).unwrap();
+
+        let result = archive.column_checked(0, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_record_columns_checked_find_honors_pre_cancelled_control() {
+        let path = temp_path("gfm-record-columns-find-cancel", "gfmcols");
+        let records = vec![record(1, "/tmp/Important.md", "Important.md", &[], None)];
+        write_record_columns(&path, &records).unwrap();
+        let archive = MmapRecordColumns::open(&path).unwrap();
+
+        let result = archive.find_checked(records[0].id, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        std::fs::remove_file(path).unwrap();
     }
 
     fn record(

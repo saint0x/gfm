@@ -183,7 +183,12 @@ impl LiveIndex {
             for index in 0..records.len() {
                 cancellation.check()?;
                 let record = records.record(index)?;
-                if insert_mmap_record_with_columns(&mut live, columns, record)? {
+                if insert_mmap_record_with_columns_checked(
+                    &mut live,
+                    columns,
+                    record,
+                    cancellation,
+                )? {
                     applied += 1;
                 }
                 loaded += 1;
@@ -196,7 +201,12 @@ impl LiveIndex {
             loaded = batch.records.len();
             for record in batch.records {
                 cancellation.check()?;
-                if insert_mmap_record_with_columns(&mut live, columns, record)? {
+                if insert_mmap_record_with_columns_checked(
+                    &mut live,
+                    columns,
+                    record,
+                    cancellation,
+                )? {
                     applied += 1;
                 }
             }
@@ -921,12 +931,14 @@ pub enum UpdateOutcome {
     NeedsRescan,
 }
 
-fn insert_mmap_record_with_columns(
+fn insert_mmap_record_with_columns_checked(
     live: &mut LiveIndex,
     columns: &MmapRecordColumns,
     record: FileRecord,
+    cancellation: &Cancellation,
 ) -> Result<bool> {
-    if let Some(column) = columns.find(record.id)? {
+    cancellation.check()?;
+    if let Some(column) = columns.find_checked(record.id, || cancellation.check())? {
         Ok(live.index.insert_with_columns_deferred_sidecars(
             record,
             SearchRecordColumns {
@@ -939,6 +951,7 @@ fn insert_mmap_record_with_columns(
             },
         ))
     } else {
+        cancellation.check()?;
         live.index.insert(record);
         Ok(false)
     }

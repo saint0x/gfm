@@ -674,7 +674,7 @@ impl SidecarIndexQuerySession {
         for index in 0..self.records.len() {
             cancellation.check()?;
             let record = self.records.record(index)?;
-            records.push(self.hydrate_record(record)?);
+            records.push(self.hydrate_record_checked(record, cancellation)?);
         }
         Ok((records, 0))
     }
@@ -713,7 +713,7 @@ impl SidecarIndexQuerySession {
         for record in batch.records {
             cancellation.check()?;
             let id = record.id;
-            loaded.push((id, self.hydrate_record(record)?));
+            loaded.push((id, self.hydrate_record_checked(record, cancellation)?));
         }
         {
             let mut cache = self.record_cache_lock();
@@ -748,10 +748,15 @@ impl SidecarIndexQuerySession {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn hydrate_record(&self, record: FileRecord) -> Result<HydratedRecord> {
+    fn hydrate_record_checked(
+        &self,
+        record: FileRecord,
+        cancellation: &Cancellation,
+    ) -> Result<HydratedRecord> {
+        cancellation.check()?;
         let columns = self
             .columns
-            .find(record.id)?
+            .find_checked(record.id, || cancellation.check())?
             .map(|column| SearchRecordColumns {
                 id: column.id,
                 name: column.name,
@@ -760,6 +765,7 @@ impl SidecarIndexQuerySession {
                 tags: column.tags,
                 comment: column.comment,
             });
+        cancellation.check()?;
         Ok(HydratedRecord { record, columns })
     }
 }
