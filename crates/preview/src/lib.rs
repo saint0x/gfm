@@ -566,6 +566,32 @@ fn read_disk_index_contents_checked(
         .map_err(|err| GfmError::io(path, format!("preview disk cache index unavailable: {err}")))
 }
 
+fn write_disk_index_contents_checked(
+    path: &Path,
+    bytes: &[u8],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    const CHUNK_BYTES: usize = 64 * 1024;
+
+    check_control()?;
+    let mut file = fs::File::create(path).map_err(|err| {
+        GfmError::io(path, format!("preview disk cache index unavailable: {err}"))
+    })?;
+    check_control()?;
+    for chunk in bytes.chunks(CHUNK_BYTES) {
+        check_control()?;
+        file.write_all(chunk).map_err(|err| {
+            GfmError::io(path, format!("preview disk cache index unavailable: {err}"))
+        })?;
+        check_control()?;
+    }
+    file.flush().map_err(|err| {
+        GfmError::io(path, format!("preview disk cache index unavailable: {err}"))
+    })?;
+    check_control()?;
+    Ok(())
+}
+
 fn load_disk_index_cancellable(
     config: &PreviewCacheConfig,
     cancellation: &Cancellation,
@@ -619,18 +645,34 @@ fn write_disk_index_cancellable(
     index: &HashMap<(PathBuf, PreviewKind), PreviewRequestKey>,
     cancellation: &Cancellation,
 ) -> Result<()> {
-    cancellation.check()?;
+    write_disk_index_checked(config, index, || cancellation.check())
+}
+
+fn write_disk_index_checked(
+    config: &PreviewCacheConfig,
+    index: &HashMap<(PathBuf, PreviewKind), PreviewRequestKey>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
     let path = preview_cache_index_path(config);
     let tmp = path.with_extension("tmp");
     let mut lines = Vec::new();
     for key in index.values() {
-        cancellation.check()?;
+        check_control()?;
         lines.push(format_disk_index_line(key));
     }
     lines.sort();
-    cancellation.check()?;
-    fs::write(&tmp, lines.join("\n")).map_err(|err| GfmError::io(&tmp, err))?;
-    cancellation.check()?;
+    check_control()?;
+    if let Err(err) =
+        write_disk_index_contents_checked(&tmp, lines.join("\n").as_bytes(), &mut check_control)
+    {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
+    }
+    if let Err(err) = check_control() {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
+    }
     fs::rename(&tmp, &path).map_err(|err| GfmError::io(&path, err))
 }
 
@@ -1257,6 +1299,67 @@ mod tests {
         assert_eq!(result, Err(GfmError::Cancelled));
         assert!(calls.get() >= 4);
         assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_disk_index_writer_honors_cancellation_during_chunked_write() {
+        let root = temp_root("cancel-disk-index-write-chunk");
+        let path = root.join("preview-cache-index.tsv.tmp");
+        let contents = "thumbnail\t1\t2\t256\t2000\t0\tlarge.png\n".repeat(4_000);
+        let calls = Cell::new(0usize);
+
+        let result = write_disk_index_contents_checked(&path, contents.as_bytes(), || {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(calls.get() >= 4);
+        assert!(path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_disk_index_publication_removes_temporary_index() {
+        let root = temp_root("cancel-disk-index-publication");
+        let config = PreviewCacheConfig {
+            memory_budget_bytes: 1024 * 1024,
+            max_entry_bytes: 1024 * 1024,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        };
+        let mut index = HashMap::new();
+        for node in 0..4_000 {
+            let key = PreviewRequestKey::new(
+                FileId::new(VolumeId(7), node),
+                format!("large-{node}.png"),
+                PreviewKind::Thumbnail,
+            );
+            index.insert((key.path.clone(), key.kind), key);
+        }
+        let index_path = preview_cache_index_path(&config);
+        let tmp_path = index_path.with_extension("tmp");
+        let calls = Cell::new(0usize);
+
+        let result = write_disk_index_checked(&config, &index, || {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call >= index.len() + 5 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(!index_path.exists());
+        assert!(!tmp_path.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
