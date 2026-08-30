@@ -118,6 +118,26 @@ fn fairness_planner_honors_dependencies_and_reports_blocked_jobs() {
 }
 
 #[test]
+fn fairness_planner_does_not_head_of_line_block_class_ready_jobs() {
+    let mut scheduler = Scheduler::new();
+    let missing = JobId::from_raw(77);
+    let blocked = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "blocked repair",
+        [missing],
+    );
+    scheduler.schedule_in_class(Priority::Visible, JobClass::Repair, "ready repair");
+
+    let plan = JobFairnessPlanner::new(JobFairnessPolicy::default()).plan(scheduler.drain_ready());
+
+    assert_eq!(plan.labels(), ["ready repair"]);
+    assert_eq!(plan.blocked.len(), 1);
+    assert_eq!(plan.blocked[0].id, blocked.id);
+    assert_eq!(plan.blocked[0].missing_dependencies, [missing]);
+}
+
+#[test]
 fn scheduler_fair_drain_retains_blocked_jobs_until_dependencies_complete() {
     let mut scheduler = Scheduler::new();
     let metadata = scheduler.schedule_in_class(

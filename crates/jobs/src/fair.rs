@@ -77,19 +77,26 @@ impl JobFairnessPlanner {
     }
 
     pub fn plan(&self, jobs: impl IntoIterator<Item = Job>) -> JobFairnessPlan {
-        let mut pending: VecDeque<Job> = jobs.into_iter().collect();
+        let mut ready_by_class: [VecDeque<Job>; JOB_CLASS_ORDER.len()] =
+            std::array::from_fn(|_| VecDeque::new());
+        let mut blocked_with_order = Vec::new();
         let mut ready = Vec::new();
+
+        for (order, job) in jobs.into_iter().enumerate() {
+            if dependencies_satisfied(&job, &self.completed) {
+                ready_by_class[class_index(job.class)].push_back(job);
+            } else {
+                blocked_with_order.push((order, job));
+            }
+        }
 
         loop {
             let mut progressed = false;
             for class in JOB_CLASS_ORDER {
                 for _ in 0..self.policy.quota(class) {
-                    let Some(index) = pending.iter().position(|job| {
-                        job.class == class && dependencies_satisfied(job, &self.completed)
-                    }) else {
+                    let Some(job) = ready_by_class[class_index(class)].pop_front() else {
                         break;
                     };
-                    let job = pending.remove(index).expect("fairness job vanished");
                     ready.push(job);
                     progressed = true;
                 }
@@ -99,9 +106,9 @@ impl JobFairnessPlanner {
             }
         }
 
-        let blocked = pending
+        let blocked = blocked_with_order
             .into_iter()
-            .map(|job| BlockedJob {
+            .map(|(_, job)| BlockedJob {
                 id: job.id,
                 label: job.label,
                 class: job.class,
@@ -124,6 +131,16 @@ const JOB_CLASS_ORDER: [JobClass; 5] = [
     JobClass::Maintenance,
     JobClass::Repair,
 ];
+
+fn class_index(class: JobClass) -> usize {
+    match class {
+        JobClass::Foreground => 0,
+        JobClass::Visible => 1,
+        JobClass::Background => 2,
+        JobClass::Maintenance => 3,
+        JobClass::Repair => 4,
+    }
+}
 
 fn dependencies_satisfied(job: &Job, satisfied: &HashSet<JobId>) -> bool {
     job.dependencies
