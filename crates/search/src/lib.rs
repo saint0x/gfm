@@ -154,7 +154,11 @@ impl SearchIndex {
         limit: usize,
         cancellation: &Cancellation,
     ) -> gfm_types::Result<Vec<SearchHit>> {
-        self.query_structured_cancellable(&SearchQuery::parse(query), limit, cancellation)
+        self.query_structured_cancellable(
+            &SearchQuery::parse_cancellable(query, cancellation)?,
+            limit,
+            cancellation,
+        )
     }
 
     pub fn query_structured_cancellable(
@@ -218,7 +222,11 @@ impl SearchIndex {
         limit: usize,
         cancellation: &Cancellation,
     ) -> gfm_types::Result<Vec<SearchStreamBatch>> {
-        self.stream_structured_cancellable(&SearchQuery::parse(query), limit, cancellation)
+        self.stream_structured_cancellable(
+            &SearchQuery::parse_cancellable(query, cancellation)?,
+            limit,
+            cancellation,
+        )
     }
 
     pub fn stream_structured_cancellable(

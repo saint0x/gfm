@@ -232,7 +232,11 @@ impl ShardedSearchIndex {
         limit: usize,
         cancellation: &Cancellation,
     ) -> Result<Vec<SearchHit>> {
-        self.query_structured_cancellable(&SearchQuery::parse(query), limit, cancellation)
+        self.query_structured_cancellable(
+            &SearchQuery::parse_cancellable(query, cancellation)?,
+            limit,
+            cancellation,
+        )
     }
 
     pub fn query_structured_cancellable(
@@ -396,7 +400,11 @@ impl ShardedSearchIndex {
         limit: usize,
         cancellation: &Cancellation,
     ) -> Result<Vec<SearchStreamBatch>> {
-        self.stream_structured_cancellable(&SearchQuery::parse(query), limit, cancellation)
+        self.stream_structured_cancellable(
+            &SearchQuery::parse_cancellable(query, cancellation)?,
+            limit,
+            cancellation,
+        )
     }
 
     pub fn stream_structured_cancellable(

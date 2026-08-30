@@ -365,8 +365,9 @@ impl LiveIndex {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<SearchQueryReport> {
+        let query = SearchQuery::parse_cancellable(query, cancellation)?;
         self.search_structured_with_lookup_budget_cancellable(
-            &SearchQuery::parse(query),
+            &query,
             limit,
             lookup,
             budget,
@@ -411,12 +412,8 @@ impl LiveIndex {
         scope: &SearchVolumeScope,
         cancellation: &Cancellation,
     ) -> Result<Vec<SearchHit>> {
-        self.search_structured_with_volume_scope_cancellable(
-            &SearchQuery::parse(query),
-            limit,
-            scope,
-            cancellation,
-        )
+        let query = SearchQuery::parse_cancellable(query, cancellation)?;
+        self.search_structured_with_volume_scope_cancellable(&query, limit, scope, cancellation)
     }
 
     pub fn search_structured_with_volume_scope_cancellable(
@@ -439,8 +436,9 @@ impl LiveIndex {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<SearchQueryReport> {
+        let query = SearchQuery::parse_cancellable(query, cancellation)?;
         self.search_structured_with_volume_scope_lookup_budget_cancellable(
-            &SearchQuery::parse(query),
+            &query,
             limit,
             scope,
             lookup,
@@ -484,7 +482,11 @@ impl LiveIndex {
         limit: usize,
         cancellation: &Cancellation,
     ) -> Result<Vec<SearchStreamBatch>> {
-        self.stream_structured_search_cancellable(&SearchQuery::parse(query), limit, cancellation)
+        self.stream_structured_search_cancellable(
+            &SearchQuery::parse_cancellable(query, cancellation)?,
+            limit,
+            cancellation,
+        )
     }
 
     pub fn stream_structured_search(
@@ -526,8 +528,9 @@ impl LiveIndex {
         scope: &SearchVolumeScope,
         cancellation: &Cancellation,
     ) -> Result<Vec<SearchStreamBatch>> {
+        let query = SearchQuery::parse_cancellable(query, cancellation)?;
         self.stream_structured_search_with_volume_scope_cancellable(
-            &SearchQuery::parse(query),
+            &query,
             limit,
             scope,
             cancellation,
@@ -583,7 +586,7 @@ impl LiveIndex {
         cancellation: &Cancellation,
     ) -> Result<Vec<SearchHit>> {
         cancellation.check()?;
-        let parsed = SearchQuery::parse(query);
+        let parsed = SearchQuery::parse_cancellable(query, cancellation)?;
         cancellation.check()?;
         let mut hits = self
             .index

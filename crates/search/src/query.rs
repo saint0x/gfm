@@ -1,8 +1,11 @@
-use gfm_types::{FileKind, FileRecord};
+use gfm_jobs::Cancellation;
+use gfm_types::{FileKind, FileRecord, Result};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod cache;
+
+const QUERY_CHECK_STRIDE: usize = 256;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SearchQuery {
@@ -16,10 +19,19 @@ pub struct SearchQuery {
 
 impl SearchQuery {
     pub fn parse(input: &str) -> Self {
+        Self::parse_cancellable(input, &Cancellation::default())
+            .expect("non-cancellable query parsing cannot cancel")
+    }
+
+    pub fn parse_cancellable(input: &str, cancellation: &Cancellation) -> Result<Self> {
+        cancellation.check()?;
         let mut query = Self::default();
-        let tokens = scan_query(input);
-        query.expression = QueryParser::new(tokens.clone()).parse();
-        for token in tokens {
+        let tokens = scan_query_checked(input, cancellation)?;
+        query.expression = QueryParser::new(tokens.clone()).parse_checked(cancellation)?;
+        for (index, token) in tokens.into_iter().enumerate() {
+            if index.is_multiple_of(QUERY_CHECK_STRIDE) {
+                cancellation.check()?;
+            }
             let Some(value) = token.as_value() else {
                 continue;
             };
@@ -28,22 +40,24 @@ impl SearchQuery {
             }
             let negative = token.starts_with('-') && token.len() > 1;
             let value = if negative { &value[1..] } else { value };
-            if let Some(proximity) = QueryProximity::parse(value) {
+            if let Some(proximity) = QueryProximity::parse_checked(value, cancellation)? {
                 if !negative {
                     query.proximities.push(proximity);
                 }
                 continue;
             }
-            if let Some(filter) = QueryFilter::parse(value, negative) {
+            if let Some(filter) = QueryFilter::parse_checked(value, negative, cancellation)? {
                 query.filters.push(filter);
                 continue;
             }
 
             if token.quoted {
-                let phrase = normalize(value);
+                let phrase = normalize_checked(value, cancellation)?;
                 if !phrase.is_empty() {
                     if negative {
-                        query.excluded_terms.extend(tokenize(&phrase));
+                        query
+                            .excluded_terms
+                            .extend(tokenize_checked(&phrase, cancellation)?);
                     } else {
                         query.phrases.push(phrase);
                     }
@@ -51,15 +65,103 @@ impl SearchQuery {
                 continue;
             }
 
-            let terms = tokenize(&normalize(value));
+            let terms = tokenize_checked(&normalize_checked(value, cancellation)?, cancellation)?;
             if negative {
                 query.excluded_terms.extend(terms);
             } else {
                 query.terms.extend(terms);
             }
         }
+        cancellation.check()?;
         query.dedupe();
-        query
+        cancellation.check()?;
+        Ok(query)
+    }
+
+    pub fn content_candidate_terms_cancellable(
+        &self,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<String>> {
+        cancellation.check()?;
+        let mut terms = self.terms.clone();
+        for phrase in &self.phrases {
+            cancellation.check()?;
+            terms.extend(tokenize_checked(phrase, cancellation)?);
+        }
+        for proximity in &self.proximities {
+            cancellation.check()?;
+            terms.extend(proximity.terms.iter().cloned());
+        }
+        cancellation.check()?;
+        terms.sort();
+        terms.dedup();
+        cancellation.check()?;
+        Ok(terms)
+    }
+
+    pub fn comment_candidate_terms_cancellable(
+        &self,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<String>> {
+        self.content_candidate_terms_cancellable(cancellation)
+    }
+
+    pub fn tag_candidate_terms_cancellable(
+        &self,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<String>> {
+        cancellation.check()?;
+        let mut terms = Vec::new();
+        for filter in &self.filters {
+            cancellation.check()?;
+            if let QueryFilter::Tag(term, false) = filter {
+                terms.push(term.clone());
+            }
+        }
+        cancellation.check()?;
+        terms.sort();
+        terms.dedup();
+        cancellation.check()?;
+        Ok(terms)
+    }
+
+    pub fn prefix_candidate_terms_cancellable(
+        &self,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<String>> {
+        let mut terms = Vec::new();
+        for term in self.content_candidate_terms_cancellable(cancellation)? {
+            cancellation.check()?;
+            if crate::is_prefix_term(&term) {
+                terms.push(term);
+            }
+        }
+        cancellation.check()?;
+        terms.sort();
+        terms.dedup();
+        cancellation.check()?;
+        Ok(terms)
+    }
+
+    pub fn fuzzy_candidate_keys_cancellable(
+        &self,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<String>> {
+        let mut keys = Vec::new();
+        for term in self.content_candidate_terms_cancellable(cancellation)? {
+            cancellation.check()?;
+            if crate::is_fuzzy_term(&term) {
+                for key in crate::deletion_keys(&term, 2) {
+                    cancellation.check()?;
+                    keys.push(key);
+                }
+            }
+        }
+        cancellation.check()?;
+        keys.sort();
+        keys.dedup();
+        cancellation.check()?;
+        Ok(keys)
     }
 
     fn dedupe(&mut self) {
@@ -159,19 +261,28 @@ pub struct QueryProximity {
 }
 
 impl QueryProximity {
-    fn parse(input: &str) -> Option<Self> {
-        let rest = input
+    fn parse_checked(input: &str, cancellation: &Cancellation) -> Result<Option<Self>> {
+        cancellation.check()?;
+        let Some(rest) = input
             .strip_prefix("near:")
-            .or_else(|| input.strip_prefix("proximity:"))?;
-        let (distance, terms) = rest.split_once(':')?;
-        let distance: u32 = distance.trim().parse().ok()?;
+            .or_else(|| input.strip_prefix("proximity:"))
+        else {
+            return Ok(None);
+        };
+        let Some((distance, terms)) = rest.split_once(':') else {
+            return Ok(None);
+        };
+        let Ok(distance) = distance.trim().parse::<u32>() else {
+            return Ok(None);
+        };
         if distance == 0 || distance > 256 {
-            return None;
+            return Ok(None);
         }
-        let mut terms = tokenize(&normalize(terms));
+        let mut terms = tokenize_checked(&normalize_checked(terms, cancellation)?, cancellation)?;
+        cancellation.check()?;
         terms.sort();
         terms.dedup();
-        (terms.len() >= 2).then_some(Self { distance, terms })
+        Ok((terms.len() >= 2).then_some(Self { distance, terms }))
     }
 }
 
@@ -188,22 +299,43 @@ pub enum QueryFilter {
 }
 
 impl QueryFilter {
-    fn parse(input: &str, negative: bool) -> Option<Self> {
-        if let Some(scope) = input.strip_prefix('@').and_then(QueryScope::parse) {
-            return Some(Self::Scope(scope, negative));
+    fn parse_checked(
+        input: &str,
+        negative: bool,
+        cancellation: &Cancellation,
+    ) -> Result<Option<Self>> {
+        cancellation.check()?;
+        if let Some(value) = input.strip_prefix('@') {
+            if let Some(scope) = QueryScope::parse_checked(value, cancellation)? {
+                return Ok(Some(Self::Scope(scope, negative)));
+            }
         }
-        let (field, value) = input.split_once(':')?;
+        let Some((field, value)) = input.split_once(':') else {
+            return Ok(None);
+        };
         let value = value.trim();
         if value.is_empty() {
-            return None;
+            return Ok(None);
         }
-        match field.trim().to_ascii_lowercase().as_str() {
-            "name" => Some(Self::Name(normalize(value), negative)),
-            "path" | "in" => Some(Self::Path(normalize(value), negative)),
-            "ext" | "extension" => Some(Self::Extension(normalize_extension(value), negative)),
-            "tag" | "label" => Some(Self::Tag(normalize(value), negative)),
-            "scope" | "where" => QueryScope::parse(value).map(|scope| Self::Scope(scope, negative)),
-            "kind" | "type" => QueryKind::parse(value).map(|kind| Self::Kind(kind, negative)),
+        let field = normalize_checked(field, cancellation)?;
+        Ok(match field.as_str() {
+            "name" => Some(Self::Name(
+                normalize_checked(value, cancellation)?,
+                negative,
+            )),
+            "path" | "in" => Some(Self::Path(
+                normalize_checked(value, cancellation)?,
+                negative,
+            )),
+            "ext" | "extension" => Some(Self::Extension(
+                normalize_extension_checked(value, cancellation)?,
+                negative,
+            )),
+            "tag" | "label" => Some(Self::Tag(normalize_checked(value, cancellation)?, negative)),
+            "scope" | "where" => QueryScope::parse_checked(value, cancellation)?
+                .map(|scope| Self::Scope(scope, negative)),
+            "kind" | "type" => QueryKind::parse_checked(value, cancellation)?
+                .map(|kind| Self::Kind(kind, negative)),
             "size" => SizeComparison::parse(value).map(|size| Self::Size(size, negative)),
             "date" | "modified" | "mtime" => DateComparison::parse(value)
                 .map(|date| Self::Date(DateField::Modified, date, negative)),
@@ -212,7 +344,7 @@ impl QueryFilter {
             "changed" | "ctime" => DateComparison::parse(value)
                 .map(|date| Self::Date(DateField::Changed, date, negative)),
             _ => None,
-        }
+        })
     }
 
     pub(crate) fn matches(&self, record: &FileRecord) -> bool {
@@ -259,14 +391,14 @@ pub enum QueryKind {
 }
 
 impl QueryKind {
-    fn parse(input: &str) -> Option<Self> {
-        match normalize(input).as_str() {
+    fn parse_checked(input: &str, cancellation: &Cancellation) -> Result<Option<Self>> {
+        Ok(match normalize_checked(input, cancellation)?.as_str() {
             "dir" | "directory" | "folder" => Some(Self::Directory),
             "file" | "document" => Some(Self::File),
             "link" | "symlink" | "alias" => Some(Self::Symlink),
             "other" => Some(Self::Other),
             _ => None,
-        }
+        })
     }
 
     pub(crate) fn matches_kind(self, kind: FileKind) -> bool {
@@ -293,13 +425,13 @@ pub enum QueryScope {
 }
 
 impl QueryScope {
-    fn parse(input: &str) -> Option<Self> {
+    fn parse_checked(input: &str, cancellation: &Cancellation) -> Result<Option<Self>> {
         let value = input.trim();
         if value.is_empty() {
-            return None;
+            return Ok(None);
         }
-        let normalized = normalize(value);
-        Some(match normalized.as_str() {
+        let normalized = normalize_checked(value, cancellation)?;
+        Ok(Some(match normalized.as_str() {
             "desktop" => Self::Desktop,
             "documents" | "docs" => Self::Documents,
             "downloads" => Self::Downloads,
@@ -308,7 +440,7 @@ impl QueryScope {
             "trash" => Self::Trash,
             "home" => Self::Home,
             _ => Self::Path(normalized),
-        })
+        }))
     }
 
     fn matches(&self, record: &FileRecord) -> bool {
@@ -469,55 +601,86 @@ impl QueryParser {
         Self { tokens, offset: 0 }
     }
 
-    fn parse(mut self) -> Option<QueryExpr> {
-        let expression = self.parse_or()?;
-        (self.offset == self.tokens.len()).then_some(expression)
+    fn parse_checked(mut self, cancellation: &Cancellation) -> Result<Option<QueryExpr>> {
+        cancellation.check()?;
+        let Some(expression) = self.parse_or_checked(cancellation)? else {
+            return Ok(None);
+        };
+        cancellation.check()?;
+        Ok((self.offset == self.tokens.len()).then_some(expression))
     }
 
-    fn parse_or(&mut self) -> Option<QueryExpr> {
-        let mut expressions = vec![self.parse_and()?];
+    fn parse_or_checked(&mut self, cancellation: &Cancellation) -> Result<Option<QueryExpr>> {
+        cancellation.check()?;
+        let Some(first) = self.parse_and_checked(cancellation)? else {
+            return Ok(None);
+        };
+        let mut expressions = vec![first];
         while self.consume_operator("or") {
-            expressions.push(self.parse_and()?);
+            cancellation.check()?;
+            let Some(expression) = self.parse_and_checked(cancellation)? else {
+                return Ok(None);
+            };
+            expressions.push(expression);
         }
-        Some(flatten_or(expressions))
+        cancellation.check()?;
+        Ok(Some(flatten_or(expressions)))
     }
 
-    fn parse_and(&mut self) -> Option<QueryExpr> {
+    fn parse_and_checked(&mut self, cancellation: &Cancellation) -> Result<Option<QueryExpr>> {
         let mut expressions = Vec::new();
         while self.peek_value().is_some() || self.peek_kind(QueryTokenKind::Open) {
+            cancellation.check()?;
             if self.peek_operator("or") || self.peek_kind(QueryTokenKind::Close) {
                 break;
             }
             self.consume_operator("and");
-            expressions.push(self.parse_not()?);
+            let Some(expression) = self.parse_not_checked(cancellation)? else {
+                return Ok(None);
+            };
+            expressions.push(expression);
         }
-        (!expressions.is_empty()).then(|| flatten_and(expressions))
+        cancellation.check()?;
+        Ok((!expressions.is_empty()).then(|| flatten_and(expressions)))
     }
 
-    fn parse_not(&mut self) -> Option<QueryExpr> {
+    fn parse_not_checked(&mut self, cancellation: &Cancellation) -> Result<Option<QueryExpr>> {
+        cancellation.check()?;
         if self.consume_operator("not") {
-            return self.parse_not().map(|expr| QueryExpr::Not(Box::new(expr)));
+            return Ok(self
+                .parse_not_checked(cancellation)?
+                .map(|expr| QueryExpr::Not(Box::new(expr))));
         }
-        let token = self.peek()?.clone();
+        let Some(token) = self.peek().cloned() else {
+            return Ok(None);
+        };
         if token.kind == QueryTokenKind::Value
             && token.value.starts_with('-')
             && token.value.len() > 1
         {
             self.offset += 1;
-            return atom_expr(&token.value[1..], token.quoted)
-                .map(|expr| QueryExpr::Not(Box::new(expr)));
+            return Ok(
+                atom_expr_checked(&token.value[1..], token.quoted, cancellation)?
+                    .map(|expr| QueryExpr::Not(Box::new(expr))),
+            );
         }
-        self.parse_atom()
+        self.parse_atom_checked(cancellation)
     }
 
-    fn parse_atom(&mut self) -> Option<QueryExpr> {
+    fn parse_atom_checked(&mut self, cancellation: &Cancellation) -> Result<Option<QueryExpr>> {
+        cancellation.check()?;
         if self.consume_kind(QueryTokenKind::Open) {
-            let expression = self.parse_or()?;
-            self.consume_kind(QueryTokenKind::Close)
-                .then_some(expression)
+            let Some(expression) = self.parse_or_checked(cancellation)? else {
+                return Ok(None);
+            };
+            Ok(self
+                .consume_kind(QueryTokenKind::Close)
+                .then_some(expression))
         } else {
-            let token = self.next_value()?;
-            atom_expr(token.as_str(), token.quoted)
+            let Some(token) = self.next_value() else {
+                return Ok(None);
+            };
+            atom_expr_checked(token.as_str(), token.quoted, cancellation)
         }
     }
 
@@ -567,21 +730,29 @@ impl QueryParser {
     }
 }
 
-fn atom_expr(value: &str, quoted: bool) -> Option<QueryExpr> {
-    if let Some(proximity) = QueryProximity::parse(value) {
-        return Some(QueryExpr::Proximity(proximity));
+fn atom_expr_checked(
+    value: &str,
+    quoted: bool,
+    cancellation: &Cancellation,
+) -> Result<Option<QueryExpr>> {
+    cancellation.check()?;
+    if let Some(proximity) = QueryProximity::parse_checked(value, cancellation)? {
+        return Ok(Some(QueryExpr::Proximity(proximity)));
     }
-    if let Some(filter) = QueryFilter::parse(value, false) {
-        return Some(QueryExpr::Filter(filter));
+    if let Some(filter) = QueryFilter::parse_checked(value, false, cancellation)? {
+        return Ok(Some(QueryExpr::Filter(filter)));
     }
-    let value = normalize(value);
+    let value = normalize_checked(value, cancellation)?;
     if value.is_empty() {
-        None
+        Ok(None)
     } else if quoted {
-        Some(QueryExpr::Phrase(value))
+        Ok(Some(QueryExpr::Phrase(value)))
     } else {
-        let terms = tokenize(&value).into_iter().map(QueryExpr::Term).collect();
-        Some(flatten_and(terms))
+        let terms = tokenize_checked(&value, cancellation)?
+            .into_iter()
+            .map(QueryExpr::Term)
+            .collect();
+        Ok(Some(flatten_and(terms)))
     }
 }
 
@@ -622,19 +793,54 @@ fn flatten_or(expressions: Vec<QueryExpr>) -> QueryExpr {
 }
 
 pub(crate) fn normalize(input: &str) -> String {
-    input.trim().to_lowercase()
+    normalize_checked(input, &Cancellation::default())
+        .expect("non-cancellable query normalization cannot cancel")
+}
+
+pub(crate) fn normalize_checked(input: &str, cancellation: &Cancellation) -> Result<String> {
+    cancellation.check()?;
+    let mut normalized = String::new();
+    for (index, ch) in input.trim().chars().enumerate() {
+        if index.is_multiple_of(QUERY_CHECK_STRIDE) {
+            cancellation.check()?;
+        }
+        normalized.extend(ch.to_lowercase());
+    }
+    cancellation.check()?;
+    Ok(normalized)
 }
 
 pub(crate) fn tokenize(input: &str) -> Vec<String> {
-    input
+    tokenize_checked(input, &Cancellation::default())
+        .expect("non-cancellable query tokenization cannot cancel")
+}
+
+pub(crate) fn tokenize_checked(input: &str, cancellation: &Cancellation) -> Result<Vec<String>> {
+    cancellation.check()?;
+    let mut tokens = Vec::new();
+    for (index, part) in input
         .split(|ch: char| !ch.is_alphanumeric())
         .filter(|part| !part.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+        .enumerate()
+    {
+        if index.is_multiple_of(QUERY_CHECK_STRIDE) {
+            cancellation.check()?;
+        }
+        tokens.push(part.to_owned());
+    }
+    cancellation.check()?;
+    Ok(tokens)
 }
 
 fn normalize_extension(input: &str) -> String {
-    normalize(input).trim_start_matches('.').to_string()
+    normalize_extension_checked(input, &Cancellation::default())
+        .expect("non-cancellable extension normalization cannot cancel")
+}
+
+fn normalize_extension_checked(input: &str, cancellation: &Cancellation) -> Result<String> {
+    Ok(normalize_checked(input, cancellation)?
+        .trim_start_matches('.')
+        .to_string())
 }
 
 fn normalize_path(path: &Path) -> String {
@@ -764,12 +970,18 @@ fn days_from_civil(year: i32, month: u32, day: u32) -> Option<i64> {
     Some(era as i64 * 146_097 + day_of_era as i64 - 719_468)
 }
 
-fn scan_query(input: &str) -> Vec<QueryToken> {
+fn scan_query_checked(input: &str, cancellation: &Cancellation) -> Result<Vec<QueryToken>> {
+    cancellation.check()?;
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut quoted = false;
     let mut chars = input.chars().peekable();
+    let mut index = 0usize;
     while let Some(ch) = chars.next() {
+        if index.is_multiple_of(QUERY_CHECK_STRIDE) {
+            cancellation.check()?;
+        }
+        index = index.saturating_add(1);
         match ch {
             '"' => {
                 if quoted {
@@ -841,6 +1053,7 @@ fn scan_query(input: &str) -> Vec<QueryToken> {
             other => current.push(other),
         }
     }
+    cancellation.check()?;
     if !current.is_empty() {
         tokens.push(QueryToken {
             value: current,
@@ -848,7 +1061,8 @@ fn scan_query(input: &str) -> Vec<QueryToken> {
             kind: QueryTokenKind::Value,
         });
     }
-    tokens
+    cancellation.check()?;
+    Ok(tokens)
 }
 
 #[cfg(test)]

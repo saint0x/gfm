@@ -319,8 +319,9 @@ impl SidecarIndexQuerySession {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<SidecarQuerySessionReport> {
+        let parsed = SearchQuery::parse_cancellable(query, cancellation)?;
         self.search_structured_with_volume_scope_budget_cancellable(
-            &SearchQuery::parse(query),
+            &parsed,
             limit,
             scope,
             budget,
@@ -356,7 +357,7 @@ impl SidecarIndexQuerySession {
         let content_hits_before = self.content_cache_hits.load(Ordering::Relaxed);
         let content_misses_before = self.content_cache_misses.load(Ordering::Relaxed);
         cancellation.check()?;
-        let content_terms = parsed.content_candidate_terms();
+        let content_terms = parsed.content_candidate_terms_cancellable(cancellation)?;
         let content_postings = self.scoped_content_postings_for_terms(
             content_terms.clone(),
             budget.max_content_ids_per_term,
@@ -1361,9 +1362,9 @@ pub fn query_sidecar_imports_cancellable(
     cancellation: &Cancellation,
 ) -> Result<SidecarQueryImport> {
     cancellation.check()?;
-    let parsed = gfm_search::SearchQuery::parse(query);
+    let parsed = gfm_search::SearchQuery::parse_cancellable(query, cancellation)?;
     cancellation.check()?;
-    let content_terms = parsed.content_candidate_terms();
+    let content_terms = parsed.content_candidate_terms_cancellable(cancellation)?;
     let content = content.postings_for_terms_limit_checked(
         content_terms.clone(),
         budget.max_content_ids_per_term,
@@ -1425,12 +1426,12 @@ fn query_sidecar_imports_with_content_postings_scoped(
     if scope_excludes_all(scope) {
         return Ok(SidecarQueryImport::default());
     }
-    let comment_terms = parsed.comment_candidate_terms();
-    let tag_terms = parsed.tag_candidate_terms();
-    let prefix_terms = parsed.prefix_candidate_terms();
+    let comment_terms = parsed.comment_candidate_terms_cancellable(cancellation)?;
+    let tag_terms = parsed.tag_candidate_terms_cancellable(cancellation)?;
+    let prefix_terms = parsed.prefix_candidate_terms_cancellable(cancellation)?;
     let substring_grams = bounded_substring_grams(&content.terms, budget);
     let fuzzy_keys = parsed
-        .fuzzy_candidate_keys()
+        .fuzzy_candidate_keys_cancellable(cancellation)?
         .into_iter()
         .take(budget.max_fuzzy_keys_per_term)
         .collect::<Vec<_>>();

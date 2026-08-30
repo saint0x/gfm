@@ -1,4 +1,6 @@
 use super::*;
+use gfm_jobs::Cancellation;
+use gfm_types::GfmError;
 use std::time::Duration;
 
 #[test]
@@ -101,6 +103,41 @@ fn parses_content_proximity_queries() {
         query.expression,
         Some(QueryExpr::Proximity(QueryProximity { distance: 4, .. }))
     ));
+}
+
+#[test]
+fn cancellable_query_parse_honors_pre_cancelled_token() {
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = SearchQuery::parse_cancellable("kind:file report", &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+}
+
+#[test]
+fn cancellable_query_scan_honors_pre_cancelled_token_before_large_scan() {
+    let query = (0..10_000)
+        .map(|index| format!("token{index}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = scan_query_checked(&query, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+}
+
+#[test]
+fn cancellable_candidate_terms_honor_cancelled_token() {
+    let query = SearchQuery::parse(r#""alpha beta" near:4:gamma,delta tag:Important"#);
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = query.content_candidate_terms_cancellable(&cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
 }
 
 #[test]

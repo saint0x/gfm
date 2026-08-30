@@ -30,7 +30,9 @@ impl SearchSupersession {
     }
 
     pub fn query(&self, index: &SearchIndex, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
-        self.query_structured(index, &crate::SearchQuery::parse(query), limit)
+        let cancellation = self.begin();
+        let query = crate::SearchQuery::parse_cancellable(query, &cancellation)?;
+        index.query_structured_cancellable(&query, limit, &cancellation)
     }
 
     pub fn query_structured(
@@ -49,7 +51,9 @@ impl SearchSupersession {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchHit>> {
-        self.query_sharded_structured(index, &crate::SearchQuery::parse(query), limit)
+        let cancellation = self.begin();
+        let query = crate::SearchQuery::parse_cancellable(query, &cancellation)?;
+        index.query_structured_cancellable(&query, limit, &cancellation)
     }
 
     pub fn query_sharded_structured(
@@ -69,12 +73,9 @@ impl SearchSupersession {
         limit: usize,
         scope: &SearchVolumeScope,
     ) -> Result<Vec<SearchHit>> {
-        self.query_sharded_structured_with_volume_scope(
-            index,
-            &crate::SearchQuery::parse(query),
-            limit,
-            scope,
-        )
+        let cancellation = self.begin();
+        let query = crate::SearchQuery::parse_cancellable(query, &cancellation)?;
+        index.query_structured_with_volume_scope_cancellable(&query, limit, scope, &cancellation)
     }
 
     pub fn query_sharded_structured_with_volume_scope(
@@ -94,7 +95,9 @@ impl SearchSupersession {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchStreamBatch>> {
-        self.stream_structured(index, &crate::SearchQuery::parse(query), limit)
+        let cancellation = self.begin();
+        let query = crate::SearchQuery::parse_cancellable(query, &cancellation)?;
+        index.stream_structured_cancellable(&query, limit, &cancellation)
     }
 
     pub fn stream_structured(
@@ -113,7 +116,9 @@ impl SearchSupersession {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchStreamBatch>> {
-        self.stream_sharded_structured(index, &crate::SearchQuery::parse(query), limit)
+        let cancellation = self.begin();
+        let query = crate::SearchQuery::parse_cancellable(query, &cancellation)?;
+        index.stream_structured_cancellable(&query, limit, &cancellation)
     }
 
     pub fn stream_sharded_structured(
@@ -133,12 +138,9 @@ impl SearchSupersession {
         limit: usize,
         scope: &SearchVolumeScope,
     ) -> Result<Vec<SearchStreamBatch>> {
-        self.stream_sharded_structured_with_volume_scope(
-            index,
-            &crate::SearchQuery::parse(query),
-            limit,
-            scope,
-        )
+        let cancellation = self.begin();
+        let query = crate::SearchQuery::parse_cancellable(query, &cancellation)?;
+        index.stream_structured_with_volume_scope_cancellable(&query, limit, scope, &cancellation)
     }
 
     pub fn stream_sharded_structured_with_volume_scope(

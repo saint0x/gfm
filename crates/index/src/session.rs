@@ -193,12 +193,8 @@ impl ContentIndexQuerySession {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<ContentQuerySessionReport> {
-        self.search_structured_with_budget_cancellable(
-            &SearchQuery::parse(query),
-            limit,
-            budget,
-            cancellation,
-        )
+        let query = SearchQuery::parse_cancellable(query, cancellation)?;
+        self.search_structured_with_budget_cancellable(&query, limit, budget, cancellation)
     }
 
     pub fn search_structured_with_budget_cancellable(
@@ -227,7 +223,7 @@ impl ContentIndexQuerySession {
         self.result_cache_misses.fetch_add(1, Ordering::Relaxed);
         let posting_hits_before = self.posting_cache_hits.load(Ordering::Relaxed);
         let posting_misses_before = self.posting_cache_misses.load(Ordering::Relaxed);
-        let content_terms = parsed.content_candidate_terms();
+        let content_terms = parsed.content_candidate_terms_cancellable(cancellation)?;
         let has_content_terms = !content_terms.is_empty();
         let postings = self.postings_for_terms(content_terms, budget, cancellation)?;
         cancellation.check()?;
