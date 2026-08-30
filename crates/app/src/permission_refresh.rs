@@ -1,7 +1,8 @@
 use crate::runtime::default_permission_state_path;
 use gfm_mac::{
-    current_permission_onboarding, MountState, PermissionStateInvalidationReport,
-    PermissionStateSnapshot, VolumeDiscoveryReport,
+    current_permission_onboarding, AccessIntent, MountState, PermissionStateInvalidationReport,
+    PermissionStateSnapshot, SecurityDecisionAction, SecurityScopedAccessReport,
+    VolumeDiscoveryReport,
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
@@ -102,7 +103,7 @@ fn preflight_permission_state_volume_with_report(
         });
     }
     if volume.reachable != Some(false) {
-        if !volume.read_only || volume.path == Path::new("/") {
+        if !volume.read_only || read_only_root_allows_permission_state_write(volume, probe_path) {
             return Ok(());
         }
         return Err(GfmError::Permission {
@@ -128,6 +129,17 @@ fn preflight_permission_state_volume_with_report(
             volume.mount_state.as_str()
         ),
     })
+}
+
+fn read_only_root_allows_permission_state_write(
+    volume: &gfm_mac::VolumeDescriptor,
+    probe_path: &Path,
+) -> bool {
+    volume.path == Path::new("/")
+        && matches!(
+            SecurityScopedAccessReport::evaluate(probe_path, AccessIntent::Write).action,
+            SecurityDecisionAction::Allow
+        )
 }
 
 fn permission_state_is_file(path: &Path) -> Result<bool> {
@@ -271,6 +283,26 @@ mod tests {
         assert!(!state.parent().unwrap().exists());
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_state_refuses_read_only_system_root_when_probe_is_denied() {
+        let state = PathBuf::from("/System/gfm-permission-state.tsv");
+        let mut volume = VolumeDescriptor::for_path("/").unwrap();
+        volume.read_only = true;
+        volume.writable = false;
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let err =
+            preflight_permission_state_volume_with_report(&state, Path::new("/System"), &report)
+                .unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err
+            .to_string()
+            .contains("permission state volume access blocked: read-only volume system"));
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
