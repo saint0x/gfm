@@ -18,7 +18,7 @@ use crate::{
     parse_user_activity, path_volume, required_path, required_string,
 };
 use gfm_content::{CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor};
-use gfm_fs::record_for_path;
+use gfm_fs::record_for_path_checked;
 use gfm_index::{
     BackgroundContentIndexer, CompactionPressure, ContentIndexJobSpec, ContentIndexReport,
     ContentMaintenanceOptions, ContentMaintenanceReport, ContentMergePolicy, IndexFootprintSpec,
@@ -814,7 +814,7 @@ fn run_extraction_cache(path: PathBuf) -> Result<String> {
         cancellation.check()?;
         let _access = preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
         cancellation.check()?;
-        let record = record_for_path(&path, None, false)?;
+        let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
         cancellation.check()?;
         let mut cached = CachedExtractor::default();
         let first = cached

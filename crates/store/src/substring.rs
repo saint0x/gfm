@@ -1,6 +1,6 @@
 use crate::durable;
 use crate::ids::{
-    read_blocked_file_id_block_from_slice, read_blocked_file_ids,
+    read_blocked_file_id_block_from_slice, read_blocked_file_ids_checked,
     read_blocked_file_ids_for_volume_limited_from_slice_checked,
     read_blocked_file_ids_limited_from_slice_checked, write_blocked_file_ids,
 };
@@ -151,7 +151,11 @@ pub fn read_substring_postings_checked(
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
         check_control()?;
-        postings.push(read_substring_posting(&mut file, path)?);
+        postings.push(read_substring_posting_checked(
+            &mut file,
+            path,
+            &mut check_control,
+        )?);
     }
     check_control()?;
     Ok(postings)
@@ -475,7 +479,8 @@ impl MmapSubstringArchive {
         };
         check_control()?;
         let bytes = self.posting_bytes(entry)?;
-        let posting = read_substring_posting(Cursor::new(bytes), &self.path)?;
+        let posting =
+            read_substring_posting_checked(Cursor::new(bytes), &self.path, check_control)?;
         if posting.gram == gram {
             Ok(Some(posting))
         } else {
@@ -592,8 +597,19 @@ fn write_substring_posting(
 }
 
 fn read_substring_posting(mut reader: impl Read, path: &Path) -> Result<SubstringPosting> {
+    read_substring_posting_checked(&mut reader, path, || Ok(()))
+}
+
+fn read_substring_posting_checked(
+    mut reader: impl Read,
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<SubstringPosting> {
+    check_control()?;
     let gram = read_substring_posting_header(&mut reader, path)?;
-    let ids = read_blocked_file_ids(reader, path)?;
+    check_control()?;
+    let ids = read_blocked_file_ids_checked(reader, path, &mut check_control)?;
+    check_control()?;
     Ok(SubstringPosting { gram, ids })
 }
 
@@ -908,6 +924,32 @@ mod tests {
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn checked_substring_reader_can_cancel_during_blocked_id_decode() {
+        let path = temp_path("gfm-substring-id-decode-cancel", "gfmsubstr");
+        let posting = SubstringPosting {
+            gram: "por".to_string(),
+            ids: (0..1_024)
+                .map(|node| FileId::new(VolumeId(5), 10_000 + node))
+                .collect(),
+        };
+        write_substring_postings(&path, &[posting]).unwrap();
+        let mut checks = 0usize;
+
+        let result = read_substring_postings_checked(&path, || {
+            checks += 1;
+            if checks >= 14 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 14);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

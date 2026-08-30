@@ -92,10 +92,6 @@ fn write_blocked_file_ids_v1(mut writer: impl Write, ids: &[FileId]) -> std::io:
     writer.write_all(&encoded)
 }
 
-pub(crate) fn read_blocked_file_ids(reader: impl Read, path: &Path) -> Result<Vec<FileId>> {
-    read_blocked_file_ids_checked(reader, path, || Ok(()))
-}
-
 pub(crate) fn read_blocked_file_ids_checked(
     mut reader: impl Read,
     path: &Path,
@@ -655,8 +651,10 @@ mod tests {
         write_blocked_file_ids(&mut encoded, &ids).unwrap();
         write_blocked_file_ids_v1(&mut legacy, &ids).unwrap();
 
-        let decoded = read_blocked_file_ids(Cursor::new(&encoded), path).unwrap();
-        let legacy_decoded = read_blocked_file_ids(Cursor::new(&legacy), path).unwrap();
+        let decoded =
+            read_blocked_file_ids_checked(Cursor::new(&encoded), path, || Ok(())).unwrap();
+        let legacy_decoded =
+            read_blocked_file_ids_checked(Cursor::new(&legacy), path, || Ok(())).unwrap();
         let block = read_blocked_file_id_block_from_slice(&encoded, 1, path).unwrap();
         let legacy_block = read_blocked_file_id_block_from_slice(&legacy, 1, path).unwrap();
 
@@ -681,7 +679,7 @@ mod tests {
         write_blocked_file_ids_v1(&mut legacy, &ids).unwrap();
 
         assert_eq!(
-            read_blocked_file_ids(Cursor::new(&encoded), path).unwrap(),
+            read_blocked_file_ids_checked(Cursor::new(&encoded), path, || Ok(())).unwrap(),
             ids
         );
         assert_eq!(

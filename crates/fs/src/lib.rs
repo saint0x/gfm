@@ -230,14 +230,16 @@ pub fn read_directory_checked(
     for entry in dir {
         check_control()?;
         match entry {
-            Ok(entry) => match record_for_path(entry.path(), None, false) {
-                Ok(record) => entries.push(record),
-                Err(GfmError::Io { path, message }) => inaccessible.push(ScanIssue {
-                    path,
-                    reason: message,
-                }),
-                Err(err) => return Err(err),
-            },
+            Ok(entry) => {
+                match record_for_path_checked(entry.path(), None, false, &mut check_control) {
+                    Ok(record) => entries.push(record),
+                    Err(GfmError::Io { path, message }) => inaccessible.push(ScanIssue {
+                        path,
+                        reason: message,
+                    }),
+                    Err(err) => return Err(err),
+                }
+            }
             Err(err) => inaccessible.push(ScanIssue {
                 path: root.clone(),
                 reason: err.to_string(),
@@ -271,7 +273,12 @@ pub fn scan_tree_checked(
 
     while let Some((path, depth, parent)) = queue.pop_front() {
         check_control()?;
-        let record = match record_for_path(path.clone(), parent, options.follow_symlinks) {
+        let record = match record_for_path_checked(
+            path.clone(),
+            parent,
+            options.follow_symlinks,
+            &mut check_control,
+        ) {
             Ok(record) => record,
             Err(GfmError::Io { path, message }) => {
                 inaccessible.push(ScanIssue {
@@ -334,13 +341,24 @@ pub fn record_for_path(
     parent: Option<FileId>,
     follow_symlinks: bool,
 ) -> Result<FileRecord> {
+    record_for_path_checked(path, parent, follow_symlinks, || Ok(()))
+}
+
+pub fn record_for_path_checked(
+    path: impl AsRef<Path>,
+    parent: Option<FileId>,
+    follow_symlinks: bool,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<FileRecord> {
     let path = path.as_ref().to_path_buf();
+    check_control()?;
     let metadata = if follow_symlinks {
         fs::metadata(&path)
     } else {
         fs::symlink_metadata(&path)
     }
     .map_err(|err| GfmError::io(&path, err))?;
+    check_control()?;
 
     let file_type = metadata.file_type();
     let kind = if file_type.is_dir() {
@@ -359,12 +377,20 @@ pub fn record_for_path(
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| path.display().to_string());
     let hidden = name.starts_with('.');
+    check_control()?;
+
+    let tags = finder_tags_checked(&path, &mut check_control)?;
+    check_control()?;
+    let finder_comment = finder_comment_checked(&path, &mut check_control)?;
+    check_control()?;
+    let xattrs_digest = xattrs_digest_checked(&path, &mut check_control)?;
+    check_control()?;
 
     Ok(FileRecord {
         id: file_id(&metadata),
         parent,
-        tags: finder_tags(&path),
-        finder_comment: finder_comment(&path),
+        tags,
+        finder_comment,
         path: path.clone(),
         name,
         kind,
@@ -372,7 +398,7 @@ pub fn record_for_path(
         mode: metadata_mode(&metadata),
         owner: metadata_owner(&metadata),
         group: metadata_group(&metadata),
-        xattrs_digest: xattrs_digest(&path),
+        xattrs_digest,
         created: metadata.created().ok(),
         modified: metadata.modified().ok(),
         changed: changed_time(&metadata),
@@ -380,13 +406,25 @@ pub fn record_for_path(
     })
 }
 
-fn finder_tags(path: &Path) -> Vec<String> {
-    let Some(raw) = bounded_xattr(path, USER_TAGS_XATTR, FINDER_METADATA_XATTR_MAX_BYTES) else {
-        return Vec::new();
+fn finder_tags_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<String>> {
+    check_control()?;
+    let Some(raw) = bounded_xattr_checked(
+        path,
+        USER_TAGS_XATTR,
+        FINDER_METADATA_XATTR_MAX_BYTES,
+        &mut check_control,
+    )?
+    else {
+        return Ok(Vec::new());
     };
+    check_control()?;
     let Ok(plist::Value::Array(values)) = plist::Value::from_reader(Cursor::new(raw)) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
+    check_control()?;
 
     let mut tags: Vec<_> = values
         .into_iter()
@@ -397,7 +435,7 @@ fn finder_tags(path: &Path) -> Vec<String> {
         .collect();
     tags.sort();
     tags.dedup();
-    tags
+    Ok(tags)
 }
 
 fn finder_tag_name(raw: &str) -> Option<String> {
@@ -409,36 +447,64 @@ fn finder_tag_name(raw: &str) -> Option<String> {
     (!tag.is_empty()).then(|| tag.to_string())
 }
 
-fn finder_comment(path: &Path) -> Option<String> {
-    let raw = bounded_xattr(path, FINDER_COMMENT_XATTR, FINDER_METADATA_XATTR_MAX_BYTES)?;
-    match plist::Value::from_reader(Cursor::new(raw)).ok()? {
-        plist::Value::String(comment) if !comment.trim().is_empty() => Some(comment),
+fn finder_comment_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Option<String>> {
+    check_control()?;
+    let Some(raw) = bounded_xattr_checked(
+        path,
+        FINDER_COMMENT_XATTR,
+        FINDER_METADATA_XATTR_MAX_BYTES,
+        &mut check_control,
+    )?
+    else {
+        return Ok(None);
+    };
+    check_control()?;
+    Ok(match plist::Value::from_reader(Cursor::new(raw)).ok() {
+        Some(plist::Value::String(comment)) if !comment.trim().is_empty() => Some(comment),
         _ => None,
-    }
+    })
 }
 
-fn xattrs_digest(path: &Path) -> u64 {
+fn xattrs_digest_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<u64> {
+    check_control()?;
     let Ok(names) = xattr::list(path) else {
-        return 0;
+        return Ok(0);
     };
     let mut names = names
         .filter_map(|name| name.to_str().map(ToOwned::to_owned))
         .collect::<Vec<_>>();
+    check_control()?;
     names.sort();
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for name in names {
+        check_control()?;
         name.hash(&mut hasher);
         let value = xattr::get(path, &name).ok().flatten().unwrap_or_default();
         value.len().hash(&mut hasher);
         value.hash(&mut hasher);
     }
-    hasher.finish()
+    Ok(hasher.finish())
 }
 
-fn bounded_xattr(path: &Path, name: &str, max_bytes: usize) -> Option<Vec<u8>> {
-    let value = xattr::get(path, name).ok().flatten()?;
-    (value.len() <= max_bytes).then_some(value)
+fn bounded_xattr_checked(
+    path: &Path,
+    name: &str,
+    max_bytes: usize,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Option<Vec<u8>>> {
+    check_control()?;
+    let Some(value) = xattr::get(path, name).ok().flatten() else {
+        return Ok(None);
+    };
+    check_control()?;
+    Ok((value.len() <= max_bytes).then_some(value))
 }
 
 fn finder_order(record: &FileRecord) -> (u8, String) {
@@ -607,6 +673,50 @@ mod tests {
         });
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_record_for_path_honors_pre_cancelled_control_before_metadata() {
+        let root = unique_temp_dir();
+        let path = root.join("record.txt");
+        fs::write(&path, "record").unwrap();
+
+        let result = record_for_path_checked(&path, None, false, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_record_for_path_can_cancel_during_xattr_digest() {
+        let root = unique_temp_dir();
+        let path = root.join("digest.txt");
+        fs::write(&path, "digest").unwrap();
+        let mut supported = true;
+        for index in 0..16 {
+            if xattr::set(&path, format!("com.apple.gfm.cancel-{index}"), b"value").is_err() {
+                supported = false;
+                break;
+            }
+        }
+        if !supported {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let mut checks = 0usize;
+
+        let result = record_for_path_checked(&path, None, false, || {
+            checks += 1;
+            if checks >= 8 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 8);
         fs::remove_dir_all(root).unwrap();
     }
 

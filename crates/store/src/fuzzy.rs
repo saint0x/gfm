@@ -153,7 +153,11 @@ pub fn read_fuzzy_postings_checked(
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
         check_control()?;
-        postings.push(read_fuzzy_posting(&mut file, path)?);
+        postings.push(read_fuzzy_posting_checked(
+            &mut file,
+            path,
+            &mut check_control,
+        )?);
     }
     check_control()?;
     Ok(postings)
@@ -234,7 +238,7 @@ impl MmapFuzzyArchive {
             return Ok((Vec::new(), false));
         };
         check_control()?;
-        let posting = self.limited_posting_for_entry(entry, limit)?;
+        let posting = self.limited_posting_for_entry_checked(entry, limit, &mut check_control)?;
         Ok((posting.posting.terms, posting.truncated))
     }
 
@@ -298,7 +302,11 @@ impl MmapFuzzyArchive {
             if let Some(entry) = self.directory.get(directory_index) {
                 if entry.key.as_str() == key.as_str() {
                     check_control()?;
-                    postings.push(self.limited_posting_for_entry(entry, limit_per_key)?);
+                    postings.push(self.limited_posting_for_entry_checked(
+                        entry,
+                        limit_per_key,
+                        &mut check_control,
+                    )?);
                 }
             }
             previous = Some(key);
@@ -378,7 +386,7 @@ impl MmapFuzzyArchive {
         };
         check_control()?;
         let bytes = self.posting_bytes(entry)?;
-        let posting = read_fuzzy_posting(Cursor::new(bytes), &self.path)?;
+        let posting = read_fuzzy_posting_checked(Cursor::new(bytes), &self.path, check_control)?;
         if posting.key == key {
             Ok(Some(posting))
         } else {
@@ -415,27 +423,37 @@ impl MmapFuzzyArchive {
             .ok_or_else(|| fuzzy_format_error(&self.path, "posting range out of bounds"))
     }
 
-    fn limited_posting_for_entry(
+    fn limited_posting_for_entry_checked(
         &self,
         entry: &FuzzyDirectoryEntry,
         limit: usize,
+        mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<LimitedFuzzyPosting> {
+        check_control()?;
         let bytes = self.posting_bytes(entry)?;
         let mut cursor = Cursor::new(bytes);
-        let posting_key = read_string(&mut cursor, &self.path, "key")?;
+        let posting_key = read_string_checked(&mut cursor, &self.path, "key", &mut check_control)?;
         if posting_key != entry.key {
             return Err(fuzzy_format_error(
                 &self.path,
                 "fuzzy directory points at the wrong posting",
             ));
         }
+        check_control()?;
         let count = read_varint(&mut cursor).map_err(|err| GfmError::io(&self.path, err))?;
         let capacity_count = usize::try_from(count).unwrap_or(usize::MAX);
         let mut terms = Vec::with_capacity(limit.min(capacity_count));
         let read_count = count.min(limit as u64);
         for _ in 0..read_count {
-            terms.push(read_string(&mut cursor, &self.path, "term")?);
+            check_control()?;
+            terms.push(read_string_checked(
+                &mut cursor,
+                &self.path,
+                "term",
+                &mut check_control,
+            )?);
         }
+        check_control()?;
         Ok(LimitedFuzzyPosting {
             posting: FuzzyPosting {
                 key: posting_key,
@@ -467,23 +485,52 @@ fn write_fuzzy_posting(mut writer: impl Write, posting: &FuzzyPosting) -> std::i
 }
 
 fn read_fuzzy_posting(mut reader: impl Read, path: &Path) -> Result<FuzzyPosting> {
-    let key = read_string(&mut reader, path, "key")?;
+    read_fuzzy_posting_checked(&mut reader, path, || Ok(()))
+}
+
+fn read_fuzzy_posting_checked(
+    mut reader: impl Read,
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<FuzzyPosting> {
+    check_control()?;
+    let key = read_string_checked(&mut reader, path, "key", &mut check_control)?;
+    check_control()?;
     let count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
     let mut terms = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
-        terms.push(read_string(&mut reader, path, "term")?);
+        check_control()?;
+        terms.push(read_string_checked(
+            &mut reader,
+            path,
+            "term",
+            &mut check_control,
+        )?);
     }
+    check_control()?;
     Ok(FuzzyPosting { key, terms })
 }
 
 fn read_string(mut reader: impl Read, path: &Path, label: &str) -> Result<String> {
+    read_string_checked(&mut reader, path, label, || Ok(()))
+}
+
+fn read_string_checked(
+    mut reader: impl Read,
+    path: &Path,
+    label: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<String> {
+    check_control()?;
     let len = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
     let len = usize::try_from(len)
         .map_err(|_| fuzzy_format_error(path, &format!("{label} length overflow")))?;
     let mut value = vec![0; len];
+    check_control()?;
     reader
         .read_exact(&mut value)
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     String::from_utf8(value)
         .map_err(|err| fuzzy_format_error(path, &format!("invalid UTF-8 {label}: {err}")))
 }
@@ -790,6 +837,30 @@ mod tests {
     }
 
     #[test]
+    fn checked_fuzzy_reader_can_cancel_during_term_decode() {
+        let path = temp_path("gfm-fuzzy-term-decode-cancel", "gfmfuzzy");
+        let posting = FuzzyPosting {
+            key: "projet".to_string(),
+            terms: (0..256).map(|term| format!("project{term}")).collect(),
+        };
+        write_fuzzy_postings(&path, &[posting]).unwrap();
+        let mut checks = 0usize;
+
+        let result = read_fuzzy_postings_checked(&path, || {
+            checks += 1;
+            if checks >= 20 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 20);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn mmap_fuzzy_archive_reads_bounded_sorted_postings_in_one_pass() {
         let path = temp_path("gfm-fuzzy-batch-postings", "gfmfuzzy");
         let postings = vec![
@@ -828,6 +899,31 @@ mod tests {
         assert!(archive
             .postings_for_sorted_keys_limit(["projet", "aplha"], 2)
             .is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_fuzzy_archive_checked_batch_can_cancel_during_term_decode() {
+        let path = temp_path("gfm-fuzzy-batch-term-decode-cancel", "gfmfuzzy");
+        let posting = FuzzyPosting {
+            key: "projet".to_string(),
+            terms: (0..256).map(|term| format!("project{term}")).collect(),
+        };
+        write_fuzzy_postings(&path, &[posting]).unwrap();
+        let archive = MmapFuzzyArchive::open(&path).unwrap();
+        let mut checks = 0usize;
+
+        let result = archive.postings_for_sorted_keys_limit_checked(["projet"], 128, || {
+            checks += 1;
+            if checks >= 12 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 12);
         std::fs::remove_file(path).unwrap();
     }
 
