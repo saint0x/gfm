@@ -75,7 +75,8 @@ pub use metadata::{
 pub use progress::{ScanProgressCheckpoint, SCAN_PROGRESS_SCHEMA_VERSION};
 pub use recovery::{
     persistent_index_action_name, persistent_index_reason_name, plan_persistent_index_recovery,
-    PersistentIndexAction, PersistentIndexPlan, PersistentIndexReason, PersistentIndexRecovery,
+    plan_persistent_index_recovery_cancellable, PersistentIndexAction, PersistentIndexPlan,
+    PersistentIndexReason, PersistentIndexRecovery,
 };
 pub use rename::{correlate_rename, RenameCorrelationReport};
 pub use repair::{RepairPriority, RepairReason, RepairSchedule, SubtreeRepairJob};
@@ -454,6 +455,16 @@ impl Indexer {
         state_path: impl AsRef<Path>,
     ) -> PersistentIndexPlan {
         plan_persistent_index_recovery(root, records_path, state_path)
+    }
+
+    pub fn plan_persistent_recovery_cancellable(
+        &self,
+        root: impl AsRef<Path>,
+        records_path: impl AsRef<Path>,
+        state_path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<PersistentIndexPlan> {
+        plan_persistent_index_recovery_cancellable(root, records_path, state_path, cancellation)
     }
 
     pub fn recover_persistent(

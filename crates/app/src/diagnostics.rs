@@ -9,9 +9,9 @@ use crate::{
 };
 use gfm_config::ConfigStore;
 use gfm_diagnostics::{
-    export_operator_trace, inspect_storage, plan_index_recovery, rebuild_index_cancellable,
-    recover_index_cancellable, select_parity_baseline, PersistentIndexRecoverySpec, RebuildSpec,
-    StorageInspection,
+    export_operator_trace, inspect_storage, plan_index_recovery_cancellable,
+    rebuild_index_cancellable, recover_index_cancellable, select_parity_baseline,
+    PersistentIndexRecoverySpec, RebuildSpec, StorageInspection,
 };
 use gfm_index::{PersistentIndexPlan, PersistentIndexRecovery};
 use gfm_jobs::{Priority, SchedulingAction};
@@ -309,7 +309,7 @@ fn run_recovery_plan(spec: PersistentIndexRecoverySpec) -> Result<PersistentInde
         cancellation.check()?;
         let _access = retain_recovery_plan_access(&spec)?;
         cancellation.check()?;
-        Ok(plan_index_recovery(&spec))
+        plan_index_recovery_cancellable(&spec, &cancellation)
     })
 }
 

@@ -112,6 +112,18 @@ pub fn plan_index_recovery(spec: &PersistentIndexRecoverySpec) -> PersistentInde
     Indexer::default().plan_persistent_recovery(&spec.root, &spec.records_path, &spec.state_path)
 }
 
+pub fn plan_index_recovery_cancellable(
+    spec: &PersistentIndexRecoverySpec,
+    cancellation: &Cancellation,
+) -> Result<PersistentIndexPlan> {
+    Indexer::default().plan_persistent_recovery_cancellable(
+        &spec.root,
+        &spec.records_path,
+        &spec.state_path,
+        cancellation,
+    )
+}
+
 pub fn recover_index(spec: &PersistentIndexRecoverySpec) -> Result<PersistentIndexRecovery> {
     recover_index_cancellable(spec, &Cancellation::default())
 }
@@ -332,6 +344,24 @@ mod tests {
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(!records.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellable_recovery_plan_stops_before_records_probe() {
+        let root = unique_temp_dir("gfm-diagnostics-recovery-plan-cancel");
+        let records = root.join("record-archive-unavailable".repeat(64));
+        let state = root.join("state.gfmstate");
+        let quarantine = root.join("quarantine");
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = plan_index_recovery_cancellable(
+            &PersistentIndexRecoverySpec::new(&root, &records, &state, &quarantine),
+            &cancellation,
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
         fs::remove_dir_all(root).unwrap();
     }
 

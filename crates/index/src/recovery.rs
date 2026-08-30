@@ -1,4 +1,5 @@
 use crate::{IndexSnapshot, IndexVolumeState};
+use gfm_jobs::Cancellation;
 use gfm_store::read_records;
 use gfm_types::{GfmError, Result};
 use std::fs;
@@ -99,14 +100,34 @@ pub fn plan_persistent_index_recovery(
     records_path: impl AsRef<Path>,
     state_path: impl AsRef<Path>,
 ) -> PersistentIndexPlan {
+    plan_persistent_index_recovery_checked(root, records_path, state_path, || Ok(()))
+        .expect("uncancellable persistent index recovery planning cannot be cancelled")
+}
+
+pub fn plan_persistent_index_recovery_cancellable(
+    root: impl AsRef<Path>,
+    records_path: impl AsRef<Path>,
+    state_path: impl AsRef<Path>,
+    cancellation: &Cancellation,
+) -> Result<PersistentIndexPlan> {
+    plan_persistent_index_recovery_checked(root, records_path, state_path, || cancellation.check())
+}
+
+fn plan_persistent_index_recovery_checked(
+    root: impl AsRef<Path>,
+    records_path: impl AsRef<Path>,
+    state_path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PersistentIndexPlan> {
     let root = root.as_ref().to_path_buf();
     let records_path = records_path.as_ref().to_path_buf();
     let state_path = state_path.as_ref().to_path_buf();
 
+    check_control()?;
     let records_exist = match records_path.try_exists() {
         Ok(exists) => exists,
         Err(err) => {
-            return PersistentIndexPlan {
+            return Ok(PersistentIndexPlan {
                 action: PersistentIndexAction::QuarantineRecordsAndRebuild,
                 reason: PersistentIndexReason::UnreadableRecords,
                 root,
@@ -116,11 +137,12 @@ pub fn plan_persistent_index_recovery(
                 state_record_count: None,
                 state_schema_version: None,
                 detail: Some(format!("record archive existence unavailable: {err}")),
-            }
+            });
         }
     };
+    check_control()?;
     if !records_exist {
-        return PersistentIndexPlan {
+        return Ok(PersistentIndexPlan {
             action: PersistentIndexAction::RebuildRecordsAndState,
             reason: PersistentIndexReason::MissingRecords,
             root,
@@ -130,13 +152,14 @@ pub fn plan_persistent_index_recovery(
             state_record_count: None,
             state_schema_version: None,
             detail: None,
-        };
+        });
     }
 
+    check_control()?;
     let records = match read_records(&records_path) {
         Ok(records) => records,
         Err(err) => {
-            return PersistentIndexPlan {
+            return Ok(PersistentIndexPlan {
                 action: PersistentIndexAction::QuarantineRecordsAndRebuild,
                 reason: PersistentIndexReason::UnreadableRecords,
                 root,
@@ -146,15 +169,16 @@ pub fn plan_persistent_index_recovery(
                 state_record_count: None,
                 state_schema_version: None,
                 detail: Some(err.to_string()),
-            }
+            });
         }
     };
     let record_count = Some(records.len());
 
+    check_control()?;
     let state_exists = match state_path.try_exists() {
         Ok(exists) => exists,
         Err(err) => {
-            return PersistentIndexPlan {
+            return Ok(PersistentIndexPlan {
                 action: PersistentIndexAction::RebuildState,
                 reason: PersistentIndexReason::UnreadableState,
                 root,
@@ -164,11 +188,12 @@ pub fn plan_persistent_index_recovery(
                 state_record_count: None,
                 state_schema_version: None,
                 detail: Some(format!("index state existence unavailable: {err}")),
-            }
+            });
         }
     };
+    check_control()?;
     if !state_exists {
-        return PersistentIndexPlan {
+        return Ok(PersistentIndexPlan {
             action: PersistentIndexAction::RebuildState,
             reason: PersistentIndexReason::MissingState,
             root,
@@ -178,16 +203,17 @@ pub fn plan_persistent_index_recovery(
             state_record_count: None,
             state_schema_version: None,
             detail: None,
-        };
+        });
     }
 
+    check_control()?;
     let state = match IndexVolumeState::read(&state_path) {
         Ok(state) => state,
         Err(err) => {
             let detail = err.to_string();
             let unsupported_schema = detail.contains("unsupported index state schema version");
             let state_schema_version = read_state_schema_version(&state_path);
-            return PersistentIndexPlan {
+            return Ok(PersistentIndexPlan {
                 action: if unsupported_schema {
                     PersistentIndexAction::MigrateState
                 } else {
@@ -205,17 +231,18 @@ pub fn plan_persistent_index_recovery(
                 state_record_count: None,
                 state_schema_version,
                 detail: Some(detail),
-            };
+            });
         }
     };
 
+    check_control()?;
     if state.root != root {
         let detail = format!(
             "state root {} does not match requested root {}",
             state.root.display(),
             root.display()
         );
-        return state_rebuild_plan(
+        return Ok(state_rebuild_plan(
             root,
             records_path,
             state_path,
@@ -223,7 +250,7 @@ pub fn plan_persistent_index_recovery(
             &state,
             PersistentIndexReason::RootMismatch,
             Some(detail),
-        );
+        ));
     }
 
     if state.records_path != records_path {
@@ -232,7 +259,7 @@ pub fn plan_persistent_index_recovery(
             state.records_path.display(),
             records_path.display()
         );
-        return state_rebuild_plan(
+        return Ok(state_rebuild_plan(
             root,
             records_path,
             state_path,
@@ -240,11 +267,11 @@ pub fn plan_persistent_index_recovery(
             &state,
             PersistentIndexReason::RecordsPathMismatch,
             Some(detail),
-        );
+        ));
     }
 
     if state.record_count != records.len() {
-        return state_rebuild_plan(
+        return Ok(state_rebuild_plan(
             root,
             records_path,
             state_path,
@@ -256,10 +283,10 @@ pub fn plan_persistent_index_recovery(
                 state.record_count,
                 records.len()
             )),
-        );
+        ));
     }
 
-    PersistentIndexPlan {
+    Ok(PersistentIndexPlan {
         action: PersistentIndexAction::Ready,
         reason: PersistentIndexReason::Healthy,
         root,
@@ -269,7 +296,7 @@ pub fn plan_persistent_index_recovery(
         state_record_count: Some(state.record_count),
         state_schema_version: Some(state.schema_version),
         detail: None,
-    }
+    })
 }
 
 fn state_rebuild_plan(
@@ -310,7 +337,8 @@ where
     let state_path = state_path.as_ref();
     let quarantine_dir = quarantine_dir.as_ref();
     check_control()?;
-    let before = plan_persistent_index_recovery(root, records_path, state_path);
+    let before =
+        plan_persistent_index_recovery_checked(root, records_path, state_path, &mut check_control)?;
     check_control()?;
     let mut rebuilt_records = false;
     let mut rebuilt_state = false;
@@ -344,7 +372,8 @@ where
     }
 
     check_control()?;
-    let after = plan_persistent_index_recovery(root, records_path, state_path);
+    let after =
+        plan_persistent_index_recovery_checked(root, records_path, state_path, &mut check_control)?;
     check_control()?;
     Ok(PersistentIndexRecovery {
         before,

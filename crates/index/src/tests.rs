@@ -3906,6 +3906,25 @@ fn persistent_index_recovery_surfaces_records_path_probe_failures() {
 }
 
 #[test]
+fn persistent_index_recovery_plan_honors_pre_cancelled_token_before_records_probe() {
+    let root = unique_temp_dir("gfm-index-recovery-plan-cancel-root");
+    let records = root.join("record-archive-unavailable".repeat(64));
+    let state_path = unique_temp_path("gfm-index-recovery-plan-cancel-state", "gfmstate");
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = Indexer::default().plan_persistent_recovery_cancellable(
+        &root,
+        &records,
+        &state_path,
+        &cancellation,
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn persistent_index_recovery_surfaces_state_path_probe_failures() {
     let root = unique_temp_dir("gfm-index-recovery-state-probe-root");
     let records = unique_temp_path("gfm-index-recovery-state-probe-records", "gfmidx");
