@@ -7264,6 +7264,69 @@
         "tmp/gfm-fozzy-search-retry.state"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-content-search-retry-root/Reports/ContentRetry.md",
+      "data": "content search retry marker\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-content",
+        "tmp/gfm-fozzy-content-search-retry-root",
+        "tmp/gfm-fozzy-content-search-retry.gfmidx",
+        "tmp/gfm-fozzy-content-search-retry.gfmcontent"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "index-content",
+        "tmp/gfm-fozzy-content-search-retry-root",
+        "tmp/gfm-fozzy-content-search-retry.gfmidx",
+        "tmp/gfm-fozzy-content-search-retry.gfmcontent"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-content-search-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-content-search-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-content-search-retry.progress"
+      },
+      "args": [
+        "search-content-index-retry-probe",
+        "tmp/gfm-fozzy-content-search-retry.gfmidx",
+        "tmp/gfm-fozzy-content-search-retry.gfmcontent",
+        "content",
+        "tmp/gfm-fozzy-content-search-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-content-search-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-content-search-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-content-search-retry.progress"
+      },
+      "args": [
+        "search-content-index-retry-probe",
+        "tmp/gfm-fozzy-content-search-retry.gfmidx",
+        "tmp/gfm-fozzy-content-search-retry.gfmcontent",
+        "content",
+        "tmp/gfm-fozzy-content-search-retry.state"
+      ],
+      "expect_exit": 0
     }
   ]
 }

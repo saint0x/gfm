@@ -10454,6 +10454,87 @@ fn index_content_retries_transient_failure_from_binary() {
 }
 
 #[test]
+fn search_content_index_retries_transient_archive_read_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-content-index-retry-root");
+    let records = unique_temp_path("gfm-cli-search-content-index-retry-records", "gfmidx");
+    let content = unique_temp_path("gfm-cli-search-content-index-retry-content", "gfmcontent");
+    let journal = unique_temp_path("gfm-cli-search-content-index-retry", "journal");
+    let catalog = unique_temp_path("gfm-cli-search-content-index-retry", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-search-content-index-retry", "gfmprogress");
+    let retry_probe = unique_temp_path("gfm-cli-search-content-index-retry", "state");
+    fs::write(
+        root.join("content-retry.md"),
+        "the body contains contentreadretrymarker",
+    )
+    .unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-content",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "search-content-index-retry-probe",
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "contentreadretrymarker",
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(stdout.contains("content-retry.md"), "{stdout}");
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tcontent index search"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains(
+            "1\t1\tfailed:temporary content index search retry probe busy\tcontent index search"
+        ),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tcontent index search"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tcontent index search"),
+        "{journal_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
+}
+
+#[test]
 fn adaptive_persisted_content_search_applies_snippet_pressure_budget_from_binary() {
     let root = unique_temp_dir("gfm-cli-durable-adaptive-snippet-root");
     let records = unique_temp_path("gfm-cli-durable-adaptive-snippet-records", "gfmidx");

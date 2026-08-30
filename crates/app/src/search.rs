@@ -118,19 +118,28 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
-        "search-content-index" => {
+        "search-content-index" | "search-content-index-retry-probe" => {
             let records =
                 required_path(args.next(), "search-content-index requires a records path")?;
             let content =
                 required_path(args.next(), "search-content-index requires a content path")?;
             let query =
                 required_string(args.next(), "search-content-index requires a query string")?;
+            let retry_probe = if command == "search-content-index-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "search-content-index-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
             let output = run_content_index_search(
                 records,
                 content,
                 query,
                 Extractor::default(),
                 "content index search",
+                retry_probe,
             )?;
             eprintln!("{}", output.diagnostics);
             for hit in output.hits {
@@ -163,6 +172,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 query,
                 extractor,
                 "adaptive content index search",
+                None,
             )?;
             eprintln!("{}", output.diagnostics);
             for hit in output.hits {
@@ -1314,24 +1324,41 @@ fn run_content_index_search(
     query: String,
     extractor: Extractor,
     worker: &'static str,
+    retry_probe: Option<PathBuf>,
 ) -> Result<ContentIndexSearchOutput> {
     preflight_volume_access_scope(&records, AccessIntent::Read, &format!("{worker} records"))?;
     preflight_volume_access_scope(&content, AccessIntent::Read, &format!("{worker} content"))?;
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
+    }
     let volume = path_volume(&records).or_else(|| path_volume(&content));
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        cancellation.check()?;
-        let _access =
-            preflight_content_index_search_access_checked(&records, &content, worker, || {
-                cancellation.check()
-            })?;
-        cancellation.check()?;
-        let (live, report) = Indexer::default().load_live_with_content_for_query_cancellable(
-            records,
-            content,
-            &query,
-            &cancellation,
-        )?;
-        let diagnostics = format!(
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        worker,
+        records.clone(),
+        move |cancellation| {
+            let records = records.clone();
+            let content = content.clone();
+            let query = query.clone();
+            let extractor = extractor.clone();
+            let retry_probe = retry_probe.clone();
+            cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
+            }
+            let _access =
+                preflight_content_index_search_access_checked(&records, &content, worker, || {
+                    cancellation.check()
+                })?;
+            cancellation.check()?;
+            let (live, report) = Indexer::default().load_live_with_content_for_query_cancellable(
+                records,
+                content,
+                &query,
+                &cancellation,
+            )?;
+            let diagnostics = format!(
             "content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
             report.content_keys,
             report.records_loaded,
@@ -1339,11 +1366,12 @@ fn run_content_index_search(
             report.candidate_ids,
             report.full_hydration
         );
-        cancellation.check()?;
-        let hits =
-            live.search_with_snippets_cancellable(&query, 50, &extractor, 96, &cancellation)?;
-        Ok(ContentIndexSearchOutput { diagnostics, hits })
-    })
+            cancellation.check()?;
+            let hits =
+                live.search_with_snippets_cancellable(&query, 50, &extractor, 96, &cancellation)?;
+            Ok(ContentIndexSearchOutput { diagnostics, hits })
+        },
+    )
 }
 
 fn run_content_index_set_search(
