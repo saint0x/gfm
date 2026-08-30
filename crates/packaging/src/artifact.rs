@@ -1,3 +1,4 @@
+use crate::{info_plist_contains_document_type, plist_string_value, read_info_plist};
 use gfm_types::{GfmError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -97,31 +98,31 @@ pub fn validate_release_artifact(spec: &ReleaseArtifactSpec) -> Result<ReleaseAr
 
     let info_plist = contents.join("Info.plist");
     ensure_file(&info_plist)?;
-    let plist = fs::read_to_string(&info_plist).map_err(|err| GfmError::io(&info_plist, err))?;
+    let plist = read_info_plist(&info_plist)?;
 
-    let bundle_identifier = plist_string(&plist, "CFBundleIdentifier")?;
+    let bundle_identifier = plist_string_value(&plist, "CFBundleIdentifier")?;
     if bundle_identifier != spec.expected_bundle_identifier {
         return Err(GfmError::Format(format!(
             "bundle identifier `{bundle_identifier}` does not match expected `{}`",
             spec.expected_bundle_identifier
         )));
     }
-    let executable = plist_string(&plist, "CFBundleExecutable")?;
+    let executable = plist_string_value(&plist, "CFBundleExecutable")?;
     if executable != spec.expected_executable {
         return Err(GfmError::Format(format!(
             "bundle executable `{executable}` does not match expected `{}`",
             spec.expected_executable
         )));
     }
-    let minimum_system_version = plist_string(&plist, "LSMinimumSystemVersion")?;
+    let minimum_system_version = plist_string_value(&plist, "LSMinimumSystemVersion")?;
     require_minimum_version(
         &minimum_system_version,
         &spec.minimum_system_version,
         "LSMinimumSystemVersion",
     )?;
 
-    let has_folder_association = plist.contains("<string>public.folder</string>");
-    let has_file_association = plist.contains("<string>public.item</string>");
+    let has_folder_association = info_plist_contains_document_type(&plist, "public.folder");
+    let has_file_association = info_plist_contains_document_type(&plist, "public.item");
     if !has_folder_association || !has_file_association {
         return Err(GfmError::Format(
             "release artifact must declare Finder-compatible folder and file associations"
@@ -141,7 +142,7 @@ pub fn validate_release_artifact(spec: &ReleaseArtifactSpec) -> Result<ReleaseAr
         )));
     }
 
-    let icon_name = plist_string(&plist, "CFBundleIconFile")?;
+    let icon_name = plist_string_value(&plist, "CFBundleIconFile")?;
     let icon_path = resources.join(icon_file_name(&icon_name));
     ensure_file(&icon_path)?;
 
@@ -201,22 +202,6 @@ fn validate_spec(spec: &ReleaseArtifactSpec) -> Result<()> {
     }
     parse_version(&spec.minimum_system_version)?;
     Ok(())
-}
-
-fn plist_string(plist: &str, key: &str) -> Result<String> {
-    let key_marker = format!("<key>{key}</key>");
-    let key_start = plist
-        .find(&key_marker)
-        .ok_or_else(|| GfmError::Format(format!("Info.plist missing `{key}`")))?;
-    let after_key = &plist[key_start + key_marker.len()..];
-    let string_start = after_key
-        .find("<string>")
-        .ok_or_else(|| GfmError::Format(format!("Info.plist `{key}` is not a string")))?;
-    let after_string = &after_key[string_start + "<string>".len()..];
-    let string_end = after_string
-        .find("</string>")
-        .ok_or_else(|| GfmError::Format(format!("Info.plist `{key}` string is unterminated")))?;
-    Ok(after_string[..string_end].to_string())
 }
 
 fn icon_file_name(icon: &str) -> String {

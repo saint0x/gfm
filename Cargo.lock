@@ -1777,6 +1777,7 @@ name = "gfm-packaging"
 version = "0.1.0"
 dependencies = [
  "gfm-types",
+ "plist",
  "serde_json",
 ]
 

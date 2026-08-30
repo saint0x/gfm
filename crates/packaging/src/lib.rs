@@ -1,5 +1,8 @@
 use gfm_types::{GfmError, Result};
+use plist::{Dictionary, Value};
 use std::fs;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -27,6 +30,7 @@ pub use toolchain::{
 };
 
 const DEFAULT_MINIMUM_SYSTEM_VERSION: &str = "14.0";
+const MAX_INFO_PLIST_BYTES: u64 = 512 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SigningIdentity {
@@ -138,22 +142,28 @@ pub fn validate_app_bundle(bundle: &AppBundle) -> Result<()> {
     ensure_file(&bundle.info_plist_path)?;
     ensure_file(&bundle.entitlements_path)?;
     ensure_file(&bundle.icon_path)?;
-    let plist = read_to_string(&bundle.info_plist_path)?;
+    let plist = read_info_plist(&bundle.info_plist_path)?;
     for required in [
         "CFBundleExecutable",
         "CFBundleIdentifier",
         "CFBundleIconFile",
-        "CFBundleDocumentTypes",
-        "LSItemContentTypes",
-        "public.folder",
-        "public.item",
         "LSMinimumSystemVersion",
     ] {
-        if !plist.contains(required) {
-            return Err(GfmError::Format(format!(
-                "{} missing required Info.plist key or value `{required}`",
-                bundle.info_plist_path.display()
-            )));
+        require_info_plist_string(&plist, &bundle.info_plist_path, required)?;
+    }
+    require_info_plist_key(&plist, &bundle.info_plist_path, "CFBundleDocumentTypes")?;
+    if !info_plist_has_item_content_types(&plist) {
+        return Err(missing_info_plist_required(
+            &bundle.info_plist_path,
+            "LSItemContentTypes",
+        ));
+    }
+    for required in ["public.folder", "public.item"] {
+        if !info_plist_contains_document_type(&plist, required) {
+            return Err(missing_info_plist_required(
+                &bundle.info_plist_path,
+                required,
+            ));
         }
     }
     if bundle.signed {
@@ -354,10 +364,6 @@ fn write_file(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
     fs::write(path, contents).map_err(|err| GfmError::io(path, err))
 }
 
-fn read_to_string(path: &Path) -> Result<String> {
-    fs::read_to_string(path).map_err(|err| GfmError::io(path, err))
-}
-
 #[cfg(unix)]
 fn preserve_executable_mode(from: &Path, to: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -376,6 +382,92 @@ fn preserve_executable_mode(from: &Path, to: &Path) -> Result<()> {
 #[cfg(not(unix))]
 fn preserve_executable_mode(_from: &Path, _to: &Path) -> Result<()> {
     Ok(())
+}
+
+pub(crate) fn read_info_plist(path: &Path) -> Result<Dictionary> {
+    let len = fs::metadata(path)
+        .map_err(|err| GfmError::io(path, err))?
+        .len();
+    if len > MAX_INFO_PLIST_BYTES {
+        return Err(GfmError::Format(format!(
+            "{} Info.plist exceeds bounded validation budget of {MAX_INFO_PLIST_BYTES} bytes",
+            path.display()
+        )));
+    }
+    let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+    let reader = BufReader::new(file).take(MAX_INFO_PLIST_BYTES);
+    let value = Value::from_reader(reader).map_err(|err| {
+        GfmError::Format(format!(
+            "{} could not parse Info.plist: {err}",
+            path.display()
+        ))
+    })?;
+    match value {
+        Value::Dictionary(dictionary) => Ok(dictionary),
+        _ => Err(GfmError::Format(format!(
+            "{} Info.plist root is not a dictionary",
+            path.display()
+        ))),
+    }
+}
+
+pub(crate) fn plist_string_value(plist: &Dictionary, key: &str) -> Result<String> {
+    plist
+        .get(key)
+        .and_then(Value::as_string)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| GfmError::Format(format!("Info.plist missing string `{key}`")))
+}
+
+pub(crate) fn info_plist_contains_document_type(plist: &Dictionary, uti: &str) -> bool {
+    plist
+        .get("CFBundleDocumentTypes")
+        .and_then(Value::as_array)
+        .is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry
+                    .as_dictionary()
+                    .and_then(|dictionary| dictionary.get("LSItemContentTypes"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|types| types.iter().any(|value| value.as_string() == Some(uti)))
+            })
+        })
+}
+
+fn info_plist_has_item_content_types(plist: &Dictionary) -> bool {
+    plist
+        .get("CFBundleDocumentTypes")
+        .and_then(Value::as_array)
+        .is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry
+                    .as_dictionary()
+                    .and_then(|dictionary| dictionary.get("LSItemContentTypes"))
+                    .and_then(Value::as_array)
+                    .is_some()
+            })
+        })
+}
+
+fn require_info_plist_string(plist: &Dictionary, path: &Path, key: &str) -> Result<()> {
+    plist_string_value(plist, key)
+        .map(|_| ())
+        .map_err(|_| missing_info_plist_required(path, key))
+}
+
+fn require_info_plist_key(plist: &Dictionary, path: &Path, key: &str) -> Result<()> {
+    if plist.contains_key(key) {
+        Ok(())
+    } else {
+        Err(missing_info_plist_required(path, key))
+    }
+}
+
+fn missing_info_plist_required(path: &Path, required: &str) -> GfmError {
+    GfmError::Format(format!(
+        "{} missing required Info.plist key or value `{required}`",
+        path.display()
+    ))
 }
 
 #[cfg(test)]
@@ -450,6 +542,27 @@ mod tests {
         fs::remove_file(&bundle.icon_path).expect("remove icon");
         let err = validate_app_bundle(&bundle).expect_err("missing icon fails");
         assert!(err.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn rejects_oversized_info_plist_without_unbounded_read() {
+        let root = temp_root("oversized-plist");
+        let executable = std::env::current_exe().expect("current test executable");
+        let icon = root.join("GFM.icns");
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(&icon, b"icns-test").expect("write icon");
+        let mut spec = AppBundleSpec::new(executable, &icon, root.join("dist"));
+        spec.signing_identity = SigningIdentity::Unsigned;
+        let bundle = build_app_bundle(&spec).expect("build app bundle");
+        fs::write(
+            &bundle.info_plist_path,
+            vec![b'x'; MAX_INFO_PLIST_BYTES as usize + 1],
+        )
+        .expect("write oversized plist");
+
+        let err = validate_app_bundle(&bundle).expect_err("oversized plist fails");
+
+        assert!(err.to_string().contains("bounded validation budget"));
     }
 
     #[test]
