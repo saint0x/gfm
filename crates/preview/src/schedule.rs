@@ -4,7 +4,7 @@ use gfm_jobs::{
     SchedulingPressure,
 };
 use gfm_types::{GfmError, Result};
-use std::collections::{HashMap, HashSet};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
@@ -215,13 +215,15 @@ impl PreviewScheduler {
         viewport: Viewport,
         tasks: impl IntoIterator<Item = PreviewTask>,
     ) -> Vec<PreviewTaskDecision> {
-        let mut desired = tasks
-            .into_iter()
-            .map(|task| ScheduledTask {
-                priority: viewport.priority_for(task.rect),
-                task,
-            })
-            .collect::<Vec<_>>();
+        let mut desired = coalesce_desired_tasks(
+            tasks
+                .into_iter()
+                .map(|task| ScheduledTask {
+                    priority: viewport.priority_for(task.rect),
+                    task,
+                })
+                .collect(),
+        );
         desired.sort_by(|a, b| {
             a.priority
                 .score()
@@ -407,6 +409,32 @@ fn throttle_limit(limit: usize) -> usize {
     }
 }
 
+fn coalesce_desired_tasks(tasks: Vec<ScheduledTask>) -> Vec<ScheduledTask> {
+    let mut by_key = HashMap::new();
+    for task in tasks {
+        match by_key.entry(task.task.key.clone()) {
+            Entry::Occupied(mut entry) => {
+                if should_replace_desired(entry.get(), &task) {
+                    entry.insert(task);
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(task);
+            }
+        }
+    }
+    by_key.into_values().collect()
+}
+
+fn should_replace_desired(current: &ScheduledTask, candidate: &ScheduledTask) -> bool {
+    candidate
+        .task
+        .generation
+        .cmp(&current.task.generation)
+        .then_with(|| current.priority.score().cmp(&candidate.priority.score()))
+        .is_gt()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -579,6 +607,81 @@ mod tests {
 
         assert_eq!(decisions.len(), 2);
         assert_eq!(scheduler.inflight_len(), 2);
+    }
+
+    #[test]
+    fn duplicate_requests_do_not_consume_multiple_visible_slots() {
+        let policy = PreviewSchedulingPolicy {
+            max_visible: 2,
+            max_prefetch: 0,
+            cancel_offscreen: true,
+        };
+        let mut scheduler = PreviewScheduler::new(policy).unwrap();
+        let duplicate = task(1, Rect::new(0, 0, 20, 20));
+        let second_visible = task(2, Rect::new(40, 0, 20, 20));
+
+        let decisions = scheduler.schedule(
+            Viewport::new(Rect::new(0, 0, 100, 100), 0),
+            vec![duplicate.clone(), duplicate, second_visible.clone()],
+        );
+
+        assert_eq!(decisions.len(), 2);
+        assert_eq!(scheduler.inflight_len(), 2);
+        assert!(decisions.iter().any(|decision| {
+            matches!(
+                decision,
+                PreviewTaskDecision::Scheduled { key, .. } if key == &second_visible.key
+            )
+        }));
+    }
+
+    #[test]
+    fn duplicate_requests_keep_best_priority_for_same_generation() {
+        let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy::default()).unwrap();
+        let mut prefetch = task(1, Rect::new(0, 120, 20, 20));
+        prefetch.generation = 4;
+        let mut visible = task(1, Rect::new(0, 0, 20, 20));
+        visible.generation = 4;
+
+        let decisions = scheduler.schedule(
+            Viewport::new(Rect::new(0, 0, 100, 100), 100),
+            vec![prefetch, visible],
+        );
+
+        assert_eq!(
+            decisions,
+            vec![PreviewTaskDecision::Scheduled {
+                key: task(1, Rect::new(0, 0, 20, 20)).key,
+                priority: PreviewPriority::Visible,
+            }]
+        );
+    }
+
+    #[test]
+    fn duplicate_requests_keep_newest_generation_before_limits() {
+        let policy = PreviewSchedulingPolicy {
+            max_visible: 1,
+            max_prefetch: 0,
+            cancel_offscreen: true,
+        };
+        let mut scheduler = PreviewScheduler::new(policy).unwrap();
+        let mut old = task(1, Rect::new(0, 0, 20, 20));
+        old.generation = 1;
+        let mut new = old.clone();
+        new.generation = 2;
+
+        let decisions = scheduler.schedule(
+            Viewport::new(Rect::new(0, 0, 100, 100), 0),
+            vec![old, new.clone()],
+        );
+
+        assert_eq!(
+            decisions,
+            vec![PreviewTaskDecision::Scheduled {
+                key: new.key,
+                priority: PreviewPriority::Visible,
+            }]
+        );
     }
 
     #[test]
