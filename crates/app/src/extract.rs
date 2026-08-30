@@ -15,7 +15,7 @@ use gfm_mac::{AccessIntent, VolumeDescriptor, VolumeDiscoveryReport, VolumeKind}
 use gfm_types::{GfmError, Result};
 use std::env;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -149,12 +149,13 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
         let _ = std::fs::remove_dir_all(&permission_state_dir);
         return Err(err);
     }
-    let sandbox = WorkerSandbox::new(
+    let sandbox = WorkerSandbox::new_checked(
         &exe,
         path,
         &stdout_path,
         &stderr_path,
         &permission_state_path,
+        || cancellation.check(),
     )?;
     let mut command = sandbox.command(&exe, path, pressure, &permission_state_path);
     let output = run_supervised_worker(
@@ -297,19 +298,22 @@ struct WorkerSandbox {
 }
 
 impl WorkerSandbox {
-    fn new(
+    fn new_checked(
         exe: &Path,
         input: &Path,
         stdout: &Path,
         stderr: &Path,
         permission_state: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
+        check_control()?;
         let Some(sandbox_exec) = sandbox_exec_path()? else {
             return Ok(Self {
                 sandbox_exec_path: None,
                 profile_path: None,
             });
         };
+        check_control()?;
         let profile = extraction_sandbox_profile(
             exe,
             input,
@@ -318,17 +322,27 @@ impl WorkerSandbox {
             permission_state,
             ExtractionSandboxReadMode::from_env(),
         )?;
+        check_control()?;
         let profile_path = env::temp_dir().join(format!(
             "gfm-extract-worker-{}-{}.sb",
             std::process::id(),
             monotonic_nanos()
         ));
+        check_control()?;
         let _profile_access = preflight_access_scope(
             write_probe_path(&profile_path)?,
             AccessIntent::Write,
             "adaptive extraction sandbox profile",
         )?;
-        std::fs::write(&profile_path, profile).map_err(|err| GfmError::io(&profile_path, err))?;
+        if let Err(err) = write_worker_sandbox_profile_checked(
+            &profile_path,
+            profile.as_bytes(),
+            &mut check_control,
+        ) {
+            let _ = std::fs::remove_file(&profile_path);
+            return Err(err);
+        }
+        check_control()?;
         Ok(Self {
             sandbox_exec_path: Some(sandbox_exec),
             profile_path: Some(profile_path),
@@ -369,6 +383,27 @@ impl WorkerSandbox {
             command
         }
     }
+}
+
+fn write_worker_sandbox_profile_checked(
+    path: &Path,
+    bytes: &[u8],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    const CHUNK_BYTES: usize = 64 * 1024;
+
+    check_control()?;
+    let mut file = std::fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    for chunk in bytes.chunks(CHUNK_BYTES) {
+        check_control()?;
+        file.write_all(chunk)
+            .map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
+    }
+    file.flush().map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    Ok(())
 }
 
 impl Drop for WorkerSandbox {
@@ -880,6 +915,58 @@ mod tests {
         assert!(checks >= 4);
         assert_eq!(fs::read(&path).unwrap(), bytes);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_sandbox_profile_writer_honors_cancellation_during_chunked_write() {
+        let root = unique_temp_dir("gfm-extract-sandbox-profile-cancel");
+        let path = root.join("profile.sb");
+        let bytes = vec![b'a'; 96 * 1024];
+        let mut checks = 0usize;
+
+        let result = write_worker_sandbox_profile_checked(&path, &bytes, || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 4);
+        assert!(path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_sandbox_constructor_removes_profile_after_cancelled_write() {
+        if sandbox_exec_path().unwrap().is_none() {
+            return;
+        }
+        let fixture = SandboxProfileFixture::new("constructor-cancel");
+        let scratch_before = worker_scratch_entries();
+        let mut checks = 0usize;
+
+        let result = WorkerSandbox::new_checked(
+            &fixture.exe,
+            &fixture.input,
+            &fixture.stdout,
+            &fixture.stderr,
+            &fixture.permission_state,
+            || {
+                checks += 1;
+                if checks >= 6 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 6);
+        assert_eq!(scratch_before, worker_scratch_entries());
     }
 
     #[test]
