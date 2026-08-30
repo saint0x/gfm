@@ -950,6 +950,8 @@ pub struct VolumeEventStream {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeEventState {
     report: VolumeDiscoveryReport,
+    stable_index: BTreeMap<String, usize>,
+    path_index: BTreeMap<PathBuf, usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1286,7 +1288,13 @@ fn description_change_invalidates_policy(reason: &str) -> bool {
 
 impl VolumeEventState {
     pub fn new(report: VolumeDiscoveryReport) -> Self {
-        Self { report }
+        let mut state = Self {
+            report,
+            stable_index: BTreeMap::new(),
+            path_index: BTreeMap::new(),
+        };
+        state.rebuild_indexes();
+        state
     }
 
     pub fn discover() -> Self {
@@ -1358,20 +1366,8 @@ impl VolumeEventState {
         current: Option<&VolumeDescriptor>,
     ) -> Option<&VolumeDescriptor> {
         current
-            .and_then(|current| {
-                self.report
-                    .volumes
-                    .iter()
-                    .find(|volume| volume.stable_identity == current.stable_identity)
-            })
-            .or_else(|| {
-                path.and_then(|path| {
-                    self.report
-                        .volumes
-                        .iter()
-                        .find(|volume| volume.path == path)
-                })
-            })
+            .and_then(|current| self.volume_by_stable_identity(&current.stable_identity))
+            .or_else(|| path.and_then(|path| self.volume_by_path(path)))
     }
 
     fn apply_state_change(
@@ -1395,25 +1391,73 @@ impl VolumeEventState {
     }
 
     fn upsert(&mut self, current: VolumeDescriptor) {
-        if let Some(existing) = self
-            .report
-            .volumes
-            .iter_mut()
-            .find(|volume| volume.stable_identity == current.stable_identity)
+        if let Some(index) = self
+            .stable_index
+            .get(current.stable_identity.as_str())
+            .copied()
         {
-            *existing = current;
+            let previous_path = self.report.volumes[index].path.clone();
+            if previous_path != current.path {
+                self.path_index.remove(&previous_path);
+                self.path_index.insert(current.path.clone(), index);
+            }
+            self.report.volumes[index] = current;
+        } else if let Some(index) = self.path_index.get(&current.path).copied() {
+            let previous_identity = self.report.volumes[index].stable_identity.clone();
+            self.stable_index.remove(previous_identity.as_str());
+            self.stable_index
+                .insert(current.stable_identity.clone(), index);
+            self.report.volumes[index] = current;
         } else {
+            let index = self.report.volumes.len();
+            self.stable_index
+                .insert(current.stable_identity.clone(), index);
+            self.path_index.insert(current.path.clone(), index);
             self.report.volumes.push(current);
         }
     }
 
     fn remove(&mut self, previous: Option<&VolumeDescriptor>, path: Option<&Path>) {
         if let Some(previous) = previous {
-            self.report
-                .volumes
-                .retain(|volume| volume.stable_identity != previous.stable_identity);
+            self.remove_by_stable_identity(&previous.stable_identity);
         } else if let Some(path) = path {
-            self.report.volumes.retain(|volume| volume.path != path);
+            self.remove_by_path(path);
+        }
+    }
+
+    fn volume_by_stable_identity(&self, stable_identity: &str) -> Option<&VolumeDescriptor> {
+        self.stable_index
+            .get(stable_identity)
+            .and_then(|index| self.report.volumes.get(*index))
+    }
+
+    fn volume_by_path(&self, path: &Path) -> Option<&VolumeDescriptor> {
+        self.path_index
+            .get(path)
+            .and_then(|index| self.report.volumes.get(*index))
+    }
+
+    fn remove_by_stable_identity(&mut self, stable_identity: &str) {
+        if let Some(index) = self.stable_index.get(stable_identity).copied() {
+            self.report.volumes.remove(index);
+            self.rebuild_indexes();
+        }
+    }
+
+    fn remove_by_path(&mut self, path: &Path) {
+        if let Some(index) = self.path_index.get(path).copied() {
+            self.report.volumes.remove(index);
+            self.rebuild_indexes();
+        }
+    }
+
+    fn rebuild_indexes(&mut self) {
+        self.stable_index.clear();
+        self.path_index.clear();
+        for (index, volume) in self.report.volumes.iter().enumerate() {
+            self.stable_index
+                .insert(volume.stable_identity.clone(), index);
+            self.path_index.insert(volume.path.clone(), index);
         }
     }
 }
@@ -1487,6 +1531,7 @@ pub enum VolumeOperationDisposition {
     Refused,
     Busy,
     Denied,
+    Missing,
     Unsupported,
     Unavailable,
     Failed,
@@ -1500,6 +1545,7 @@ impl VolumeOperationDisposition {
             Self::Refused => "refused",
             Self::Busy => "busy",
             Self::Denied => "denied",
+            Self::Missing => "missing",
             Self::Unsupported => "unsupported",
             Self::Unavailable => "unavailable",
             Self::Failed => "failed",
@@ -1796,9 +1842,10 @@ fn disposition_for_native_operation(
         NativeVolumeOperationStatus::BadArgument
         | NativeVolumeOperationStatus::NotMounted
         | NativeVolumeOperationStatus::NotWritable => VolumeOperationDisposition::Refused,
-        NativeVolumeOperationStatus::Failed
-        | NativeVolumeOperationStatus::NotFound
-        | NativeVolumeOperationStatus::Missing => VolumeOperationDisposition::Failed,
+        NativeVolumeOperationStatus::NotFound | NativeVolumeOperationStatus::Missing => {
+            VolumeOperationDisposition::Missing
+        }
+        NativeVolumeOperationStatus::Failed => VolumeOperationDisposition::Failed,
         NativeVolumeOperationStatus::Unavailable => VolumeOperationDisposition::Unavailable,
     }
 }
@@ -3053,6 +3100,18 @@ mod tests {
     }
 
     #[test]
+    fn native_missing_volume_operation_status_maps_to_missing_disposition() {
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::Missing),
+            VolumeOperationDisposition::Missing
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::NotFound),
+            VolumeOperationDisposition::Missing
+        );
+    }
+
+    #[test]
     fn volume_mount_identity_refuses_invalid_bsd_name_before_native_call() {
         let report = VolumeMountIdentityReport::execute("not/a/disk");
 
@@ -3708,6 +3767,94 @@ mod tests {
         assert_eq!(transition.current.as_ref(), Some(&current));
         assert_eq!(transition.invalidation.reason, "volume-label-changed");
         assert_eq!(state.report().volumes, vec![current]);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_state_updates_path_index_after_stable_identity_move() {
+        let root = unique_temp_dir("gfm-volume-event-state-path-index");
+        let old_path = root.join("Old Mount");
+        let new_path = root.join("New Mount");
+        fs::create_dir_all(&old_path).unwrap();
+        fs::create_dir_all(&new_path).unwrap();
+        fs::write(old_path.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let previous = VolumeDescriptor::for_path(&old_path).unwrap();
+        let mut current = previous.clone();
+        current.path = new_path.clone();
+        current.label = "New Mount".to_string();
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: vec![previous.clone()],
+        });
+
+        let changed = state.apply_parts_transition(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Available,
+            Some(new_path.clone()),
+            Some(current.clone()),
+            None,
+        );
+
+        assert_eq!(changed.previous.as_ref(), Some(&previous));
+        assert_eq!(state.report().volumes, vec![current.clone()]);
+
+        let stale_remove = state.apply_parts_transition(
+            VolumeEventKind::Disappeared,
+            NativeVolumeStatus::Available,
+            Some(old_path),
+            None,
+            None,
+        );
+
+        assert!(stale_remove.previous.is_none());
+        assert_eq!(state.report().volumes, vec![current.clone()]);
+
+        let current_remove = state.apply_parts_transition(
+            VolumeEventKind::Disappeared,
+            NativeVolumeStatus::Available,
+            Some(new_path),
+            None,
+            None,
+        );
+
+        assert_eq!(current_remove.previous.as_ref(), Some(&current));
+        assert!(state.report().volumes.is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_state_replaces_path_when_stable_identity_changes() {
+        let root = unique_temp_dir("gfm-volume-event-state-stable-index");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let previous = VolumeDescriptor::for_path(&root).unwrap();
+        let mut current = previous.clone();
+        current.stable_identity = format!("{}-replacement", previous.stable_identity);
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: vec![previous.clone()],
+        });
+
+        let changed = state.apply_parts_transition(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Available,
+            Some(root.clone()),
+            Some(current.clone()),
+            None,
+        );
+
+        assert_eq!(changed.previous.as_ref(), Some(&previous));
+        assert_eq!(state.report().volumes, vec![current.clone()]);
+
+        let removed = state.apply_parts_transition(
+            VolumeEventKind::Disappeared,
+            NativeVolumeStatus::Available,
+            Some(root.clone()),
+            None,
+            None,
+        );
+
+        assert_eq!(removed.previous.as_ref(), Some(&current));
+        assert!(state.report().volumes.is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
