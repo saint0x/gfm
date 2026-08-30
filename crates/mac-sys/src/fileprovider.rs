@@ -204,6 +204,7 @@ pub enum NativeFileProviderOperationStatus {
     Missing,
     PermissionDenied,
     Unavailable,
+    Cancelled,
     Failed,
     UnsupportedPath,
 }
@@ -871,14 +872,22 @@ fn operation_failure_status(
     error_code: Option<i64>,
     error_description: Option<&str>,
 ) -> NativeFileProviderOperationStatus {
-    let permission_description = error_description.is_some_and(|description| {
-        let description = description.to_ascii_lowercase();
+    const NS_USER_CANCELLED_ERROR: i64 = 3072;
+    let description = error_description.map(str::to_ascii_lowercase);
+    let permission_description = description.as_deref().is_some_and(|description| {
         description.contains("permission")
             || description.contains("denied")
             || description.contains("not permitted")
     });
+    let cancelled_description = description.as_deref().is_some_and(|description| {
+        description.contains("cancelled")
+            || description.contains("canceled")
+            || description.contains("user cancel")
+    });
     if error_code == Some(257) || permission_description {
         NativeFileProviderOperationStatus::PermissionDenied
+    } else if error_code == Some(NS_USER_CANCELLED_ERROR) || cancelled_description {
+        NativeFileProviderOperationStatus::Cancelled
     } else {
         NativeFileProviderOperationStatus::Failed
     }
@@ -1187,7 +1196,7 @@ mod tests {
     }
 
     #[test]
-    fn classifies_native_fileprovider_permission_failures() {
+    fn classifies_native_fileprovider_operation_failures() {
         assert_eq!(
             operation_failure_status(Some(257), Some("Operation not permitted")),
             NativeFileProviderOperationStatus::PermissionDenied
@@ -1195,6 +1204,14 @@ mod tests {
         assert_eq!(
             operation_failure_status(None, Some("Permission denied")),
             NativeFileProviderOperationStatus::PermissionDenied
+        );
+        assert_eq!(
+            operation_failure_status(Some(3072), Some("The operation was cancelled.")),
+            NativeFileProviderOperationStatus::Cancelled
+        );
+        assert_eq!(
+            operation_failure_status(None, Some("User canceled operation")),
+            NativeFileProviderOperationStatus::Cancelled
         );
         assert_eq!(
             operation_failure_status(Some(5), Some("Input/output error")),

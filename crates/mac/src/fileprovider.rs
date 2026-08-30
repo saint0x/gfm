@@ -650,6 +650,7 @@ pub enum FileProviderOperationDisposition {
     Missing,
     Unsupported,
     Unavailable,
+    Cancelled,
     Failed,
 }
 
@@ -662,6 +663,7 @@ impl FileProviderOperationDisposition {
             Self::Missing => "missing",
             Self::Unsupported => "unsupported",
             Self::Unavailable => "unavailable",
+            Self::Cancelled => "cancelled",
             Self::Failed => "failed",
         }
     }
@@ -1395,6 +1397,7 @@ impl FileProviderOperationReport {
             NativeFileProviderOperationStatus::Missing
             | NativeFileProviderOperationStatus::PermissionDenied
             | NativeFileProviderOperationStatus::Unavailable
+            | NativeFileProviderOperationStatus::Cancelled
             | NativeFileProviderOperationStatus::UnsupportedPath
             | NativeFileProviderOperationStatus::Failed => Ok(Self {
                 path,
@@ -1468,6 +1471,7 @@ fn disposition_for_native_fileprovider_operation(
         NativeFileProviderOperationStatus::Unavailable => {
             FileProviderOperationDisposition::Unavailable
         }
+        NativeFileProviderOperationStatus::Cancelled => FileProviderOperationDisposition::Cancelled,
         NativeFileProviderOperationStatus::Missing => FileProviderOperationDisposition::Missing,
         NativeFileProviderOperationStatus::UnsupportedPath => {
             FileProviderOperationDisposition::Unsupported
@@ -4295,6 +4299,16 @@ mod tests {
                 NativeFileProviderOperationStatus::Failed
             ),
             FileProviderOperationDisposition::Failed
+        );
+        assert_eq!(
+            disposition_for_native_fileprovider_operation(
+                NativeFileProviderOperationStatus::Cancelled
+            ),
+            FileProviderOperationDisposition::Cancelled
+        );
+        assert_eq!(
+            FileProviderOperationDisposition::Cancelled.as_str(),
+            "cancelled"
         );
         assert_eq!(
             disposition_for_native_fileprovider_operation(
