@@ -3,7 +3,7 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const SCHEMA_VERSION: u32 = 1;
 
@@ -48,6 +48,7 @@ pub struct DiagnosticExportReceipt {
 
 #[derive(Debug)]
 pub enum DiagnosticExportError {
+    Cancelled,
     Privacy(PrivacyReview),
     Io { path: PathBuf, error: io::Error },
 }
@@ -55,6 +56,7 @@ pub enum DiagnosticExportError {
 impl fmt::Display for DiagnosticExportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => write!(f, "diagnostic export cancelled"),
             Self::Privacy(review) => write!(
                 f,
                 "diagnostic export rejected by privacy review: {}",
@@ -72,41 +74,65 @@ pub fn export_diagnostics(
     telemetry: &Telemetry,
     privacy: DiagnosticPrivacy,
 ) -> Result<DiagnosticExportReceipt, DiagnosticExportError> {
+    export_diagnostics_checked(path, telemetry, privacy, || Ok(()))
+}
+
+pub fn export_diagnostics_checked(
+    path: impl AsRef<Path>,
+    telemetry: &Telemetry,
+    privacy: DiagnosticPrivacy,
+    mut check_control: impl FnMut() -> Result<(), DiagnosticExportError>,
+) -> Result<DiagnosticExportReceipt, DiagnosticExportError> {
     let path = path.as_ref();
+    check_control()?;
     let review = privacy.review();
     if !review.approved {
         return Err(DiagnosticExportError::Privacy(review));
     }
 
+    check_control()?;
     let encoded = encode_report(telemetry, &review);
+    check_control()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| DiagnosticExportError::Io {
             path: parent.to_path_buf(),
             error,
         })?;
     }
+    check_control()?;
 
     let temp_path = temp_path(path);
-    {
+    let result = (|| {
         let mut file = File::create(&temp_path).map_err(|error| DiagnosticExportError::Io {
             path: temp_path.clone(),
             error,
         })?;
-        file.write_all(encoded.as_bytes())
-            .map_err(|error| DiagnosticExportError::Io {
-                path: temp_path.clone(),
-                error,
-            })?;
+        check_control()?;
+        for chunk in encoded.as_bytes().chunks(64 * 1024) {
+            check_control()?;
+            file.write_all(chunk)
+                .map_err(|error| DiagnosticExportError::Io {
+                    path: temp_path.clone(),
+                    error,
+                })?;
+        }
+        check_control()?;
         file.sync_all().map_err(|error| DiagnosticExportError::Io {
             path: temp_path.clone(),
             error,
         })?;
+        check_control()?;
+        fs::rename(&temp_path, path).map_err(|error| DiagnosticExportError::Io {
+            path: path.to_path_buf(),
+            error,
+        })?;
+        sync_parent(path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
     }
-    fs::rename(&temp_path, path).map_err(|error| DiagnosticExportError::Io {
-        path: path.to_path_buf(),
-        error,
-    })?;
-    sync_parent(path)?;
+    result?;
 
     Ok(DiagnosticExportReceipt {
         path: path.to_path_buf(),
@@ -320,14 +346,22 @@ fn encode_report(telemetry: &Telemetry, review: &PrivacyReview) -> String {
 }
 
 fn temp_path(path: &Path) -> PathBuf {
-    let mut temp = path.to_path_buf();
-    let extension = temp
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| format!("{extension}.tmp"))
-        .unwrap_or_else(|| "tmp".to_string());
-    temp.set_extension(extension);
-    temp
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("diagnostics.json");
+    path.with_file_name(format!(
+        ".{file_name}.{}.{nonce}.tmp",
+        std::process::id(),
+        nonce = now_nanos()
+    ))
+}
+
+fn now_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
 }
 
 fn sync_parent(path: &Path) -> Result<(), DiagnosticExportError> {
@@ -530,7 +564,7 @@ mod tests {
         assert!(exported.contains("\"peak_resident_bytes\": 1024"));
         assert!(!exported.contains("query_text"));
         assert!(!exported.contains("user_identifiers"));
-        assert!(!path.with_extension("json.tmp").exists());
+        assert_eq!(diagnostic_temp_count(&path), 0);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -556,6 +590,56 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn checked_export_honors_pre_cancelled_control_before_privacy_review() {
+        let root = unique_temp_dir("gfm-diagnostics-pre-cancel");
+        let path = root.join("diagnostics.json");
+        let telemetry = Telemetry::default();
+
+        let err =
+            export_diagnostics_checked(&path, &telemetry, DiagnosticPrivacy::default(), || {
+                Err(DiagnosticExportError::Cancelled)
+            })
+            .unwrap_err();
+
+        assert!(matches!(err, DiagnosticExportError::Cancelled));
+        assert!(!path.exists());
+        assert_eq!(diagnostic_temp_count(&path), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_export_preserves_existing_report_on_mid_write_cancel() {
+        let root = unique_temp_dir("gfm-diagnostics-mid-write-cancel");
+        let path = root.join("diagnostics.json");
+        let mut telemetry = Telemetry::default();
+        telemetry.observe_latency(LatencyMetric::Navigation, Duration::from_millis(1));
+        export_diagnostics(&path, &telemetry, DiagnosticPrivacy::default()).unwrap();
+        let before = fs::read(&path).unwrap();
+
+        for _ in 0..8192 {
+            telemetry.observe_queue_depth("index", 42);
+        }
+        let mut checks = 0usize;
+
+        let err =
+            export_diagnostics_checked(&path, &telemetry, DiagnosticPrivacy::default(), || {
+                checks += 1;
+                if checks >= 7 {
+                    Err(DiagnosticExportError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert!(matches!(err, DiagnosticExportError::Cancelled));
+        assert!(checks >= 7);
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(diagnostic_temp_count(&path), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -564,5 +648,20 @@ mod tests {
         let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn diagnostic_temp_count(path: &Path) -> usize {
+        let Some(parent) = path.parent() else {
+            return 0;
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            return 0;
+        };
+        let prefix = format!(".{file_name}.{}.", std::process::id());
+        fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+            .count()
     }
 }
