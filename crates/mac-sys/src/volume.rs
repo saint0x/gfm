@@ -344,6 +344,7 @@ pub enum NativeVolumeOperationStatus {
     NotReady,
     NotWritable,
     Unsupported,
+    Cancelled,
     Failed,
     Missing,
     Unavailable,
@@ -366,6 +367,7 @@ impl NativeVolumeOperationStatus {
             Self::NotReady => "not-ready",
             Self::NotWritable => "not-writable",
             Self::Unsupported => "unsupported",
+            Self::Cancelled => "cancelled",
             Self::Failed => "failed",
             Self::Missing => "missing",
             Self::Unavailable => "unavailable",
@@ -929,6 +931,8 @@ fn native_operation_status_for_unix_dissenter(code: u32) -> Option<NativeVolumeO
         Some(NativeVolumeOperationStatus::Unsupported)
     } else if errno == libc::ENOMEM as u32 {
         Some(NativeVolumeOperationStatus::NoResources)
+    } else if errno == libc::EINTR as u32 || errno == libc::ECANCELED as u32 {
+        Some(NativeVolumeOperationStatus::Cancelled)
     } else {
         None
     }
@@ -1726,10 +1730,12 @@ mod tests {
             native_operation_status_for_dissenter(unix_dissenter_code(libc::ENOMEM)),
             NativeVolumeOperationStatus::NoResources
         );
-        assert_eq!(
-            native_operation_status_for_dissenter(unix_dissenter_code(libc::EINTR)),
-            NativeVolumeOperationStatus::Failed
-        );
+        for errno in [libc::EINTR, libc::ECANCELED] {
+            assert_eq!(
+                native_operation_status_for_dissenter(unix_dissenter_code(errno)),
+                NativeVolumeOperationStatus::Cancelled
+            );
+        }
     }
 
     #[test]

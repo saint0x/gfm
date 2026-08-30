@@ -1537,6 +1537,7 @@ pub enum VolumeOperationDisposition {
     Denied,
     Missing,
     Unsupported,
+    Cancelled,
     Unavailable,
     Failed,
 }
@@ -1551,6 +1552,7 @@ impl VolumeOperationDisposition {
             Self::Denied => "denied",
             Self::Missing => "missing",
             Self::Unsupported => "unsupported",
+            Self::Cancelled => "cancelled",
             Self::Unavailable => "unavailable",
             Self::Failed => "failed",
         }
@@ -1849,6 +1851,7 @@ fn disposition_for_native_operation(
         NativeVolumeOperationStatus::NotFound | NativeVolumeOperationStatus::Missing => {
             VolumeOperationDisposition::Missing
         }
+        NativeVolumeOperationStatus::Cancelled => VolumeOperationDisposition::Cancelled,
         NativeVolumeOperationStatus::Failed => VolumeOperationDisposition::Failed,
         NativeVolumeOperationStatus::Unavailable => VolumeOperationDisposition::Unavailable,
     }
@@ -4327,6 +4330,10 @@ mod tests {
         assert_eq!(
             disposition_for_native_operation(NativeVolumeOperationStatus::Unsupported),
             VolumeOperationDisposition::Unsupported
+        );
+        assert_eq!(
+            disposition_for_native_operation(NativeVolumeOperationStatus::Cancelled),
+            VolumeOperationDisposition::Cancelled
         );
         assert_eq!(
             disposition_for_native_operation(NativeVolumeOperationStatus::Unavailable),
