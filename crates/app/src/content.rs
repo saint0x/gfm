@@ -31,7 +31,7 @@ use gfm_jobs::{
 use gfm_mac::AccessIntent;
 use gfm_store::{read_records, ContentArchiveManifest};
 use gfm_types::{GfmError, Result, SearchHit};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -952,58 +952,11 @@ fn retain_index_footprint_access(
     worker: &str,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::new();
-    guards.push(preflight_access_scope(
-        &spec.records,
-        AccessIntent::Read,
-        &format!("{worker} records"),
-    )?);
-    if let Some(path) = &spec.columns {
+    for (path, role) in unique_index_footprint_paths(spec) {
         guards.push(preflight_access_scope(
             path,
             AccessIntent::Read,
-            &format!("{worker} columns"),
-        )?);
-    }
-    if let Some(path) = &spec.metadata {
-        guards.push(preflight_access_scope(
-            path,
-            AccessIntent::Read,
-            &format!("{worker} metadata"),
-        )?);
-    }
-    if let Some(path) = &spec.prefixes {
-        guards.push(preflight_access_scope(
-            path,
-            AccessIntent::Read,
-            &format!("{worker} prefixes"),
-        )?);
-    }
-    if let Some(path) = &spec.substrings {
-        guards.push(preflight_access_scope(
-            path,
-            AccessIntent::Read,
-            &format!("{worker} substrings"),
-        )?);
-    }
-    if let Some(path) = &spec.fuzzy {
-        guards.push(preflight_access_scope(
-            path,
-            AccessIntent::Read,
-            &format!("{worker} fuzzy"),
-        )?);
-    }
-    if let Some(path) = &spec.content_manifest {
-        guards.push(preflight_access_scope(
-            path,
-            AccessIntent::Read,
-            &format!("{worker} content manifest"),
-        )?);
-    }
-    for path in &spec.content_segments {
-        guards.push(preflight_access_scope(
-            path,
-            AccessIntent::Read,
-            &format!("{worker} content segment"),
+            &format!("{worker} {role}"),
         )?);
     }
     Ok(guards)
@@ -1014,7 +967,7 @@ fn retain_index_footprint_archive_access(
     worker: &str,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::new();
-    for path in paths {
+    for path in unique_path_refs(paths.iter().map(PathBuf::as_path)) {
         guards.push(preflight_access_scope(
             path,
             AccessIntent::Read,
@@ -1025,45 +978,14 @@ fn retain_index_footprint_archive_access(
 }
 
 fn preflight_index_footprint_volumes(spec: &IndexFootprintSpec, worker: &str) -> Result<()> {
-    preflight_volume_access_scope(
-        &spec.records,
-        AccessIntent::Read,
-        &format!("{worker} records"),
-    )?;
-    if let Some(path) = &spec.columns {
-        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} columns"))?;
-    }
-    if let Some(path) = &spec.metadata {
-        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} metadata"))?;
-    }
-    if let Some(path) = &spec.prefixes {
-        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} prefixes"))?;
-    }
-    if let Some(path) = &spec.substrings {
-        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} substrings"))?;
-    }
-    if let Some(path) = &spec.fuzzy {
-        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} fuzzy"))?;
-    }
-    if let Some(path) = &spec.content_manifest {
-        preflight_volume_access_scope(
-            path,
-            AccessIntent::Read,
-            &format!("{worker} content manifest"),
-        )?;
-    }
-    for path in &spec.content_segments {
-        preflight_volume_access_scope(
-            path,
-            AccessIntent::Read,
-            &format!("{worker} content segment"),
-        )?;
+    for (path, role) in unique_index_footprint_paths(spec) {
+        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} {role}"))?;
     }
     Ok(())
 }
 
 fn preflight_index_footprint_archive_volumes(paths: &[PathBuf], worker: &str) -> Result<()> {
-    for path in paths {
+    for path in unique_path_refs(paths.iter().map(PathBuf::as_path)) {
         preflight_volume_access_scope(
             path,
             AccessIntent::Read,
@@ -1071,6 +993,100 @@ fn preflight_index_footprint_archive_volumes(paths: &[PathBuf], worker: &str) ->
         )?;
     }
     Ok(())
+}
+
+fn index_footprint_paths_with_roles(spec: &IndexFootprintSpec) -> Vec<(&Path, &'static str)> {
+    let mut paths = vec![(spec.records.as_path(), "records")];
+    if let Some(path) = &spec.columns {
+        paths.push((path.as_path(), "columns"));
+    }
+    if let Some(path) = &spec.metadata {
+        paths.push((path.as_path(), "metadata"));
+    }
+    if let Some(path) = &spec.prefixes {
+        paths.push((path.as_path(), "prefixes"));
+    }
+    if let Some(path) = &spec.substrings {
+        paths.push((path.as_path(), "substrings"));
+    }
+    if let Some(path) = &spec.fuzzy {
+        paths.push((path.as_path(), "fuzzy"));
+    }
+    if let Some(path) = &spec.content_manifest {
+        paths.push((path.as_path(), "content manifest"));
+    }
+    paths.extend(
+        spec.content_segments
+            .iter()
+            .map(|path| (path.as_path(), "content segment")),
+    );
+    paths
+}
+
+fn unique_index_footprint_paths(spec: &IndexFootprintSpec) -> Vec<(&Path, &'static str)> {
+    unique_path_roles(index_footprint_paths_with_roles(spec))
+}
+
+fn unique_path_roles<'a>(
+    paths: impl IntoIterator<Item = (&'a Path, &'static str)>,
+) -> Vec<(&'a Path, &'static str)> {
+    let mut seen = BTreeSet::new();
+    paths
+        .into_iter()
+        .filter(|(path, _)| seen.insert((*path).to_path_buf()))
+        .collect()
+}
+
+fn unique_path_refs<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<&'a Path> {
+    let mut seen = BTreeSet::new();
+    paths
+        .into_iter()
+        .filter(|path| seen.insert((*path).to_path_buf()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_index_footprint_paths_preserves_first_role_for_repeated_paths() {
+        let root = PathBuf::from("/tmp/gfm-footprint");
+        let shared_sidecar = root.join("shared.gfmidx");
+        let segment = root.join("segment.gfmseg");
+        let mut spec = IndexFootprintSpec::new(shared_sidecar.clone());
+        spec.columns = Some(shared_sidecar.clone());
+        spec.metadata = Some(root.join("metadata.gfmmeta"));
+        spec.prefixes = Some(shared_sidecar);
+        spec.content_segments = vec![segment.clone(), segment.clone(), root.join("other.gfmseg")];
+
+        let unique = unique_index_footprint_paths(&spec)
+            .into_iter()
+            .map(|(path, role)| (path.to_path_buf(), role))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unique,
+            vec![
+                (root.join("shared.gfmidx"), "records"),
+                (root.join("metadata.gfmmeta"), "metadata"),
+                (root.join("segment.gfmseg"), "content segment"),
+                (root.join("other.gfmseg"), "content segment"),
+            ]
+        );
+    }
+
+    #[test]
+    fn unique_path_refs_preserves_first_occurrence_order() {
+        let first = PathBuf::from("/tmp/gfm-first");
+        let second = PathBuf::from("/tmp/gfm-second");
+        let unique = unique_path_refs([first.as_path(), second.as_path(), first.as_path()])
+            .into_iter()
+            .map(Path::to_path_buf)
+            .collect::<Vec<_>>();
+
+        assert_eq!(unique, vec![first, second]);
+    }
 }
 
 fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<usize> {

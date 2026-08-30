@@ -12174,6 +12174,15 @@ fn compacts_content_segments_from_binary() {
         "index footprint content segment",
         &segment,
     );
+    assert_eq!(
+        worker_admission_count(
+            &footprint_stderr,
+            "index footprint content segment",
+            &segment
+        ),
+        1,
+        "{footprint_stderr}"
+    );
     assert!(
         footprint_stderr.contains("index-footprint")
             && footprint_stderr.contains("compaction-scheduled=true")
@@ -15499,17 +15508,21 @@ fn write_tar_octal(field: &mut [u8], value: u64) {
 }
 
 fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
+    assert!(worker_admission_count(stderr, worker, path) > 0, "{stderr}");
+}
+
+fn worker_admission_count(stderr: &str, worker: &str, path: &std::path::Path) -> usize {
     let expected_worker = format!("worker={worker}");
     let expected = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let expected_path = format!("path={}", expected.display());
-    assert!(
-        stderr.lines().any(|line| {
+    stderr
+        .lines()
+        .filter(|line| {
             line.starts_with("security-worker-admission\t")
                 && line.split('\t').any(|field| field == expected_worker)
                 && line.split('\t').any(|field| field == expected_path)
-        }),
-        "{stderr}"
-    );
+        })
+        .count()
 }
 
 #[cfg(unix)]
