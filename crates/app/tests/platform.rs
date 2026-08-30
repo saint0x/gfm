@@ -782,6 +782,77 @@ fn reports_security_worker_admission_from_binary() {
 }
 
 #[test]
+fn reports_security_worker_admission_fanout_from_binary() {
+    let root =
+        std::env::temp_dir().join(format!("gfm-security-worker-fanout-{}", std::process::id()));
+    let path = root.join("Preview.pdf");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("security-worker-admission-fanout")
+        .arg(&path)
+        .arg("index worker")
+        .arg("index")
+        .arg("preview worker")
+        .arg("preview")
+        .arg("thumbnail worker")
+        .arg("preview")
+        .arg("operation worker")
+        .arg("operate")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "security-worker-admission-fanout\tworkers=4\tstart=0\tprompt=0\tmetadata-only=0\tdeny=4\t"
+    ));
+    assert!(stdout.contains("\tcan-touch-filesystem=0\t"));
+    assert!(stdout.contains("\tbookmark-access=0\t"));
+    assert!(stdout.contains("\trefresh-on-permission-change=4\n"));
+    for (worker, intent) in [
+        ("index worker", "index"),
+        ("preview worker", "preview"),
+        ("thumbnail worker", "preview"),
+        ("operation worker", "operate"),
+    ] {
+        assert!(
+            stdout.contains(&format!(
+                "security-worker-admission\tworker={worker}\tpath={}",
+                path.display()
+            )),
+            "{stdout}"
+        );
+        assert!(stdout.contains(&format!("\tintent={intent}\t")), "{stdout}");
+    }
+    assert_eq!(stdout.matches("\tprobe=unknown\t").count(), 4, "{stdout}");
+    assert_eq!(
+        stdout.matches("\tworker-action=deny\t").count(),
+        4,
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("\tcan-touch-filesystem=false\t").count(),
+        4,
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("unreachable volume network").count(),
+        4,
+        "{stdout}"
+    );
+    assert!(!stdout.contains("\tprobe=missing\t"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn security_scope_classifies_relative_home_paths_from_binary() {
     let root =
         std::env::temp_dir().join(format!("gfm-security-relative-home-{}", std::process::id()));
@@ -5837,6 +5908,11 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(stdout.contains("sidebar-volume-invalidation\trow=volume-"));
     assert!(stdout.contains("\tkind=disappeared\t"));
     assert!(stdout.contains("\tremove-row=true\t"));
+    assert!(stdout.contains("volume-event-operation-policy-invalidation\tkind=disappeared\t"));
+    assert!(stdout.contains("\tprevious-class="));
+    assert!(stdout.contains("\tprevious-mount="));
+    assert!(stdout.contains("\tcurrent-class=-\tcurrent-mount=-\t"));
+    assert!(stdout.contains("\tinvalidate-policy=true\treason=volume-event-disappeared\n"));
     assert!(stdout.contains("\nvolume-job-cancellation\tvolume="));
     assert!(stdout.contains("\tclass=background\tcancelled=1\n"));
     assert!(stdout.contains("cancelled-job\t1\tbackground\tbackground\tindex invalidated volume"));
@@ -5864,6 +5940,12 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(kept_stdout.contains("\tcancel-index-jobs=false\t"));
     assert!(kept_stdout.contains("sidebar-volume-invalidation\trow=volume-"));
     assert!(kept_stdout.contains("\tremove-row=false\t"));
+    assert!(kept_stdout.contains("volume-event-operation-policy-invalidation\tkind=appeared\t"));
+    assert!(kept_stdout.contains("\tprevious-class="));
+    assert!(kept_stdout.contains("\tprevious-mount="));
+    assert!(kept_stdout.contains("\tcurrent-class="));
+    assert!(kept_stdout.contains("\tcurrent-mount=mounted\t"));
+    assert!(kept_stdout.contains("\tinvalidate-policy=true\treason=volume-event-appeared\n"));
     assert!(kept_stdout.ends_with(
         "volume-job-cancellation\tvolume=-\tclass=background\tcancelled=0\treason=index-jobs-still-valid\n"
     ));

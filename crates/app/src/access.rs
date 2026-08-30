@@ -14,6 +14,12 @@ pub(crate) struct ScopedAccessGuard {
     _accesses: Vec<SecurityScopedBookmarkAccess>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkerAdmissionRequest {
+    pub(crate) worker: String,
+    pub(crate) intent: AccessIntent,
+}
+
 pub(crate) fn worker_admission_with_volume_gate(
     path: &Path,
     intent: AccessIntent,
@@ -49,6 +55,25 @@ pub(crate) fn worker_admission_with_volume_report(
     }
     let access = SecurityScopedAccessReport::evaluate(path, intent);
     access.worker_admission(worker)
+}
+
+pub(crate) fn worker_admissions_with_shared_volume_report(
+    path: &Path,
+    requests: &[WorkerAdmissionRequest],
+) -> Vec<SecurityWorkerAdmissionReport> {
+    let volume_path = absolute_volume_probe_path(path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    requests
+        .iter()
+        .map(|request| {
+            worker_admission_with_volume_report(
+                path,
+                request.intent,
+                request.worker.clone(),
+                &volume_report,
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn preflight_access_scope_checked(
@@ -435,6 +460,46 @@ mod tests {
             .contains("preview worker volume access blocked"));
         assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
         assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_fanout_reuses_one_volume_gate_for_multiple_workers() {
+        let root = unique_temp_dir("gfm-access-admission-fanout-unreachable");
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let path = root.join("Missing.pdf");
+        let requests = [
+            WorkerAdmissionRequest {
+                worker: "index worker".to_string(),
+                intent: AccessIntent::Index,
+            },
+            WorkerAdmissionRequest {
+                worker: "preview worker".to_string(),
+                intent: AccessIntent::Preview,
+            },
+            WorkerAdmissionRequest {
+                worker: "operation worker".to_string(),
+                intent: AccessIntent::Operate,
+            },
+        ];
+
+        let admissions = worker_admissions_with_shared_volume_report(&path, &requests);
+
+        assert_eq!(admissions.len(), requests.len());
+        for (admission, request) in admissions.iter().zip(requests.iter()) {
+            assert_eq!(admission.worker, request.worker);
+            assert_eq!(admission.access.intent, request.intent);
+            assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
+            assert!(!admission.can_touch_filesystem);
+            assert!(!admission.needs_bookmark_access);
+            assert!(admission.refresh_on_permission_change);
+            assert_eq!(admission.access.probe, gfm_mac::AccessProbeState::Unknown);
+            assert_eq!(admission.access.action, SecurityDecisionAction::Deny);
+            assert!(admission.reason.contains("unreachable volume network"));
+            assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
+            assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
+        }
 
         fs::remove_dir_all(root).unwrap();
     }

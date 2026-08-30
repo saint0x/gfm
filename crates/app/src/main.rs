@@ -833,6 +833,7 @@ fn print_usage() {
   gfm permission-invalidation-compare <previous-state.tsv> <current-state.tsv>
   gfm security-scope <path> [read|write|index|preview|operate]
   gfm security-worker-admission <worker-label> <path> [read|write|index|preview|operate]
+  gfm security-worker-admission-fanout <path> <worker-label> <read|write|index|preview|operate>...
   gfm security-worker-admission-unavailable-volume-api <worker-label> <path> <volume-root> [read|write|index|preview|operate]
   gfm security-bookmark-create <path> [read|write|index|preview|operate]
   gfm security-bookmark-reconcile

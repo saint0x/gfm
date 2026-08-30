@@ -1,6 +1,7 @@
 use crate::access::{
     preflight_access_scope_checked, preflight_volume_access_scope,
-    worker_admission_with_volume_gate, ScopedAccessGuard,
+    worker_admission_with_volume_gate, worker_admissions_with_shared_volume_report,
+    ScopedAccessGuard, WorkerAdmissionRequest,
 };
 use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
 use crate::{
@@ -31,10 +32,11 @@ use gfm_mac::{
     FileProviderStateInvalidationReport, FileProviderStateObserver, FileProviderStateReport,
     FileProviderStateSnapshot, MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor,
     NativeIconInvalidationReport, SecurityScopedAccessReport, SecurityScopedBookmarkStatus,
-    SecurityScopedBookmarkStore, SpotlightMetadataReader, SpotlightReconciliationReport,
-    VolumeDescriptor, VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind,
-    VolumeEventState, VolumeEventStream, VolumeMountIdentityReport, VolumeOperation,
-    VolumeOperationReport, VolumeTopologyChangeKind, VolumeTopologyDiff, WatchRoot,
+    SecurityScopedBookmarkStore, SecurityWorkerAction, SecurityWorkerAdmissionReport,
+    SpotlightMetadataReader, SpotlightReconciliationReport, VolumeDescriptor,
+    VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind, VolumeEventState,
+    VolumeEventStream, VolumeMountIdentityReport, VolumeOperation, VolumeOperationReport,
+    VolumeTopologyChangeKind, VolumeTopologyDiff, WatchRoot,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
@@ -83,6 +85,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "{}",
                 worker_admission_with_volume_gate(&path, intent, worker).as_tsv()
             );
+        }
+        "security-worker-admission-fanout" => {
+            let path = required_path(
+                args.next(),
+                "security-worker-admission-fanout requires a path",
+            )?;
+            let requests = parse_worker_admission_requests(args)?;
+            let admissions = worker_admissions_with_shared_volume_report(&path, &requests);
+            println!("{}", worker_admission_fanout_summary(&admissions));
+            for admission in admissions {
+                println!("{}", admission.as_tsv());
+            }
         }
         "security-worker-admission-unavailable-volume-api" => {
             let worker = required_string(
@@ -1589,6 +1603,11 @@ fn volume_event_runtime_fanout_from_args(
         volume_event_runtime_fanout_summary(&transition.invalidation, &index, &sidebar),
         index.as_tsv(),
         sidebar.as_tsv(),
+        volume_event_operation_policy_invalidation_tsv(
+            &transition.invalidation,
+            transition.previous.as_ref(),
+            transition.current.as_ref(),
+        ),
     ];
     if let Some(cancellation) = runtime_volume_cancellation(&index) {
         lines.push(cancellation.as_tsv());
@@ -1626,6 +1645,40 @@ fn volume_event_runtime_fanout_summary(
         index.clear_fsevents_cursor,
         sidebar.invalidate_row,
         sidebar.invalidate_section,
+        platform.reason
+    )
+}
+
+fn volume_event_operation_policy_invalidation_tsv(
+    platform: &VolumeEventInvalidationReport,
+    previous: Option<&VolumeDescriptor>,
+    current: Option<&VolumeDescriptor>,
+) -> String {
+    format!(
+        "volume-event-operation-policy-invalidation\tkind={}\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-read-only={}\tinvalidate-policy={}\treason={}",
+        platform.kind.as_str(),
+        platform
+            .path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        previous.map(|volume| volume.kind.as_str()).unwrap_or("-"),
+        previous
+            .map(|volume| volume.mount_state.as_str())
+            .unwrap_or("-"),
+        previous
+            .map(|volume| volume.read_only)
+            .map(|read_only| read_only.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        current.map(|volume| volume.kind.as_str()).unwrap_or("-"),
+        current
+            .map(|volume| volume.mount_state.as_str())
+            .unwrap_or("-"),
+        current
+            .map(|volume| volume.read_only)
+            .map(|read_only| read_only.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        platform.invalidate_operation_policy,
         platform.reason
     )
 }
@@ -2996,6 +3049,68 @@ fn parse_volume_event_kind(kind: &str) -> Result<VolumeEventKind> {
             "unsupported volume event kind `{other}`"
         ))),
     }
+}
+
+fn parse_worker_admission_requests(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<Vec<WorkerAdmissionRequest>> {
+    let mut requests = Vec::new();
+    while let Some(worker) = args.next() {
+        let intent = AccessIntent::parse(&required_string(
+            args.next(),
+            "security-worker-admission-fanout requires an intent after every worker label",
+        )?)?;
+        requests.push(WorkerAdmissionRequest { worker, intent });
+    }
+    if requests.is_empty() {
+        return Err(GfmError::Format(
+            "security-worker-admission-fanout requires at least one worker label and intent"
+                .to_string(),
+        ));
+    }
+    Ok(requests)
+}
+
+fn worker_admission_fanout_summary(admissions: &[SecurityWorkerAdmissionReport]) -> String {
+    let starts = admissions
+        .iter()
+        .filter(|admission| admission.worker_action == SecurityWorkerAction::Start)
+        .count();
+    let prompts = admissions
+        .iter()
+        .filter(|admission| admission.worker_action == SecurityWorkerAction::Prompt)
+        .count();
+    let metadata_only = admissions
+        .iter()
+        .filter(|admission| admission.worker_action == SecurityWorkerAction::MetadataOnly)
+        .count();
+    let denied = admissions
+        .iter()
+        .filter(|admission| admission.worker_action == SecurityWorkerAction::Deny)
+        .count();
+    let can_touch_filesystem = admissions
+        .iter()
+        .filter(|admission| admission.can_touch_filesystem)
+        .count();
+    let bookmark_access = admissions
+        .iter()
+        .filter(|admission| admission.needs_bookmark_access)
+        .count();
+    let refresh_on_permission_change = admissions
+        .iter()
+        .filter(|admission| admission.refresh_on_permission_change)
+        .count();
+    format!(
+        "security-worker-admission-fanout\tworkers={}\tstart={}\tprompt={}\tmetadata-only={}\tdeny={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}",
+        admissions.len(),
+        starts,
+        prompts,
+        metadata_only,
+        denied,
+        can_touch_filesystem,
+        bookmark_access,
+        refresh_on_permission_change
+    )
 }
 
 fn index_volume_event_kind(kind: VolumeEventKind) -> IndexVolumeEventKind {
