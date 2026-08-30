@@ -1173,6 +1173,19 @@ fn read_ui_payload_records(path: &Path) -> Result<HashMap<JobId, JobPayloadRecor
     )
 }
 
+fn read_optional_ui_payload_records(path: &Path) -> Result<HashMap<JobId, JobPayloadRecord>> {
+    const WORKER: &str = "ui payload catalog";
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => read_ui_payload_records(path),
+        Ok(_) => Ok(HashMap::new()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("{WORKER} metadata unavailable: {err}"),
+        )),
+    }
+}
+
 fn read_ui_progress_snapshots_with(
     path: &Path,
     read: fn(&JobProgressStore) -> Result<Vec<JobProgressSnapshot>>,
@@ -1399,7 +1412,7 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
         .with_sidebar_volumes(native_sidebar_volumes());
     if let Some(store) = crate::runtime::runtime_progress_store() {
         let payloads = crate::runtime::runtime_payload_catalog()
-            .map(|catalog| read_ui_payload_records(catalog.path()))
+            .map(|catalog| read_optional_ui_payload_records(catalog.path()))
             .transpose()?
             .unwrap_or_default();
         let progress_surfaces = read_ui_restorable_progress_snapshots(store.path())?

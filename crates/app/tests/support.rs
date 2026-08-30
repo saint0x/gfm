@@ -1158,6 +1158,64 @@ fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
 }
 
 #[test]
+fn reports_restorable_progress_surfaces_without_optional_payload_catalog_from_binary() {
+    let progress = std::env::temp_dir().join(format!(
+        "gfm-ui-lifecycle-progress-missing-payload-{}.gfmprogress",
+        std::process::id()
+    ));
+    let catalog = std::env::temp_dir().join(format!(
+        "gfm-ui-lifecycle-missing-payload-{}.gfmjobs",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&progress);
+    let _ = std::fs::remove_file(&catalog);
+
+    let seed = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("jobs-progress-snapshot")
+        .arg(&progress)
+        .output()
+        .unwrap();
+    assert!(
+        seed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&seed.stderr)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["ui-contract", "/tmp/gfm"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("window\tGFM\t/tmp/gfm\t"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "\noperation-progress\tjob=1\tlabel=copy selected files\tstate=running\tcompleted=42\ttotal=100\tpercent=42\t"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tpayload-kind=-\tpayload-path=-\tpayload-summary=-"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\noperation-progress-command\tpause\tjob=1\tenabled=true"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("compact content segments"), "{stdout}");
+
+    let _ = std::fs::remove_file(progress);
+    let _ = std::fs::remove_file(catalog);
+}
+
+#[test]
 fn copy_operation_publishes_runtime_progress_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-copy-operation-runtime-progress-{}",
