@@ -3696,6 +3696,43 @@
       "expect_exit": 0
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-invalidation",
+        "external",
+        "mounted",
+        "tmp/gfm-fozzy-dist",
+        "true",
+        "false",
+        "true",
+        "false",
+        "-",
+        "-",
+        "-"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-invalidation",
+        "external",
+        "mounted",
+        "tmp/gfm-fozzy-dist",
+        "true",
+        "false",
+        "true",
+        "false",
+        "-",
+        "-",
+        "-"
+      ],
+      "expect_exit": 0
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-network/.gfm-volume-kind",
       "data": "network-smb\n"
