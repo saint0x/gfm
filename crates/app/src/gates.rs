@@ -1,5 +1,5 @@
 use crate::{
-    access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard},
+    access::{preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard},
     detect_volume_id, parent_volume, parse_u32_arg, parse_usize_arg, required_path,
     runtime::run_volume_task_cancellable,
 };
@@ -135,8 +135,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "pixel diff",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access =
-                        retain_pixel_diff_access(&expected, &actual, mask_path.as_deref())?;
+                    let _access = retain_pixel_diff_access_checked(
+                        &expected,
+                        &actual,
+                        mask_path.as_deref(),
+                        || cancellation.check(),
+                    )?;
                     cancellation.check()?;
                     let masks = mask_path
                         .as_ref()
@@ -210,8 +214,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "pixel threshold",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access =
-                        retain_pixel_diff_access(&expected, &actual, mask_path.as_deref())?;
+                    let _access = retain_pixel_diff_access_checked(
+                        &expected,
+                        &actual,
+                        mask_path.as_deref(),
+                        || cancellation.check(),
+                    )?;
                     cancellation.check()?;
                     let masks = mask_path
                         .as_ref()
@@ -255,10 +263,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "parity gate",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = preflight_access_scope(
+                    let _access = preflight_access_scope_checked(
                         &manifest_for_worker,
                         AccessIntent::Read,
                         "parity gate",
+                        || cancellation.check(),
                     )?;
                     cancellation.check()?;
                     run_parity_gate_manifest(&manifest_for_worker)
@@ -314,8 +323,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "parity review",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access =
-                        retain_parity_review_access(&manifest_for_worker, &output_dir_for_worker)?;
+                    let _access = retain_parity_review_access_checked(
+                        &manifest_for_worker,
+                        &output_dir_for_worker,
+                        || cancellation.check(),
+                    )?;
                     cancellation.check()?;
                     write_parity_review_bundle_manifest(
                         &manifest_for_worker,
@@ -633,47 +645,79 @@ where
     let volume = primary_volume(&probe);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_workspace_write_access(&workspace, worker)?;
+        let _access =
+            retain_workspace_write_access_checked(&workspace, worker, || cancellation.check())?;
         cancellation.check()?;
         work(cancellation)
     })
 }
 
-fn retain_pixel_diff_access(
+fn retain_pixel_diff_access_checked(
     expected: &Path,
     actual: &Path,
     mask: Option<&Path>,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
     let mut guards = vec![
-        preflight_access_scope(expected, AccessIntent::Read, "pixel expected")?,
-        preflight_access_scope(actual, AccessIntent::Read, "pixel actual")?,
+        preflight_access_scope_checked(
+            expected,
+            AccessIntent::Read,
+            "pixel expected",
+            &mut check_control,
+        )?,
+        preflight_access_scope_checked(
+            actual,
+            AccessIntent::Read,
+            "pixel actual",
+            &mut check_control,
+        )?,
     ];
     if let Some(mask) = mask {
-        guards.push(preflight_access_scope(
+        guards.push(preflight_access_scope_checked(
             mask,
             AccessIntent::Read,
             "pixel mask",
+            &mut check_control,
         )?);
     }
+    check_control()?;
     Ok(guards)
 }
 
-fn retain_parity_review_access(
+fn retain_parity_review_access_checked(
     manifest: &Path,
     output_dir: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let output_probe = write_probe_path(output_dir)?.to_path_buf();
+    check_control()?;
     Ok(vec![
-        preflight_access_scope(manifest, AccessIntent::Read, "parity review manifest")?,
-        preflight_access_scope(
-            write_probe_path(output_dir)?,
+        preflight_access_scope_checked(
+            manifest,
+            AccessIntent::Read,
+            "parity review manifest",
+            &mut check_control,
+        )?,
+        preflight_access_scope_checked(
+            &output_probe,
             AccessIntent::Write,
             "parity review output",
+            &mut check_control,
         )?,
     ])
 }
 
-fn retain_workspace_write_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(write_probe_path(path)?, AccessIntent::Write, worker)
+fn retain_workspace_write_access_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    preflight_access_scope_checked(&probe, AccessIntent::Write, worker, check_control)
 }
 
 fn write_probe_path(path: &Path) -> Result<&Path> {
@@ -778,4 +822,72 @@ fn parse_color_profile(value: Option<String>) -> Result<ColorProfile> {
         .unwrap_or_else(|| "srgb".to_string())
         .parse::<ColorProfile>()
         .map_err(GfmError::Format)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn pixel_diff_access_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-gates-pixel-diff-access-pre-cancel");
+        let expected = root.join("expected.rgba");
+        let actual = root.join("actual.rgba");
+
+        let result =
+            retain_pixel_diff_access_checked(&expected, &actual, None, || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_review_access_checked_can_cancel_before_output_probe() {
+        let root = unique_temp_dir("gfm-gates-parity-review-access-cancel");
+        let manifest = root.join("manifest.tsv");
+        let output = root.join("review");
+        let mut checks = 0usize;
+
+        let result = retain_parity_review_access_checked(&manifest, &output, || {
+            checks += 1;
+            if checks >= 2 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 2);
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_write_access_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-gates-workspace-write-access-pre-cancel");
+        let workspace = root.join("fixture");
+
+        let result = retain_workspace_write_access_checked(&workspace, "fixture workspace", || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!workspace.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "{}-{}-{}",
+            prefix,
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
 }

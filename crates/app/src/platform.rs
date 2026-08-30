@@ -1,5 +1,5 @@
 use crate::access::{
-    preflight_access_scope, preflight_access_scope_checked, preflight_volume_access_scope,
+    preflight_access_scope_checked, preflight_volume_access_scope,
     worker_admission_with_volume_gate, ScopedAccessGuard,
 };
 use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
@@ -641,10 +641,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?)?;
             let path = required_path(args.next(), "volume-operation requires a path")?;
             let _access = match path.try_exists() {
-                Ok(true) => Some(preflight_access_scope(
+                Ok(true) => Some(preflight_access_scope_checked(
                     &path,
                     AccessIntent::Operate,
                     "volume operation",
+                    || Ok(()),
                 )?),
                 Ok(false) | Err(_) => None,
             };

@@ -51,14 +51,6 @@ pub(crate) fn worker_admission_with_volume_report(
     access.worker_admission(worker)
 }
 
-pub(crate) fn preflight_access_scope(
-    path: &Path,
-    intent: AccessIntent,
-    worker: &str,
-) -> Result<ScopedAccessGuard> {
-    preflight_access_scope_checked(path, intent, worker, || Ok(()))
-}
-
 pub(crate) fn preflight_access_scope_checked(
     path: &Path,
     intent: AccessIntent,
