@@ -1,3 +1,4 @@
+use gfm_jobs::Cancellation;
 use gfm_types::{FileId, GfmError, Result, VolumeId};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
@@ -166,6 +167,15 @@ impl PreviewCache {
     }
 
     pub fn insert(&mut self, entry: PreviewEntry) -> Result<()> {
+        self.insert_cancellable(entry, &Cancellation::default())
+    }
+
+    pub fn insert_cancellable(
+        &mut self,
+        entry: PreviewEntry,
+        cancellation: &Cancellation,
+    ) -> Result<()> {
+        cancellation.check()?;
         if entry.bytes.len() > self.config.max_entry_bytes {
             return Err(GfmError::Format(format!(
                 "preview entry is {} bytes, above max {}",
@@ -174,20 +184,34 @@ impl PreviewCache {
             )));
         }
         if self.config.disk_enabled {
+            cancellation.check()?;
             self.write_disk(&entry)?;
+            cancellation.check()?;
             self.write_disk_index_entry(&entry.key)?;
         }
+        cancellation.check()?;
         self.insert_memory(entry);
         Ok(())
     }
 
     pub fn get(&mut self, key: &PreviewRequestKey) -> Result<Option<CacheHit>> {
+        self.get_cancellable(key, &Cancellation::default())
+    }
+
+    pub fn get_cancellable(
+        &mut self,
+        key: &PreviewRequestKey,
+        cancellation: &Cancellation,
+    ) -> Result<Option<CacheHit>> {
+        cancellation.check()?;
         if let Some(entry) = self.memory.get(key).cloned() {
             self.touch(key);
             return Ok(Some(CacheHit::Memory(entry)));
         }
         if self.config.disk_enabled {
+            cancellation.check()?;
             if let Some(entry) = self.read_disk(key)? {
+                cancellation.check()?;
                 self.insert_memory(entry.clone());
                 return Ok(Some(CacheHit::Disk(entry)));
             }
@@ -196,15 +220,27 @@ impl PreviewCache {
     }
 
     pub fn invalidate(&mut self, key: &PreviewRequestKey) -> Result<()> {
+        self.invalidate_cancellable(key, &Cancellation::default())
+    }
+
+    pub fn invalidate_cancellable(
+        &mut self,
+        key: &PreviewRequestKey,
+        cancellation: &Cancellation,
+    ) -> Result<()> {
+        cancellation.check()?;
         if let Some(entry) = self.memory.remove(key) {
             self.memory_bytes = self.memory_bytes.saturating_sub(entry.byte_len());
         }
         self.order.retain(|candidate| candidate != key);
         if self.config.disk_enabled {
+            cancellation.check()?;
             let path = self.disk_path(key);
             if disk_cache_path_exists(&path)? {
+                cancellation.check()?;
                 fs::remove_file(&path).map_err(|err| GfmError::io(&path, err))?;
             }
+            cancellation.check()?;
             self.remove_disk_index_entry(key)?;
         }
         Ok(())
@@ -215,14 +251,26 @@ impl PreviewCache {
         key: &PreviewRequestKey,
         event: PreviewInvalidationEvent,
     ) -> Result<PreviewCacheInvalidationReport> {
+        self.apply_invalidation_cancellable(key, event, &Cancellation::default())
+    }
+
+    pub fn apply_invalidation_cancellable(
+        &mut self,
+        key: &PreviewRequestKey,
+        event: PreviewInvalidationEvent,
+        cancellation: &Cancellation,
+    ) -> Result<PreviewCacheInvalidationReport> {
+        cancellation.check()?;
         let decision = decide_invalidation(event);
         let removed_memory = if decision.invalidate_memory {
+            cancellation.check()?;
             self.remove_memory(key)
         } else {
             false
         };
         let removed_disk = if decision.invalidate_disk {
-            self.remove_disk(key)?
+            cancellation.check()?;
+            self.remove_disk_cancellable(key, cancellation)?
         } else {
             false
         };
@@ -256,16 +304,24 @@ impl PreviewCache {
         true
     }
 
-    fn remove_disk(&mut self, key: &PreviewRequestKey) -> Result<bool> {
+    fn remove_disk_cancellable(
+        &mut self,
+        key: &PreviewRequestKey,
+        cancellation: &Cancellation,
+    ) -> Result<bool> {
+        cancellation.check()?;
         if !self.config.disk_enabled {
             return Ok(false);
         }
         let path = self.disk_path(key);
         if !disk_cache_path_exists(&path)? {
+            cancellation.check()?;
             self.remove_disk_index_entry(key)?;
             return Ok(false);
         }
+        cancellation.check()?;
         fs::remove_file(&path).map_err(|err| GfmError::io(&path, err))?;
+        cancellation.check()?;
         self.remove_disk_index_entry(key)?;
         Ok(true)
     }
@@ -842,6 +898,100 @@ mod tests {
             cache.get(&first).unwrap(),
             Some(CacheHit::Disk(_))
         ));
+    }
+
+    #[test]
+    fn cancelled_cache_insert_does_not_touch_memory_or_disk() {
+        let root = temp_root("cancel-insert");
+        let mut cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        })
+        .unwrap();
+        let key = key("cancelled.png", PreviewKind::Thumbnail);
+        let disk_path = cache.disk_path(&key);
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = cache.insert_cancellable(
+            PreviewEntry::new(key.clone(), b"cancelled".to_vec()),
+            &cancellation,
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(cache.memory_bytes(), 0);
+        assert!(!disk_path.exists());
+        assert!(!preview_cache_index_path(&PreviewCacheConfig::new(&root)).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_cache_get_does_not_promote_disk_entry_to_memory() {
+        let root = temp_root("cancel-get");
+        let key = key("disk.png", PreviewKind::Thumbnail);
+        {
+            let mut cache = PreviewCache::new(PreviewCacheConfig {
+                memory_budget_bytes: 16,
+                max_entry_bytes: 16,
+                disk_root: root.clone(),
+                disk_enabled: true,
+            })
+            .unwrap();
+            cache
+                .insert(PreviewEntry::new(key.clone(), b"disk".to_vec()))
+                .unwrap();
+        }
+        let mut reloaded = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        })
+        .unwrap();
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = reloaded.get_cancellable(&key, &cancellation);
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(reloaded.memory_bytes(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_cache_invalidation_keeps_existing_entry() {
+        let root = temp_root("cancel-invalidation");
+        let key = key("keep.png", PreviewKind::Thumbnail);
+        let mut cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        })
+        .unwrap();
+        cache
+            .insert(PreviewEntry::new(key.clone(), b"keep".to_vec()))
+            .unwrap();
+        let disk_path = cache.disk_path(&key);
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = cache.apply_invalidation_cancellable(
+            &key,
+            PreviewInvalidationEvent {
+                icloud_state_changed: true,
+                ..PreviewInvalidationEvent::default()
+            },
+            &cancellation,
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(cache.memory_bytes(), 4);
+        assert!(disk_path.exists());
+        assert!(cache.disk_key_for_path_kind(&key.path, key.kind).is_some());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

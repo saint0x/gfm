@@ -350,7 +350,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!(
                 "{}",
-                observed_preview_cache_invalidation_tsv(&observed, &cache_root, kind)?
+                observed_preview_cache_invalidation_tsv(
+                    &observed,
+                    &cache_root,
+                    kind,
+                    &Cancellation::default(),
+                )?
             );
         }
         "fileprovider-invalidation-scan" => {
@@ -2067,9 +2072,10 @@ fn run_preview_cache_fileprovider_invalidation(
             .unwrap_or_else(|| key.clone());
         cancellation.check()?;
         Ok(cache
-            .apply_invalidation(
+            .apply_invalidation_cancellable(
                 &invalidation_key,
                 preview_invalidation_for_fileprovider(&report),
+                &cancellation,
             )?
             .as_tsv())
     })
@@ -2102,7 +2108,7 @@ fn run_preview_cache_fileprovider_observed_invalidation(
         let observed =
             evaluate_fileprovider_observed_invalidation(&state_path, event, WORKER, &cancellation)?;
         cancellation.check()?;
-        observed_preview_cache_invalidation_tsv(&observed, &cache_root, kind)
+        observed_preview_cache_invalidation_tsv(&observed, &cache_root, kind, &cancellation)
     })
 }
 
@@ -2328,19 +2334,24 @@ fn observed_preview_cache_invalidation_tsv(
     observed: &FileProviderObservedInvalidation,
     cache_root: &Path,
     kind: PreviewKind,
+    cancellation: &Cancellation,
 ) -> Result<String> {
+    cancellation.check()?;
     let mut cache = PreviewCache::new(PreviewCacheConfig::new(cache_root))?;
     let mut lines = vec![observed.as_tsv()];
     for report in &observed.report.changes {
+        cancellation.check()?;
         let key = preview_cache_key_for_path_kind(&cache, &report.path, kind)?;
         let invalidation_key = cache
             .disk_key_for_path_kind(&key.path, key.kind)
             .unwrap_or_else(|| key.clone());
+        cancellation.check()?;
         lines.push(
             cache
-                .apply_invalidation(
+                .apply_invalidation_cancellable(
                     &invalidation_key,
                     preview_invalidation_for_fileprovider(report),
+                    cancellation,
                 )?
                 .as_tsv(),
         );
@@ -2686,6 +2697,41 @@ mod tests {
             "cancelled observer poll pause waited {:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn observed_preview_cache_invalidation_honors_pre_cancelled_token_before_disk_touch() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-cancelled-preview-cache-observed-{}",
+            std::process::id()
+        ));
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+        let observed = FileProviderObservedInvalidation {
+            events: 1,
+            event_kinds: Vec::new(),
+            paths: Vec::new(),
+            report: FileProviderStateInvalidationReport {
+                initialized: false,
+                changes: Vec::new(),
+                invalidate_icon: false,
+                invalidate_preview_memory: false,
+                invalidate_preview_disk: false,
+                invalidate_sidebar: false,
+                reindex_metadata: false,
+            },
+        };
+
+        let err = observed_preview_cache_invalidation_tsv(
+            &observed,
+            &root,
+            PreviewKind::Thumbnail,
+            &cancellation,
+        )
+        .expect_err("pre-cancelled observed invalidation should stop before cache open");
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!root.exists());
     }
 
     #[test]
