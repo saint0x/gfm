@@ -264,8 +264,17 @@ impl LiveIndex {
         limit: usize,
         lookup: &dyn SearchLookup,
     ) -> Result<Vec<SearchHit>> {
+        self.search_structured_with_lookup(&SearchQuery::parse(query), limit, lookup)
+    }
+
+    pub fn search_structured_with_lookup(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        lookup: &dyn SearchLookup,
+    ) -> Result<Vec<SearchHit>> {
         self.index.query_structured_with_lookup_cancellable(
-            &SearchQuery::parse(query),
+            query,
             limit,
             lookup,
             &Cancellation::default(),
@@ -279,7 +288,17 @@ impl LiveIndex {
         lookup: &dyn SearchLookup,
         budget: SearchLookupBudget,
     ) -> Result<SearchQueryReport> {
-        self.search_with_lookup_budget_cancellable(
+        self.search_structured_with_lookup_budget(&SearchQuery::parse(query), limit, lookup, budget)
+    }
+
+    pub fn search_structured_with_lookup_budget(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+    ) -> Result<SearchQueryReport> {
+        self.search_structured_with_lookup_budget_cancellable(
             query,
             limit,
             lookup,
@@ -296,9 +315,26 @@ impl LiveIndex {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<SearchQueryReport> {
+        self.search_structured_with_lookup_budget_cancellable(
+            &SearchQuery::parse(query),
+            limit,
+            lookup,
+            budget,
+            cancellation,
+        )
+    }
+
+    pub fn search_structured_with_lookup_budget_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<SearchQueryReport> {
         let cache_before = lookup.cache_telemetry();
         let mut report = self.index.query_structured_with_lookup_budget_cancellable(
-            &SearchQuery::parse(query),
+            query,
             limit,
             lookup,
             budget,
@@ -325,12 +361,23 @@ impl LiveIndex {
         scope: &SearchVolumeScope,
         cancellation: &Cancellation,
     ) -> Result<Vec<SearchHit>> {
-        self.index.query_structured_with_volume_scope_cancellable(
+        self.search_structured_with_volume_scope_cancellable(
             &SearchQuery::parse(query),
             limit,
             scope,
             cancellation,
         )
+    }
+
+    pub fn search_structured_with_volume_scope_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchHit>> {
+        self.index
+            .query_structured_with_volume_scope_cancellable(query, limit, scope, cancellation)
     }
 
     pub fn search_with_volume_scope_lookup_budget_cancellable(
@@ -342,11 +389,30 @@ impl LiveIndex {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<SearchQueryReport> {
+        self.search_structured_with_volume_scope_lookup_budget_cancellable(
+            &SearchQuery::parse(query),
+            limit,
+            scope,
+            lookup,
+            budget,
+            cancellation,
+        )
+    }
+
+    pub fn search_structured_with_volume_scope_lookup_budget_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        lookup: &dyn SearchLookup,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<SearchQueryReport> {
         let cache_before = lookup.cache_telemetry();
         let mut report = self
             .index
             .query_structured_with_volume_scope_lookup_budget_cancellable(
-                &SearchQuery::parse(query),
+                query,
                 limit,
                 scope,
                 lookup,

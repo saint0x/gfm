@@ -150,6 +150,17 @@ impl IndexQuerySession {
         self.live.search_with_volume_scope(query, limit, scope)
     }
 
+    pub fn search_structured_with_volume_scope_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchHit>> {
+        self.live
+            .search_structured_with_volume_scope_cancellable(query, limit, scope, cancellation)
+    }
+
     pub fn search_with_volume_plan(
         &self,
         query: &str,

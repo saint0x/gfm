@@ -123,6 +123,35 @@ fn query_session_searches_only_admitted_volume_scope() {
 }
 
 #[test]
+fn query_session_structured_search_preserves_filters() {
+    let mut directory = volume_file_record(1, 1, "/Volumes/A/report", "report");
+    directory.kind = FileKind::Directory;
+    let session = IndexSnapshot {
+        root: PathBuf::from("/Volumes"),
+        records: vec![
+            directory,
+            volume_file_record(1, 2, "/Volumes/A/report.md", "report.md"),
+        ],
+        inaccessible: Vec::new(),
+    }
+    .query_session();
+    let parsed = SearchQuery::parse("report kind:file");
+
+    let hits = session
+        .search_structured_with_volume_scope_cancellable(
+            &parsed,
+            10,
+            &SearchVolumeScope::All,
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.kind, FileKind::File);
+    assert_eq!(hits[0].record.path, PathBuf::from("/Volumes/A/report.md"));
+}
+
+#[test]
 fn query_session_streams_only_admitted_volume_scope() {
     let session = IndexSnapshot {
         root: PathBuf::from("/Volumes"),

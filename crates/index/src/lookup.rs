@@ -289,8 +289,8 @@ impl SidecarIndexQuerySession {
         let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
         let (live, hydration) = self.live_from_import(import, cancellation)?;
-        let search = live.search_with_volume_scope_lookup_budget_cancellable(
-            query,
+        let search = live.search_structured_with_volume_scope_lookup_budget_cancellable(
+            &parsed,
             limit,
             scope,
             &self.lookup,

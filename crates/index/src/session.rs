@@ -173,7 +173,12 @@ impl ContentIndexQuerySession {
         let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
         let (live, load) = self.live_from_postings(postings, has_content_terms, cancellation)?;
-        let hits = live.search_cancellable(query, limit, cancellation)?;
+        let hits = live.search_structured_with_volume_scope_cancellable(
+            &parsed,
+            limit,
+            &gfm_search::SearchVolumeScope::All,
+            cancellation,
+        )?;
         let report = ContentQuerySessionReport {
             load,
             search: SearchQueryReport {
