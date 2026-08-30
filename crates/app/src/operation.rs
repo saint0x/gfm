@@ -1425,6 +1425,34 @@ mod tests {
     }
 
     #[test]
+    fn operation_volume_policy_requires_identity_for_explicit_non_local_cloning() {
+        let root = unique_temp_dir("gfm-app-op-volume-policy-clone-identity");
+        let source_root = root.join("Source");
+        let destination_root = root.join("Backup");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&destination_root).unwrap();
+        let source = source_root.join("source.bin");
+        let destination = destination_root.join("destination.bin");
+        let mut destination_volume = VolumeDescriptor::for_path(&destination_root).unwrap();
+        destination_volume.kind = VolumeKind::External;
+        destination_volume.resource_supports_file_cloning = Some(true);
+        destination_volume.stable_identity.clear();
+        let report = VolumeDiscoveryReport {
+            volumes: vec![destination_volume],
+        };
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert!(!policy.file_cloning_supported_for_paths(&source, &destination));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn operation_volume_policy_skips_file_cloning_for_distinct_known_volumes() {
         let root = unique_temp_dir("gfm-app-op-volume-policy-distinct-clone");
         let source_root = root.join("Source");

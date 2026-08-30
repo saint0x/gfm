@@ -136,6 +136,7 @@ impl OperationVolumeCopyPolicy {
             .filter(|(root, _)| path.starts_with(root))
             .max_by_key(|(root, _)| root.components().count())
             .map(|(_, identity)| identity.as_str())
+            .filter(|identity| !identity.trim().is_empty())
     }
 
     pub fn file_cloning_supported_for_paths(&self, from: &Path, to: &Path) -> bool {
@@ -148,7 +149,11 @@ impl OperationVolumeCopyPolicy {
             self.volume_identity_for_path(to),
         ) {
             (Some(source), Some(destination)) => source == destination,
-            _ => true,
+            (Some(_), None) | (None, Some(_)) => false,
+            (None, None) => {
+                self.class_for_path(from) == OperationVolumeClass::Local
+                    && self.class_for_path(to) == OperationVolumeClass::Local
+            }
         }
     }
 
@@ -254,7 +259,8 @@ mod tests {
             .with_root("/Volumes/Media", OperationVolumeClass::External)
             .with_root("/Volumes/Media/Fast", OperationVolumeClass::External)
             .with_root_file_cloning_support("/Volumes/Media", false)
-            .with_root_file_cloning_support("/Volumes/Media/Fast", true);
+            .with_root_file_cloning_support("/Volumes/Media/Fast", true)
+            .with_root_volume_identity("/Volumes/Media/Fast", "diskarbitration:uuid:FAST");
 
         assert!(!policy.file_cloning_supported_for_paths(
             Path::new("/Volumes/Media/source.bin"),
@@ -262,7 +268,7 @@ mod tests {
         ));
         assert!(policy.file_cloning_supported_for_paths(
             Path::new("/Volumes/Media/Fast/source.bin"),
-            Path::new("/Users/deepsaint/copy.bin")
+            Path::new("/Volumes/Media/Fast/copy.bin")
         ));
         assert!(policy.file_cloning_supported_for_paths(
             Path::new("/Users/deepsaint/source.bin"),
@@ -286,6 +292,7 @@ mod tests {
 
         let explicitly_supported = policy
             .with_root_file_cloning_support("/Volumes/Backup", true)
+            .with_root_volume_identity("/Volumes/Backup", "diskarbitration:uuid:BACKUP")
             .with_root_hard_link_support("/Volumes/Remote", true)
             .with_root_sparse_file_support("/Volumes/Camera", true);
 
@@ -318,9 +325,13 @@ mod tests {
             Path::new("/Volumes/Source/Subvolume/file.bin"),
             Path::new("/Volumes/Source/copy.bin")
         ));
-        assert!(policy.file_cloning_supported_for_paths(
+        assert!(!policy.file_cloning_supported_for_paths(
             Path::new("/Unknown/source.bin"),
             Path::new("/Volumes/Destination/file.bin")
+        ));
+        assert!(policy.file_cloning_supported_for_paths(
+            Path::new("/Unknown/source.bin"),
+            Path::new("/Unknown/copy.bin")
         ));
         assert!(policy.paths_are_known_distinct_volumes(
             Path::new("/Volumes/Source/file.bin"),
@@ -333,6 +344,26 @@ mod tests {
         assert!(!policy.paths_are_known_distinct_volumes(
             Path::new("/Unknown/source.bin"),
             Path::new("/Volumes/Destination/file.bin")
+        ));
+    }
+
+    #[test]
+    fn explicit_non_local_clone_support_still_requires_known_same_volume_identity() {
+        let policy = OperationVolumeCopyPolicy::default()
+            .with_root("/Volumes/Media", OperationVolumeClass::External)
+            .with_root_file_cloning_support("/Volumes/Media", true);
+
+        assert!(!policy.file_cloning_supported_for_paths(
+            Path::new("/Volumes/Media/source.bin"),
+            Path::new("/Volumes/Media/copy.bin")
+        ));
+
+        let identified =
+            policy.with_root_volume_identity("/Volumes/Media", "diskarbitration:uuid:MEDIA");
+
+        assert!(identified.file_cloning_supported_for_paths(
+            Path::new("/Volumes/Media/source.bin"),
+            Path::new("/Volumes/Media/copy.bin")
         ));
     }
 
