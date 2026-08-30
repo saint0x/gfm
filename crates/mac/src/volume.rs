@@ -1181,7 +1181,9 @@ impl VolumeEventInvalidationReport {
             );
         let reason = match kind {
             VolumeEventKind::Appeared => "volume-event-appeared",
-            VolumeEventKind::DescriptionChanged => "volume-event-description-changed",
+            VolumeEventKind::DescriptionChanged => native_reason
+                .as_deref()
+                .unwrap_or("volume-event-description-changed"),
             VolumeEventKind::Disappeared => "volume-event-disappeared",
             VolumeEventKind::Unavailable => native_reason
                 .as_deref()
@@ -4148,6 +4150,29 @@ mod tests {
         assert!(report
             .as_tsv()
             .contains("\treason=diskarbitration-session-unavailable"));
+    }
+
+    #[test]
+    fn description_changed_volume_event_preserves_native_probe_failure_reason() {
+        let report = VolumeEventInvalidationReport::from_parts(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Unavailable,
+            Some(PathBuf::from("/Volumes/Unprobeable")),
+            None,
+            Some("volume path state unavailable: permission denied".to_string()),
+        );
+
+        assert_eq!(
+            report.reason,
+            "volume path state unavailable: permission denied"
+        );
+        assert!(report.invalidate_sidebar);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report
+            .as_tsv()
+            .contains("\treason=volume path state unavailable: permission denied"));
     }
 
     #[test]

@@ -4549,6 +4549,37 @@ fn reports_volume_event_invalidation_from_binary() {
 }
 
 #[test]
+fn sidebar_volume_invalidation_reports_unavailable_description_probe_from_binary() {
+    let path = std::env::temp_dir().join("gfm-sidebar-volume-invalid".repeat(64));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-sidebar-volume-invalidation")
+        .arg("description-changed")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("sidebar-volume-invalidation\trow=-\t"));
+    assert!(stdout.contains(&format!("\tpath={}\t", path.display())));
+    assert!(stdout.contains("\tkind=description-changed\t"));
+    assert!(stdout.contains("\tprevious-kind=-\t"));
+    assert!(stdout.contains("\tcurrent-kind=-\t"));
+    assert!(stdout.contains("\tcurrent-native-status=-\t"));
+    assert!(stdout.contains("\tinvalidate-row=false\t"));
+    assert!(stdout.contains("\tinvalidate-section=true\t"));
+    assert!(
+        stdout.contains("\treason=volume path state unavailable: "),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn reports_volume_event_transition_label_change_as_sidebar_only_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-event-transition-label-{}",
