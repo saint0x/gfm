@@ -4002,6 +4002,16 @@ fn persistent_index_state_tracks_volume_mount_and_epoch() {
 }
 
 #[test]
+fn index_volume_state_checked_read_honors_pre_cancelled_control_before_file_open() {
+    let state_path = unique_temp_path("gfm-index-state-read-cancel", "gfmstate");
+
+    let result = IndexVolumeState::read_checked(&state_path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!state_path.exists());
+}
+
+#[test]
 fn persistent_index_recovery_rebuilds_missing_or_stale_state() {
     let root = unique_temp_dir("gfm-index-recovery-state-root");
     let records = unique_temp_path("gfm-index-recovery-state-records", "gfmidx");
@@ -4284,6 +4294,16 @@ fn fsevents_cursor_checkpoints_and_resumes_from_next_event() {
     fs::remove_file(records).unwrap();
     fs::remove_file(state_path).unwrap();
     fs::remove_file(cursor_path).unwrap();
+}
+
+#[test]
+fn fsevents_cursor_checked_read_honors_pre_cancelled_control_before_file_open() {
+    let cursor_path = unique_temp_path("gfm-fsevents-cursor-read-cancel", "gfmcursor");
+
+    let result = FseventsCursor::read_checked(&cursor_path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!cursor_path.exists());
 }
 
 #[test]

@@ -10,8 +10,8 @@ pub use gfm_search::{
 };
 use gfm_search::{SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
-    compact_content_segments, compact_content_segments_with_policy, read_records, write_records,
-    MmapContentArchive, MmapContentSet, MmapRecordArchive,
+    compact_content_segments, compact_content_segments_with_policy, read_records_checked,
+    write_records, MmapContentArchive, MmapContentSet, MmapRecordArchive,
 };
 pub use gfm_store::{
     ContentArchiveCleanupAction, ContentArchiveCleanupPlan, ContentArchiveCleanupPolicy,
@@ -509,7 +509,9 @@ impl Indexer {
                 format!("index state existence unavailable: {err}"),
             )
         })? {
-            Some(IndexVolumeState::read(state_path)?)
+            Some(IndexVolumeState::read_checked(state_path, || {
+                cancellation.check()
+            })?)
         } else {
             None
         };
@@ -634,9 +636,29 @@ impl Indexer {
         last_event_id: u64,
         health: FseventsCursorHealth,
     ) -> Result<FseventsCursor> {
-        let volume = IndexVolumeState::read(state_path)?;
+        self.checkpoint_fsevents_cursor_cancellable(
+            state_path,
+            cursor_path,
+            last_event_id,
+            health,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn checkpoint_fsevents_cursor_cancellable(
+        &self,
+        state_path: impl AsRef<Path>,
+        cursor_path: impl AsRef<Path>,
+        last_event_id: u64,
+        health: FseventsCursorHealth,
+        cancellation: &Cancellation,
+    ) -> Result<FseventsCursor> {
+        cancellation.check()?;
+        let volume = IndexVolumeState::read_checked(state_path, || cancellation.check())?;
+        cancellation.check()?;
         let cursor = FseventsCursor::checkpoint(&volume, last_event_id, health);
         cursor.write(cursor_path)?;
+        cancellation.check()?;
         Ok(cursor)
     }
 
@@ -645,8 +667,19 @@ impl Indexer {
         state_path: impl AsRef<Path>,
         cursor_path: impl AsRef<Path>,
     ) -> Result<FseventsResumePlan> {
-        let volume = IndexVolumeState::read(state_path)?;
-        FseventsResumePlan::read(&volume, cursor_path)
+        self.fsevents_resume_plan_cancellable(state_path, cursor_path, &Cancellation::default())
+    }
+
+    pub fn fsevents_resume_plan_cancellable(
+        &self,
+        state_path: impl AsRef<Path>,
+        cursor_path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<FseventsResumePlan> {
+        cancellation.check()?;
+        let volume = IndexVolumeState::read_checked(state_path, || cancellation.check())?;
+        cancellation.check()?;
+        FseventsResumePlan::read_checked(&volume, cursor_path, || cancellation.check())
     }
 
     pub fn repair_schedule(
@@ -657,8 +690,31 @@ impl Indexer {
         dropped_roots: &[PathBuf],
         explicit_reason: Option<&str>,
     ) -> Result<RepairSchedule> {
-        let volume = IndexVolumeState::read(state_path)?;
-        let resume = FseventsResumePlan::read(&volume, cursor_path)?;
+        self.repair_schedule_cancellable(
+            state_path,
+            cursor_path,
+            observed_event_ids,
+            dropped_roots,
+            explicit_reason,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn repair_schedule_cancellable(
+        &self,
+        state_path: impl AsRef<Path>,
+        cursor_path: impl AsRef<Path>,
+        observed_event_ids: &[u64],
+        dropped_roots: &[PathBuf],
+        explicit_reason: Option<&str>,
+        cancellation: &Cancellation,
+    ) -> Result<RepairSchedule> {
+        cancellation.check()?;
+        let volume = IndexVolumeState::read_checked(state_path, || cancellation.check())?;
+        cancellation.check()?;
+        let resume =
+            FseventsResumePlan::read_checked(&volume, cursor_path, || cancellation.check())?;
+        cancellation.check()?;
         Ok(RepairSchedule::evaluate(
             &volume,
             resume,
@@ -678,7 +734,7 @@ impl Indexer {
         cancellation: &Cancellation,
     ) -> Result<IndexSnapshot> {
         cancellation.check()?;
-        let records = read_records(path)?;
+        let records = read_records_checked(path, || cancellation.check())?;
         cancellation.check()?;
         Ok(IndexSnapshot {
             root: PathBuf::new(),

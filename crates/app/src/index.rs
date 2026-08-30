@@ -380,7 +380,7 @@ fn parse_event_ids(value: &str) -> Result<Vec<u64>> {
 
 fn run_index_state_inspect(state: PathBuf) -> Result<IndexVolumeState> {
     run_index_read_task(state, "index state inspect", |path, cancellation| {
-        let state = IndexVolumeState::read(path)?;
+        let state = IndexVolumeState::read_checked(path, || cancellation.check())?;
         cancellation.check()?;
         Ok(state)
     })
@@ -400,7 +400,7 @@ fn run_scan_progress_inspect(progress: PathBuf) -> Result<gfm_index::ScanProgres
 
 fn run_fsevents_cursor_inspect(cursor: PathBuf) -> Result<FseventsCursor> {
     run_index_read_task(cursor, "fsevents cursor inspect", |path, cancellation| {
-        let cursor = FseventsCursor::read(path)?;
+        let cursor = FseventsCursor::read_checked(path, || cancellation.check())?;
         cancellation.check()?;
         Ok(cursor)
     })
@@ -429,7 +429,13 @@ fn run_fsevents_cursor_checkpoint(
             let _state_access = preflight_index_read(&state, "fsevents cursor checkpoint state")?;
             let _cursor_access = preflight_index_write(&cursor, "fsevents cursor checkpoint")?;
             cancellation.check()?;
-            Indexer::default().checkpoint_fsevents_cursor(state, cursor, event_id, health)
+            Indexer::default().checkpoint_fsevents_cursor_cancellable(
+                state,
+                cursor,
+                event_id,
+                health,
+                &cancellation,
+            )
         },
     )
 }
@@ -450,7 +456,7 @@ fn run_fsevents_cursor_resume(
             let _state_access = preflight_index_read(&state, "fsevents cursor resume state")?;
             let _cursor_access = preflight_index_read(&cursor, "fsevents cursor resume")?;
             cancellation.check()?;
-            Indexer::default().fsevents_resume_plan(state, cursor)
+            Indexer::default().fsevents_resume_plan_cancellable(state, cursor, &cancellation)
         },
     )
 }
@@ -489,12 +495,13 @@ fn run_fsevents_repair_schedule(
                 .map(|root| preflight_index_read(root, "fsevents repair schedule dropped root"))
                 .collect::<Result<Vec<_>>>()?;
             cancellation.check()?;
-            Indexer::default().repair_schedule(
+            Indexer::default().repair_schedule_cancellable(
                 state,
                 cursor,
                 &observed_event_ids,
                 &existing_dropped_roots,
                 reason.as_deref(),
+                &cancellation,
             )
         },
     )

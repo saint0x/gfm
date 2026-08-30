@@ -207,7 +207,7 @@ fn plan_persistent_index_recovery_checked(
     }
 
     check_control()?;
-    let state = match IndexVolumeState::read(&state_path) {
+    let state = match IndexVolumeState::read_checked(&state_path, &mut check_control) {
         Ok(state) => state,
         Err(err) => {
             let detail = err.to_string();
@@ -400,7 +400,7 @@ fn write_state_from_records(
         inaccessible: Vec::new(),
     };
     check_control()?;
-    let previous = IndexVolumeState::read(state_path).ok();
+    let previous = IndexVolumeState::read_checked(state_path, &mut check_control).ok();
     check_control()?;
     let state = snapshot.volume_state(records_path.to_path_buf(), previous.as_ref())?;
     check_control()?;

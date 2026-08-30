@@ -77,8 +77,17 @@ impl IndexVolumeState {
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_checked(path, || Ok(()))
+    }
+
+    pub fn read_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mut lines = BufReader::new(file).lines();
         match lines.next() {
             Some(Ok(header)) if header == MAGIC => {}
@@ -96,6 +105,7 @@ impl IndexVolumeState {
                 )))
             }
         }
+        check_control()?;
 
         let mut schema_version = None;
         let mut root = None;
@@ -108,7 +118,9 @@ impl IndexVolumeState {
         let mut seen_fields = BTreeSet::new();
 
         for (line_index, line) in lines.enumerate() {
+            check_control()?;
             let line = line.map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
             let (key, value) = line.split_once('\t').ok_or_else(|| {
                 GfmError::Format(format!(
                     "{} line {}: expected key and value",
@@ -144,6 +156,7 @@ impl IndexVolumeState {
                 }
             }
         }
+        check_control()?;
 
         let state = Self {
             schema_version: required(schema_version, "schema_version", path)?,
@@ -162,6 +175,7 @@ impl IndexVolumeState {
                 state.schema_version
             )));
         }
+        check_control()?;
         Ok(state)
     }
 

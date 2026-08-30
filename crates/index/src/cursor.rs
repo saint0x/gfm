@@ -76,8 +76,17 @@ impl FseventsCursor {
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_checked(path, || Ok(()))
+    }
+
+    pub fn read_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mut lines = BufReader::new(file).lines();
         match lines.next() {
             Some(Ok(header)) if header == MAGIC => {}
@@ -95,6 +104,7 @@ impl FseventsCursor {
                 )))
             }
         }
+        check_control()?;
 
         let mut schema_version = None;
         let mut volume_id = None;
@@ -103,7 +113,9 @@ impl FseventsCursor {
         let mut last_event_id = None;
         let mut health = None;
         for (line_index, line) in lines.enumerate() {
+            check_control()?;
             let line = line.map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
             let (key, value) = line.split_once('\t').ok_or_else(|| {
                 GfmError::Format(format!(
                     "{} line {}: expected key and value",
@@ -128,6 +140,7 @@ impl FseventsCursor {
                 }
             }
         }
+        check_control()?;
 
         let cursor = Self {
             schema_version: required(schema_version, "schema_version", path)?,
@@ -144,6 +157,7 @@ impl FseventsCursor {
                 cursor.schema_version
             )));
         }
+        check_control()?;
         Ok(cursor)
     }
 
@@ -210,17 +224,31 @@ impl FseventsResumePlan {
     }
 
     pub fn read(volume: &IndexVolumeState, cursor_path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_checked(volume, cursor_path, || Ok(()))
+    }
+
+    pub fn read_checked(
+        volume: &IndexVolumeState,
+        cursor_path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let cursor_path = cursor_path.as_ref();
+        check_control()?;
         let cursor = if cursor_path.try_exists().map_err(|err| {
             GfmError::io(
                 cursor_path,
                 format!("fsevents cursor existence unavailable: {err}"),
             )
         })? {
-            Some(FseventsCursor::read(cursor_path)?)
+            check_control()?;
+            Some(FseventsCursor::read_checked(
+                cursor_path,
+                &mut check_control,
+            )?)
         } else {
             None
         };
+        check_control()?;
         Ok(Self::evaluate(volume, cursor.as_ref()))
     }
 
