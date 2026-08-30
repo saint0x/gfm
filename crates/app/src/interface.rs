@@ -1233,7 +1233,10 @@ fn run_ui_fileprovider_observed_invalidation(
             )?];
             cancellation.check()?;
             let previous = if ui_fileprovider_state_file_exists(&state_path, WORKER)? {
-                Some(FileProviderStateSnapshot::read(&state_path)?)
+                Some(FileProviderStateSnapshot::read_checked(
+                    &state_path,
+                    || cancellation.check(),
+                )?)
             } else {
                 None
             };
@@ -1245,7 +1248,7 @@ fn run_ui_fileprovider_observed_invalidation(
             cancellation.check()?;
             let (observed, snapshot) =
                 FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
-            snapshot.write(&state_path)?;
+            snapshot.write_checked(&state_path, || cancellation.check())?;
             Ok(observed)
         },
     )

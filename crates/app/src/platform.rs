@@ -2160,7 +2160,10 @@ fn run_fileprovider_invalidation_scan(
         let _access = retain_fileprovider_snapshot_access(&state_path, &paths, WORKER)?;
         cancellation.check()?;
         let previous = if fileprovider_state_file_exists(&state_path, WORKER)? {
-            Some(FileProviderStateSnapshot::read(&state_path)?)
+            Some(FileProviderStateSnapshot::read_checked(
+                &state_path,
+                || cancellation.check(),
+            )?)
         } else {
             None
         };
@@ -2168,7 +2171,7 @@ fn run_fileprovider_invalidation_scan(
         let (report, snapshot) =
             FileProviderStateInvalidationReport::evaluate(previous.as_ref(), paths)?;
         cancellation.check()?;
-        snapshot.write(&state_path)?;
+        snapshot.write_checked(&state_path, || cancellation.check())?;
         Ok(report)
     })
 }
@@ -2205,7 +2208,9 @@ fn evaluate_fileprovider_observed_invalidation(
     )?];
     cancellation.check()?;
     let previous = if fileprovider_state_file_exists(state_path, worker)? {
-        Some(FileProviderStateSnapshot::read(state_path)?)
+        Some(FileProviderStateSnapshot::read_checked(state_path, || {
+            cancellation.check()
+        })?)
     } else {
         None
     };
@@ -2219,7 +2224,7 @@ fn evaluate_fileprovider_observed_invalidation(
     let (observed, snapshot) =
         FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
     cancellation.check()?;
-    snapshot.write(state_path)?;
+    snapshot.write_checked(state_path, || cancellation.check())?;
     Ok(observed)
 }
 
@@ -2346,7 +2351,10 @@ pub(crate) fn run_fileprovider_observer_probe(
             )?;
             cancellation.check()?;
             let previous = if fileprovider_state_file_exists(&state_path, &state_worker)? {
-                Some(FileProviderStateSnapshot::read(&state_path)?)
+                Some(FileProviderStateSnapshot::read_checked(
+                    &state_path,
+                    || cancellation.check(),
+                )?)
             } else {
                 None
             };
@@ -2358,7 +2366,9 @@ pub(crate) fn run_fileprovider_observer_probe(
             cancellation.check()?;
             let observed = drain_fileprovider_observer_probe(&mut observer, &cancellation)?;
             cancellation.check()?;
-            observer.snapshot().write(&state_path)?;
+            observer
+                .snapshot()
+                .write_checked(&state_path, || cancellation.check())?;
             Ok(observed)
         },
     )

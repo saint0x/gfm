@@ -895,8 +895,17 @@ impl FileProviderStateSnapshot {
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_checked(path, || Ok(()))
+    }
+
+    pub fn read_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let text = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mut lines = text.lines();
         match lines.next() {
             Some("gfm-fileprovider-state-v1") => {}
@@ -916,6 +925,7 @@ impl FileProviderStateSnapshot {
         let mut entries = Vec::new();
         let mut seen_paths = BTreeSet::new();
         for (line_index, line) in lines.enumerate() {
+            check_control()?;
             if line.trim().is_empty() {
                 continue;
             }
@@ -953,6 +963,14 @@ impl FileProviderStateSnapshot {
     }
 
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        self.write_checked(path, || Ok(()))
+    }
+
+    pub fn write_checked(
+        &self,
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
         let path = path.as_ref();
         validate_unique_fileprovider_snapshot_paths(path, &self.entries)?;
         let mut entries = self.entries.clone();
@@ -965,7 +983,7 @@ impl FileProviderStateSnapshot {
                 escape_field(&entry.path.to_string_lossy())
             ));
         }
-        atomic_write_text(path, &output)
+        atomic_write_text_checked(path, &output, &mut check_control)
     }
 
     fn state_index(&self) -> BTreeMap<&Path, CloudStorageState> {
@@ -2748,22 +2766,35 @@ fn unescape_field(value: &str) -> String {
     output
 }
 
-fn atomic_write_text(path: &Path, text: &str) -> Result<()> {
+fn atomic_write_text_checked(
+    path: &Path,
+    text: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
+    check_control()?;
     let temporary = temporary_path(path);
     let mut file = File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
     if let Err(err) = file.write_all(text.as_bytes()) {
         let _ = fs::remove_file(&temporary);
         return Err(GfmError::io(&temporary, err));
     }
+    if let Err(err) = check_control() {
+        let _ = fs::remove_file(&temporary);
+        return Err(err);
+    }
     if let Err(err) = file.sync_all() {
         let _ = fs::remove_file(&temporary);
         return Err(GfmError::io(&temporary, err));
+    }
+    if let Err(err) = check_control() {
+        let _ = fs::remove_file(&temporary);
+        return Err(err);
     }
     drop(file);
     if let Err(err) = fs::rename(&temporary, path) {
@@ -3324,6 +3355,49 @@ mod tests {
         assert!(err
             .to_string()
             .contains("unsupported FileProvider storage state `broken`"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_state_snapshot_read_honors_pre_cancelled_control_before_file_open() {
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-fileprovider-snapshot-cancelled\0path".to_vec(),
+        ));
+
+        let err = FileProviderStateSnapshot::read_checked(&path, || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn checked_state_snapshot_read_can_cancel_during_parse() {
+        let root = unique_temp_dir();
+        let path = root.join("fileprovider-state.tsv");
+        fs::write(
+            &path,
+            format!(
+                "gfm-fileprovider-state-v1\nevicted\t{}\ndownloaded\t{}\n",
+                escape_field(&root.join("Remote.icloud-placeholder").to_string_lossy()),
+                escape_field(&root.join("Remote.icloud-downloaded").to_string_lossy())
+            ),
+        )
+        .unwrap();
+        let mut checks = 0usize;
+
+        let err = FileProviderStateSnapshot::read_checked(&path, || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(checks >= 4);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -4813,6 +4887,53 @@ mod tests {
         assert_eq!(restored.entries[1].path, first);
         assert_eq!(restored.entries[1].state, CloudStorageState::Evicted);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_state_snapshot_write_preserves_existing_state_on_cancel() {
+        let root = unique_temp_dir();
+        let snapshot_path = root.join("state.tsv");
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: root.join("Remote.icloud-placeholder"),
+                state: CloudStorageState::Evicted,
+            }],
+        };
+        let current = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: root.join("Remote.icloud-downloaded"),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+        previous.write(&snapshot_path).unwrap();
+        let before = fs::read(&snapshot_path).unwrap();
+        let mut checks = 0usize;
+
+        let err = current
+            .write_checked(&snapshot_path, || {
+                checks += 1;
+                if checks >= 3 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(fs::read(&snapshot_path).unwrap(), before);
+        let leftovers = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".state.tsv")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
         fs::remove_dir_all(root).unwrap();
     }
 
