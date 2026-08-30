@@ -11872,7 +11872,7 @@ fn content_manifest_write_reports_manifest_probe_failure_before_publishing_from_
 
 #[test]
 fn content_manifest_write_reports_manifest_probe_failure_before_archive_admission_from_binary() {
-    let root = unique_temp_dir("gfm-cli-content-manifest-write-probe");
+    let root = unique_temp_dir("gfm-cli-content-manifest-write-admission-probe");
     let content = root.join("content.gfmcontent");
     let manifest = root.join(format!(
         "{}.gfmmanifest",
