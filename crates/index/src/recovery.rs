@@ -3,6 +3,7 @@ use gfm_jobs::Cancellation;
 use gfm_store::read_records_checked;
 use gfm_types::{GfmError, Result};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -428,12 +429,19 @@ fn read_state_schema_version_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Option<u32> {
     check_control().ok()?;
-    let text = fs::read_to_string(path).ok()?;
+    let file = fs::File::open(path).ok()?;
     check_control().ok()?;
-    text.lines().find_map(|line| {
-        let value = line.strip_prefix("schema_version\t")?;
-        value.parse().ok()
-    })
+    let lines = BufReader::new(file).lines();
+    for line in lines {
+        check_control().ok()?;
+        let line = line.ok()?;
+        let Some(value) = line.strip_prefix("schema_version\t") else {
+            continue;
+        };
+        return value.parse().ok();
+    }
+    check_control().ok()?;
+    None
 }
 
 fn optional_usize(value: Option<usize>) -> String {
