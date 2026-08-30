@@ -383,7 +383,7 @@ fn run_manifest_inspect(manifest_path: PathBuf) -> Result<Vec<String>> {
             cancellation.check()?;
             let _archive_access = retain_manifest_inspect_archive_access(paths.iter())?;
             cancellation.check()?;
-            let set = MmapContentSet::open(&paths)?;
+            let set = MmapContentSet::open_checked(&paths, || cancellation.check())?;
             let mut lines = vec![format!(
                 "content-manifest\tarchives={}\tterms={}\tbytes={}",
                 set.archive_count(),
