@@ -949,22 +949,19 @@ impl FileProviderStateSnapshot {
     }
 
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
-        let mut snapshot = self.clone();
-        snapshot
-            .entries
-            .sort_by(|left, right| left.path.cmp(&right.path));
-        snapshot
-            .entries
-            .dedup_by(|left, right| left.path == right.path);
+        let path = path.as_ref();
+        validate_unique_fileprovider_snapshot_paths(path, &self.entries)?;
+        let mut entries = self.entries.clone();
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
         let mut output = String::from("gfm-fileprovider-state-v1\n");
-        for entry in &snapshot.entries {
+        for entry in &entries {
             output.push_str(&format!(
                 "{}\t{}\n",
                 entry.state.as_str(),
                 escape_field(&entry.path.to_string_lossy())
             ));
         }
-        atomic_write_text(path.as_ref(), &output)
+        atomic_write_text(path, &output)
     }
 
     fn state_index(&self) -> BTreeMap<&Path, CloudStorageState> {
@@ -981,6 +978,23 @@ impl FileProviderStateSnapshot {
             .map(|entry| entry.path.clone())
             .collect()
     }
+}
+
+fn validate_unique_fileprovider_snapshot_paths(
+    path: &Path,
+    entries: &[FileProviderStateSnapshotEntry],
+) -> Result<()> {
+    let mut seen_paths = BTreeSet::new();
+    for entry in entries {
+        if !seen_paths.insert(entry.path.clone()) {
+            return Err(GfmError::Format(format!(
+                "duplicate FileProvider state path `{}` before writing {}",
+                entry.path.display(),
+                path.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl FileProviderStateInvalidationReport {
@@ -3218,6 +3232,35 @@ mod tests {
             }]
         );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_state_snapshot_write_rejects_duplicate_paths_before_persisting() {
+        let root = unique_temp_dir();
+        let path = root.join("fileprovider-state.tsv");
+        let tracked = root.join("Remote.icloud-placeholder");
+        let snapshot = FileProviderStateSnapshot {
+            entries: vec![
+                FileProviderStateSnapshotEntry {
+                    path: tracked.clone(),
+                    state: CloudStorageState::Evicted,
+                },
+                FileProviderStateSnapshotEntry {
+                    path: tracked.clone(),
+                    state: CloudStorageState::Downloaded,
+                },
+            ],
+        };
+
+        let err = snapshot.write(&path).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("duplicate FileProvider state path"));
+        assert!(err.to_string().contains("before writing"));
+        assert!(err.to_string().contains(&tracked.display().to_string()));
+        assert!(!path.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
