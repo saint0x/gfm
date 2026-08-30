@@ -1232,6 +1232,7 @@ fn reports_fileprovider_state_from_binary() {
     let evicted = root.join("Evicted.icloud-placeholder");
     let value_evicted = root.join("ValueEvicted.icloud.md");
     let value_current = root.join("Remote.icloud-placeholder");
+    let value_downloaded_false = root.join("DownloadedFalse.icloud.md");
     let local_with_provider_xattr = root.join("Local.md");
     let conflict = root.join("Conflict.icloud-conflict.md");
     std::fs::write(&downloaded, "downloaded").unwrap();
@@ -1246,6 +1247,13 @@ fn reports_fileprovider_state_from_binary() {
     .unwrap();
     std::fs::write(&value_current, "current").unwrap();
     xattr::set(&value_current, "com.apple.fileprovider.state", b"current").unwrap();
+    std::fs::write(&value_downloaded_false, "downloaded false").unwrap();
+    xattr::set(
+        &value_downloaded_false,
+        "com.apple.fileprovider.state",
+        b"isDownloaded=false; isDownloading=false",
+    )
+    .unwrap();
     std::fs::write(&local_with_provider_xattr, "local").unwrap();
     xattr::set(
         &local_with_provider_xattr,
@@ -1398,6 +1406,30 @@ fn reports_fileprovider_state_from_binary() {
     assert!(value_current_stdout.contains("\tmaterialization-source=xattr-fallback\t"));
     assert!(value_current_stdout.contains("\tbadges=available-offline\t"));
     assert!(value_current_stdout.contains("\treason=not-native-provider-backed"));
+
+    let value_downloaded_false_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-state")
+        .arg(&value_downloaded_false)
+        .output()
+        .unwrap();
+    assert!(
+        value_downloaded_false_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&value_downloaded_false_output.stderr)
+    );
+    let value_downloaded_false_stdout =
+        String::from_utf8(value_downloaded_false_output.stdout).unwrap();
+    let value_downloaded_false_stderr =
+        String::from_utf8_lossy(&value_downloaded_false_output.stderr);
+    assert_worker_admitted(
+        &value_downloaded_false_stderr,
+        "fileprovider state",
+        &value_downloaded_false,
+    );
+    assert!(value_downloaded_false_stdout
+        .contains("\tstate=evicted\tmaterialization=remote-placeholder\t"));
+    assert!(value_downloaded_false_stdout.contains("\tmaterialization-source=xattr-fallback\t"));
+    assert!(value_downloaded_false_stdout.contains("\tbadges=cloud\t"));
 
     let local_with_provider_xattr_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-state")

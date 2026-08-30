@@ -1829,31 +1829,130 @@ fn xattr_storage_state(hints: &CloudHints) -> Option<CloudStorageState> {
     if blob.is_empty() {
         return None;
     }
-    if blob.contains("conflict") || blob.contains("unresolved") {
+    if has_truthy_marker(
+        &blob,
+        &[
+            "conflict",
+            "conflicts",
+            "unresolved-conflicts",
+            "hasunresolvedconflicts",
+        ],
+    ) || contains_state_phrase_without_false_marker(
+        &blob,
+        &["unresolved-conflict", "unresolved conflict", "conflict"],
+        &[
+            "conflict",
+            "conflicts",
+            "unresolved-conflicts",
+            "hasunresolvedconflicts",
+        ],
+    ) {
         Some(CloudStorageState::Conflict)
-    } else if blob.contains("offline") || blob.contains("network") {
+    } else if has_truthy_marker(&blob, &["offline", "network-offline"])
+        || contains_state_phrase_without_false_marker(
+            &blob,
+            &["offline", "network-unavailable", "network unavailable"],
+            &["offline", "network-offline"],
+        )
+    {
         Some(CloudStorageState::Offline)
-    } else if blob.contains("downloading") || blob.contains("download-in-progress") {
+    } else if has_truthy_marker(&blob, &["downloading", "isdownloading"])
+        || contains_state_phrase_without_false_marker(
+            &blob,
+            &[
+                "download-in-progress",
+                "download in progress",
+                "downloading",
+            ],
+            &["downloading", "isdownloading"],
+        )
+    {
         Some(CloudStorageState::Downloading)
-    } else if blob.contains("uploading") || blob.contains("upload-in-progress") {
+    } else if has_truthy_marker(&blob, &["uploading", "isuploading"])
+        || contains_state_phrase_without_false_marker(
+            &blob,
+            &["upload-in-progress", "upload in progress", "uploading"],
+            &["uploading", "isuploading"],
+        )
+    {
         Some(CloudStorageState::Uploading)
-    } else if blob.contains("waiting") || blob.contains("queued") || blob.contains("requested") {
+    } else if has_truthy_marker(
+        &blob,
+        &["waiting", "queued", "requested", "downloadrequested"],
+    ) || contains_state_phrase_without_false_marker(
+        &blob,
+        &["waiting", "queued", "requested"],
+        &["waiting", "queued", "requested", "downloadrequested"],
+    ) {
         Some(CloudStorageState::Waiting)
     } else if blob.contains("not-downloaded")
         || blob.contains("not_downloaded")
         || blob.contains("not downloaded")
         || blob.contains("evicted")
         || blob.contains("placeholder")
+        || has_false_marker(
+            &blob,
+            &["downloaded", "isdownloaded", "current", "materialized"],
+        )
     {
         Some(CloudStorageState::Evicted)
-    } else if blob.contains("downloaded")
-        || blob.contains("current")
-        || blob.contains("materialized")
-    {
+    } else if has_truthy_marker(
+        &blob,
+        &["downloaded", "isdownloaded", "current", "materialized"],
+    ) || contains_state_phrase_without_false_marker(
+        &blob,
+        &["downloaded", "current", "materialized"],
+        &["downloaded", "isdownloaded", "current", "materialized"],
+    ) {
         Some(CloudStorageState::Downloaded)
     } else {
         None
     }
+}
+
+fn contains_state_phrase_without_false_marker(
+    blob: &str,
+    phrases: &[&str],
+    false_markers: &[&str],
+) -> bool {
+    phrases.iter().any(|phrase| blob.contains(phrase)) && !has_false_marker(blob, false_markers)
+}
+
+fn has_truthy_marker(blob: &str, names: &[&str]) -> bool {
+    names
+        .iter()
+        .any(|name| has_marker_value(blob, name, &["true", "1", "yes", "on"]))
+}
+
+fn has_false_marker(blob: &str, names: &[&str]) -> bool {
+    names
+        .iter()
+        .any(|name| has_marker_value(blob, name, &["false", "0", "no", "off"]))
+}
+
+fn has_marker_value(blob: &str, name: &str, values: &[&str]) -> bool {
+    let mut offset = 0;
+    while let Some(found) = blob[offset..].find(name) {
+        let after_name = &blob[offset + found + name.len()..];
+        let Some(after_separator) = after_name
+            .strip_prefix('=')
+            .or_else(|| after_name.strip_prefix(':'))
+            .or_else(|| after_name.strip_prefix(' '))
+            .or_else(|| after_name.strip_prefix('-'))
+            .or_else(|| after_name.strip_prefix('_'))
+        else {
+            offset += found + name.len();
+            continue;
+        };
+        if values
+            .iter()
+            .any(|value| after_separator.starts_with(value))
+        {
+            return true;
+        }
+        offset += found + name.len();
+    }
+    false
 }
 
 fn path_only_provider_hint(source: &str) -> bool {
@@ -5004,6 +5103,66 @@ mod tests {
         assert_eq!(
             report.commands.reason.as_deref(),
             Some("not-native-provider-backed")
+        );
+    }
+
+    #[test]
+    fn xattr_value_downloaded_false_marks_remote_placeholder() {
+        let path = PathBuf::from("/tmp/Downloaded.icloud.md");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: vec!["com.apple.fileprovider.state".to_string()],
+            xattr_values: vec!["isDownloaded=false; isDownloading=false".to_string()],
+            provider_identifier: None,
+            source: "fixture-name+xattr".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::RemotePlaceholder
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::XattrFallback
+        );
+        assert_eq!(report.progress.percent_milli, Some(0));
+        assert_eq!(report.commands.download, CloudCommandState::Disabled);
+    }
+
+    #[test]
+    fn xattr_value_conflict_false_does_not_override_evicted_state() {
+        let path = PathBuf::from("/tmp/Remote.icloud.md");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: vec!["com.apple.fileprovider.state".to_string()],
+            xattr_values: vec!["hasUnresolvedConflicts=false; isDownloaded=false".to_string()],
+            provider_identifier: None,
+            source: "fixture-name+xattr".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert!(!report.conflict);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::RemotePlaceholder
         );
     }
 
