@@ -1234,6 +1234,7 @@ fn reports_fileprovider_state_from_binary() {
     let value_current = root.join("Remote.icloud-placeholder");
     let value_downloaded_false = root.join("DownloadedFalse.icloud.md");
     let value_conflict_false = root.join("Clean.icloud.md");
+    let value_false_prefix = root.join("FalsePrefix.icloud.md");
     let local_with_provider_xattr = root.join("Local.md");
     let conflict = root.join("Conflict.icloud-conflict.md");
     std::fs::write(&downloaded, "downloaded").unwrap();
@@ -1260,6 +1261,13 @@ fn reports_fileprovider_state_from_binary() {
         &value_conflict_false,
         "com.apple.fileprovider.state",
         b"hasUnresolvedConflicts=false",
+    )
+    .unwrap();
+    std::fs::write(&value_false_prefix, "false prefix").unwrap();
+    xattr::set(
+        &value_false_prefix,
+        "com.apple.fileprovider.state",
+        b"isDownloaded=falsepositive",
     )
     .unwrap();
     std::fs::write(&local_with_provider_xattr, "local").unwrap();
@@ -1462,6 +1470,28 @@ fn reports_fileprovider_state_from_binary() {
     );
     assert!(value_conflict_false_stdout.contains("\tconflict=false\t"));
     assert!(value_conflict_false_stdout.contains("\tmaterialization-source=xattr-fallback\t"));
+
+    let value_false_prefix_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-state")
+        .arg(&value_false_prefix)
+        .output()
+        .unwrap();
+    assert!(
+        value_false_prefix_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&value_false_prefix_output.stderr)
+    );
+    let value_false_prefix_stdout = String::from_utf8(value_false_prefix_output.stdout).unwrap();
+    let value_false_prefix_stderr = String::from_utf8_lossy(&value_false_prefix_output.stderr);
+    assert_worker_admitted(
+        &value_false_prefix_stderr,
+        "fileprovider state",
+        &value_false_prefix,
+    );
+    assert!(
+        value_false_prefix_stdout.contains("\tstate=downloaded\tmaterialization=materialized\t")
+    );
+    assert!(value_false_prefix_stdout.contains("\tmaterialization-source=xattr-fallback\t"));
 
     let local_with_provider_xattr_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-state")

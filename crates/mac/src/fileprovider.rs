@@ -1983,15 +1983,21 @@ fn has_marker_value(blob: &str, name: &str, values: &[&str]) -> bool {
             offset += found + name.len();
             continue;
         };
-        if values
-            .iter()
-            .any(|value| after_separator.starts_with(value))
-        {
+        if values.iter().any(|value| {
+            after_separator.starts_with(value)
+                && marker_value_has_boundary(&after_separator[value.len()..])
+        }) {
             return true;
         }
         offset += found + name.len();
     }
     false
+}
+
+fn marker_value_has_boundary(rest: &str) -> bool {
+    rest.chars()
+        .next()
+        .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')))
 }
 
 fn path_only_provider_hint(source: &str) -> bool {
@@ -5232,6 +5238,30 @@ mod tests {
         assert_eq!(
             report.materialization_source,
             CloudMaterializationSource::XattrFallback
+        );
+
+        let suffix_path = root.join("Suffix.icloud.md");
+        fs::write(&suffix_path, "suffix").unwrap();
+        let suffix_hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: vec!["com.apple.fileprovider.state".to_string()],
+            xattr_values: vec!["isDownloaded=falsepositive".to_string()],
+            provider_identifier: None,
+            source: "fixture-name+xattr".to_string(),
+        };
+
+        let suffix_report = FileProviderStateReport::from_hints(suffix_path, suffix_hints);
+
+        assert_eq!(suffix_report.storage_state, CloudStorageState::Downloaded);
+        assert_eq!(
+            suffix_report.materialization,
+            CloudMaterialization::Materialized
         );
 
         fs::remove_dir_all(root).unwrap();
