@@ -7415,6 +7415,43 @@
         "tmp/gfm-fozzy-content-set-search-retry-second.gfmcontent"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-content-set-session-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-content-set-session-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-content-set-session-retry.progress"
+      },
+      "args": [
+        "search-content-index-set-session-retry-probe",
+        "tmp/gfm-fozzy-content-set-search-retry.gfmidx",
+        "set",
+        "tmp/gfm-fozzy-content-set-session-retry.state",
+        "tmp/gfm-fozzy-content-set-search-retry-first.gfmcontent",
+        "tmp/gfm-fozzy-content-set-search-retry-second.gfmcontent"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-content-set-session-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-content-set-session-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-content-set-session-retry.progress"
+      },
+      "args": [
+        "search-content-index-set-session-retry-probe",
+        "tmp/gfm-fozzy-content-set-search-retry.gfmidx",
+        "set",
+        "tmp/gfm-fozzy-content-set-session-retry.state",
+        "tmp/gfm-fozzy-content-set-search-retry-first.gfmcontent",
+        "tmp/gfm-fozzy-content-set-search-retry-second.gfmcontent"
+      ],
+      "expect_exit": 0
     }
   ]
 }

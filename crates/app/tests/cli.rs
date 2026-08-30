@@ -10646,6 +10646,138 @@ fn search_content_index_set_retries_transient_archive_read_failure_from_binary()
 }
 
 #[test]
+fn search_content_index_set_session_retries_transient_archive_read_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-content-index-set-session-retry-root");
+    let records = unique_temp_path(
+        "gfm-cli-search-content-index-set-session-retry-records",
+        "gfmidx",
+    );
+    let first_content = unique_temp_path(
+        "gfm-cli-search-content-index-set-session-retry-first",
+        "gfmcontent",
+    );
+    let second_content = unique_temp_path(
+        "gfm-cli-search-content-index-set-session-retry-second",
+        "gfmcontent",
+    );
+    let journal = unique_temp_path("gfm-cli-search-content-index-set-session-retry", "journal");
+    let catalog = unique_temp_path("gfm-cli-search-content-index-set-session-retry", "gfmjobs");
+    let progress = unique_temp_path(
+        "gfm-cli-search-content-index-set-session-retry",
+        "gfmprogress",
+    );
+    let retry_probe = unique_temp_path("gfm-cli-search-content-index-set-session-retry", "state");
+    fs::write(root.join("left-set-session-retry.md"), "metadata only").unwrap();
+    fs::write(root.join("right-set-session-retry.md"), "metadata only").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let indexed_records = read_records(&records).unwrap();
+    let left = indexed_records
+        .iter()
+        .find(|record| record.path.ends_with("left-set-session-retry.md"))
+        .unwrap()
+        .id;
+    let right = indexed_records
+        .iter()
+        .find(|record| record.path.ends_with("right-set-session-retry.md"))
+        .unwrap()
+        .id;
+    write_content_postings(
+        &first_content,
+        &[ContentPosting {
+            term: "setsessionretrymarker".to_string(),
+            ids: vec![left],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    write_content_postings(
+        &second_content,
+        &[ContentPosting {
+            term: "setsessionretrymarker".to_string(),
+            ids: vec![right],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "search-content-index-set-session-retry-probe",
+            records.to_str().unwrap(),
+            "setsessionretrymarker",
+            retry_probe.to_str().unwrap(),
+            first_content.to_str().unwrap(),
+            second_content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(stdout.contains("left-set-session-retry.md"), "{stdout}");
+    assert!(stdout.contains("right-set-session-retry.md"), "{stdout}");
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let stderr = String::from_utf8(search_output.stderr).unwrap();
+    assert!(
+        stderr.contains(
+            "content-session-second\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("\tposting-cache-hits=0\tposting-cache-misses=0")
+            && stderr.contains("\trecord-cache-hits=0\trecord-cache-misses=0")
+            && stderr.contains("\tresult-cache-hits=1\tresult-cache-misses=0"),
+        "{stderr}"
+    );
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tcontent index set session"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains(
+            "1\t1\tfailed:temporary content index set session retry probe busy\tcontent index set session"
+        ),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tcontent index set session"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tcontent index set session"),
+        "{journal_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(first_content).unwrap();
+    fs::remove_file(second_content).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
+}
+
+#[test]
 fn adaptive_persisted_content_search_applies_snippet_pressure_budget_from_binary() {
     let root = unique_temp_dir("gfm-cli-durable-adaptive-snippet-root");
     let records = unique_temp_path("gfm-cli-durable-adaptive-snippet-records", "gfmidx");

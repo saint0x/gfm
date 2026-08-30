@@ -208,7 +208,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
-        "search-content-index-set-session" => {
+        "search-content-index-set-session" | "search-content-index-set-session-retry-probe" => {
             let records = required_path(
                 args.next(),
                 "search-content-index-set-session requires a records path",
@@ -217,6 +217,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-content-index-set-session requires a query string",
             )?;
+            let retry_probe = if command == "search-content-index-set-session-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "search-content-index-set-session-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
             let content_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
             if content_paths.is_empty() {
                 return Err(gfm_types::GfmError::Format(
@@ -224,7 +232,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         .to_string(),
                 ));
             }
-            let output = run_content_index_set_session(records, content_paths, query)?;
+            let output = run_content_index_set_session(records, content_paths, query, retry_probe)?;
             for diagnostic in output.diagnostics {
                 eprintln!("{diagnostic}");
             }
@@ -1450,52 +1458,69 @@ fn run_content_index_set_session(
     records: PathBuf,
     content_paths: Vec<PathBuf>,
     query: String,
+    retry_probe: Option<PathBuf>,
 ) -> Result<ContentIndexSessionOutput> {
     const WORKER: &str = "content index set session";
     preflight_content_index_set_volume_access(&records, &content_paths, WORKER)?;
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    }
     let volume = path_volume(&records);
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = preflight_content_index_set_search_access_checked(
-            &records,
-            &content_paths,
-            WORKER,
-            || cancellation.check(),
-        )?;
-        cancellation.check()?;
-        let session = Indexer::default().load_content_set_query_session_cancellable(
-            &records,
-            &content_paths,
-            &cancellation,
-        )?;
-        let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-        let first = session.search_structured_with_budget_cancellable(
-            &parsed,
-            50,
-            SearchLookupBudget::default(),
-            &cancellation,
-        )?;
-        let mut diagnostics = vec![format_content_session_report(
-            "content-session-first",
-            content_paths.len(),
-            &first,
-        )];
-        let mut hits = first.search.hits;
-        cancellation.check()?;
-        let second = session.search_structured_with_budget_cancellable(
-            &parsed,
-            50,
-            SearchLookupBudget::default(),
-            &cancellation,
-        )?;
-        diagnostics.push(format_content_session_report(
-            "content-session-second",
-            content_paths.len(),
-            &second,
-        ));
-        hits.extend(second.search.hits);
-        Ok(ContentIndexSessionOutput { diagnostics, hits })
-    })
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        WORKER,
+        records.clone(),
+        move |cancellation| {
+            let records = records.clone();
+            let content_paths = content_paths.clone();
+            let query = query.clone();
+            let retry_probe = retry_probe.clone();
+            cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            }
+            let _access = preflight_content_index_set_search_access_checked(
+                &records,
+                &content_paths,
+                WORKER,
+                || cancellation.check(),
+            )?;
+            cancellation.check()?;
+            let session = Indexer::default().load_content_set_query_session_cancellable(
+                &records,
+                &content_paths,
+                &cancellation,
+            )?;
+            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+            let first = session.search_structured_with_budget_cancellable(
+                &parsed,
+                50,
+                SearchLookupBudget::default(),
+                &cancellation,
+            )?;
+            let mut diagnostics = vec![format_content_session_report(
+                "content-session-first",
+                content_paths.len(),
+                &first,
+            )];
+            let mut hits = first.search.hits;
+            cancellation.check()?;
+            let second = session.search_structured_with_budget_cancellable(
+                &parsed,
+                50,
+                SearchLookupBudget::default(),
+                &cancellation,
+            )?;
+            diagnostics.push(format_content_session_report(
+                "content-session-second",
+                content_paths.len(),
+                &second,
+            ));
+            hits.extend(second.search.hits);
+            Ok(ContentIndexSessionOutput { diagnostics, hits })
+        },
+    )
 }
 
 fn run_content_index_manifest_search(
