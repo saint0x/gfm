@@ -23,7 +23,7 @@ use gfm_types::{
 };
 use std::path::{Path, PathBuf};
 
-use gfm_store::write_content_segment;
+use gfm_store::{write_content_segment, write_content_segment_checked};
 #[cfg(test)]
 use gfm_store::{MmapRecordColumns, MmapSubstringArchive};
 #[cfg(test)]
@@ -389,10 +389,29 @@ impl IndexSnapshot {
         content_path: impl AsRef<Path>,
         extractor: &Extractor,
     ) -> Result<usize> {
-        self.save(records_path)?;
+        self.save_with_content_cancellable(
+            records_path,
+            content_path,
+            extractor,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn save_with_content_cancellable(
+        &self,
+        records_path: impl AsRef<Path>,
+        content_path: impl AsRef<Path>,
+        extractor: &Extractor,
+        cancellation: &Cancellation,
+    ) -> Result<usize> {
+        cancellation.check()?;
+        self.save_checked(records_path, || cancellation.check())?;
+        cancellation.check()?;
         let mut live = self.clone().into_live();
-        let indexed = live.index_content(extractor)?;
-        live.save_content_postings(content_path)?;
+        let indexed = live.index_content_cancellable(extractor, cancellation)?;
+        cancellation.check()?;
+        live.save_content_postings_checked(content_path, || cancellation.check())?;
+        cancellation.check()?;
         Ok(indexed)
     }
 
@@ -402,13 +421,31 @@ impl IndexSnapshot {
         extractor: &Extractor,
         tombstones: Vec<FileId>,
     ) -> Result<usize> {
+        self.save_content_segment_cancellable(
+            segment_path,
+            extractor,
+            tombstones,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn save_content_segment_cancellable(
+        &self,
+        segment_path: impl AsRef<Path>,
+        extractor: &Extractor,
+        tombstones: Vec<FileId>,
+        cancellation: &Cancellation,
+    ) -> Result<usize> {
+        cancellation.check()?;
         let mut live = self.clone().into_live();
-        let indexed = live.index_content(extractor)?;
+        let indexed = live.index_content_cancellable(extractor, cancellation)?;
+        cancellation.check()?;
         let segment = ContentSegment {
             tombstones,
             postings: live.content_postings(),
         };
-        write_content_segment(segment_path, &segment)?;
+        write_content_segment_checked(segment_path, &segment, || cancellation.check())?;
+        cancellation.check()?;
         Ok(indexed)
     }
 

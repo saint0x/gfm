@@ -3446,6 +3446,37 @@ fn snapshot_can_write_content_segment_for_compaction() {
 }
 
 #[test]
+fn cancellable_snapshot_content_segment_preserves_existing_segment_when_cancelled_before_publish() {
+    let root = unique_temp_dir("gfm-content-segment-write-cancel-root");
+    let segment = unique_temp_path("gfm-content-segment-write-cancel", "gfmseg");
+    fs::write(root.join("segment.md"), "stable segmenttoken").unwrap();
+
+    let indexer = Indexer::default();
+    let snapshot = indexer.build(&root).unwrap();
+    snapshot
+        .save_content_segment(&segment, &Extractor::default(), Vec::new())
+        .unwrap();
+    fs::write(root.join("segment.md"), "replacement segmenttoken").unwrap();
+    let replacement = indexer.build(&root).unwrap();
+    let before = fs::read(&segment).unwrap();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = replacement.save_content_segment_cancellable(
+        &segment,
+        &Extractor::default(),
+        Vec::new(),
+        &cancellation,
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert_eq!(fs::read(&segment).unwrap(), before);
+    assert!(!has_store_atomic_temp_file(&segment));
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(segment).unwrap();
+}
+
+#[test]
 fn compacted_content_segments_preserve_phrase_positions() {
     let root = unique_temp_dir("gfm-content-phrase-segment-root");
     let segment = unique_temp_path("gfm-content-phrase-segment", "gfmseg");
@@ -3961,6 +3992,42 @@ fn content_index_job_spec_checked_read_honors_pre_cancelled_control_before_file_
 
     assert!(matches!(result, Err(GfmError::Cancelled)));
     assert!(!path.exists());
+}
+
+#[test]
+fn content_index_job_spec_checked_write_preserves_existing_file_when_cancelled_before_publish() {
+    let path = unique_temp_path("gfm-content-job-write-cancel", "job");
+    let original = ContentIndexJobSpec {
+        root: PathBuf::from("/tmp/root"),
+        segment_dir: PathBuf::from("/tmp/segments"),
+        records_path: PathBuf::from("/tmp/records.gfmidx"),
+        content_path: PathBuf::from("/tmp/content.gfmcontent"),
+        volume: Some(VolumeId(42)),
+        batch_size: 17,
+    };
+    let replacement = ContentIndexJobSpec {
+        batch_size: 99,
+        ..original.clone()
+    };
+    original.write(&path).unwrap();
+    let before = fs::read(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = replacement.write_checked(&path, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 5);
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(ContentIndexJobSpec::read(&path).unwrap(), original);
+    assert!(!has_store_atomic_temp_file(&path));
+    fs::remove_file(path).unwrap();
 }
 
 #[test]

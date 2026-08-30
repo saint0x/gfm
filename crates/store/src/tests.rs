@@ -66,6 +66,102 @@ fn checked_record_write_preserves_existing_file_when_cancelled_before_publish() 
 }
 
 #[test]
+fn checked_prefix_write_preserves_existing_file_when_cancelled_before_publish() {
+    let path = temp_path("gfm-store-prefix-write-cancel", "gfmprefix");
+    let original = vec![PrefixPosting {
+        prefix: "stable".to_string(),
+        ids: vec![FileId::new(VolumeId(4), 12)],
+    }];
+    let replacement = vec![PrefixPosting {
+        prefix: "replacement".to_string(),
+        ids: vec![FileId::new(VolumeId(4), 13)],
+    }];
+    write_prefix_postings(&path, &original).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = write_prefix_postings_checked(&path, &replacement, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(read_prefix_postings(&path).unwrap(), original);
+    assert!(!has_store_atomic_temp_file(&path));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn checked_substring_write_preserves_existing_file_when_cancelled_before_publish() {
+    let path = temp_path("gfm-store-substring-write-cancel", "gfmsubstr");
+    let original = vec![SubstringPosting {
+        gram: "sta".to_string(),
+        ids: vec![FileId::new(VolumeId(4), 12)],
+    }];
+    let replacement = vec![SubstringPosting {
+        gram: "rep".to_string(),
+        ids: vec![FileId::new(VolumeId(4), 13)],
+    }];
+    write_substring_postings(&path, &original).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = write_substring_postings_checked(&path, &replacement, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(read_substring_postings(&path).unwrap(), original);
+    assert!(!has_store_atomic_temp_file(&path));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn checked_fuzzy_write_preserves_existing_file_when_cancelled_before_publish() {
+    let path = temp_path("gfm-store-fuzzy-write-cancel", "gfmfuzzy");
+    let original = vec![FuzzyPosting {
+        key: "stabl".to_string(),
+        terms: vec!["stable".to_string()],
+    }];
+    let replacement = vec![FuzzyPosting {
+        key: "replacemen".to_string(),
+        terms: vec!["replacement".to_string()],
+    }];
+    write_fuzzy_postings(&path, &original).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = write_fuzzy_postings_checked(&path, &replacement, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(read_fuzzy_postings(&path).unwrap(), original);
+    assert!(!has_store_atomic_temp_file(&path));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn mmap_record_archive_hydrates_records_from_immutable_map() {
     let path = temp_path("gfm-store-mmap", "idx");
     let records = vec![

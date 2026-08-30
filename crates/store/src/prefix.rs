@@ -62,19 +62,32 @@ pub fn prefix_postings_from_records(records: &[FileRecord]) -> Vec<PrefixPosting
 }
 
 pub fn write_prefix_postings(path: impl AsRef<Path>, postings: &[PrefixPosting]) -> Result<()> {
+    write_prefix_postings_checked(path, postings, || Ok(()))
+}
+
+pub fn write_prefix_postings_checked(
+    path: impl AsRef<Path>,
+    postings: &[PrefixPosting],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
     let path = path.as_ref();
-    durable::atomic_write(path, |writer| {
+    durable::atomic_write_checked(path, &mut check_control, |writer, check_control| {
         let mut bytes = Vec::new();
         {
             let mut archive = CountingWriter::new(&mut bytes);
-            archive.write_all(PREFIX_MAGIC_V1)?;
-            write_varint(&mut archive, postings.len() as u64)?;
+            archive
+                .write_all(PREFIX_MAGIC_V1)
+                .map_err(|err| GfmError::io(path, err))?;
+            write_varint(&mut archive, postings.len() as u64)
+                .map_err(|err| GfmError::io(path, err))?;
             let mut postings = postings.to_vec();
             postings.sort_by(|left, right| left.prefix.cmp(&right.prefix));
             let mut directory = Vec::with_capacity(postings.len());
             for posting in &postings {
+                check_control()?;
                 let offset = archive.position();
-                write_prefix_posting(&mut archive, posting)?;
+                write_prefix_posting(&mut archive, posting)
+                    .map_err(|err| GfmError::io(path, err))?;
                 let end = archive.position();
                 directory.push(PrefixDirectoryEntry {
                     prefix: posting.prefix.clone(),
@@ -83,17 +96,29 @@ pub fn write_prefix_postings(path: impl AsRef<Path>, postings: &[PrefixPosting])
                 });
             }
             let directory_offset = archive.position();
-            write_varint(&mut archive, directory.len() as u64)?;
+            write_varint(&mut archive, directory.len() as u64)
+                .map_err(|err| GfmError::io(path, err))?;
             for entry in &directory {
-                write_directory_entry(&mut archive, entry)?;
+                check_control()?;
+                write_directory_entry(&mut archive, entry)
+                    .map_err(|err| GfmError::io(path, err))?;
             }
-            archive.write_all(&directory_offset.to_le_bytes())?;
-            archive.write_all(PREFIX_INDEX_FOOTER)?;
+            check_control()?;
+            archive
+                .write_all(&directory_offset.to_le_bytes())
+                .map_err(|err| GfmError::io(path, err))?;
+            archive
+                .write_all(PREFIX_INDEX_FOOTER)
+                .map_err(|err| GfmError::io(path, err))?;
         }
         let mut footer = Vec::new();
-        write_checksum_footer(&mut footer, &bytes, PREFIX_CHECKSUM_FOOTER)?;
+        write_checksum_footer(&mut footer, &bytes, PREFIX_CHECKSUM_FOOTER)
+            .map_err(|err| GfmError::io(path, err))?;
         bytes.extend(footer);
-        writer.write_all(&bytes)?;
+        check_control()?;
+        writer
+            .write_all(&bytes)
+            .map_err(|err| GfmError::io(path, err))?;
         Ok(())
     })
     .map(|_| ())

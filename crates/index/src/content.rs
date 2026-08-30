@@ -4,11 +4,11 @@ use gfm_content::{
 };
 use gfm_jobs::Cancellation;
 use gfm_store::{
-    compact_content_postings_with_segments_checked, compact_content_segments_checked,
-    compact_content_segments_with_policy_checked, plan_content_segment_merge_checked,
-    read_content_postings_checked, write_content_segment, ContentArchiveCleanupAction,
-    ContentArchiveCleanupPolicy, ContentArchiveManifest, ContentArchiveManifestEntry,
-    ContentMergePolicy, ContentMergeTier,
+    atomic_write_checked, compact_content_postings_with_segments_checked,
+    compact_content_segments_checked, compact_content_segments_with_policy_checked,
+    plan_content_segment_merge_checked, read_content_postings_checked,
+    write_content_segment_checked, ContentArchiveCleanupAction, ContentArchiveCleanupPolicy,
+    ContentArchiveManifest, ContentArchiveManifestEntry, ContentMergePolicy, ContentMergeTier,
 };
 use gfm_types::{
     ContentPosting, ContentSegment, FileId, FileKind, FileRecord, GfmError, Result, VolumeId,
@@ -235,24 +235,37 @@ impl ContentIndexJobSpec {
     }
 
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        self.write_checked(path, || Ok(()))
+    }
+
+    pub fn write_checked(
+        &self,
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
         let path = path.as_ref();
-        let file = fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
-        let mut writer = BufWriter::new(file);
-        writeln!(writer, "gfm-content-job-v1").map_err(|err| GfmError::io(path, err))?;
-        writeln!(writer, "root\t{}", escape_path(&self.root))
-            .map_err(|err| GfmError::io(path, err))?;
-        writeln!(writer, "segment_dir\t{}", escape_path(&self.segment_dir))
-            .map_err(|err| GfmError::io(path, err))?;
-        writeln!(writer, "records_path\t{}", escape_path(&self.records_path))
-            .map_err(|err| GfmError::io(path, err))?;
-        writeln!(writer, "content_path\t{}", escape_path(&self.content_path))
-            .map_err(|err| GfmError::io(path, err))?;
-        if let Some(volume) = self.volume {
-            writeln!(writer, "volume_id\t{}", volume.0).map_err(|err| GfmError::io(path, err))?;
-        }
-        writeln!(writer, "batch_size\t{}", self.batch_size)
-            .map_err(|err| GfmError::io(path, err))?;
-        writer.flush().map_err(|err| GfmError::io(path, err))
+        atomic_write_checked(path, &mut check_control, |writer, check_control| {
+            let mut writer = BufWriter::new(writer);
+            macro_rules! line {
+                ($($arg:tt)*) => {
+                    writeln!($($arg)*).map_err(|err| GfmError::io(path, err))?
+                };
+            }
+            check_control()?;
+            line!(writer, "gfm-content-job-v1");
+            check_control()?;
+            line!(writer, "root\t{}", escape_path(&self.root));
+            line!(writer, "segment_dir\t{}", escape_path(&self.segment_dir));
+            line!(writer, "records_path\t{}", escape_path(&self.records_path));
+            line!(writer, "content_path\t{}", escape_path(&self.content_path));
+            if let Some(volume) = self.volume {
+                line!(writer, "volume_id\t{}", volume.0);
+            }
+            line!(writer, "batch_size\t{}", self.batch_size);
+            check_control()?;
+            writer.flush().map_err(|err| GfmError::io(path, err))
+        })
+        .map(|_| ())
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
@@ -381,12 +394,13 @@ impl BackgroundContentIndexer {
             report.skipped += records.len().saturating_sub(indexed);
             let postings = live.content_postings();
             report.terms += postings.len();
-            write_content_segment(
+            write_content_segment_checked(
                 &segment_path,
                 &ContentSegment {
                     tombstones: Vec::new(),
                     postings,
                 },
+                || cancellation.check(),
             )?;
             report.segments.push(segment_path);
         }
@@ -438,12 +452,13 @@ impl BackgroundContentIndexer {
             cancellation.check()?;
             let segment_path =
                 output_dir.join(format!("{}-{:08}.gfmseg", self.options.segment_prefix, 0));
-            write_content_segment(
+            write_content_segment_checked(
                 &segment_path,
                 &ContentSegment {
                     tombstones: delta.tombstones,
                     postings: Vec::new(),
                 },
+                || cancellation.check(),
             )?;
             report.segments.push(segment_path);
             return Ok(report);
@@ -476,7 +491,7 @@ impl BackgroundContentIndexer {
             report.quarantined += batch.quarantined;
             let postings = live.content_postings();
             report.terms += postings.len();
-            write_content_segment(
+            write_content_segment_checked(
                 &segment_path,
                 &ContentSegment {
                     tombstones: if batch_index == 0 {
@@ -486,6 +501,7 @@ impl BackgroundContentIndexer {
                     },
                     postings,
                 },
+                || cancellation.check(),
             )?;
             report.segments.push(segment_path);
         }

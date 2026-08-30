@@ -1,6 +1,6 @@
 use crate::content::{
     content_format_error, read_content_segment_checked, read_file_ids, read_varint,
-    write_content_postings, CONTENT_SEGMENT_MAGIC, CONTENT_SEGMENT_MAGIC_V2,
+    write_content_postings_checked, CONTENT_SEGMENT_MAGIC, CONTENT_SEGMENT_MAGIC_V2,
 };
 use gfm_types::{ContentPositions, ContentPosting, FileId, GfmError, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -289,7 +289,7 @@ pub fn compact_content_postings_with_segments_checked(
     check()?;
     let postings = content_postings_from_terms_checked(terms, &mut check)?;
     check()?;
-    write_content_postings(output, &postings)?;
+    write_content_postings_checked(output, &postings, &mut check)?;
     Ok(postings)
 }
 

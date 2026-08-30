@@ -13,8 +13,8 @@ use gfm_search::{
     SearchSubstringPosting, SearchVolumeScope, ShardedSearchIndex,
 };
 use gfm_store::{
-    read_content_postings_checked, write_content_postings, MmapContentArchive, MmapContentSet,
-    MmapRecordArchive, MmapRecordColumns,
+    read_content_postings_checked, write_content_postings, write_content_postings_checked,
+    MmapContentArchive, MmapContentSet, MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_types::{
     ContentPosting, FileEvent, FileEventKind, FileId, FileKind, FileRecord, Result, SearchHit,
@@ -689,6 +689,14 @@ impl LiveIndex {
 
     pub fn save_content_postings(&self, path: impl AsRef<Path>) -> Result<()> {
         write_content_postings(path, &self.index.content_postings())
+    }
+
+    pub fn save_content_postings_checked(
+        &self,
+        path: impl AsRef<Path>,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        write_content_postings_checked(path, &self.index.content_postings(), check_control)
     }
 
     pub fn content_postings(&self) -> Vec<gfm_types::ContentPosting> {

@@ -62,21 +62,34 @@ pub struct LimitedContentPosting {
 }
 
 pub fn write_content_postings(path: impl AsRef<Path>, postings: &[ContentPosting]) -> Result<()> {
+    write_content_postings_checked(path, postings, || Ok(()))
+}
+
+pub fn write_content_postings_checked(
+    path: impl AsRef<Path>,
+    postings: &[ContentPosting],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
     let path = path.as_ref();
-    durable::atomic_write(path, |writer| {
+    durable::atomic_write_checked(path, &mut check_control, |writer, check_control| {
         let mut bytes = Vec::new();
         {
             let mut archive = CountingWriter::new(&mut bytes);
-            archive.write_all(CONTENT_MAGIC_V5)?;
-            write_varint(&mut archive, postings.len() as u64)?;
+            archive
+                .write_all(CONTENT_MAGIC_V5)
+                .map_err(|err| GfmError::io(path, err))?;
+            write_varint(&mut archive, postings.len() as u64)
+                .map_err(|err| GfmError::io(path, err))?;
             let mut directory = Vec::with_capacity(postings.len());
             for posting in postings {
+                check_control()?;
                 let offset = archive.position();
                 write_content_posting(
                     &mut archive,
                     posting,
                     ContentStoreVersion::IndexedChecksummed,
-                )?;
+                )
+                .map_err(|err| GfmError::io(path, err))?;
                 let end = archive.position();
                 directory.push(ContentDirectoryEntry {
                     term: posting.term.trim().to_lowercase(),
@@ -87,17 +100,28 @@ pub fn write_content_postings(path: impl AsRef<Path>, postings: &[ContentPosting
             directory.sort_by(|left, right| left.term.cmp(&right.term));
 
             let directory_offset = archive.position();
-            write_varint(&mut archive, directory.len() as u64)?;
+            write_varint(&mut archive, directory.len() as u64)
+                .map_err(|err| GfmError::io(path, err))?;
             for entry in &directory {
-                write_directory_entry(&mut archive, entry)?;
+                check_control()?;
+                write_directory_entry(&mut archive, entry)
+                    .map_err(|err| GfmError::io(path, err))?;
             }
-            archive.write_all(&directory_offset.to_le_bytes())?;
-            archive.write_all(CONTENT_INDEX_FOOTER)?;
+            archive
+                .write_all(&directory_offset.to_le_bytes())
+                .map_err(|err| GfmError::io(path, err))?;
+            archive
+                .write_all(CONTENT_INDEX_FOOTER)
+                .map_err(|err| GfmError::io(path, err))?;
         }
         let mut footer = Vec::new();
-        write_checksum_footer(&mut footer, &bytes, CONTENT_CHECKSUM_FOOTER)?;
+        write_checksum_footer(&mut footer, &bytes, CONTENT_CHECKSUM_FOOTER)
+            .map_err(|err| GfmError::io(path, err))?;
         bytes.extend(footer);
-        writer.write_all(&bytes)?;
+        check_control()?;
+        writer
+            .write_all(&bytes)
+            .map_err(|err| GfmError::io(path, err))?;
         Ok(())
     })
     .map(|_| ())
@@ -764,13 +788,28 @@ impl Write for CountingWriter<'_> {
 }
 
 pub fn write_content_segment(path: impl AsRef<Path>, segment: &ContentSegment) -> Result<()> {
+    write_content_segment_checked(path, segment, || Ok(()))
+}
+
+pub fn write_content_segment_checked(
+    path: impl AsRef<Path>,
+    segment: &ContentSegment,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
     let path = path.as_ref();
-    durable::atomic_write(path, |writer| {
-        writer.write_all(CONTENT_SEGMENT_MAGIC_V2)?;
-        write_file_ids(&mut *writer, &segment.tombstones)?;
-        write_varint(&mut *writer, segment.postings.len() as u64)?;
+    durable::atomic_write_checked(path, &mut check_control, |writer, check_control| {
+        writer
+            .write_all(CONTENT_SEGMENT_MAGIC_V2)
+            .map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
+        write_file_ids(&mut *writer, &segment.tombstones).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
+        write_varint(&mut *writer, segment.postings.len() as u64)
+            .map_err(|err| GfmError::io(path, err))?;
         for posting in &segment.postings {
-            write_content_posting(&mut *writer, posting, ContentStoreVersion::IndexedPositions)?;
+            check_control()?;
+            write_content_posting(&mut *writer, posting, ContentStoreVersion::IndexedPositions)
+                .map_err(|err| GfmError::io(path, err))?;
         }
         Ok(())
     })

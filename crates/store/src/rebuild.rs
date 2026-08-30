@@ -3,10 +3,11 @@ use crate::{
     fuzzy_postings_from_records, inspect_archive_schema, metadata_postings_from_records,
     plan_content_archive_migration, plan_content_manifest_recovery, plan_record_archive_migration,
     prefix_postings_from_records, schema, sidecar_kind_name, substring_postings_from_records,
-    write_dictionary, write_fuzzy_postings, write_metadata_postings, write_prefix_postings,
-    write_record_columns, write_substring_postings, ArchiveSchemaKind, ArchiveSchemaReport,
-    ArchiveSchemaStatus, ContentArchiveManifestEntry, ContentArchiveMigrationAction,
-    ContentManifestRecoveryAction, MmapRecordArchive, RecordArchiveMigrationAction, SidecarKind,
+    write_dictionary, write_fuzzy_postings_checked, write_metadata_postings,
+    write_prefix_postings_checked, write_record_columns, write_substring_postings_checked,
+    ArchiveSchemaKind, ArchiveSchemaReport, ArchiveSchemaStatus, ContentArchiveManifestEntry,
+    ContentArchiveMigrationAction, ContentManifestRecoveryAction, MmapRecordArchive,
+    RecordArchiveMigrationAction, SidecarKind,
 };
 use gfm_types::{FileRecord, GfmError, Result};
 use std::path::{Path, PathBuf};
@@ -417,7 +418,7 @@ pub fn rebuild_derived_sidecar_checked(
         None
     };
     check_control()?;
-    write_derived_sidecar(kind, sidecar_path, &records)?;
+    write_derived_sidecar_checked(kind, sidecar_path, &records, &mut check_control)?;
     check_control()?;
     let after = inspect_archive_schema(archive_kind_for_sidecar(kind), sidecar_path);
     check_control()?;
@@ -639,19 +640,29 @@ fn archive_kind_for_sidecar(kind: SidecarKind) -> ArchiveSchemaKind {
     }
 }
 
-fn write_derived_sidecar(kind: SidecarKind, path: &Path, records: &[FileRecord]) -> Result<()> {
+fn write_derived_sidecar_checked(
+    kind: SidecarKind,
+    path: &Path,
+    records: &[FileRecord],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
     match kind {
         SidecarKind::Columns => write_record_columns(path, records),
         SidecarKind::Metadata => {
             write_metadata_postings(path, &metadata_postings_from_records(records))
         }
         SidecarKind::Prefixes => {
-            write_prefix_postings(path, &prefix_postings_from_records(records))
+            let postings = prefix_postings_from_records(records);
+            write_prefix_postings_checked(path, &postings, &mut check_control)
         }
         SidecarKind::Substrings => {
-            write_substring_postings(path, &substring_postings_from_records(records))
+            let postings = substring_postings_from_records(records);
+            write_substring_postings_checked(path, &postings, &mut check_control)
         }
-        SidecarKind::Fuzzy => write_fuzzy_postings(path, &fuzzy_postings_from_records(records)),
+        SidecarKind::Fuzzy => {
+            let postings = fuzzy_postings_from_records(records);
+            write_fuzzy_postings_checked(path, &postings, &mut check_control)
+        }
         SidecarKind::Dictionary => write_dictionary(path, &dictionary_terms_from_records(records)),
     }
 }

@@ -65,8 +65,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let records_len = snapshot.records.len();
                     let inaccessible_len = snapshot.inaccessible.len();
                     cancellation.check()?;
-                    let indexed =
-                        snapshot.save_with_content(records, content, &Extractor::default())?;
+                    let indexed = snapshot.save_with_content_cancellable(
+                        records,
+                        content,
+                        &Extractor::default(),
+                        &cancellation,
+                    )?;
                     Ok((records_len, inaccessible_len, indexed))
                 },
             )?;
@@ -291,8 +295,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let inaccessible_len = snapshot.inaccessible.len();
                     cancellation.check()?;
-                    let indexed =
-                        snapshot.save_content_segment(output, &Extractor::default(), Vec::new())?;
+                    let indexed = snapshot.save_content_segment_cancellable(
+                        output,
+                        &Extractor::default(),
+                        Vec::new(),
+                        &cancellation,
+                    )?;
                     Ok((inaccessible_len, indexed))
                 },
             )?;
@@ -1600,7 +1608,7 @@ pub(crate) fn run_content_job(
                 } else {
                     Vec::new()
                 };
-                snapshot.save(&job_spec.records_path)?;
+                snapshot.save_checked(&job_spec.records_path, || cancellation.check())?;
                 let extractor = Extractor::with_budget_profile(extraction_budget_profile(
                     &job_spec.root,
                     pressure,

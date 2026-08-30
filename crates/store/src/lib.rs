@@ -19,8 +19,9 @@ mod substring;
 pub use columns::{write_record_columns, MmapRecordColumns, RecordColumn};
 pub use content::{
     read_content_postings, read_content_postings_checked, read_content_segment,
-    read_content_segment_checked, write_content_postings, write_content_segment, ContentArchive,
-    LimitedContentPosting, MmapContentArchive,
+    read_content_segment_checked, write_content_postings, write_content_postings_checked,
+    write_content_segment, write_content_segment_checked, ContentArchive, LimitedContentPosting,
+    MmapContentArchive,
 };
 pub use contentmerge::{
     compact_content_postings_with_segments, compact_content_postings_with_segments_checked,
@@ -58,7 +59,8 @@ pub use dictionary::{
 pub use durable::{atomic_write, atomic_write_checked, DurableCommit};
 pub use fuzzy::{
     fuzzy_postings_from_records, read_fuzzy_postings, read_fuzzy_postings_checked,
-    write_fuzzy_postings, FuzzyPosting, LimitedFuzzyPosting, MmapFuzzyArchive,
+    write_fuzzy_postings, write_fuzzy_postings_checked, FuzzyPosting, LimitedFuzzyPosting,
+    MmapFuzzyArchive,
 };
 pub use metadata::{
     metadata_postings_from_records, metadata_postings_from_records_and_secondary,
@@ -67,7 +69,8 @@ pub use metadata::{
 };
 pub use prefix::{
     prefix_postings_from_records, read_prefix_postings, read_prefix_postings_checked,
-    write_prefix_postings, LimitedPrefixPosting, MmapPrefixArchive, PrefixPosting,
+    write_prefix_postings, write_prefix_postings_checked, LimitedPrefixPosting, MmapPrefixArchive,
+    PrefixPosting,
 };
 pub use rebuild::{
     plan_archive_rebuilds, plan_columns_archive_rebuild, plan_derived_sidecar_rebuild,
@@ -96,7 +99,8 @@ pub use sidecar::{
 };
 pub use substring::{
     read_substring_postings, read_substring_postings_checked, substring_postings_from_records,
-    write_substring_postings, LimitedSubstringPosting, MmapSubstringArchive, SubstringPosting,
+    write_substring_postings, write_substring_postings_checked, LimitedSubstringPosting,
+    MmapSubstringArchive, SubstringPosting,
 };
 
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};

@@ -431,6 +431,94 @@ fn checked_content_segment_read_honors_pre_cancelled_control_before_file_open() 
 }
 
 #[test]
+fn checked_content_postings_write_preserves_existing_file_when_cancelled_before_publish() {
+    let path = temp_path("gfm-content-postings-write-cancel", "gfmcontent");
+    let id = FileId::new(VolumeId(4), 12);
+    let original = vec![ContentPosting {
+        term: "stable".to_string(),
+        ids: vec![id],
+        positions: vec![ContentPositions {
+            id,
+            positions: vec![1],
+        }],
+    }];
+    let replacement = vec![ContentPosting {
+        term: "replacement".to_string(),
+        ids: vec![id],
+        positions: vec![ContentPositions {
+            id,
+            positions: vec![2],
+        }],
+    }];
+    write_content_postings(&path, &original).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = write_content_postings_checked(&path, &replacement, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 5);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(read_content_postings(&path).unwrap(), original);
+    assert!(!has_atomic_temp_file(&path));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn checked_content_segment_write_preserves_existing_file_when_cancelled_before_publish() {
+    let path = temp_path("gfm-content-segment-write-cancel", "gfmseg");
+    let id = FileId::new(VolumeId(4), 12);
+    let original = ContentSegment {
+        tombstones: Vec::new(),
+        postings: vec![ContentPosting {
+            term: "stable".to_string(),
+            ids: vec![id],
+            positions: vec![ContentPositions {
+                id,
+                positions: vec![1],
+            }],
+        }],
+    };
+    let replacement = ContentSegment {
+        tombstones: vec![id],
+        postings: vec![ContentPosting {
+            term: "replacement".to_string(),
+            ids: vec![id],
+            positions: vec![ContentPositions {
+                id,
+                positions: vec![2],
+            }],
+        }],
+    };
+    write_content_segment(&path, &original).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = write_content_segment_checked(&path, &replacement, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 5);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(read_content_segment(&path).unwrap(), original);
+    assert!(!has_atomic_temp_file(&path));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn compacts_content_segments_with_tombstones() {
     let first = temp_path("gfm-content-segment-first", "gfmseg");
     let second = temp_path("gfm-content-segment-second", "gfmseg");
@@ -614,4 +702,23 @@ fn temp_path(prefix: &str, extension: &str) -> PathBuf {
             .as_nanos(),
         extension
     ))
+}
+
+fn has_atomic_temp_file(path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let prefix = format!(".{file_name}.{}.", std::process::id());
+    std::fs::read_dir(parent)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".tmp"))
+        })
 }
