@@ -348,13 +348,36 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 &target,
                 "preview cache fileprovider observer",
             )?;
+            let cache_probe = write_probe_path(&cache_root)?.to_path_buf();
+            preflight_volume_access_scope(
+                &cache_probe,
+                AccessIntent::Write,
+                "preview cache fileprovider observer cache",
+            )?;
+            let volume = detect_volume_id(&cache_probe)
+                .ok()
+                .or_else(|| parent_volume(&cache_probe));
             println!(
                 "{}",
-                observed_preview_cache_invalidation_tsv(
-                    &observed,
-                    &cache_root,
-                    kind,
-                    &Cancellation::default(),
+                run_volume_task_cancellable(
+                    volume,
+                    Priority::Visible,
+                    "preview cache fileprovider observer cache",
+                    move |cancellation| {
+                        cancellation.check()?;
+                        let _cache_access = preflight_access_scope(
+                            &cache_probe,
+                            AccessIntent::Write,
+                            "preview cache fileprovider observer cache",
+                        )?;
+                        cancellation.check()?;
+                        observed_preview_cache_invalidation_tsv(
+                            &observed,
+                            &cache_root,
+                            kind,
+                            &cancellation,
+                        )
+                    },
                 )?
             );
         }

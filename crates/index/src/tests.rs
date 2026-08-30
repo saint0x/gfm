@@ -908,6 +908,50 @@ fn sidecar_mmap_hydration_honors_pre_cancelled_tokens() {
 }
 
 #[test]
+fn search_archive_lookup_open_honors_pre_cancelled_token_before_prefix_open() {
+    let root = unique_temp_dir("gfm-search-archive-open-cancel-root");
+    let prefixes = unprobeable_child_path(&root, "prefixes-unavailable", "gfmprefix");
+    let substrings = root.join("substrings.gfmsubstr");
+    let fuzzy = root.join("fuzzy.gfmfuzzy");
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result =
+        SearchArchiveLookup::open_cancellable(&prefixes, &substrings, &fuzzy, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sidecar_query_session_open_honors_pre_cancelled_token_before_records_open() {
+    let root = unique_temp_dir("gfm-sidecar-session-open-cancel-root");
+    let records = unprobeable_child_path(&root, "records-unavailable", "gfmidx");
+    let columns = root.join("columns.gfmcols");
+    let metadata = root.join("metadata.gfmmeta");
+    let prefixes = root.join("prefixes.gfmprefix");
+    let substrings = root.join("substrings.gfmsubstr");
+    let fuzzy = root.join("fuzzy.gfmfuzzy");
+    let content = root.join("content.gfmcontent");
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = SidecarIndexQuerySession::open_cancellable(
+        &records,
+        &columns,
+        &metadata,
+        &prefixes,
+        &substrings,
+        &fuzzy,
+        &content,
+        &cancellation,
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn sidecar_query_session_reuses_mmap_archives_and_lookup_cache() {
     let records_path = unique_temp_path("gfm-index-sidecar-session", "gfmidx");
     let columns_path = unique_temp_path("gfm-index-sidecar-session", "gfmcols");

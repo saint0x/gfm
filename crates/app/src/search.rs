@@ -1489,8 +1489,15 @@ fn run_sidecar_index_search(
             fuzzy,
             content,
         } = paths;
-        let session = SidecarIndexQuerySession::open(
-            records, columns, metadata, prefixes, substrings, fuzzy, content,
+        let session = SidecarIndexQuerySession::open_cancellable(
+            records,
+            columns,
+            metadata,
+            prefixes,
+            substrings,
+            fuzzy,
+            content,
+            &cancellation,
         )?;
         cancellation.check()?;
         let budget = SearchLookupBudget::default();
@@ -1542,7 +1549,7 @@ fn run_sidecar_index_session(
         cancellation.check()?;
         let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
         cancellation.check()?;
-        let session = open_sidecar_index_query_session(paths)?;
+        let session = open_sidecar_index_query_session(paths, &cancellation)?;
         cancellation.check()?;
         let budget = SearchLookupBudget::default();
         let parsed = SearchQuery::parse(&query);
@@ -1583,7 +1590,7 @@ fn run_sidecar_index_budget(
         cancellation.check()?;
         let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
         cancellation.check()?;
-        let session = open_sidecar_index_query_session(paths)?;
+        let session = open_sidecar_index_query_session(paths, &cancellation)?;
         cancellation.check()?;
         let parsed = SearchQuery::parse(&query);
         let report = session.search_structured_with_volume_scope_budget_cancellable(
@@ -1613,7 +1620,7 @@ fn run_sidecar_index_volume_scope(
         cancellation.check()?;
         let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
         cancellation.check()?;
-        let session = open_sidecar_index_query_session(paths)?;
+        let session = open_sidecar_index_query_session(paths, &cancellation)?;
         cancellation.check()?;
         let parsed = SearchQuery::parse(&query);
         let report = session.search_structured_with_volume_scope_budget_cancellable(
@@ -1637,6 +1644,7 @@ fn run_sidecar_index_volume_scope(
 
 fn open_sidecar_index_query_session(
     paths: OwnedSidecarIndexAccessPaths,
+    cancellation: &Cancellation,
 ) -> Result<SidecarIndexQuerySession> {
     let OwnedSidecarIndexAccessPaths {
         records,
@@ -1647,8 +1655,15 @@ fn open_sidecar_index_query_session(
         fuzzy,
         content,
     } = paths;
-    SidecarIndexQuerySession::open(
-        records, columns, metadata, prefixes, substrings, fuzzy, content,
+    SidecarIndexQuerySession::open_cancellable(
+        records,
+        columns,
+        metadata,
+        prefixes,
+        substrings,
+        fuzzy,
+        content,
+        cancellation,
     )
 }
 
@@ -2009,6 +2024,32 @@ mod tests {
                 (content, "content"),
             ]
         );
+    }
+
+    #[test]
+    fn sidecar_session_open_helper_passes_runtime_token_to_index_session_open() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-sidecar-session-open-token-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let unavailable = root.join(format!("{}.gfmidx", "records-unavailable".repeat(64)));
+        let paths = OwnedSidecarIndexAccessPaths {
+            records: unavailable,
+            columns: root.join("columns.gfmcols"),
+            metadata: root.join("metadata.gfmmeta"),
+            prefixes: root.join("prefixes.gfmprefix"),
+            substrings: root.join("substrings.gfmsubstr"),
+            fuzzy: root.join("fuzzy.gfmfuzzy"),
+            content: root.join("content.gfmcontent"),
+        };
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = open_sidecar_index_query_session(paths, &cancellation);
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

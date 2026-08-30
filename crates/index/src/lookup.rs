@@ -148,14 +148,51 @@ impl SidecarIndexQuerySession {
         fuzzy: impl AsRef<Path>,
         content: impl AsRef<Path>,
     ) -> Result<Self> {
+        Self::open_cancellable(
+            records,
+            columns,
+            metadata,
+            prefixes,
+            substrings,
+            fuzzy,
+            content,
+            &Cancellation::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_cancellable(
+        records: impl AsRef<Path>,
+        columns: impl AsRef<Path>,
+        metadata: impl AsRef<Path>,
+        prefixes: impl AsRef<Path>,
+        substrings: impl AsRef<Path>,
+        fuzzy: impl AsRef<Path>,
+        content: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<Self> {
+        cancellation.check()?;
         let substrings = substrings.as_ref();
+        let records = MmapRecordArchive::open(records)?;
+        cancellation.check()?;
+        let columns = MmapRecordColumns::open(columns)?;
+        cancellation.check()?;
+        let metadata = MmapMetadataArchive::open(metadata)?;
+        cancellation.check()?;
+        let lookup =
+            SearchArchiveLookup::open_cancellable(prefixes, substrings, fuzzy, cancellation)?;
+        cancellation.check()?;
+        let substrings = MmapSubstringArchive::open(substrings)?;
+        cancellation.check()?;
+        let content = MmapContentArchive::open(content)?;
+        cancellation.check()?;
         Ok(Self {
-            records: MmapRecordArchive::open(records)?,
-            columns: MmapRecordColumns::open(columns)?,
-            metadata: MmapMetadataArchive::open(metadata)?,
-            lookup: SearchArchiveLookup::open(prefixes, substrings, fuzzy)?,
-            substrings: MmapSubstringArchive::open(substrings)?,
-            content: MmapContentArchive::open(content)?,
+            records,
+            columns,
+            metadata,
+            lookup,
+            substrings,
+            content,
             content_cache: Mutex::new(LookupCache::new(SIDECAR_CONTENT_POSTING_CACHE_CAPACITY)),
             content_cache_hits: AtomicUsize::new(0),
             content_cache_misses: AtomicUsize::new(0),
@@ -751,24 +788,58 @@ impl SearchArchiveLookup {
         substrings: impl AsRef<Path>,
         fuzzy: impl AsRef<Path>,
     ) -> Result<SearchArchiveLookup> {
-        Self::open_with_capacity(
+        Self::open_cancellable(prefixes, substrings, fuzzy, &Cancellation::default())
+    }
+
+    pub fn open_cancellable(
+        prefixes: impl AsRef<Path>,
+        substrings: impl AsRef<Path>,
+        fuzzy: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<SearchArchiveLookup> {
+        Self::open_with_capacity_cancellable(
             prefixes,
             substrings,
             fuzzy,
             SEARCH_ARCHIVE_LOOKUP_CACHE_CAPACITY,
+            cancellation,
         )
     }
 
+    #[allow(dead_code)]
     fn open_with_capacity(
         prefixes: impl AsRef<Path>,
         substrings: impl AsRef<Path>,
         fuzzy: impl AsRef<Path>,
         cache_capacity: usize,
     ) -> Result<SearchArchiveLookup> {
+        Self::open_with_capacity_cancellable(
+            prefixes,
+            substrings,
+            fuzzy,
+            cache_capacity,
+            &Cancellation::default(),
+        )
+    }
+
+    fn open_with_capacity_cancellable(
+        prefixes: impl AsRef<Path>,
+        substrings: impl AsRef<Path>,
+        fuzzy: impl AsRef<Path>,
+        cache_capacity: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchArchiveLookup> {
+        cancellation.check()?;
+        let prefixes = MmapPrefixArchive::open(prefixes)?;
+        cancellation.check()?;
+        let substrings = MmapSubstringArchive::open(substrings)?;
+        cancellation.check()?;
+        let fuzzy = MmapFuzzyArchive::open(fuzzy)?;
+        cancellation.check()?;
         Ok(Self {
-            prefixes: MmapPrefixArchive::open(prefixes)?,
-            substrings: MmapSubstringArchive::open(substrings)?,
-            fuzzy: MmapFuzzyArchive::open(fuzzy)?,
+            prefixes,
+            substrings,
+            fuzzy,
             prefix_cache: Mutex::new(LookupCache::new(cache_capacity)),
             substring_cache: Mutex::new(LookupCache::new(cache_capacity)),
             fuzzy_cache: Mutex::new(LookupCache::new(cache_capacity)),
