@@ -909,12 +909,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!("{report}");
         }
-        "prefix-ids-mmap" => {
+        "prefix-ids-mmap" | "prefix-ids-mmap-retry-probe" => {
             let prefixes = required_path(args.next(), "prefix-ids-mmap requires a prefix path")?;
             let prefix = required_string(args.next(), "prefix-ids-mmap requires a prefix")?;
-            let ids = run_search_archive_read_cancellable(
+            let retry_probe = if command == "prefix-ids-mmap-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "prefix-ids-mmap-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let ids = run_search_archive_read_cancellable_with_retry_probe(
                 prefixes,
                 "prefix ids mmap",
+                retry_probe,
                 move |prefixes, cancellation| {
                     let archive =
                         MmapPrefixArchive::open_checked(prefixes, || cancellation.check())?;
@@ -926,15 +935,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             print_file_ids(ids);
         }
-        "prefix-id-block-mmap" => {
+        "prefix-id-block-mmap" | "prefix-id-block-mmap-retry-probe" => {
             let prefixes =
                 required_path(args.next(), "prefix-id-block-mmap requires a prefix path")?;
             let prefix = required_string(args.next(), "prefix-id-block-mmap requires a prefix")?;
             let block_index =
                 parse_usize_arg(args.next(), "prefix-id-block-mmap requires a block index")?;
-            let ids = run_search_archive_read_cancellable(
+            let retry_probe = if command == "prefix-id-block-mmap-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "prefix-id-block-mmap-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let ids = run_search_archive_read_cancellable_with_retry_probe(
                 prefixes,
                 "prefix id block mmap",
+                retry_probe,
                 move |prefixes, cancellation| {
                     let archive =
                         MmapPrefixArchive::open_checked(prefixes, || cancellation.check())?;
@@ -967,13 +985,22 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!("{report}");
         }
-        "substring-ids-mmap" => {
+        "substring-ids-mmap" | "substring-ids-mmap-retry-probe" => {
             let substrings =
                 required_path(args.next(), "substring-ids-mmap requires a substring path")?;
             let gram = required_string(args.next(), "substring-ids-mmap requires a trigram")?;
-            let ids = run_search_archive_read_cancellable(
+            let retry_probe = if command == "substring-ids-mmap-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "substring-ids-mmap-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let ids = run_search_archive_read_cancellable_with_retry_probe(
                 substrings,
                 "substring ids mmap",
+                retry_probe,
                 move |substrings, cancellation| {
                     let archive =
                         MmapSubstringArchive::open_checked(substrings, || cancellation.check())?;
@@ -985,7 +1012,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             print_file_ids(ids);
         }
-        "substring-id-block-mmap" => {
+        "substring-id-block-mmap" | "substring-id-block-mmap-retry-probe" => {
             let substrings = required_path(
                 args.next(),
                 "substring-id-block-mmap requires a substring path",
@@ -995,9 +1022,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "substring-id-block-mmap requires a block index",
             )?;
-            let ids = run_search_archive_read_cancellable(
+            let retry_probe = if command == "substring-id-block-mmap-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "substring-id-block-mmap-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let ids = run_search_archive_read_cancellable_with_retry_probe(
                 substrings,
                 "substring id block mmap",
+                retry_probe,
                 move |substrings, cancellation| {
                     let archive =
                         MmapSubstringArchive::open_checked(substrings, || cancellation.check())?;
@@ -1078,7 +1114,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!("{report}");
         }
-        "metadata-ids-mmap" => {
+        "metadata-ids-mmap" | "metadata-ids-mmap-retry-probe" => {
             let metadata =
                 required_path(args.next(), "metadata-ids-mmap requires a metadata path")?;
             let field = parse_metadata_field(
@@ -1086,9 +1122,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "metadata field",
             )?;
             let term = required_string(args.next(), "metadata-ids-mmap requires a term")?;
-            let ids = run_search_archive_read_cancellable(
+            let retry_probe = if command == "metadata-ids-mmap-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "metadata-ids-mmap-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let ids = run_search_archive_read_cancellable_with_retry_probe(
                 metadata,
                 "metadata ids mmap",
+                retry_probe,
                 move |metadata, cancellation| {
                     let archive =
                         MmapMetadataArchive::open_checked(metadata, || cancellation.check())?;
@@ -1100,7 +1145,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             print_file_ids(ids);
         }
-        "metadata-id-block-mmap" => {
+        "metadata-id-block-mmap" | "metadata-id-block-mmap-retry-probe" => {
             let metadata = required_path(
                 args.next(),
                 "metadata-id-block-mmap requires a metadata path",
@@ -1112,9 +1157,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let term = required_string(args.next(), "metadata-id-block-mmap requires a term")?;
             let block_index =
                 parse_usize_arg(args.next(), "metadata-id-block-mmap requires a block index")?;
-            let ids = run_search_archive_read_cancellable(
+            let retry_probe = if command == "metadata-id-block-mmap-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "metadata-id-block-mmap-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let ids = run_search_archive_read_cancellable_with_retry_probe(
                 metadata,
                 "metadata id block mmap",
+                retry_probe,
                 move |metadata, cancellation| {
                     let archive =
                         MmapMetadataArchive::open_checked(metadata, || cancellation.check())?;

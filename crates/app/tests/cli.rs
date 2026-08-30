@@ -4377,6 +4377,38 @@ fn searches_persisted_tags_from_binary() {
     let scope_retry_progress =
         unique_temp_path("gfm-cli-sidecar-volume-scope-retry", "gfmprogress");
     let scope_retry_probe = unique_temp_path("gfm-cli-sidecar-volume-scope-retry", "state");
+    let metadata_ids_retry_journal = unique_temp_path("gfm-cli-metadata-ids-retry", "journal");
+    let metadata_ids_retry_catalog = unique_temp_path("gfm-cli-metadata-ids-retry", "gfmjobs");
+    let metadata_ids_retry_progress = unique_temp_path("gfm-cli-metadata-ids-retry", "gfmprogress");
+    let metadata_ids_retry_probe = unique_temp_path("gfm-cli-metadata-ids-retry", "state");
+    let metadata_block_retry_journal =
+        unique_temp_path("gfm-cli-metadata-id-block-retry", "journal");
+    let metadata_block_retry_catalog =
+        unique_temp_path("gfm-cli-metadata-id-block-retry", "gfmjobs");
+    let metadata_block_retry_progress =
+        unique_temp_path("gfm-cli-metadata-id-block-retry", "gfmprogress");
+    let metadata_block_retry_probe = unique_temp_path("gfm-cli-metadata-id-block-retry", "state");
+    let prefix_ids_retry_journal = unique_temp_path("gfm-cli-prefix-ids-retry", "journal");
+    let prefix_ids_retry_catalog = unique_temp_path("gfm-cli-prefix-ids-retry", "gfmjobs");
+    let prefix_ids_retry_progress = unique_temp_path("gfm-cli-prefix-ids-retry", "gfmprogress");
+    let prefix_ids_retry_probe = unique_temp_path("gfm-cli-prefix-ids-retry", "state");
+    let prefix_block_retry_journal = unique_temp_path("gfm-cli-prefix-id-block-retry", "journal");
+    let prefix_block_retry_catalog = unique_temp_path("gfm-cli-prefix-id-block-retry", "gfmjobs");
+    let prefix_block_retry_progress =
+        unique_temp_path("gfm-cli-prefix-id-block-retry", "gfmprogress");
+    let prefix_block_retry_probe = unique_temp_path("gfm-cli-prefix-id-block-retry", "state");
+    let substring_ids_retry_journal = unique_temp_path("gfm-cli-substring-ids-retry", "journal");
+    let substring_ids_retry_catalog = unique_temp_path("gfm-cli-substring-ids-retry", "gfmjobs");
+    let substring_ids_retry_progress =
+        unique_temp_path("gfm-cli-substring-ids-retry", "gfmprogress");
+    let substring_ids_retry_probe = unique_temp_path("gfm-cli-substring-ids-retry", "state");
+    let substring_block_retry_journal =
+        unique_temp_path("gfm-cli-substring-id-block-retry", "journal");
+    let substring_block_retry_catalog =
+        unique_temp_path("gfm-cli-substring-id-block-retry", "gfmjobs");
+    let substring_block_retry_progress =
+        unique_temp_path("gfm-cli-substring-id-block-retry", "gfmprogress");
+    let substring_block_retry_probe = unique_temp_path("gfm-cli-substring-id-block-retry", "state");
     let assert_worker_admitted = |stderr: &[u8], worker: &str, path: &Path| {
         let stderr = String::from_utf8_lossy(stderr);
         assert!(
@@ -4385,6 +4417,48 @@ fn searches_persisted_tags_from_binary() {
                 path.display()
             )),
             "{stderr}"
+        );
+    };
+    let assert_retry_probe = |command: &str,
+                              archive: &Path,
+                              tail_args: &[&str],
+                              worker: &str,
+                              expected_stdout: &str,
+                              journal: &Path,
+                              catalog: &Path,
+                              progress: &Path,
+                              probe: &Path| {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .env("GFM_JOB_JOURNAL", journal)
+            .env("GFM_JOB_PAYLOAD_CATALOG", catalog)
+            .env("GFM_JOB_PROGRESS_STORE", progress)
+            .arg(command)
+            .arg(archive)
+            .args(tail_args)
+            .arg(probe)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), expected_stdout);
+        assert_eq!(fs::read_to_string(probe).unwrap(), "2");
+        let journal_text = fs::read_to_string(journal).unwrap();
+        assert!(
+            journal_text.contains(&format!("1\t1\tstarted\t{worker}")),
+            "{journal_text}"
+        );
+        assert!(
+            journal_text.contains(&format!(
+                "1\t1\tfailed:temporary {worker} retry probe busy\t{worker}"
+            )),
+            "{journal_text}"
+        );
+        assert!(
+            journal_text.contains(&format!("1\t2\tcompleted\t{worker}")),
+            "{journal_text}"
         );
     };
     fs::write(
@@ -4436,6 +4510,17 @@ fn searches_persisted_tags_from_binary() {
     );
     assert_worker_admitted(&ids_output.stderr, "metadata ids mmap", &metadata);
     assert_eq!(String::from_utf8(ids_output.stdout).unwrap(), "1\t1\n");
+    assert_retry_probe(
+        "metadata-ids-mmap-retry-probe",
+        &metadata,
+        &["tag", "Important"],
+        "metadata ids mmap",
+        "1\t1\n",
+        &metadata_ids_retry_journal,
+        &metadata_ids_retry_catalog,
+        &metadata_ids_retry_progress,
+        &metadata_ids_retry_probe,
+    );
 
     let block_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -4454,6 +4539,17 @@ fn searches_persisted_tags_from_binary() {
     );
     assert_worker_admitted(&block_output.stderr, "metadata id block mmap", &metadata);
     assert_eq!(String::from_utf8(block_output.stdout).unwrap(), "1\t1\n");
+    assert_retry_probe(
+        "metadata-id-block-mmap-retry-probe",
+        &metadata,
+        &["tag", "Important", "0"],
+        "metadata id block mmap",
+        "1\t1\n",
+        &metadata_block_retry_journal,
+        &metadata_block_retry_catalog,
+        &metadata_block_retry_progress,
+        &metadata_block_retry_probe,
+    );
 
     let verify_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["metadata-verify", metadata.to_str().unwrap()])
@@ -4577,6 +4673,17 @@ fn searches_persisted_tags_from_binary() {
     );
     assert_worker_admitted(&prefix_ids.stderr, "prefix ids mmap", &prefixes);
     assert_eq!(String::from_utf8(prefix_ids.stdout).unwrap(), "1\t1\n");
+    assert_retry_probe(
+        "prefix-ids-mmap-retry-probe",
+        &prefixes,
+        &["tag"],
+        "prefix ids mmap",
+        "1\t1\n",
+        &prefix_ids_retry_journal,
+        &prefix_ids_retry_catalog,
+        &prefix_ids_retry_progress,
+        &prefix_ids_retry_probe,
+    );
 
     let prefix_block = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -4594,6 +4701,17 @@ fn searches_persisted_tags_from_binary() {
     );
     assert_worker_admitted(&prefix_block.stderr, "prefix id block mmap", &prefixes);
     assert_eq!(String::from_utf8(prefix_block.stdout).unwrap(), "1\t1\n");
+    assert_retry_probe(
+        "prefix-id-block-mmap-retry-probe",
+        &prefixes,
+        &["tag", "0"],
+        "prefix id block mmap",
+        "1\t1\n",
+        &prefix_block_retry_journal,
+        &prefix_block_retry_catalog,
+        &prefix_block_retry_progress,
+        &prefix_block_retry_probe,
+    );
 
     let prefix_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["prefix-verify", prefixes.to_str().unwrap()])
@@ -4636,6 +4754,17 @@ fn searches_persisted_tags_from_binary() {
     );
     assert_worker_admitted(&substring_ids.stderr, "substring ids mmap", &substrings);
     assert_eq!(String::from_utf8(substring_ids.stdout).unwrap(), "1\t1\n");
+    assert_retry_probe(
+        "substring-ids-mmap-retry-probe",
+        &substrings,
+        &["agg"],
+        "substring ids mmap",
+        "1\t1\n",
+        &substring_ids_retry_journal,
+        &substring_ids_retry_catalog,
+        &substring_ids_retry_progress,
+        &substring_ids_retry_probe,
+    );
 
     let substring_block = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -4657,6 +4786,17 @@ fn searches_persisted_tags_from_binary() {
         &substrings,
     );
     assert_eq!(String::from_utf8(substring_block.stdout).unwrap(), "1\t1\n");
+    assert_retry_probe(
+        "substring-id-block-mmap-retry-probe",
+        &substrings,
+        &["agg", "0"],
+        "substring id block mmap",
+        "1\t1\n",
+        &substring_block_retry_journal,
+        &substring_block_retry_catalog,
+        &substring_block_retry_progress,
+        &substring_block_retry_probe,
+    );
 
     let substring_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["substring-verify", substrings.to_str().unwrap()])
@@ -5374,6 +5514,34 @@ fn searches_persisted_tags_from_binary() {
     fs::remove_file(scope_retry_catalog).unwrap();
     fs::remove_file(scope_retry_progress).unwrap();
     fs::remove_file(scope_retry_probe).unwrap();
+    for path in [
+        metadata_ids_retry_journal,
+        metadata_ids_retry_catalog,
+        metadata_ids_retry_progress,
+        metadata_ids_retry_probe,
+        metadata_block_retry_journal,
+        metadata_block_retry_catalog,
+        metadata_block_retry_progress,
+        metadata_block_retry_probe,
+        prefix_ids_retry_journal,
+        prefix_ids_retry_catalog,
+        prefix_ids_retry_progress,
+        prefix_ids_retry_probe,
+        prefix_block_retry_journal,
+        prefix_block_retry_catalog,
+        prefix_block_retry_progress,
+        prefix_block_retry_probe,
+        substring_ids_retry_journal,
+        substring_ids_retry_catalog,
+        substring_ids_retry_progress,
+        substring_ids_retry_probe,
+        substring_block_retry_journal,
+        substring_block_retry_catalog,
+        substring_block_retry_progress,
+        substring_block_retry_probe,
+    ] {
+        fs::remove_file(path).unwrap();
+    }
 }
 
 #[test]

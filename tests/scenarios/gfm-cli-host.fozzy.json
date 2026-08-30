@@ -780,6 +780,78 @@
     {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-metadata-ids-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-metadata-ids-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-metadata-ids-retry.progress"
+      },
+      "args": [
+        "metadata-ids-mmap-retry-probe",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "tag",
+        "Important",
+        "tmp/gfm-fozzy-metadata-ids-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-metadata-ids-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-metadata-ids-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-metadata-ids-retry.progress"
+      },
+      "args": [
+        "metadata-ids-mmap-retry-probe",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "tag",
+        "Important",
+        "tmp/gfm-fozzy-metadata-ids-retry.state"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-metadata-block-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-metadata-block-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-metadata-block-retry.progress"
+      },
+      "args": [
+        "metadata-id-block-mmap-retry-probe",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "tag",
+        "Important",
+        "0",
+        "tmp/gfm-fozzy-metadata-block-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-metadata-block-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-metadata-block-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-metadata-block-retry.progress"
+      },
+      "args": [
+        "metadata-id-block-mmap-retry-probe",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "tag",
+        "Important",
+        "0",
+        "tmp/gfm-fozzy-metadata-block-retry.state"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
         "metadata-verify",
         "/tmp/gfm-fozzy-metadata.gfmmeta"
@@ -925,6 +997,74 @@
     {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-prefix-ids-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-prefix-ids-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-prefix-ids-retry.progress"
+      },
+      "args": [
+        "prefix-ids-mmap-retry-probe",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "tag",
+        "tmp/gfm-fozzy-prefix-ids-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-prefix-ids-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-prefix-ids-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-prefix-ids-retry.progress"
+      },
+      "args": [
+        "prefix-ids-mmap-retry-probe",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "tag",
+        "tmp/gfm-fozzy-prefix-ids-retry.state"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-prefix-block-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-prefix-block-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-prefix-block-retry.progress"
+      },
+      "args": [
+        "prefix-id-block-mmap-retry-probe",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "tag",
+        "0",
+        "tmp/gfm-fozzy-prefix-block-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-prefix-block-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-prefix-block-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-prefix-block-retry.progress"
+      },
+      "args": [
+        "prefix-id-block-mmap-retry-probe",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "tag",
+        "0",
+        "tmp/gfm-fozzy-prefix-block-retry.state"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
         "prefix-verify",
         "/tmp/gfm-fozzy-prefixes.gfmprefix"
@@ -1003,6 +1143,74 @@
         "/tmp/gfm-fozzy-substrings.gfmsubstr",
         "agg",
         "0"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-substring-ids-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-substring-ids-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-substring-ids-retry.progress"
+      },
+      "args": [
+        "substring-ids-mmap-retry-probe",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "agg",
+        "tmp/gfm-fozzy-substring-ids-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-substring-ids-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-substring-ids-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-substring-ids-retry.progress"
+      },
+      "args": [
+        "substring-ids-mmap-retry-probe",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "agg",
+        "tmp/gfm-fozzy-substring-ids-retry.state"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-substring-block-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-substring-block-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-substring-block-retry.progress"
+      },
+      "args": [
+        "substring-id-block-mmap-retry-probe",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "agg",
+        "0",
+        "tmp/gfm-fozzy-substring-block-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-substring-block-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-substring-block-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-substring-block-retry.progress"
+      },
+      "args": [
+        "substring-id-block-mmap-retry-probe",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "agg",
+        "0",
+        "tmp/gfm-fozzy-substring-block-retry.state"
       ],
       "expect_exit": 0
     },
@@ -4238,6 +4446,19 @@
       "exit_code": 0,
       "stdout": "volume-event-index-invalidation\tkind=description-changed\tpath=tmp/gfm-fozzy-dist\tprevious-volume=-\tprevious-class=-\tprevious-mount=-\tprevious-reachable=-\tprevious-read-only=-\tcurrent-volume=16777230\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tcurrent-read-only=false\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=false\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-descriptor-changed\nvolume-job-cancellation\tvolume=16777230\tclass=background\tcancelled=1\ncancelled-job\t1\tbackground\tbackground\tindex invalidated volume\n",
       "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-event-runtime-fanout",
+        "tmp/gfm-fozzy-dist",
+        "--",
+        "disappeared",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 0,
       "times": 1
     },
     {
