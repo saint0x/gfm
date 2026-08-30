@@ -120,6 +120,7 @@ pub enum CloudMaterializationSource {
     NativeFileProviderIdentityUnavailable,
     NativeFileProviderIdentityFailed,
     NativeFileProviderIdentityUnsupported,
+    NativeFileProviderIdentityNoProviderForPath,
     XattrFallback,
     PathFallback,
     Filesystem,
@@ -142,6 +143,9 @@ impl CloudMaterializationSource {
             Self::NativeFileProviderIdentityUnavailable => "nsfileprovidermanager:unavailable",
             Self::NativeFileProviderIdentityFailed => "nsfileprovidermanager:failed",
             Self::NativeFileProviderIdentityUnsupported => "nsfileprovidermanager:unsupported",
+            Self::NativeFileProviderIdentityNoProviderForPath => {
+                "nsfileprovidermanager:no-provider-for-path"
+            }
             Self::XattrFallback => "xattr-fallback",
             Self::PathFallback => "path-fallback",
             Self::Filesystem => "filesystem",
@@ -1472,8 +1476,17 @@ impl FileProviderOperationReport {
     fn missing(
         path: PathBuf,
         operation: FileProviderOperation,
-        before: FileProviderStateReport,
+        mut before: FileProviderStateReport,
     ) -> Self {
+        if before.storage_state == CloudStorageState::Unknown && is_evicted_placeholder_path(&path)
+        {
+            before.storage_state = CloudStorageState::Evicted;
+            before.materialization = CloudMaterialization::RemotePlaceholder;
+            before.materialization_source = CloudMaterializationSource::PathFallback;
+            before.materialization_confidence = CloudMaterializationConfidence::PathFallback;
+            before.materialization_reason =
+                Some("fileprovider-path-missing-placeholder".to_string());
+        }
         Self {
             path,
             operation,
@@ -2200,6 +2213,11 @@ fn materialization_source_for_state(
     state: CloudStorageState,
     hints: &CloudHints,
 ) -> CloudMaterializationSource {
+    if state == CloudStorageState::LocalOnly
+        && hints.native_identity.status == NativeFileProviderIdentityStatus::NoProviderForPath
+    {
+        return CloudMaterializationSource::NativeFileProviderIdentityNoProviderForPath;
+    }
     if state == CloudStorageState::LocalOnly && !native_proves_local_only(hints) {
         return CloudMaterializationSource::Filesystem;
     }
@@ -2281,7 +2299,8 @@ fn materialization_confidence_for_source(
         | CloudMaterializationSource::NativeFileProviderIdentityTimedOut
         | CloudMaterializationSource::NativeFileProviderIdentityUnavailable
         | CloudMaterializationSource::NativeFileProviderIdentityFailed
-        | CloudMaterializationSource::NativeFileProviderIdentityUnsupported => {
+        | CloudMaterializationSource::NativeFileProviderIdentityUnsupported
+        | CloudMaterializationSource::NativeFileProviderIdentityNoProviderForPath => {
             CloudMaterializationConfidence::ProviderIdentity
         }
         CloudMaterializationSource::XattrFallback => CloudMaterializationConfidence::XattrFallback,
@@ -2295,6 +2314,11 @@ fn materialization_reason_for_state(
     state: CloudStorageState,
     hints: &CloudHints,
 ) -> Option<String> {
+    if state == CloudStorageState::LocalOnly
+        && hints.native_identity.status == NativeFileProviderIdentityStatus::NoProviderForPath
+    {
+        return hints.native_identity.reason.clone();
+    }
     if state == CloudStorageState::LocalOnly && native_proves_local_only(hints) {
         return Some("native-url-resource-not-provider-backed".to_string());
     }
@@ -5650,6 +5674,47 @@ mod tests {
         let report = FileProviderStateReport::from_hints(path, hints);
         assert!(report.as_tsv().contains(
             "\tmaterialization-source=nsfileprovidermanager:missing\tmaterialization-confidence=provider-identity\tmaterialization-reason=FileProvider identity path missing\t"
+        ));
+    }
+
+    #[test]
+    fn native_identity_no_provider_reports_typed_local_only_source() {
+        let path = PathBuf::from("/tmp/Local.md");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NoProviderForPath,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("NSFileProviderManager returned no provider for path".to_string()),
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "nsfileprovidermanager".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+
+        assert_eq!(domain, FileProviderDomain::Local);
+        assert_eq!(state, CloudStorageState::LocalOnly);
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            CloudMaterializationSource::NativeFileProviderIdentityNoProviderForPath
+        );
+        assert_eq!(
+            materialization_confidence_for_source(materialization_source_for_state(state, &hints)),
+            CloudMaterializationConfidence::ProviderIdentity
+        );
+        assert_eq!(
+            materialization_reason_for_state(state, &hints).as_deref(),
+            Some("NSFileProviderManager returned no provider for path")
+        );
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+        assert!(report.as_tsv().contains(
+            "\tmaterialization-source=nsfileprovidermanager:no-provider-for-path\tmaterialization-confidence=provider-identity\tmaterialization-reason=NSFileProviderManager returned no provider for path\t"
         ));
     }
 
