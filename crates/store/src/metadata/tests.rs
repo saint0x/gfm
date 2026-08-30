@@ -339,6 +339,36 @@ fn mmap_metadata_archive_checked_open_honors_pre_cancelled_control_before_file_o
     assert!(!path.exists());
 }
 
+#[test]
+fn mmap_metadata_archive_checked_lookup_can_cancel_during_normalization() {
+    let path = temp_path("gfm-metadata-normalize-cancel", "gfmmeta");
+    write_metadata_postings(
+        &path,
+        &[MetadataPosting {
+            field: MetadataField::Tag,
+            term: "important".to_string(),
+            ids: vec![FileId::new(VolumeId(12), 10_000)],
+        }],
+    )
+    .unwrap();
+    let archive = MmapMetadataArchive::open(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result =
+        archive.ids_for_limit_checked(MetadataField::Tag, &"Important".repeat(256), 8, || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert_eq!(checks, 3);
+    std::fs::remove_file(path).unwrap();
+}
+
 fn temp_path(prefix: &str, extension: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "{}-{}.{}",

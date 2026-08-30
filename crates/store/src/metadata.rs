@@ -17,6 +17,7 @@ const METADATA_MAGIC_V3: &[u8] = b"gfm-metadata-v3\n";
 const METADATA_INDEX_FOOTER: &[u8] = b"gfm-metadata-index-v1\n";
 const METADATA_CHECKSUM_FOOTER: &[u8] = b"gfm-metadata-checksum-v1\n";
 const METADATA_FOOTER_LEN: u64 = 8 + METADATA_INDEX_FOOTER.len() as u64;
+const METADATA_NORMALIZE_CHECK_STRIDE: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MetadataStoreVersion {
@@ -315,7 +316,7 @@ impl MmapMetadataArchive {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<(Vec<FileId>, bool)> {
         check_control()?;
-        let term = normalize(term);
+        let term = normalize_checked(term, &mut check_control)?;
         if term.is_empty() || limit == 0 {
             return Ok((Vec::new(), false));
         }
@@ -366,7 +367,7 @@ impl MmapMetadataArchive {
         let mut selected = BTreeSet::new();
         for term in terms {
             check_control()?;
-            let term = normalize(term.as_ref());
+            let term = normalize_checked(term.as_ref(), &mut check_control)?;
             if !term.is_empty() {
                 selected.insert(term);
             }
@@ -416,7 +417,7 @@ impl MmapMetadataArchive {
 
         for term in terms {
             check_control()?;
-            let term = normalize(term.as_ref());
+            let term = normalize_checked(term.as_ref(), &mut check_control)?;
             if term.is_empty() {
                 continue;
             }
@@ -480,7 +481,7 @@ impl MmapMetadataArchive {
         let mut selected = BTreeSet::new();
         for term in terms {
             check_control()?;
-            let term = normalize(term.as_ref());
+            let term = normalize_checked(term.as_ref(), &mut check_control)?;
             if !term.is_empty() {
                 selected.insert(term);
             }
@@ -506,7 +507,7 @@ impl MmapMetadataArchive {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Option<MetadataPosting>> {
         check_control()?;
-        let term = normalize(term);
+        let term = normalize_checked(term, &mut check_control)?;
         if term.is_empty() {
             return Ok(None);
         }
@@ -936,6 +937,19 @@ fn metadata_version(bytes: &[u8], path: &Path) -> Result<MetadataStoreVersion> {
 
 fn normalize(value: &str) -> String {
     value.trim().to_lowercase()
+}
+
+fn normalize_checked(value: &str, mut check_control: impl FnMut() -> Result<()>) -> Result<String> {
+    check_control()?;
+    let mut normalized = String::new();
+    for (index, ch) in value.trim().chars().enumerate() {
+        if index.is_multiple_of(METADATA_NORMALIZE_CHECK_STRIDE) {
+            check_control()?;
+        }
+        normalized.extend(ch.to_lowercase());
+    }
+    check_control()?;
+    Ok(normalized)
 }
 
 fn tokenize(value: &str) -> Vec<String> {

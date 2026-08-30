@@ -13,6 +13,7 @@ const FUZZY_CHECKSUM_FOOTER: &[u8] = b"gfm-fuzzy-checksum-v1\n";
 const FUZZY_MIN_TERM_LEN: usize = 2;
 const FUZZY_MAX_TERM_LEN: usize = 32;
 const FUZZY_MAX_DELETIONS: usize = 2;
+const FUZZY_NORMALIZE_CHECK_STRIDE: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuzzyPosting {
@@ -219,7 +220,7 @@ impl MmapFuzzyArchive {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<(Vec<String>, bool)> {
         check_control()?;
-        let key = normalize(key);
+        let key = normalize_checked(key, &mut check_control)?;
         if key.is_empty() || limit == 0 {
             return Ok((Vec::new(), false));
         }
@@ -270,7 +271,7 @@ impl MmapFuzzyArchive {
 
         for key in keys {
             check_control()?;
-            let key = normalize(key.as_ref());
+            let key = normalize_checked(key.as_ref(), &mut check_control)?;
             if key.is_empty() {
                 continue;
             }
@@ -337,7 +338,7 @@ impl MmapFuzzyArchive {
         let mut selected = BTreeSet::new();
         for key in keys {
             check_control()?;
-            let key = normalize(key.as_ref());
+            let key = normalize_checked(key.as_ref(), &mut check_control)?;
             if !key.is_empty() {
                 selected.insert(key);
             }
@@ -362,7 +363,7 @@ impl MmapFuzzyArchive {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Option<FuzzyPosting>> {
         check_control()?;
-        let key = normalize(key);
+        let key = normalize_checked(key, &mut check_control)?;
         if key.is_empty() {
             return Ok(None);
         }
@@ -595,6 +596,19 @@ fn fuzzy_indexed_len_from_slice(bytes: &[u8], path: &Path) -> Result<usize> {
 
 fn normalize(value: &str) -> String {
     value.trim().to_ascii_lowercase()
+}
+
+fn normalize_checked(value: &str, mut check_control: impl FnMut() -> Result<()>) -> Result<String> {
+    check_control()?;
+    let mut normalized = String::new();
+    for (index, ch) in value.trim().chars().enumerate() {
+        if index.is_multiple_of(FUZZY_NORMALIZE_CHECK_STRIDE) {
+            check_control()?;
+        }
+        normalized.push(ch.to_ascii_lowercase());
+    }
+    check_control()?;
+    Ok(normalized)
 }
 
 fn tokenize(value: &str) -> Vec<String> {
@@ -840,6 +854,34 @@ mod tests {
             }),
             Err(GfmError::Cancelled)
         ));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_fuzzy_archive_checked_lookup_can_cancel_during_normalization() {
+        let path = temp_path("gfm-fuzzy-checked-normalize-cancel", "gfmfuzzy");
+        write_fuzzy_postings(
+            &path,
+            &[FuzzyPosting {
+                key: "finderlatency".to_string(),
+                terms: vec!["finderlatency".to_string()],
+            }],
+        )
+        .unwrap();
+        let archive = MmapFuzzyArchive::open(&path).unwrap();
+        let mut checks = 0usize;
+
+        let result = archive.terms_for_limit_checked(&"FinderLatency".repeat(512), 8, || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(checks, 3);
         std::fs::remove_file(path).unwrap();
     }
 

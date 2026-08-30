@@ -12,6 +12,7 @@ const DICTIONARY_INDEX_FOOTER: &[u8] = b"gfm-dictionary-index-v1\n";
 const DICTIONARY_CHECKSUM_FOOTER: &[u8] = b"gfm-dictionary-checksum-v1\n";
 const DICTIONARY_FOOTER_LEN: u64 = 8 + DICTIONARY_INDEX_FOOTER.len() as u64;
 const DEFAULT_BLOCK_SIZE: usize = 16;
+const DICTIONARY_NORMALIZE_CHECK_STRIDE: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictionaryTermReport {
@@ -158,11 +159,16 @@ fn write_dictionary_with_block_size_checked(
 ) -> Result<()> {
     let path = path.as_ref();
     let block_size = block_size.max(1);
-    let mut terms: Vec<_> = terms
-        .iter()
-        .map(|term| normalize(term))
-        .filter(|term| !term.is_empty())
-        .collect();
+    check_control()?;
+    let mut normalized_terms = Vec::with_capacity(terms.len());
+    for term in terms {
+        check_control()?;
+        let term = normalize_checked(term, &mut check_control)?;
+        if !term.is_empty() {
+            normalized_terms.push(term);
+        }
+    }
+    let mut terms = normalized_terms;
     terms.sort();
     terms.dedup();
     durable::atomic_write_checked(path, &mut check_control, |writer, check_control| {
@@ -622,6 +628,19 @@ fn normalize(value: &str) -> String {
     value.trim().to_lowercase()
 }
 
+fn normalize_checked(value: &str, mut check_control: impl FnMut() -> Result<()>) -> Result<String> {
+    check_control()?;
+    let mut normalized = String::new();
+    for (index, ch) in value.trim().chars().enumerate() {
+        if index.is_multiple_of(DICTIONARY_NORMALIZE_CHECK_STRIDE) {
+            check_control()?;
+        }
+        normalized.extend(ch.to_lowercase());
+    }
+    check_control()?;
+    Ok(normalized)
+}
+
 fn tokenize(value: &str) -> Vec<String> {
     value
         .split(|ch: char| !ch.is_alphanumeric())
@@ -703,6 +722,26 @@ mod tests {
         let result = MmapDictionary::open_checked(&path, || Err(GfmError::Cancelled));
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn checked_dictionary_write_can_cancel_during_term_normalization() {
+        let path = temp_path("gfm-dictionary-normalize-cancel", "gfmdict");
+        let terms = vec!["FinderLatency".repeat(512)];
+        let mut checks = 0usize;
+
+        let result = write_dictionary_checked(&path, &terms, || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(checks, 3);
         assert!(!path.exists());
     }
 
