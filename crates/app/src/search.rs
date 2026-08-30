@@ -647,34 +647,55 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "fuzzy-terms-mmap" => {
             let fuzzy = required_path(args.next(), "fuzzy-terms-mmap requires a fuzzy path")?;
             let key = required_string(args.next(), "fuzzy-terms-mmap requires a key")?;
-            let terms = run_search_archive_read(fuzzy, "fuzzy terms mmap", move |fuzzy| {
-                let archive = MmapFuzzyArchive::open(fuzzy)?;
-                archive.terms_for(&key)
-            })?;
+            let terms = run_search_archive_read_cancellable(
+                fuzzy,
+                "fuzzy terms mmap",
+                move |fuzzy, cancellation| {
+                    let archive = MmapFuzzyArchive::open(fuzzy)?;
+                    cancellation.check()?;
+                    let terms = archive.terms_for(&key)?;
+                    cancellation.check()?;
+                    Ok(terms)
+                },
+            )?;
             for term in terms {
                 println!("{term}");
             }
         }
         "fuzzy-verify" => {
             let fuzzy = required_path(args.next(), "fuzzy-verify requires a fuzzy path")?;
-            let report = run_search_archive_read(fuzzy, "fuzzy verify", move |fuzzy| {
-                let archive = MmapFuzzyArchive::open(fuzzy)?;
-                Ok(format!(
-                    "fuzzy-verify\tkeys={}\tbytes={}\tchecksum={}",
-                    archive.indexed_keys(),
-                    archive.mapped_len(),
-                    archive.is_checksummed()
-                ))
-            })?;
+            let report = run_search_archive_read_cancellable(
+                fuzzy,
+                "fuzzy verify",
+                move |fuzzy, cancellation| {
+                    let archive = MmapFuzzyArchive::open(fuzzy)?;
+                    cancellation.check()?;
+                    let report = format!(
+                        "fuzzy-verify\tkeys={}\tbytes={}\tchecksum={}",
+                        archive.indexed_keys(),
+                        archive.mapped_len(),
+                        archive.is_checksummed()
+                    );
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         "prefix-ids-mmap" => {
             let prefixes = required_path(args.next(), "prefix-ids-mmap requires a prefix path")?;
             let prefix = required_string(args.next(), "prefix-ids-mmap requires a prefix")?;
-            let ids = run_search_archive_read(prefixes, "prefix ids mmap", move |prefixes| {
-                let archive = MmapPrefixArchive::open(prefixes)?;
-                archive.ids_for(&prefix)
-            })?;
+            let ids = run_search_archive_read_cancellable(
+                prefixes,
+                "prefix ids mmap",
+                move |prefixes, cancellation| {
+                    let archive = MmapPrefixArchive::open(prefixes)?;
+                    cancellation.check()?;
+                    let ids = archive.ids_for(&prefix)?;
+                    cancellation.check()?;
+                    Ok(ids)
+                },
+            )?;
             print_file_ids(ids);
         }
         "prefix-id-block-mmap" => {
@@ -683,34 +704,54 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let prefix = required_string(args.next(), "prefix-id-block-mmap requires a prefix")?;
             let block_index =
                 parse_usize_arg(args.next(), "prefix-id-block-mmap requires a block index")?;
-            let ids = run_search_archive_read(prefixes, "prefix id block mmap", move |prefixes| {
-                let archive = MmapPrefixArchive::open(prefixes)?;
-                archive.id_block_for(&prefix, block_index)
-            })?;
+            let ids = run_search_archive_read_cancellable(
+                prefixes,
+                "prefix id block mmap",
+                move |prefixes, cancellation| {
+                    let archive = MmapPrefixArchive::open(prefixes)?;
+                    cancellation.check()?;
+                    let ids = archive.id_block_for(&prefix, block_index)?;
+                    cancellation.check()?;
+                    Ok(ids)
+                },
+            )?;
             print_file_ids(ids);
         }
         "prefix-verify" => {
             let prefixes = required_path(args.next(), "prefix-verify requires a prefix path")?;
-            let report = run_search_archive_read(prefixes, "prefix verify", move |prefixes| {
-                let archive = MmapPrefixArchive::open(prefixes)?;
-                Ok(format!(
-                    "prefix-verify\tprefixes={}\tbytes={}\tchecksum={}",
-                    archive.indexed_prefixes(),
-                    archive.mapped_len(),
-                    archive.is_checksummed()
-                ))
-            })?;
+            let report = run_search_archive_read_cancellable(
+                prefixes,
+                "prefix verify",
+                move |prefixes, cancellation| {
+                    let archive = MmapPrefixArchive::open(prefixes)?;
+                    cancellation.check()?;
+                    let report = format!(
+                        "prefix-verify\tprefixes={}\tbytes={}\tchecksum={}",
+                        archive.indexed_prefixes(),
+                        archive.mapped_len(),
+                        archive.is_checksummed()
+                    );
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         "substring-ids-mmap" => {
             let substrings =
                 required_path(args.next(), "substring-ids-mmap requires a substring path")?;
             let gram = required_string(args.next(), "substring-ids-mmap requires a trigram")?;
-            let ids =
-                run_search_archive_read(substrings, "substring ids mmap", move |substrings| {
+            let ids = run_search_archive_read_cancellable(
+                substrings,
+                "substring ids mmap",
+                move |substrings, cancellation| {
                     let archive = MmapSubstringArchive::open(substrings)?;
-                    archive.ids_for(&gram)
-                })?;
+                    cancellation.check()?;
+                    let ids = archive.ids_for(&gram)?;
+                    cancellation.check()?;
+                    Ok(ids)
+                },
+            )?;
             print_file_ids(ids);
         }
         "substring-id-block-mmap" => {
@@ -723,12 +764,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "substring-id-block-mmap requires a block index",
             )?;
-            let ids = run_search_archive_read(
+            let ids = run_search_archive_read_cancellable(
                 substrings,
                 "substring id block mmap",
-                move |substrings| {
+                move |substrings, cancellation| {
                     let archive = MmapSubstringArchive::open(substrings)?;
-                    archive.id_block_for(&gram, block_index)
+                    cancellation.check()?;
+                    let ids = archive.id_block_for(&gram, block_index)?;
+                    cancellation.check()?;
+                    Ok(ids)
                 },
             )?;
             print_file_ids(ids);
@@ -736,39 +780,54 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "substring-verify" => {
             let substrings =
                 required_path(args.next(), "substring-verify requires a substring path")?;
-            let report =
-                run_search_archive_read(substrings, "substring verify", move |substrings| {
+            let report = run_search_archive_read_cancellable(
+                substrings,
+                "substring verify",
+                move |substrings, cancellation| {
                     let archive = MmapSubstringArchive::open(substrings)?;
-                    Ok(format!(
+                    cancellation.check()?;
+                    let report = format!(
                         "substring-verify\tgrams={}\tbytes={}\tchecksum={}",
                         archive.indexed_grams(),
                         archive.mapped_len(),
                         archive.is_checksummed()
-                    ))
-                })?;
+                    );
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         "dictionary-lookup" => {
             let dictionary =
                 required_path(args.next(), "dictionary-lookup requires a dictionary path")?;
             let term = required_string(args.next(), "dictionary-lookup requires a term")?;
-            let report =
-                run_search_archive_read(dictionary, "dictionary lookup", move |dictionary| {
+            let report = run_search_archive_read_cancellable(
+                dictionary,
+                "dictionary lookup",
+                move |dictionary, cancellation| {
                     let archive = MmapDictionary::open(dictionary)?;
-                    Ok(match archive.find(&term)? {
+                    cancellation.check()?;
+                    let report = match archive.find(&term)? {
                         Some(index) => format!("dictionary\tfound\tindex={index}\tterm={term}"),
                         None => format!("dictionary\tmissing\tterm={term}"),
-                    })
-                })?;
+                    };
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         "dictionary-verify" => {
             let dictionary =
                 required_path(args.next(), "dictionary-verify requires a dictionary path")?;
-            let report =
-                run_search_archive_read(dictionary, "dictionary verify", move |dictionary| {
+            let report = run_search_archive_read_cancellable(
+                dictionary,
+                "dictionary verify",
+                move |dictionary, cancellation| {
                     let archive = MmapDictionary::open(dictionary)?;
-                    Ok(format!(
+                    cancellation.check()?;
+                    let report = format!(
                         "dictionary-verify\tterms={}\tbytes={}\tchecksum={}",
                         archive.len(),
                         archive.mapped_len(),
@@ -777,8 +836,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         } else {
                             "legacy"
                         }
-                    ))
-                })?;
+                    );
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         "metadata-ids-mmap" => {
@@ -789,10 +851,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "metadata field",
             )?;
             let term = required_string(args.next(), "metadata-ids-mmap requires a term")?;
-            let ids = run_search_archive_read(metadata, "metadata ids mmap", move |metadata| {
-                let archive = MmapMetadataArchive::open(metadata)?;
-                archive.ids_for(field, &term)
-            })?;
+            let ids = run_search_archive_read_cancellable(
+                metadata,
+                "metadata ids mmap",
+                move |metadata, cancellation| {
+                    let archive = MmapMetadataArchive::open(metadata)?;
+                    cancellation.check()?;
+                    let ids = archive.ids_for(field, &term)?;
+                    cancellation.check()?;
+                    Ok(ids)
+                },
+            )?;
             print_file_ids(ids);
         }
         "metadata-id-block-mmap" => {
@@ -807,28 +876,41 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let term = required_string(args.next(), "metadata-id-block-mmap requires a term")?;
             let block_index =
                 parse_usize_arg(args.next(), "metadata-id-block-mmap requires a block index")?;
-            let ids =
-                run_search_archive_read(metadata, "metadata id block mmap", move |metadata| {
+            let ids = run_search_archive_read_cancellable(
+                metadata,
+                "metadata id block mmap",
+                move |metadata, cancellation| {
                     let archive = MmapMetadataArchive::open(metadata)?;
-                    archive.id_block_for(field, &term, block_index)
-                })?;
+                    cancellation.check()?;
+                    let ids = archive.id_block_for(field, &term, block_index)?;
+                    cancellation.check()?;
+                    Ok(ids)
+                },
+            )?;
             print_file_ids(ids);
         }
         "metadata-verify" => {
             let metadata = required_path(args.next(), "metadata-verify requires a metadata path")?;
-            let report = run_search_archive_read(metadata, "metadata verify", move |metadata| {
-                let archive = MmapMetadataArchive::open(metadata)?;
-                Ok(format!(
-                    "metadata-verify\tterms={}\tbytes={}\tchecksum={}",
-                    archive.indexed_terms(),
-                    archive.mapped_len(),
-                    if archive.is_checksummed() {
-                        "verified"
-                    } else {
-                        "legacy"
-                    }
-                ))
-            })?;
+            let report = run_search_archive_read_cancellable(
+                metadata,
+                "metadata verify",
+                move |metadata, cancellation| {
+                    let archive = MmapMetadataArchive::open(metadata)?;
+                    cancellation.check()?;
+                    let report = format!(
+                        "metadata-verify\tterms={}\tbytes={}\tchecksum={}",
+                        archive.indexed_terms(),
+                        archive.mapped_len(),
+                        if archive.is_checksummed() {
+                            "verified"
+                        } else {
+                            "legacy"
+                        }
+                    );
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         _ => return Ok(false),
@@ -938,17 +1020,6 @@ fn preflight_content_archive_volumes(paths: &[PathBuf], worker: &str) -> Result<
         preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
     }
     Ok(())
-}
-
-fn run_search_archive_read<T>(
-    path: PathBuf,
-    worker: &'static str,
-    read: impl FnOnce(PathBuf) -> Result<T> + Send + 'static,
-) -> Result<T>
-where
-    T: Send + 'static,
-{
-    run_search_archive_read_cancellable(path, worker, move |path, _| read(path))
 }
 
 fn run_search_archive_read_cancellable<T>(

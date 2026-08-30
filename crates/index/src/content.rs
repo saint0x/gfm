@@ -508,7 +508,8 @@ impl BackgroundContentIndexer {
             cancellation,
         )?;
         cancellation.check()?;
-        let base_postings = read_previous_content_postings(previous_content_path)?;
+        let base_postings =
+            read_previous_content_postings_cancellable(previous_content_path, cancellation)?;
         report.terms = compact_content_postings_with_segments_checked(
             content_path,
             base_postings,
@@ -532,7 +533,10 @@ impl BackgroundContentIndexer {
             Some(quarantine),
         )?;
         request.cancellation.check()?;
-        let base_postings = read_previous_content_postings(request.previous_content_path)?;
+        let base_postings = read_previous_content_postings_cancellable(
+            request.previous_content_path,
+            request.cancellation,
+        )?;
         report.terms = compact_content_postings_with_segments_checked(
             request.content_path,
             base_postings,
@@ -654,12 +658,21 @@ impl Default for BackgroundContentIndexer {
     }
 }
 
-pub(crate) fn read_previous_content_postings(path: Option<&Path>) -> Result<Vec<ContentPosting>> {
+pub(crate) fn read_previous_content_postings_cancellable(
+    path: Option<&Path>,
+    cancellation: &Cancellation,
+) -> Result<Vec<ContentPosting>> {
+    cancellation.check()?;
     let Some(path) = path else {
         return Ok(Vec::new());
     };
     match fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => read_content_postings(path),
+        Ok(metadata) if metadata.is_file() => {
+            cancellation.check()?;
+            let postings = read_content_postings(path)?;
+            cancellation.check()?;
+            Ok(postings)
+        }
         Ok(_) => Ok(Vec::new()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(err) => Err(GfmError::io(

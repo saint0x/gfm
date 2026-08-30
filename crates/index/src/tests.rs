@@ -1,5 +1,5 @@
 use super::*;
-use crate::content::read_previous_content_postings;
+use crate::content::read_previous_content_postings_cancellable;
 use gfm_content::ExtractionQuarantine;
 use gfm_fs::FinderMetadataReport;
 use gfm_jobs::Cancellation;
@@ -3434,7 +3434,9 @@ fn previous_content_postings_probe_reports_unavailable_metadata() {
     let root = unique_temp_dir("gfm-background-content-previous-probe-root");
     let unavailable = unprobeable_child_path(&root, "content-postings-unavailable", "gfmcontent");
 
-    let err = read_previous_content_postings(Some(&unavailable)).unwrap_err();
+    let err =
+        read_previous_content_postings_cancellable(Some(&unavailable), &Cancellation::default())
+            .unwrap_err();
 
     assert!(format!("{err}").contains("content postings metadata unavailable"));
     assert!(format!("{err}").contains("content-postings-unavailable"));
@@ -3443,17 +3445,39 @@ fn previous_content_postings_probe_reports_unavailable_metadata() {
 }
 
 #[test]
+fn previous_content_postings_read_honors_cancelled_token_before_probe() {
+    let root = unique_temp_dir("gfm-background-content-previous-cancel-root");
+    let unavailable = unprobeable_child_path(&root, "content-postings-unavailable", "gfmcontent");
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let err = read_previous_content_postings_cancellable(Some(&unavailable), &cancellation)
+        .expect_err("pre-cancelled previous postings read should not probe metadata");
+
+    assert_eq!(err, GfmError::Cancelled);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn previous_content_postings_probe_skips_missing_and_non_file_paths() {
     let root = unique_temp_dir("gfm-background-content-previous-empty-root");
     let missing = root.join("missing.gfmcontent");
 
-    assert!(read_previous_content_postings(None).unwrap().is_empty());
-    assert!(read_previous_content_postings(Some(&missing))
-        .unwrap()
-        .is_empty());
-    assert!(read_previous_content_postings(Some(&root))
-        .unwrap()
-        .is_empty());
+    assert!(
+        read_previous_content_postings_cancellable(None, &Cancellation::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        read_previous_content_postings_cancellable(Some(&missing), &Cancellation::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        read_previous_content_postings_cancellable(Some(&root), &Cancellation::default())
+            .unwrap()
+            .is_empty()
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
