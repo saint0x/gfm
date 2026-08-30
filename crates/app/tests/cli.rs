@@ -249,6 +249,76 @@ fn search_index_retries_transient_archive_read_failure_from_binary() {
 }
 
 #[test]
+fn search_index_mmap_retries_transient_archive_read_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-index-mmap-retry-root");
+    let index = unique_temp_path("gfm-cli-search-index-mmap-retry", "gfmidx");
+    let journal = unique_temp_path("gfm-cli-search-index-mmap-retry", "journal");
+    let catalog = unique_temp_path("gfm-cli-search-index-mmap-retry", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-search-index-mmap-retry", "gfmprogress");
+    let retry_probe = unique_temp_path("gfm-cli-search-index-mmap-retry", "state");
+    fs::create_dir_all(root.join("Reports")).unwrap();
+    fs::write(
+        root.join("Reports").join("RetryMmapSearch.md"),
+        "persisted mmap search retry",
+    )
+    .unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), index.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "search-index-mmap-retry-probe",
+            index.to_str().unwrap(),
+            "retrymmapsearch",
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(stdout.contains("RetryMmapSearch.md"), "{stdout}");
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tsearch index mmap"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains(
+            "1\t1\tfailed:temporary search index mmap retry probe busy\tsearch index mmap"
+        ),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tsearch index mmap"),
+        "{journal_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(index).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
+}
+
+#[test]
 fn live_search_routes_retry_transient_scan_failure_from_binary() {
     let root = unique_temp_dir("gfm-cli-live-search-retry-root");
     let search_journal = unique_temp_path("gfm-cli-live-search-retry", "journal");
@@ -11757,6 +11827,18 @@ fn resolves_content_ids_from_archive_directory() {
     let root = unique_temp_dir("gfm-cli-content-ids-root");
     let records = unique_temp_path("gfm-cli-content-ids-records", "gfmidx");
     let content = unique_temp_path("gfm-cli-content-ids", "gfmcontent");
+    let direct_retry_journal = unique_temp_path("gfm-cli-content-ids-retry", "journal");
+    let direct_retry_catalog = unique_temp_path("gfm-cli-content-ids-retry", "gfmjobs");
+    let direct_retry_progress = unique_temp_path("gfm-cli-content-ids-retry", "gfmprogress");
+    let direct_retry_probe = unique_temp_path("gfm-cli-content-ids-retry", "state");
+    let mmap_retry_journal = unique_temp_path("gfm-cli-content-ids-mmap-retry", "journal");
+    let mmap_retry_catalog = unique_temp_path("gfm-cli-content-ids-mmap-retry", "gfmjobs");
+    let mmap_retry_progress = unique_temp_path("gfm-cli-content-ids-mmap-retry", "gfmprogress");
+    let mmap_retry_probe = unique_temp_path("gfm-cli-content-ids-mmap-retry", "state");
+    let block_retry_journal = unique_temp_path("gfm-cli-content-id-block-retry", "journal");
+    let block_retry_catalog = unique_temp_path("gfm-cli-content-id-block-retry", "gfmjobs");
+    let block_retry_progress = unique_temp_path("gfm-cli-content-id-block-retry", "gfmprogress");
+    let block_retry_probe = unique_temp_path("gfm-cli-content-id-block-retry", "state");
     fs::write(root.join("archive.md"), "the body contains directmarker").unwrap();
 
     let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -11796,6 +11878,40 @@ fn resolves_content_ids_from_archive_directory() {
     assert_eq!(stdout.lines().count(), 1, "{stdout}");
     assert!(stdout.lines().all(|line| line.split('\t').count() == 2));
 
+    let ids_retry_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &direct_retry_journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &direct_retry_catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &direct_retry_progress)
+        .args([
+            "content-ids-retry-probe",
+            content.to_str().unwrap(),
+            "directmarker",
+            direct_retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        ids_retry_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ids_retry_output.stderr)
+    );
+    assert_eq!(String::from_utf8(ids_retry_output.stdout).unwrap(), stdout);
+    assert_eq!(fs::read_to_string(&direct_retry_probe).unwrap(), "2");
+    let direct_retry_journal_text = fs::read_to_string(&direct_retry_journal).unwrap();
+    assert!(
+        direct_retry_journal_text.contains("1\t1\tstarted\tcontent ids"),
+        "{direct_retry_journal_text}"
+    );
+    assert!(
+        direct_retry_journal_text
+            .contains("1\t1\tfailed:temporary content ids retry probe busy\tcontent ids"),
+        "{direct_retry_journal_text}"
+    );
+    assert!(
+        direct_retry_journal_text.contains("1\t2\tcompleted\tcontent ids"),
+        "{direct_retry_journal_text}"
+    );
+
     let mmap_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "content-ids-mmap",
@@ -11820,6 +11936,40 @@ fn resolves_content_ids_from_archive_directory() {
 
     let mmap_stdout = String::from_utf8(mmap_output.stdout).unwrap();
     assert_eq!(mmap_stdout, stdout);
+
+    let mmap_retry_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &mmap_retry_journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &mmap_retry_catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &mmap_retry_progress)
+        .args([
+            "content-ids-mmap-retry-probe",
+            content.to_str().unwrap(),
+            "directmarker",
+            mmap_retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        mmap_retry_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mmap_retry_output.stderr)
+    );
+    assert_eq!(String::from_utf8(mmap_retry_output.stdout).unwrap(), stdout);
+    assert_eq!(fs::read_to_string(&mmap_retry_probe).unwrap(), "2");
+    let mmap_retry_journal_text = fs::read_to_string(&mmap_retry_journal).unwrap();
+    assert!(
+        mmap_retry_journal_text.contains("1\t1\tstarted\tcontent ids mmap"),
+        "{mmap_retry_journal_text}"
+    );
+    assert!(
+        mmap_retry_journal_text
+            .contains("1\t1\tfailed:temporary content ids mmap retry probe busy\tcontent ids mmap"),
+        "{mmap_retry_journal_text}"
+    );
+    assert!(
+        mmap_retry_journal_text.contains("1\t2\tcompleted\tcontent ids mmap"),
+        "{mmap_retry_journal_text}"
+    );
 
     let block_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -11847,6 +11997,45 @@ fn resolves_content_ids_from_archive_directory() {
     let block_stdout = String::from_utf8(block_output.stdout).unwrap();
     assert_eq!(block_stdout, stdout);
 
+    let block_retry_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &block_retry_journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &block_retry_catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &block_retry_progress)
+        .args([
+            "content-id-block-mmap-retry-probe",
+            content.to_str().unwrap(),
+            "directmarker",
+            "0",
+            block_retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        block_retry_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&block_retry_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(block_retry_output.stdout).unwrap(),
+        stdout
+    );
+    assert_eq!(fs::read_to_string(&block_retry_probe).unwrap(), "2");
+    let block_retry_journal_text = fs::read_to_string(&block_retry_journal).unwrap();
+    assert!(
+        block_retry_journal_text.contains("1\t1\tstarted\tcontent id block mmap"),
+        "{block_retry_journal_text}"
+    );
+    assert!(
+        block_retry_journal_text.contains(
+            "1\t1\tfailed:temporary content id block mmap retry probe busy\tcontent id block mmap"
+        ),
+        "{block_retry_journal_text}"
+    );
+    assert!(
+        block_retry_journal_text.contains("1\t2\tcompleted\tcontent id block mmap"),
+        "{block_retry_journal_text}"
+    );
+
     let verify_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["content-verify", content.to_str().unwrap()])
         .output()
@@ -11873,6 +12062,18 @@ fn resolves_content_ids_from_archive_directory() {
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(content).unwrap();
+    fs::remove_file(direct_retry_journal).unwrap();
+    fs::remove_file(direct_retry_catalog).unwrap();
+    fs::remove_file(direct_retry_progress).unwrap();
+    fs::remove_file(direct_retry_probe).unwrap();
+    fs::remove_file(mmap_retry_journal).unwrap();
+    fs::remove_file(mmap_retry_catalog).unwrap();
+    fs::remove_file(mmap_retry_progress).unwrap();
+    fs::remove_file(mmap_retry_probe).unwrap();
+    fs::remove_file(block_retry_journal).unwrap();
+    fs::remove_file(block_retry_catalog).unwrap();
+    fs::remove_file(block_retry_progress).unwrap();
+    fs::remove_file(block_retry_probe).unwrap();
 }
 
 #[test]
@@ -12046,6 +12247,17 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     let second_content = unique_temp_path("gfm-cli-content-set-second", "gfmcontent");
     let third_content = unique_temp_path("gfm-cli-content-set-third", "gfmcontent");
     let manifest = unique_temp_path("gfm-cli-content-set", "gfmmanifest");
+    let set_ids_retry_journal = unique_temp_path("gfm-cli-content-ids-set-retry", "journal");
+    let set_ids_retry_catalog = unique_temp_path("gfm-cli-content-ids-set-retry", "gfmjobs");
+    let set_ids_retry_progress = unique_temp_path("gfm-cli-content-ids-set-retry", "gfmprogress");
+    let set_ids_retry_probe = unique_temp_path("gfm-cli-content-ids-set-retry", "state");
+    let manifest_ids_retry_journal =
+        unique_temp_path("gfm-cli-content-ids-manifest-retry", "journal");
+    let manifest_ids_retry_catalog =
+        unique_temp_path("gfm-cli-content-ids-manifest-retry", "gfmjobs");
+    let manifest_ids_retry_progress =
+        unique_temp_path("gfm-cli-content-ids-manifest-retry", "gfmprogress");
+    let manifest_ids_retry_probe = unique_temp_path("gfm-cli-content-ids-manifest-retry", "state");
     fs::write(root.join("left.md"), "metadata only").unwrap();
     fs::write(root.join("right.md"), "metadata only").unwrap();
 
@@ -12125,6 +12337,45 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     );
     let ids_stdout = String::from_utf8(ids_output.stdout).unwrap();
     assert_eq!(ids_stdout.lines().count(), 2, "{ids_stdout}");
+
+    let ids_retry_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &set_ids_retry_journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &set_ids_retry_catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &set_ids_retry_progress)
+        .args([
+            "content-ids-mmap-set-retry-probe",
+            "setneedle",
+            set_ids_retry_probe.to_str().unwrap(),
+            first_content.to_str().unwrap(),
+            second_content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        ids_retry_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ids_retry_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(ids_retry_output.stdout).unwrap(),
+        ids_stdout
+    );
+    assert_eq!(fs::read_to_string(&set_ids_retry_probe).unwrap(), "2");
+    let set_ids_retry_journal_text = fs::read_to_string(&set_ids_retry_journal).unwrap();
+    assert!(
+        set_ids_retry_journal_text.contains("1\t1\tstarted\tcontent ids mmap set"),
+        "{set_ids_retry_journal_text}"
+    );
+    assert!(
+        set_ids_retry_journal_text.contains(
+            "1\t1\tfailed:temporary content ids mmap set retry probe busy\tcontent ids mmap set"
+        ),
+        "{set_ids_retry_journal_text}"
+    );
+    assert!(
+        set_ids_retry_journal_text.contains("1\t2\tcompleted\tcontent ids mmap set"),
+        "{set_ids_retry_journal_text}"
+    );
 
     let manifest_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -12292,6 +12543,44 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     assert_eq!(
         String::from_utf8(manifest_ids_output.stdout).unwrap(),
         ids_stdout
+    );
+
+    let manifest_ids_retry_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &manifest_ids_retry_journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &manifest_ids_retry_catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &manifest_ids_retry_progress)
+        .args([
+            "content-ids-mmap-manifest-retry-probe",
+            manifest.to_str().unwrap(),
+            "setneedle",
+            manifest_ids_retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        manifest_ids_retry_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&manifest_ids_retry_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(manifest_ids_retry_output.stdout).unwrap(),
+        ids_stdout
+    );
+    assert_eq!(fs::read_to_string(&manifest_ids_retry_probe).unwrap(), "2");
+    let manifest_ids_retry_journal_text = fs::read_to_string(&manifest_ids_retry_journal).unwrap();
+    assert!(
+        manifest_ids_retry_journal_text.contains("1\t1\tstarted\tcontent ids mmap manifest"),
+        "{manifest_ids_retry_journal_text}"
+    );
+    assert!(
+        manifest_ids_retry_journal_text.contains(
+            "1\t1\tfailed:temporary content ids mmap manifest retry probe busy\tcontent ids mmap manifest"
+        ),
+        "{manifest_ids_retry_journal_text}"
+    );
+    assert!(
+        manifest_ids_retry_journal_text.contains("1\t2\tcompleted\tcontent ids mmap manifest"),
+        "{manifest_ids_retry_journal_text}"
     );
 
     let manifest_search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -12723,6 +13012,14 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     fs::remove_file(crash_manifest).unwrap();
     fs::remove_file(crash_old).unwrap();
     fs::remove_file(crash_new).unwrap();
+    fs::remove_file(set_ids_retry_journal).unwrap();
+    fs::remove_file(set_ids_retry_catalog).unwrap();
+    fs::remove_file(set_ids_retry_progress).unwrap();
+    fs::remove_file(set_ids_retry_probe).unwrap();
+    fs::remove_file(manifest_ids_retry_journal).unwrap();
+    fs::remove_file(manifest_ids_retry_catalog).unwrap();
+    fs::remove_file(manifest_ids_retry_progress).unwrap();
+    fs::remove_file(manifest_ids_retry_probe).unwrap();
 }
 
 #[test]

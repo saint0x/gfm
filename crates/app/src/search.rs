@@ -3,9 +3,7 @@ use crate::access::{
 };
 use crate::content::run_content_search;
 use crate::extract::extraction_budget_profile;
-use crate::runtime::{
-    run_retriable_volume_task_cancellable_with_payload_path, run_volume_task_cancellable,
-};
+use crate::runtime::run_retriable_volume_task_cancellable_with_payload_path;
 use crate::{
     first_path_volume, parse_required_scheduling_pressure, parse_usize_arg, path_volume,
     required_path, required_string,
@@ -382,13 +380,22 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
-        "search-index-mmap" => {
+        "search-index-mmap" | "search-index-mmap-retry-probe" => {
             let index_path =
                 required_path(args.next(), "search-index-mmap requires an index path")?;
             let query = required_string(args.next(), "search-index-mmap requires a query string")?;
-            let hits = run_search_archive_read_cancellable(
+            let retry_probe = if command == "search-index-mmap-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "search-index-mmap-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let hits = run_search_archive_read_cancellable_with_retry_probe(
                 index_path,
                 "search index mmap",
+                retry_probe,
                 move |index_path, cancellation| {
                     let parsed = SearchQuery::parse_cancellable(&query, cancellation)?;
                     let live = LiveIndex::from_records(
@@ -698,12 +705,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "search-query-cancel-parse" => {
             run_search_query_parse_cancellation_probe()?;
         }
-        "content-ids" => {
+        "content-ids" | "content-ids-retry-probe" => {
             let content = required_path(args.next(), "content-ids requires a content path")?;
             let term = required_string(args.next(), "content-ids requires a term")?;
-            let ids = run_content_archive_read_cancellable(
+            let retry_probe = if command == "content-ids-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "content-ids-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let ids = run_content_archive_read_cancellable_with_retry_probe(
                 content,
                 "content ids",
+                retry_probe,
                 move |content, cancellation| {
                     let mut archive =
                         ContentArchive::open_checked(content, || cancellation.check())?;
@@ -715,12 +731,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             print_file_ids(ids);
         }
-        "content-ids-mmap" => {
+        "content-ids-mmap" | "content-ids-mmap-retry-probe" => {
             let content = required_path(args.next(), "content-ids-mmap requires a content path")?;
             let term = required_string(args.next(), "content-ids-mmap requires a term")?;
-            let ids = run_content_archive_read_cancellable(
+            let retry_probe = if command == "content-ids-mmap-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "content-ids-mmap-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let ids = run_content_archive_read_cancellable_with_retry_probe(
                 content,
                 "content ids mmap",
+                retry_probe,
                 move |content, cancellation| {
                     let archive =
                         MmapContentArchive::open_checked(content, || cancellation.check())?;
@@ -732,17 +757,26 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             print_file_ids(ids);
         }
-        "content-ids-mmap-set" => {
+        "content-ids-mmap-set" | "content-ids-mmap-set-retry-probe" => {
             let term = required_string(args.next(), "content-ids-mmap-set requires a term")?;
+            let retry_probe = if command == "content-ids-mmap-set-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "content-ids-mmap-set-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
             let content_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
             if content_paths.is_empty() {
                 return Err(gfm_types::GfmError::Format(
                     "content-ids-mmap-set requires at least one content archive".to_string(),
                 ));
             }
-            let ids = run_content_archive_set_read_cancellable(
+            let ids = run_content_archive_set_read_cancellable_with_retry_probe(
                 content_paths,
                 "content ids mmap set",
+                retry_probe,
                 move |paths, cancellation| {
                     let archive = MmapContentSet::open_checked(&paths, || cancellation.check())?;
                     cancellation.check()?;
@@ -753,15 +787,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             print_file_ids(ids);
         }
-        "content-ids-mmap-manifest" => {
+        "content-ids-mmap-manifest" | "content-ids-mmap-manifest-retry-probe" => {
             let manifest = required_path(
                 args.next(),
                 "content-ids-mmap-manifest requires a manifest path",
             )?;
             let term = required_string(args.next(), "content-ids-mmap-manifest requires a term")?;
-            let ids = run_content_manifest_read_cancellable(
+            let retry_probe = if command == "content-ids-mmap-manifest-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "content-ids-mmap-manifest-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let ids = run_content_manifest_read_cancellable_with_retry_probe(
                 manifest,
                 "content ids mmap manifest",
+                retry_probe,
                 move |manifest, cancellation| {
                     let archive =
                         MmapContentSet::open_manifest_checked(manifest, || cancellation.check())?;
@@ -773,15 +816,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             print_file_ids(ids);
         }
-        "content-id-block-mmap" => {
+        "content-id-block-mmap" | "content-id-block-mmap-retry-probe" => {
             let content =
                 required_path(args.next(), "content-id-block-mmap requires a content path")?;
             let term = required_string(args.next(), "content-id-block-mmap requires a term")?;
             let block_index =
                 parse_usize_arg(args.next(), "content-id-block-mmap requires a block index")?;
-            let ids = run_content_archive_read_cancellable(
+            let retry_probe = if command == "content-id-block-mmap-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "content-id-block-mmap-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let ids = run_content_archive_read_cancellable_with_retry_probe(
                 content,
                 "content id block mmap",
+                retry_probe,
                 move |content, cancellation| {
                     let archive =
                         MmapContentArchive::open_checked(content, || cancellation.check())?;
@@ -1173,58 +1225,119 @@ fn preflight_content_archive_access_checked(
 fn run_content_archive_read_cancellable<T>(
     path: PathBuf,
     worker: &'static str,
-    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
+    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Clone + Send + Sync + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    run_content_archive_read_cancellable_with_retry_probe(path, worker, None, read)
+}
+
+fn run_content_archive_read_cancellable_with_retry_probe<T>(
+    path: PathBuf,
+    worker: &'static str,
+    retry_probe: Option<PathBuf>,
+    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Clone + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
 {
     preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
+    }
     let volume = path_volume(&path);
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        cancellation.check()?;
-        let _access =
-            preflight_content_archive_access_checked(&path, worker, || cancellation.check())?;
-        cancellation.check()?;
-        read(path, &cancellation)
-    })
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        worker,
+        path.clone(),
+        move |cancellation| {
+            let path = path.clone();
+            let retry_probe = retry_probe.clone();
+            let read = read.clone();
+            cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
+            }
+            let _access =
+                preflight_content_archive_access_checked(&path, worker, || cancellation.check())?;
+            cancellation.check()?;
+            read(path, &cancellation)
+        },
+    )
 }
 
-fn run_content_archive_set_read_cancellable<T>(
+fn run_content_archive_set_read_cancellable_with_retry_probe<T>(
     paths: Vec<PathBuf>,
     worker: &'static str,
-    read: impl FnOnce(Vec<PathBuf>, &Cancellation) -> Result<T> + Send + 'static,
+    retry_probe: Option<PathBuf>,
+    read: impl Fn(Vec<PathBuf>, &Cancellation) -> Result<T> + Clone + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
 {
     preflight_content_archive_volumes(&paths, worker)?;
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
+    }
     let volume = first_path_volume(paths.iter());
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        cancellation.check()?;
-        let _access =
-            preflight_content_archives_access_checked(&paths, worker, || cancellation.check())?;
-        cancellation.check()?;
-        read(paths, &cancellation)
-    })
+    let payload_path = paths.first().cloned().unwrap_or_else(|| PathBuf::from("."));
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        worker,
+        payload_path,
+        move |cancellation| {
+            let paths = paths.clone();
+            let retry_probe = retry_probe.clone();
+            let read = read.clone();
+            cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
+            }
+            let _access =
+                preflight_content_archives_access_checked(&paths, worker, || cancellation.check())?;
+            cancellation.check()?;
+            read(paths, &cancellation)
+        },
+    )
 }
 
-fn run_content_manifest_read_cancellable<T>(
+fn run_content_manifest_read_cancellable_with_retry_probe<T>(
     manifest: PathBuf,
     worker: &'static str,
-    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
+    retry_probe: Option<PathBuf>,
+    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Clone + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
 {
     preflight_volume_access_scope(&manifest, AccessIntent::Read, worker)?;
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
+    }
     let volume = path_volume(&manifest);
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        cancellation.check()?;
-        let _access =
-            preflight_content_manifest_access_checked(&manifest, worker, || cancellation.check())?;
-        cancellation.check()?;
-        read(manifest, &cancellation)
-    })
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        worker,
+        manifest.clone(),
+        move |cancellation| {
+            let manifest = manifest.clone();
+            let retry_probe = retry_probe.clone();
+            let read = read.clone();
+            cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
+            }
+            let _access = preflight_content_manifest_access_checked(&manifest, worker, || {
+                cancellation.check()
+            })?;
+            cancellation.check()?;
+            read(manifest, &cancellation)
+        },
+    )
 }
 
 fn preflight_content_archive_volumes(paths: &[PathBuf], worker: &str) -> Result<()> {
