@@ -11,7 +11,7 @@ use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -502,6 +502,7 @@ fn progress_semantics_equal(left: &JobProgressSnapshot, right: &JobProgressSnaps
 mod tests {
     use super::*;
     use gfm_jobs::{JobClass, JobId};
+    use std::cell::Cell;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -678,6 +679,53 @@ mod tests {
 
         assert_eq!(err, GfmError::Cancelled);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn operation_conflict_store_checked_read_can_cancel_during_parse() {
+        let path = temp_path("gfm-operation-conflict-read-parse-cancel", "tsv");
+        let store = OperationConflictStore::new(&path);
+        let conflicts = vec![
+            RuntimeOperationConflict {
+                operation: "copy".to_string(),
+                source: "/tmp/source-first.md".to_string(),
+                target: "/tmp/target-first.md".to_string(),
+                target_kind: "file".to_string(),
+                selected_policy: "fail".to_string(),
+                available_policies: vec!["replace".to_string(), "keep-both".to_string()],
+                blocks_operation: true,
+                reason: "first-conflict".to_string(),
+            },
+            RuntimeOperationConflict {
+                operation: "copy".to_string(),
+                source: "/tmp/source-second.md".to_string(),
+                target: "/tmp/target-second.md".to_string(),
+                target_kind: "file".to_string(),
+                selected_policy: "fail".to_string(),
+                available_policies: vec!["replace".to_string(), "keep-both".to_string()],
+                blocks_operation: true,
+                reason: "second-conflict".to_string(),
+            },
+        ];
+        store.write_all_checked(&conflicts, || Ok(())).unwrap();
+        let checks = Cell::new(0);
+
+        let err = store
+            .read_checked(|| {
+                let next = checks.get() + 1;
+                checks.set(next);
+                if next >= 4 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(store.read_checked(|| Ok(())).unwrap(), conflicts);
+
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -953,20 +1001,24 @@ impl OperationConflictStore {
         check_control()?;
         let _access = preflight_operation_conflict_read(&self.path)?;
         check_control()?;
-        let text = match fs::read_to_string(&self.path) {
-            Ok(text) => text,
+        let file = match fs::File::open(&self.path) {
+            Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(err) => return Err(GfmError::io(&self.path, err)),
         };
+        let mut conflicts = Vec::new();
+        for (line_index, line) in BufReader::new(file).lines().enumerate() {
+            check_control()?;
+            let line = line.map_err(|err| GfmError::io(&self.path, err))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            conflicts.push(parse_operation_conflict_line(
+                &self.path, line_index, &line,
+            )?);
+        }
         check_control()?;
-        text.lines()
-            .enumerate()
-            .filter(|(_, line)| !line.trim().is_empty())
-            .map(|(line_index, line)| {
-                check_control()?;
-                parse_operation_conflict_line(&self.path, line_index, line)
-            })
-            .collect()
+        Ok(conflicts)
     }
 
     pub(crate) fn resolve_checked(
