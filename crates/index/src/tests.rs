@@ -280,6 +280,35 @@ fn query_session_honors_cancellation() {
 }
 
 #[test]
+fn query_session_stream_honors_cancellation() {
+    let root = unique_temp_dir("gfm-query-session-stream-cancel-root");
+    fs::write(root.join("notes.md"), "needle").unwrap();
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let session = snapshot.query_session();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = session.stream_search_cancellable("needle", 5, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn snapshot_stream_honors_pre_cancelled_token_without_indexing_records() {
+    let root = unique_temp_dir("gfm-snapshot-stream-cancel-root");
+    fs::write(root.join("notes.md"), "needle").unwrap();
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = snapshot.stream_search_cancellable("needle", 5, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn indexer_build_honors_pre_cancelled_token_without_scanning() {
     let root = unique_temp_dir("gfm-index-build-cancel-root");
     fs::write(root.join("never-scanned.md"), "needle").unwrap();

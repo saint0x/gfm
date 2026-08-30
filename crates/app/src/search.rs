@@ -69,7 +69,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let parsed = SearchQuery::parse(&query);
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let session = snapshot.query_session();
-                    session.stream_structured_search(&parsed, 50)
+                    session.stream_structured_search_cancellable(&parsed, 50, &cancellation)
                 },
             )?;
             for batch in batches {
@@ -532,19 +532,33 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "content-ids" => {
             let content = required_path(args.next(), "content-ids requires a content path")?;
             let term = required_string(args.next(), "content-ids requires a term")?;
-            let ids = run_content_archive_read(content, "content ids", move |content| {
-                let mut archive = ContentArchive::open(content)?;
-                archive.ids_for_term(&term)
-            })?;
+            let ids = run_content_archive_read_cancellable(
+                content,
+                "content ids",
+                move |content, cancellation| {
+                    let mut archive = ContentArchive::open(content)?;
+                    cancellation.check()?;
+                    let ids = archive.ids_for_term(&term)?;
+                    cancellation.check()?;
+                    Ok(ids)
+                },
+            )?;
             print_file_ids(ids);
         }
         "content-ids-mmap" => {
             let content = required_path(args.next(), "content-ids-mmap requires a content path")?;
             let term = required_string(args.next(), "content-ids-mmap requires a term")?;
-            let ids = run_content_archive_read(content, "content ids mmap", move |content| {
-                let archive = MmapContentArchive::open(content)?;
-                archive.ids_for_term(&term)
-            })?;
+            let ids = run_content_archive_read_cancellable(
+                content,
+                "content ids mmap",
+                move |content, cancellation| {
+                    let archive = MmapContentArchive::open(content)?;
+                    cancellation.check()?;
+                    let ids = archive.ids_for_term(&term)?;
+                    cancellation.check()?;
+                    Ok(ids)
+                },
+            )?;
             print_file_ids(ids);
         }
         "content-ids-mmap-set" => {
@@ -555,12 +569,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-ids-mmap-set requires at least one content archive".to_string(),
                 ));
             }
-            let ids = run_content_archive_set_read(
+            let ids = run_content_archive_set_read_cancellable(
                 content_paths,
                 "content ids mmap set",
-                move |paths| {
+                move |paths, cancellation| {
                     let archive = MmapContentSet::open(&paths)?;
-                    archive.ids_for_term(&term)
+                    cancellation.check()?;
+                    let ids = archive.ids_for_term(&term)?;
+                    cancellation.check()?;
+                    Ok(ids)
                 },
             )?;
             print_file_ids(ids);
@@ -571,12 +588,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "content-ids-mmap-manifest requires a manifest path",
             )?;
             let term = required_string(args.next(), "content-ids-mmap-manifest requires a term")?;
-            let ids = run_content_manifest_read(
+            let ids = run_content_manifest_read_cancellable(
                 manifest,
                 "content ids mmap manifest",
-                move |manifest| {
+                move |manifest, cancellation| {
                     let archive = MmapContentSet::open_manifest(manifest)?;
-                    archive.ids_for_term(&term)
+                    cancellation.check()?;
+                    let ids = archive.ids_for_term(&term)?;
+                    cancellation.check()?;
+                    Ok(ids)
                 },
             )?;
             print_file_ids(ids);
@@ -587,27 +607,41 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let term = required_string(args.next(), "content-id-block-mmap requires a term")?;
             let block_index =
                 parse_usize_arg(args.next(), "content-id-block-mmap requires a block index")?;
-            let ids = run_content_archive_read(content, "content id block mmap", move |content| {
-                let archive = MmapContentArchive::open(content)?;
-                archive.id_block_for_term(&term, block_index)
-            })?;
+            let ids = run_content_archive_read_cancellable(
+                content,
+                "content id block mmap",
+                move |content, cancellation| {
+                    let archive = MmapContentArchive::open(content)?;
+                    cancellation.check()?;
+                    let ids = archive.id_block_for_term(&term, block_index)?;
+                    cancellation.check()?;
+                    Ok(ids)
+                },
+            )?;
             print_file_ids(ids);
         }
         "content-verify" => {
             let content = required_path(args.next(), "content-verify requires a content path")?;
-            let report = run_content_archive_read(content, "content verify", move |content| {
-                let archive = MmapContentArchive::open(content)?;
-                Ok(format!(
-                    "content-verify\tterms={}\tbytes={}\tchecksum={}",
-                    archive.indexed_terms(),
-                    archive.mapped_len(),
-                    if archive.is_checksummed() {
-                        "verified"
-                    } else {
-                        "legacy"
-                    }
-                ))
-            })?;
+            let report = run_content_archive_read_cancellable(
+                content,
+                "content verify",
+                move |content, cancellation| {
+                    let archive = MmapContentArchive::open(content)?;
+                    cancellation.check()?;
+                    let report = format!(
+                        "content-verify\tterms={}\tbytes={}\tchecksum={}",
+                        archive.indexed_terms(),
+                        archive.mapped_len(),
+                        if archive.is_checksummed() {
+                            "verified"
+                        } else {
+                            "legacy"
+                        }
+                    );
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         "fuzzy-terms-mmap" => {
@@ -845,10 +879,10 @@ fn preflight_content_archive_access(path: &Path, worker: &str) -> Result<ScopedA
     preflight_access_scope(path, AccessIntent::Read, worker)
 }
 
-fn run_content_archive_read<T>(
+fn run_content_archive_read_cancellable<T>(
     path: PathBuf,
     worker: &'static str,
-    read: impl FnOnce(PathBuf) -> Result<T> + Send + 'static,
+    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -859,14 +893,14 @@ where
         cancellation.check()?;
         let _access = preflight_content_archive_access(&path, worker)?;
         cancellation.check()?;
-        read(path)
+        read(path, &cancellation)
     })
 }
 
-fn run_content_archive_set_read<T>(
+fn run_content_archive_set_read_cancellable<T>(
     paths: Vec<PathBuf>,
     worker: &'static str,
-    read: impl FnOnce(Vec<PathBuf>) -> Result<T> + Send + 'static,
+    read: impl FnOnce(Vec<PathBuf>, &Cancellation) -> Result<T> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -877,14 +911,14 @@ where
         cancellation.check()?;
         let _access = preflight_content_archives_access(&paths, worker)?;
         cancellation.check()?;
-        read(paths)
+        read(paths, &cancellation)
     })
 }
 
-fn run_content_manifest_read<T>(
+fn run_content_manifest_read_cancellable<T>(
     manifest: PathBuf,
     worker: &'static str,
-    read: impl FnOnce(PathBuf) -> Result<T> + Send + 'static,
+    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -895,7 +929,7 @@ where
         cancellation.check()?;
         let _access = preflight_content_manifest_access(&manifest, worker)?;
         cancellation.check()?;
-        read(manifest)
+        read(manifest, &cancellation)
     })
 }
 
@@ -1898,6 +1932,27 @@ mod tests {
         let result = run_search_archive_read_cancellable(
             path.clone(),
             "search archive cancellation token",
+            |_path, cancellation| {
+                cancellation.cancel();
+                cancellation.check()
+            },
+        );
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn content_archive_read_cancellable_passes_runtime_token_to_reader() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-content-archive-cancellation-token-{}.gfmcontent",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"token-probe").unwrap();
+
+        let result = run_content_archive_read_cancellable(
+            path.clone(),
+            "content archive cancellation token",
             |_path, cancellation| {
                 cancellation.cancel();
                 cancellation.check()

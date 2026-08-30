@@ -460,6 +460,15 @@ impl LiveIndex {
         self.stream_structured_search(&SearchQuery::parse(query), limit)
     }
 
+    pub fn stream_search_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.stream_structured_search_cancellable(&SearchQuery::parse(query), limit, cancellation)
+    }
+
     pub fn stream_structured_search(
         &self,
         query: &SearchQuery,
@@ -468,17 +477,57 @@ impl LiveIndex {
         self.index.stream_structured(query, limit)
     }
 
+    pub fn stream_structured_search_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.index
+            .stream_structured_cancellable(query, limit, cancellation)
+    }
+
     pub fn stream_search_with_volume_scope(
         &self,
         query: &str,
         limit: usize,
         scope: &SearchVolumeScope,
     ) -> Result<Vec<SearchStreamBatch>> {
-        self.index.stream_structured_with_volume_scope_cancellable(
-            &SearchQuery::parse(query),
+        self.stream_search_with_volume_scope_cancellable(
+            query,
             limit,
             scope,
             &Cancellation::default(),
+        )
+    }
+
+    pub fn stream_search_with_volume_scope_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.stream_structured_search_with_volume_scope_cancellable(
+            &SearchQuery::parse(query),
+            limit,
+            scope,
+            cancellation,
+        )
+    }
+
+    pub fn stream_structured_search_with_volume_scope_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.index.stream_structured_with_volume_scope_cancellable(
+            query,
+            limit,
+            scope,
+            cancellation,
         )
     }
 

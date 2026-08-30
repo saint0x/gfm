@@ -175,12 +175,32 @@ impl IndexQuerySession {
         self.live.stream_search(query, limit)
     }
 
+    pub fn stream_search_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.live
+            .stream_search_cancellable(query, limit, cancellation)
+    }
+
     pub fn stream_structured_search(
         &self,
         query: &SearchQuery,
         limit: usize,
     ) -> Result<Vec<SearchStreamBatch>> {
         self.live.stream_structured_search(query, limit)
+    }
+
+    pub fn stream_structured_search_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.live
+            .stream_structured_search_cancellable(query, limit, cancellation)
     }
 
     pub fn stream_search_with_volume_scope(
@@ -191,6 +211,33 @@ impl IndexQuerySession {
     ) -> Result<Vec<SearchStreamBatch>> {
         self.live
             .stream_search_with_volume_scope(query, limit, scope)
+    }
+
+    pub fn stream_structured_search_with_volume_scope_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.live
+            .stream_structured_search_with_volume_scope_cancellable(
+                query,
+                limit,
+                scope,
+                cancellation,
+            )
+    }
+
+    pub fn stream_search_with_volume_scope_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.live
+            .stream_search_with_volume_scope_cancellable(query, limit, scope, cancellation)
     }
 
     pub fn stream_search_with_volume_plan(
@@ -242,6 +289,34 @@ impl IndexSnapshot {
             index.insert(record);
         }
         index.stream(query, limit)
+    }
+
+    pub fn stream_search_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        let mut index = ShardedSearchIndex::new();
+        for record in self.records.iter().cloned() {
+            cancellation.check()?;
+            index.insert(record);
+        }
+        index.stream_cancellable(query, limit, cancellation)
+    }
+
+    pub fn stream_structured_search_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        let mut index = ShardedSearchIndex::new();
+        for record in self.records.iter().cloned() {
+            cancellation.check()?;
+            index.insert(record);
+        }
+        index.stream_structured_cancellable(query, limit, cancellation)
     }
 
     pub fn query_session(&self) -> IndexQuerySession {
