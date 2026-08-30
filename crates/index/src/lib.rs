@@ -669,15 +669,35 @@ impl Indexer {
     }
 
     pub fn load(&self, path: impl AsRef<Path>) -> Result<IndexSnapshot> {
+        self.load_cancellable(path, &Cancellation::default())
+    }
+
+    pub fn load_cancellable(
+        &self,
+        path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<IndexSnapshot> {
+        cancellation.check()?;
+        let records = read_records(path)?;
+        cancellation.check()?;
         Ok(IndexSnapshot {
             root: PathBuf::new(),
-            records: read_records(path)?,
+            records,
             inaccessible: Vec::new(),
         })
     }
 
     pub fn load_query_session(&self, path: impl AsRef<Path>) -> Result<IndexQuerySession> {
-        self.load(path).map(IndexQuerySession::from_snapshot)
+        self.load_query_session_cancellable(path, &Cancellation::default())
+    }
+
+    pub fn load_query_session_cancellable(
+        &self,
+        path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<IndexQuerySession> {
+        self.load_cancellable(path, cancellation)
+            .map(IndexQuerySession::from_snapshot)
     }
 
     pub fn load_live_with_content(
@@ -685,8 +705,24 @@ impl Indexer {
         records_path: impl AsRef<Path>,
         content_path: impl AsRef<Path>,
     ) -> Result<LiveIndex> {
-        let mut live = self.load(records_path)?.into_live();
-        live.load_content_postings(content_path)?;
+        self.load_live_with_content_cancellable(
+            records_path,
+            content_path,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn load_live_with_content_cancellable(
+        &self,
+        records_path: impl AsRef<Path>,
+        content_path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<LiveIndex> {
+        let mut live = self
+            .load_cancellable(records_path, cancellation)?
+            .into_live();
+        cancellation.check()?;
+        live.load_content_postings_cancellable(content_path, cancellation)?;
         Ok(live)
     }
 
@@ -696,11 +732,27 @@ impl Indexer {
         content_path: impl AsRef<Path>,
         query: &str,
     ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
-        self.load_live_with_content_for_query_with_budget(
+        self.load_live_with_content_for_query_cancellable(
+            records_path,
+            content_path,
+            query,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn load_live_with_content_for_query_cancellable(
+        &self,
+        records_path: impl AsRef<Path>,
+        content_path: impl AsRef<Path>,
+        query: &str,
+        cancellation: &Cancellation,
+    ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
+        self.load_live_with_content_for_query_with_budget_cancellable(
             records_path,
             content_path,
             query,
             SearchLookupBudget::default(),
+            cancellation,
         )
     }
 
@@ -711,13 +763,38 @@ impl Indexer {
         query: &str,
         budget: SearchLookupBudget,
     ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
+        self.load_live_with_content_for_query_with_budget_cancellable(
+            records_path,
+            content_path,
+            query,
+            budget,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn load_live_with_content_for_query_with_budget_cancellable(
+        &self,
+        records_path: impl AsRef<Path>,
+        content_path: impl AsRef<Path>,
+        query: &str,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
+        cancellation.check()?;
         let records = MmapRecordArchive::open(records_path)?;
+        cancellation.check()?;
         let content = MmapContentArchive::open(content_path)?;
+        cancellation.check()?;
         let postings = content.postings_for_terms_limit(
             content_query_terms(query),
             budget.max_content_ids_per_term,
         )?;
-        LiveIndex::from_mmap_records_with_content_postings(&records, postings)
+        cancellation.check()?;
+        LiveIndex::from_mmap_records_with_content_postings_cancellable(
+            &records,
+            postings,
+            cancellation,
+        )
     }
 
     pub fn load_content_query_session(
@@ -725,7 +802,20 @@ impl Indexer {
         records_path: impl AsRef<Path>,
         content_path: impl AsRef<Path>,
     ) -> Result<ContentIndexQuerySession> {
-        ContentIndexQuerySession::open_content(records_path, content_path)
+        self.load_content_query_session_cancellable(
+            records_path,
+            content_path,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn load_content_query_session_cancellable(
+        &self,
+        records_path: impl AsRef<Path>,
+        content_path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<ContentIndexQuerySession> {
+        ContentIndexQuerySession::open_content_cancellable(records_path, content_path, cancellation)
     }
 
     pub fn load_content_set_query_session<I, P>(
@@ -737,7 +827,24 @@ impl Indexer {
         I: IntoIterator<Item = P>,
         P: AsRef<Path>,
     {
-        ContentIndexQuerySession::open_set(records_path, content_paths)
+        self.load_content_set_query_session_cancellable(
+            records_path,
+            content_paths,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn load_content_set_query_session_cancellable<I, P>(
+        &self,
+        records_path: impl AsRef<Path>,
+        content_paths: I,
+        cancellation: &Cancellation,
+    ) -> Result<ContentIndexQuerySession>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        ContentIndexQuerySession::open_set_cancellable(records_path, content_paths, cancellation)
     }
 
     pub fn load_content_manifest_query_session(
@@ -745,7 +852,24 @@ impl Indexer {
         records_path: impl AsRef<Path>,
         manifest_path: impl AsRef<Path>,
     ) -> Result<ContentIndexQuerySession> {
-        ContentIndexQuerySession::open_manifest(records_path, manifest_path)
+        self.load_content_manifest_query_session_cancellable(
+            records_path,
+            manifest_path,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn load_content_manifest_query_session_cancellable(
+        &self,
+        records_path: impl AsRef<Path>,
+        manifest_path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<ContentIndexQuerySession> {
+        ContentIndexQuerySession::open_manifest_cancellable(
+            records_path,
+            manifest_path,
+            cancellation,
+        )
     }
 
     pub fn load_live_with_content_set(
@@ -754,13 +878,36 @@ impl Indexer {
         content_paths: &[impl AsRef<Path>],
         query: &str,
     ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
+        self.load_live_with_content_set_cancellable(
+            records_path,
+            content_paths,
+            query,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn load_live_with_content_set_cancellable(
+        &self,
+        records_path: impl AsRef<Path>,
+        content_paths: &[impl AsRef<Path>],
+        query: &str,
+        cancellation: &Cancellation,
+    ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
+        cancellation.check()?;
         let records = MmapRecordArchive::open(records_path)?;
+        cancellation.check()?;
         let content = MmapContentSet::open(content_paths)?;
+        cancellation.check()?;
         let postings = content.postings_for_terms_limit(
             content_query_terms(query),
             SearchLookupBudget::default().max_content_ids_per_term,
         )?;
-        LiveIndex::from_mmap_records_with_content_postings(&records, postings)
+        cancellation.check()?;
+        LiveIndex::from_mmap_records_with_content_postings_cancellable(
+            &records,
+            postings,
+            cancellation,
+        )
     }
 
     pub fn load_live_with_content_manifest(
@@ -769,13 +916,36 @@ impl Indexer {
         manifest_path: impl AsRef<Path>,
         query: &str,
     ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
+        self.load_live_with_content_manifest_cancellable(
+            records_path,
+            manifest_path,
+            query,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn load_live_with_content_manifest_cancellable(
+        &self,
+        records_path: impl AsRef<Path>,
+        manifest_path: impl AsRef<Path>,
+        query: &str,
+        cancellation: &Cancellation,
+    ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
+        cancellation.check()?;
         let records = MmapRecordArchive::open(records_path)?;
+        cancellation.check()?;
         let content = MmapContentSet::open_manifest(manifest_path)?;
+        cancellation.check()?;
         let postings = content.postings_for_terms_limit(
             content_query_terms(query),
             SearchLookupBudget::default().max_content_ids_per_term,
         )?;
-        LiveIndex::from_mmap_records_with_content_postings(&records, postings)
+        cancellation.check()?;
+        LiveIndex::from_mmap_records_with_content_postings_cancellable(
+            &records,
+            postings,
+            cancellation,
+        )
     }
 
     pub fn compact_content_segments(

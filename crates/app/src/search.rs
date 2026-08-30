@@ -1122,8 +1122,12 @@ fn run_content_index_search(
         cancellation.check()?;
         let _access = preflight_content_index_search_access(&records, &content, worker)?;
         cancellation.check()?;
-        let (live, report) =
-            Indexer::default().load_live_with_content_for_query(records, content, &query)?;
+        let (live, report) = Indexer::default().load_live_with_content_for_query_cancellable(
+            records,
+            content,
+            &query,
+            &cancellation,
+        )?;
         let diagnostics = format!(
             "content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
             report.content_keys,
@@ -1133,7 +1137,8 @@ fn run_content_index_search(
             report.full_hydration
         );
         cancellation.check()?;
-        let hits = live.search_with_snippets(&query, 50, &extractor, 96)?;
+        let hits =
+            live.search_with_snippets_cancellable(&query, 50, &extractor, 96, &cancellation)?;
         Ok(ContentIndexSearchOutput { diagnostics, hits })
     })
 }
@@ -1151,8 +1156,12 @@ fn run_content_index_set_search(
         let _access = preflight_content_index_set_search_access(&records, &content_paths, WORKER)?;
         cancellation.check()?;
         let archive_count = content_paths.len();
-        let (live, report) =
-            Indexer::default().load_live_with_content_set(records, &content_paths, &query)?;
+        let (live, report) = Indexer::default().load_live_with_content_set_cancellable(
+            records,
+            &content_paths,
+            &query,
+            &cancellation,
+        )?;
         let diagnostics = format!(
             "content-archives {} content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
             archive_count,
@@ -1188,8 +1197,11 @@ fn run_content_index_set_session(
         cancellation.check()?;
         let _access = preflight_content_index_set_search_access(&records, &content_paths, WORKER)?;
         cancellation.check()?;
-        let session =
-            Indexer::default().load_content_set_query_session(&records, &content_paths)?;
+        let session = Indexer::default().load_content_set_query_session_cancellable(
+            &records,
+            &content_paths,
+            &cancellation,
+        )?;
         let parsed = SearchQuery::parse(&query);
         let first = session.search_structured_with_budget_cancellable(
             &parsed,
@@ -1233,8 +1245,12 @@ fn run_content_index_manifest_search(
         cancellation.check()?;
         let _access = preflight_content_index_manifest_search_access(&records, &manifest, WORKER)?;
         cancellation.check()?;
-        let (live, report) =
-            Indexer::default().load_live_with_content_manifest(records, manifest, &query)?;
+        let (live, report) = Indexer::default().load_live_with_content_manifest_cancellable(
+            records,
+            manifest,
+            &query,
+            &cancellation,
+        )?;
         let diagnostics = format!(
             "content-manifest-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
             report.content_keys,
@@ -1270,8 +1286,11 @@ fn run_content_index_manifest_session(
         cancellation.check()?;
         let _access = preflight_content_index_manifest_search_access(&records, &manifest, WORKER)?;
         cancellation.check()?;
-        let session =
-            Indexer::default().load_content_manifest_query_session(&records, &manifest)?;
+        let session = Indexer::default().load_content_manifest_query_session_cancellable(
+            &records,
+            &manifest,
+            &cancellation,
+        )?;
         let archive_count = session.archive_count();
         let parsed = SearchQuery::parse(&query);
         let first = session.search_structured_with_budget_cancellable(

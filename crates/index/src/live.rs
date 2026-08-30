@@ -238,6 +238,7 @@ impl LiveIndex {
         postings: Vec<ContentPosting>,
         cancellation: &Cancellation,
     ) -> Result<(Self, ContentQueryLoadReport)> {
+        cancellation.check()?;
         let candidate_ids = content_candidate_ids_cancellable(&postings, cancellation)?;
         let full_hydration = candidate_ids.is_empty();
         let mut live = Self::new();
@@ -261,7 +262,9 @@ impl LiveIndex {
         }
 
         let content_keys = postings.len();
+        cancellation.check()?;
         live.index.import_content_postings(&postings);
+        cancellation.check()?;
         Ok((
             live,
             ContentQueryLoadReport {
@@ -673,9 +676,20 @@ impl LiveIndex {
     }
 
     pub fn load_content_postings(&mut self, path: impl AsRef<Path>) -> Result<usize> {
+        self.load_content_postings_cancellable(path, &Cancellation::default())
+    }
+
+    pub fn load_content_postings_cancellable(
+        &mut self,
+        path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<usize> {
+        cancellation.check()?;
         let postings = read_content_postings(path)?;
+        cancellation.check()?;
         let terms = postings.len();
         self.index.import_content_postings(&postings);
+        cancellation.check()?;
         Ok(terms)
     }
 
@@ -685,13 +699,32 @@ impl LiveIndex {
         query: &str,
         budget: SearchLookupBudget,
     ) -> Result<usize> {
+        self.load_content_postings_with_budget_cancellable(
+            path,
+            query,
+            budget,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn load_content_postings_with_budget_cancellable(
+        &mut self,
+        path: impl AsRef<Path>,
+        query: &str,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<usize> {
+        cancellation.check()?;
         let content = MmapContentArchive::open(path)?;
+        cancellation.check()?;
         let postings = content.postings_for_terms_limit(
             content_query_terms(query),
             budget.max_content_ids_per_term,
         )?;
+        cancellation.check()?;
         let terms = postings.len();
         self.index.import_content_postings(&postings);
+        cancellation.check()?;
         Ok(terms)
     }
 
@@ -700,10 +733,23 @@ impl LiveIndex {
         paths: &[impl AsRef<Path>],
         query: &str,
     ) -> Result<usize> {
+        self.load_content_set_postings_cancellable(paths, query, &Cancellation::default())
+    }
+
+    pub fn load_content_set_postings_cancellable(
+        &mut self,
+        paths: &[impl AsRef<Path>],
+        query: &str,
+        cancellation: &Cancellation,
+    ) -> Result<usize> {
+        cancellation.check()?;
         let content = MmapContentSet::open(paths)?;
+        cancellation.check()?;
         let postings = content.postings_for_terms(content_query_terms(query))?;
+        cancellation.check()?;
         let terms = postings.len();
         self.index.import_content_postings(&postings);
+        cancellation.check()?;
         Ok(terms)
     }
 
@@ -713,13 +759,32 @@ impl LiveIndex {
         query: &str,
         budget: SearchLookupBudget,
     ) -> Result<usize> {
+        self.load_content_set_postings_with_budget_cancellable(
+            paths,
+            query,
+            budget,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn load_content_set_postings_with_budget_cancellable(
+        &mut self,
+        paths: &[impl AsRef<Path>],
+        query: &str,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<usize> {
+        cancellation.check()?;
         let content = MmapContentSet::open(paths)?;
+        cancellation.check()?;
         let postings = content.postings_for_terms_limit(
             content_query_terms(query),
             budget.max_content_ids_per_term,
         )?;
+        cancellation.check()?;
         let terms = postings.len();
         self.index.import_content_postings(&postings);
+        cancellation.check()?;
         Ok(terms)
     }
 
@@ -728,10 +793,27 @@ impl LiveIndex {
         manifest_path: impl AsRef<Path>,
         query: &str,
     ) -> Result<usize> {
+        self.load_content_manifest_postings_cancellable(
+            manifest_path,
+            query,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn load_content_manifest_postings_cancellable(
+        &mut self,
+        manifest_path: impl AsRef<Path>,
+        query: &str,
+        cancellation: &Cancellation,
+    ) -> Result<usize> {
+        cancellation.check()?;
         let content = MmapContentSet::open_manifest(manifest_path)?;
+        cancellation.check()?;
         let postings = content.postings_for_terms(content_query_terms(query))?;
+        cancellation.check()?;
         let terms = postings.len();
         self.index.import_content_postings(&postings);
+        cancellation.check()?;
         Ok(terms)
     }
 
@@ -741,13 +823,32 @@ impl LiveIndex {
         query: &str,
         budget: SearchLookupBudget,
     ) -> Result<usize> {
+        self.load_content_manifest_postings_with_budget_cancellable(
+            manifest_path,
+            query,
+            budget,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn load_content_manifest_postings_with_budget_cancellable(
+        &mut self,
+        manifest_path: impl AsRef<Path>,
+        query: &str,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<usize> {
+        cancellation.check()?;
         let content = MmapContentSet::open_manifest(manifest_path)?;
+        cancellation.check()?;
         let postings = content.postings_for_terms_limit(
             content_query_terms(query),
             budget.max_content_ids_per_term,
         )?;
+        cancellation.check()?;
         let terms = postings.len();
         self.index.import_content_postings(&postings);
+        cancellation.check()?;
         Ok(terms)
     }
 

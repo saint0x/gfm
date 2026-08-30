@@ -2781,6 +2781,62 @@ fn live_snippet_search_honors_cancellation_before_querying() {
 }
 
 #[test]
+fn content_posting_load_honors_pre_cancelled_token_before_content_open() {
+    let root = unique_temp_dir("gfm-content-posting-load-cancel-root");
+    let unavailable = unprobeable_child_path(&root, "content-postings-unavailable", "gfmcontent");
+    let mut live = LiveIndex::new();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = live.load_content_postings_with_budget_cancellable(
+        &unavailable,
+        "needle",
+        SearchLookupBudget::default(),
+        &cancellation,
+    );
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_query_loader_honors_pre_cancelled_token_before_records_open() {
+    let root = unique_temp_dir("gfm-content-query-loader-cancel-root");
+    let records = unprobeable_child_path(&root, "records-unavailable", "gfmidx");
+    let content = root.join("content.gfmcontent");
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = Indexer::default().load_live_with_content_for_query_cancellable(
+        &records,
+        &content,
+        "needle",
+        &cancellation,
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_query_session_open_honors_pre_cancelled_token_before_records_open() {
+    let root = unique_temp_dir("gfm-content-session-open-cancel-root");
+    let records = unprobeable_child_path(&root, "records-unavailable", "gfmidx");
+    let content = root.join("content.gfmcontent");
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = Indexer::default().load_content_set_query_session_cancellable(
+        &records,
+        [&content],
+        &cancellation,
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn durable_content_postings_survive_reload() {
     let root = unique_temp_dir("gfm-durable-content-root");
     let records = unique_temp_path("gfm-durable-content-records", "gfmidx");

@@ -44,7 +44,15 @@ impl ContentIndexQuerySession {
         records_path: impl AsRef<Path>,
         content_path: impl AsRef<Path>,
     ) -> Result<Self> {
-        Self::open_set(records_path, std::iter::once(content_path))
+        Self::open_content_cancellable(records_path, content_path, &Cancellation::default())
+    }
+
+    pub fn open_content_cancellable(
+        records_path: impl AsRef<Path>,
+        content_path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<Self> {
+        Self::open_set_cancellable(records_path, std::iter::once(content_path), cancellation)
     }
 
     pub fn open_set<I, P>(records_path: impl AsRef<Path>, content_paths: I) -> Result<Self>
@@ -52,9 +60,26 @@ impl ContentIndexQuerySession {
         I: IntoIterator<Item = P>,
         P: AsRef<Path>,
     {
+        Self::open_set_cancellable(records_path, content_paths, &Cancellation::default())
+    }
+
+    pub fn open_set_cancellable<I, P>(
+        records_path: impl AsRef<Path>,
+        content_paths: I,
+        cancellation: &Cancellation,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        cancellation.check()?;
+        let records = MmapRecordArchive::open(records_path)?;
+        cancellation.check()?;
+        let content = MmapContentSet::open(content_paths)?;
+        cancellation.check()?;
         Ok(Self {
-            records: MmapRecordArchive::open(records_path)?,
-            content: MmapContentSet::open(content_paths)?,
+            records,
+            content,
             posting_cache: Mutex::new(ContentPostingCache::new(CONTENT_POSTING_CACHE_CAPACITY)),
             posting_cache_hits: AtomicUsize::new(0),
             posting_cache_misses: AtomicUsize::new(0),
@@ -71,9 +96,22 @@ impl ContentIndexQuerySession {
         records_path: impl AsRef<Path>,
         manifest_path: impl AsRef<Path>,
     ) -> Result<Self> {
+        Self::open_manifest_cancellable(records_path, manifest_path, &Cancellation::default())
+    }
+
+    pub fn open_manifest_cancellable(
+        records_path: impl AsRef<Path>,
+        manifest_path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<Self> {
+        cancellation.check()?;
+        let records = MmapRecordArchive::open(records_path)?;
+        cancellation.check()?;
+        let content = MmapContentSet::open_manifest(manifest_path)?;
+        cancellation.check()?;
         Ok(Self {
-            records: MmapRecordArchive::open(records_path)?,
-            content: MmapContentSet::open_manifest(manifest_path)?,
+            records,
+            content,
             posting_cache: Mutex::new(ContentPostingCache::new(CONTENT_POSTING_CACHE_CAPACITY)),
             posting_cache_hits: AtomicUsize::new(0),
             posting_cache_misses: AtomicUsize::new(0),
