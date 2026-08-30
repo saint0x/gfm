@@ -818,7 +818,11 @@ impl FileProviderInvalidationReport {
 impl FileProviderStateSnapshot {
     pub fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Result<Self> {
         let mut entries = Vec::new();
+        let mut seen_paths = BTreeSet::new();
         for path in paths {
+            if !seen_paths.insert(path.clone()) {
+                continue;
+            }
             let report = FileProviderStateReport::read_path(&path)?;
             if should_persist_fileprovider_snapshot_entry(&report) {
                 entries.push(FileProviderStateSnapshotEntry {
@@ -3104,6 +3108,31 @@ mod tests {
 
         let snapshot =
             FileProviderStateSnapshot::from_paths([local.clone(), evicted.clone()]).unwrap();
+
+        assert_eq!(
+            snapshot.entries,
+            vec![FileProviderStateSnapshotEntry {
+                path: evicted,
+                state: CloudStorageState::Evicted,
+            }]
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_state_snapshot_deduplicates_input_paths_before_persisting() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
+
+        let snapshot = FileProviderStateSnapshot::from_paths([
+            evicted.clone(),
+            evicted.clone(),
+            evicted.clone(),
+        ])
+        .unwrap();
 
         assert_eq!(
             snapshot.entries,
