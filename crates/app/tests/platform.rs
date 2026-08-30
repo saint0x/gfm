@@ -5412,6 +5412,37 @@ fn reports_volume_operation_refusal_from_binary() {
 }
 
 #[test]
+fn reports_volume_operation_policy_refusal_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-operation-policy-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "internal\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-operation")
+        .arg("eject")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-operation\teject\t"));
+    assert!(stdout.contains("\tdisposition=refused\tnative-status=-\tdissenter-status=-\t"));
+    assert!(stdout.contains("\tvolume-kind=internal\tmount=mounted\t"));
+    assert!(stdout.contains("\treason=internal-volume-not-ejectable\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn volume_operation_refuses_nested_volume_path_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-operation-nested-{}",

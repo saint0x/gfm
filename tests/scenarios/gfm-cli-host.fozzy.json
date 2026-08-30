@@ -3374,6 +3374,11 @@
       "data": "%PDF-1.7\n"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-internal-volume/.gfm-volume-kind",
+      "data": "internal\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -3623,6 +3628,19 @@
         "tmp/gfm-fozzy-dist/Project/Preview.pdf"
       ],
       "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-operation",
+        "eject",
+        "tmp/gfm-fozzy-internal-volume"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-operation\teject\tpath=tmp/gfm-fozzy-internal-volume\tdisposition=refused\tnative-status=-\tdissenter-status=-\tvolume-kind=internal\tmount=mounted\tstable-id=fixture-marker:internal:dev:16777230:tmp/gfm-fozzy-internal-volume\treason=internal-volume-not-ejectable\n",
+      "stderr": "",
       "times": 1
     },
     {

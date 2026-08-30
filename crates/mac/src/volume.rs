@@ -1625,16 +1625,6 @@ impl VolumeOperationReport {
                 "native-volume-operation-requires-volume-root",
             ));
         }
-        if volume.source.starts_with("fixture-marker:") {
-            return Ok(Self::with_volume(
-                operation,
-                VolumeOperationDisposition::Refused,
-                None,
-                None,
-                volume,
-                "fixture-volume-native-operation-disabled",
-            ));
-        }
         if path == Path::new("/") {
             return Ok(Self::with_volume(
                 operation,
@@ -1643,6 +1633,26 @@ impl VolumeOperationReport {
                 None,
                 volume,
                 "system-volume-operation-refused",
+            ));
+        }
+        if let Some(reason) = disabled_command_reason(operation, &volume) {
+            return Ok(Self::with_volume(
+                operation,
+                VolumeOperationDisposition::Refused,
+                None,
+                None,
+                volume,
+                reason,
+            ));
+        }
+        if volume.source.starts_with("fixture-marker:") {
+            return Ok(Self::with_volume(
+                operation,
+                VolumeOperationDisposition::Refused,
+                None,
+                None,
+                volume,
+                "fixture-volume-native-operation-disabled",
             ));
         }
         if !path.starts_with("/Volumes") {
@@ -1665,17 +1675,6 @@ impl VolumeOperationReport {
                 "diskarbitration-volume-unavailable",
             ));
         }
-        if let Some(reason) = disabled_command_reason(operation, &volume) {
-            return Ok(Self::with_volume(
-                operation,
-                VolumeOperationDisposition::Refused,
-                None,
-                None,
-                volume,
-                reason,
-            ));
-        }
-
         let native_operation = match operation {
             VolumeOperation::Eject => NativeVolumeOperation::Eject,
             VolumeOperation::Unmount => NativeVolumeOperation::Unmount,
@@ -1870,16 +1869,19 @@ fn disposition_for_native_operation(
 fn disabled_command_reason(
     operation: VolumeOperation,
     volume: &VolumeDescriptor,
-) -> Option<&'static str> {
+) -> Option<String> {
     let state = match operation {
         VolumeOperation::Eject => volume.commands.eject,
         VolumeOperation::Unmount => volume.commands.unmount,
         VolumeOperation::Mount => volume.commands.mount,
     };
-    (state != VolumeCommandState::Enabled).then_some(match operation {
-        VolumeOperation::Eject => "eject-command-disabled",
-        VolumeOperation::Unmount => "unmount-command-disabled",
-        VolumeOperation::Mount => "mount-command-disabled",
+    (state != VolumeCommandState::Enabled).then(|| match operation {
+        VolumeOperation::Eject | VolumeOperation::Unmount => volume
+            .commands
+            .reason
+            .clone()
+            .unwrap_or_else(|| format!("{}-command-disabled", operation.as_str())),
+        VolumeOperation::Mount => "mount-command-disabled".to_string(),
     })
 }
 
@@ -3428,6 +3430,25 @@ mod tests {
         assert!(report
             .as_tsv()
             .contains("\tvolume-kind=external\tmount=mounted\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_operation_refuses_disabled_command_with_policy_reason() {
+        let root = unique_temp_dir("gfm-volume-operation-policy");
+        fs::write(root.join(VOLUME_MARKER), "internal\n").unwrap();
+
+        let report = VolumeOperationReport::execute(&root, VolumeOperation::Eject).unwrap();
+
+        assert_eq!(report.disposition, VolumeOperationDisposition::Refused);
+        assert_eq!(report.native_status, None);
+        assert_eq!(report.dissenter_status, None);
+        assert_eq!(report.reason, "internal-volume-not-ejectable");
+        assert!(report.as_tsv().contains("\tvolume-kind=internal\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\treason=internal-volume-not-ejectable"));
 
         fs::remove_dir_all(root).unwrap();
     }
