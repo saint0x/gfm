@@ -177,6 +177,78 @@ fn index_retries_transient_failure_from_binary() {
 }
 
 #[test]
+fn search_index_retries_transient_archive_read_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-index-retry-root");
+    let index = unique_temp_path("gfm-cli-search-index-retry", "gfmidx");
+    let journal = unique_temp_path("gfm-cli-search-index-retry", "journal");
+    let catalog = unique_temp_path("gfm-cli-search-index-retry", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-search-index-retry", "gfmprogress");
+    let retry_probe = unique_temp_path("gfm-cli-search-index-retry", "state");
+    fs::create_dir_all(root.join("Reports")).unwrap();
+    fs::write(
+        root.join("Reports").join("RetrySearch.md"),
+        "persisted search retry",
+    )
+    .unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), index.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "search-index-retry-probe",
+            index.to_str().unwrap(),
+            "retrysearch",
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(stdout.contains("RetrySearch.md"), "{stdout}");
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tsearch index"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t1\tfailed:temporary search index retry probe busy\tsearch index"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tsearch index"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tsearch index"),
+        "{journal_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(index).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
+}
+
+#[test]
 fn index_preflight_refreshes_permission_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-permission-worker-refresh");
     let index = root.join("records.gfmidx");
@@ -6530,6 +6602,48 @@ fn failed_operation_from_binary_still_journals_failure() {
         "{journal_text}"
     );
     assert!(!destination.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn live_copy_operation_retries_transient_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ops-live-retry-root");
+    let journal = root.join("ops.journal");
+    let source = root.join("source.txt");
+    let destination = root.join("destination.txt");
+    let state = root.join("retry.state");
+    fs::write(&source, "arrived during backoff").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "copy-retry-probe",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&destination).unwrap(),
+        "arrived during backoff"
+    );
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert_eq!(journal_text.matches("\tstarted\t").count(), 2);
+    assert_eq!(journal_text.matches("\tfailed\t").count(), 1);
+    assert_eq!(journal_text.matches("\tcompleted\t").count(), 1);
+    assert_eq!(fs::read_to_string(&state).unwrap(), "2");
+    assert!(
+        journal_text.contains("temporary operation retry probe busy"),
+        "{journal_text}"
+    );
 
     fs::remove_dir_all(root).unwrap();
 }

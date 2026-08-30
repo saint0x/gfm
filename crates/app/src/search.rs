@@ -3,7 +3,9 @@ use crate::access::{
 };
 use crate::content::run_content_search;
 use crate::extract::extraction_budget_profile;
-use crate::runtime::run_volume_task_cancellable;
+use crate::runtime::{
+    run_retriable_volume_task_cancellable_with_payload_path, run_volume_task_cancellable,
+};
 use crate::{
     first_path_volume, parse_required_scheduling_pressure, parse_usize_arg, path_volume,
     required_path, required_string,
@@ -18,14 +20,16 @@ use gfm_jobs::Cancellation;
 use gfm_jobs::Priority;
 use gfm_mac::AccessIntent;
 use gfm_store::{
-    ContentArchive, ContentArchiveManifest, MetadataField, MmapContentArchive, MmapContentSet,
-    MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
-    MmapRecordColumns, MmapSubstringArchive,
+    atomic_write_checked, ContentArchive, ContentArchiveManifest, MetadataField,
+    MmapContentArchive, MmapContentSet, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive,
+    MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_types::{
     ContentPositions, ContentPosting, FileId, FileKind, GfmError, Result, SearchHit, VolumeId,
 };
 use std::collections::BTreeSet;
+use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -250,12 +254,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
-        "search-index" => {
+        "search-index" | "search-index-retry-probe" => {
             let index_path = required_path(args.next(), "search-index requires an index path")?;
             let query = required_string(args.next(), "search-index requires a query string")?;
-            let hits = run_search_archive_read_cancellable(
+            let retry_probe = if command == "search-index-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "search-index-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let hits = run_search_archive_read_cancellable_with_retry_probe(
                 index_path,
                 "search index",
+                retry_probe,
                 move |index_path, cancellation| {
                     let session = Indexer::default()
                         .load_query_session_cancellable(index_path, cancellation)?;
@@ -1086,20 +1099,138 @@ fn preflight_content_archive_volumes(paths: &[PathBuf], worker: &str) -> Result<
 fn run_search_archive_read_cancellable<T>(
     path: PathBuf,
     worker: &'static str,
-    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
+    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Send + Sync + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    run_search_archive_read_cancellable_with_retry_probe(path, worker, None, read)
+}
+
+fn run_search_archive_read_cancellable_with_retry_probe<T>(
+    path: PathBuf,
+    worker: &'static str,
+    retry_probe: Option<PathBuf>,
+    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
 {
     preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
+    }
     let volume = path_volume(&path);
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        worker,
+        path.clone(),
+        move |cancellation| {
+            let path = path.clone();
+            let retry_probe = retry_probe.clone();
+            cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
+            }
+            let _access =
+                preflight_search_archive_access_checked(&path, worker, || cancellation.check())?;
+            cancellation.check()?;
+            read(path, &cancellation)
+        },
+    )
+}
+
+fn write_probe_path(path: &Path) -> Result<&Path> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Ok(crate::parent_or_cwd(path)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("search retry probe metadata unavailable: {err}"),
+        )),
+    }
+}
+
+fn fail_first_search_retry_probe_attempt(
+    attempt_state: &Path,
+    worker: &str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    cancellation.check()?;
+    let probe = write_probe_path(attempt_state)?.to_path_buf();
+    let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, worker, || {
+        cancellation.check()
+    })?;
+    cancellation.check()?;
+    let attempts = read_search_retry_probe_attempt_checked(attempt_state, || cancellation.check())?;
+    cancellation.check()?;
+    write_search_retry_probe_attempt_checked(attempt_state, attempts + 1, || {
         cancellation.check()?;
-        let _access =
-            preflight_search_archive_access_checked(&path, worker, || cancellation.check())?;
-        cancellation.check()?;
-        read(path, &cancellation)
-    })
+        Ok(())
+    })?;
+    cancellation.check()?;
+    if attempts == 0 {
+        return Err(GfmError::Format(format!(
+            "temporary {worker} retry probe busy"
+        )));
+    }
+    Ok(())
+}
+
+fn read_search_retry_probe_attempt_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<usize> {
+    check_control()?;
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(GfmError::io(path, err)),
+    };
+    check_control()?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        check_control()?;
+        let read = file
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
+        if read == 0 {
+            break;
+        }
+        if bytes.len().saturating_add(read) > 4096 {
+            return Ok(0);
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    let Ok(value) = std::str::from_utf8(&bytes) else {
+        return Ok(0);
+    };
+    Ok(value.trim().parse::<usize>().unwrap_or(0))
+}
+
+fn write_search_retry_probe_attempt_checked(
+    path: &Path,
+    attempt: usize,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let encoded = attempt.to_string();
+    atomic_write_checked(path, &mut check_control, |writer, check_control| {
+        for chunk in encoded.as_bytes().chunks(4096) {
+            check_control()?;
+            writer
+                .write_all(chunk)
+                .map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
+        }
+        Ok(())
+    })?;
+    check_control()?;
+    Ok(())
 }
 
 struct SearchIndexColumnsOutput {

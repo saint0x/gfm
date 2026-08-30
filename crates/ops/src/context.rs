@@ -14,6 +14,7 @@ pub struct OperationContext {
     pub verification: VerificationPolicy,
     pub access_gate: OperationAccessGate,
     pub volume_copy_policy: OperationVolumeCopyPolicy,
+    pub retry_probe_path: Option<PathBuf>,
 }
 
 impl OperationContext {
@@ -27,6 +28,7 @@ impl OperationContext {
             verification: VerificationPolicy::Size,
             access_gate: OperationAccessGate::default(),
             volume_copy_policy: OperationVolumeCopyPolicy::default(),
+            retry_probe_path: None,
         }
     }
 
@@ -62,6 +64,11 @@ impl OperationContext {
 
     pub fn with_volume_copy_policy(mut self, policy: OperationVolumeCopyPolicy) -> Self {
         self.volume_copy_policy = policy;
+        self
+    }
+
+    pub fn with_retry_probe_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.retry_probe_path = Some(path.into());
         self
     }
 }

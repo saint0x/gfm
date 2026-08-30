@@ -108,6 +108,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let conflict = parse_operation_conflict_args(args, "copy")?;
             execute_operation(Operation::Copy { from, to }, conflict)?;
         }
+        "copy-retry-probe" => {
+            let from = required_path(args.next(), "copy-retry-probe requires a source path")?;
+            let to = required_path(args.next(), "copy-retry-probe requires a destination path")?;
+            let state = required_path(
+                args.next(),
+                "copy-retry-probe requires an attempt state path",
+            )?;
+            execute_operation_with_retry_probe(Operation::Copy { from, to }, state)?;
+        }
         "operation-volume-copy-policy" => {
             let from = required_path(
                 args.next(),
@@ -448,6 +457,18 @@ fn restore_destination_from_metadata(trashed_path: &Path) -> Result<PathBuf> {
 }
 
 fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<()> {
+    execute_operation_inner(operation, conflict, None)
+}
+
+fn execute_operation_with_retry_probe(operation: Operation, retry_probe: PathBuf) -> Result<()> {
+    execute_operation_inner(operation, ConflictPolicy::Fail, Some(retry_probe))
+}
+
+fn execute_operation_inner(
+    operation: Operation,
+    conflict: ConflictPolicy,
+    retry_probe: Option<PathBuf>,
+) -> Result<()> {
     let journal = default_journal_path();
     let trash_metadata = default_trash_metadata_path();
     let label = operation_kind(&operation);
@@ -481,44 +502,61 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
                         store.append_checked(&conflict_report, || cancellation.check())?;
                     }
                 }
-                let operator = Operator::new(
-                    OperationContext::new(journal)
-                        .with_conflict(conflict)
-                        .with_trash_metadata_path(trash_metadata)
-                        .with_access_gate(access_gate)
-                        .with_volume_copy_policy(volume_copy_policy),
-                );
-                return execute_with_runtime_progress(operator, operation, runtime, &cancellation);
-            }
-            let operator = Operator::new(
-                OperationContext::new(journal)
+                let mut context = OperationContext::new(journal)
                     .with_conflict(conflict)
                     .with_trash_metadata_path(trash_metadata)
                     .with_access_gate(access_gate)
-                    .with_volume_copy_policy(volume_copy_policy),
-            );
-            execute_with_runtime_progress(operator, operation, runtime, &cancellation)
+                    .with_volume_copy_policy(volume_copy_policy);
+                if let Some(retry_probe) = retry_probe.clone() {
+                    context = context.with_retry_probe_path(retry_probe);
+                }
+                let operator = Operator::new(context);
+                return execute_with_runtime_progress_and_retry(
+                    operator,
+                    operation,
+                    runtime,
+                    &cancellation,
+                );
+            }
+            let mut context = OperationContext::new(journal)
+                .with_conflict(conflict)
+                .with_trash_metadata_path(trash_metadata)
+                .with_access_gate(access_gate)
+                .with_volume_copy_policy(volume_copy_policy);
+            if let Some(retry_probe) = retry_probe {
+                context = context.with_retry_probe_path(retry_probe);
+            }
+            let operator = Operator::new(context);
+            execute_with_runtime_progress_and_retry(operator, operation, runtime, &cancellation)
         },
     )?;
     println!("{}\t{}", entry.id, operation_status(entry.status));
     Ok(())
 }
 
-fn execute_with_runtime_progress(
+fn execute_with_runtime_progress_and_retry(
     operator: Operator,
     operation: Operation,
     runtime: RuntimeJobHandle,
     cancellation: &gfm_jobs::Cancellation,
 ) -> Result<gfm_ops::JournalEntry> {
     let mut progress_error = None;
-    let entry = operator.execute_with_progress(operation, |event| {
-        emit_operation_progress_event(event.clone());
-        if progress_error.is_none() {
-            if let Err(err) = publish_runtime_operation_progress(&runtime, &event, cancellation) {
-                progress_error = Some(err);
+    let entry = operator.execute_with_retry_policy_and_progress(
+        operation,
+        OperationRecoveryPolicy {
+            retry_failed: true,
+            max_attempts: 2,
+        },
+        |event| {
+            emit_operation_progress_event(event.clone());
+            if progress_error.is_none() {
+                if let Err(err) = publish_runtime_operation_progress(&runtime, &event, cancellation)
+                {
+                    progress_error = Some(err);
+                }
             }
-        }
-    })?;
+        },
+    )?;
     if let Some(err) = progress_error {
         return Err(err);
     }

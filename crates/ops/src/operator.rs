@@ -11,7 +11,12 @@ use crate::{
     OperationConflictPlan, OperationContext, OperationProgressEvent, OperationRecoveryOutcome,
     OperationRecoveryPolicy, OperationRecoveryReport, OperationStatus,
 };
+use gfm_jobs::RetryPolicy;
 use gfm_types::{GfmError, Result};
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
+use std::path::Path;
+use std::time::Duration;
 
 pub struct Operator {
     context: OperationContext,
@@ -43,6 +48,35 @@ impl Operator {
         let id = now_nanos();
         self.append(JournalEntry::started(id, operation.clone()))?;
         self.execute_started(id, operation, &mut on_progress)
+    }
+
+    pub fn execute_with_retry_policy_and_progress(
+        &self,
+        operation: Operation,
+        policy: OperationRecoveryPolicy,
+        mut on_progress: impl FnMut(OperationProgressEvent),
+    ) -> Result<JournalEntry> {
+        if let Err(err) = self.context.access_gate.check(&operation) {
+            let id = now_nanos();
+            self.append(JournalEntry::started(id, operation.clone()))?;
+            let entry = JournalEntry::from_error(id, operation, &err);
+            let _ = self.append(entry);
+            return match self.retry_failed_by_id(id, policy, &mut on_progress)? {
+                Some(entry) => Ok(entry),
+                None => Err(err),
+            };
+        }
+        let operation =
+            crate::conflict::resolve_operation_conflicts(operation, self.context.conflict)?;
+        let id = now_nanos();
+        self.append(JournalEntry::started(id, operation.clone()))?;
+        match self.execute_started(id, operation, &mut on_progress) {
+            Ok(entry) => Ok(entry),
+            Err(err) => match self.retry_failed_by_id(id, policy, &mut on_progress)? {
+                Some(entry) => Ok(entry),
+                None => Err(err),
+            },
+        }
     }
 
     pub fn execute_batch_with_conflicts(
@@ -132,6 +166,35 @@ impl Operator {
         self.execute_started_inner(id, operation, true, on_progress)
     }
 
+    fn retry_failed_by_id(
+        &self,
+        id: u128,
+        policy: OperationRecoveryPolicy,
+        on_progress: &mut impl FnMut(OperationProgressEvent),
+    ) -> Result<Option<JournalEntry>> {
+        let entries: Vec<JournalEntry> = self
+            .journal()?
+            .into_iter()
+            .filter(|entry| entry.id == id)
+            .collect();
+        let mut recoverable = recoverable_operations(entries.clone(), policy);
+        let Some(plan) = recoverable.pop() else {
+            return Ok(None);
+        };
+        if plan.entry.id != id || !recoverable.is_empty() {
+            return Ok(None);
+        }
+        if let Some(delay) = retry_delay_for_failed_operation(&entries, id, policy) {
+            std::thread::sleep(delay);
+        }
+        let operation = plan.entry.operation;
+        if plan.append_started {
+            self.append(JournalEntry::started(id, operation.clone()))?;
+        }
+        self.execute_started_resuming(id, operation, on_progress)
+            .map(Some)
+    }
+
     fn execute_started_inner(
         &self,
         id: u128,
@@ -148,6 +211,13 @@ impl Operator {
             let entry = JournalEntry::skipped(id, operation);
             self.append(entry.clone())?;
             return Ok(entry);
+        }
+        if let Some(retry_probe) = self.context.retry_probe_path.as_ref() {
+            if let Err(err) = fail_first_operation_retry_probe_attempt(retry_probe) {
+                let entry = JournalEntry::from_error(id, operation, &err);
+                let _ = self.append(entry);
+                return Err(err);
+            }
         }
         let plan = match plan_operation_checked(&operation, &self.context.cancellation) {
             Ok(plan) => plan,
@@ -229,6 +299,58 @@ impl Operator {
     fn append(&self, entry: JournalEntry) -> Result<()> {
         append_journal(&self.context.journal_path, &entry)
     }
+}
+
+fn retry_delay_for_failed_operation(
+    entries: &[JournalEntry],
+    id: u128,
+    policy: OperationRecoveryPolicy,
+) -> Option<Duration> {
+    let attempts = entries
+        .iter()
+        .filter(|entry| entry.id == id && entry.status == OperationStatus::Started)
+        .count();
+    let message = entries
+        .iter()
+        .rev()
+        .find(|entry| entry.id == id && entry.status == OperationStatus::Failed)
+        .and_then(|entry| entry.message.as_deref())?;
+    let delay_ms = RetryPolicy {
+        max_attempts: policy.max_attempts,
+    }
+    .retry_decision(attempts, message)
+    .next_delay_ms;
+    (delay_ms > 0).then(|| Duration::from_millis(delay_ms))
+}
+
+fn fail_first_operation_retry_probe_attempt(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
+    let mut current = String::new();
+    match OpenOptions::new().read(true).open(path) {
+        Ok(mut file) => {
+            file.read_to_string(&mut current)
+                .map_err(|err| GfmError::io(path, err))?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(GfmError::io(path, err)),
+    }
+    let attempts = current.trim().parse::<usize>().unwrap_or(0);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .map_err(|err| GfmError::io(path, err))?;
+    write!(file, "{}", attempts + 1).map_err(|err| GfmError::io(path, err))?;
+    file.flush().map_err(|err| GfmError::io(path, err))?;
+    if attempts == 0 {
+        return Err(GfmError::Format(
+            "temporary operation retry probe busy".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn should_skip_operation(operation: &Operation, conflict: ConflictPolicy) -> Result<bool> {
