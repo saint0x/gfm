@@ -1,6 +1,6 @@
 use crate::access::{
     preflight_access_scope_checked, preflight_volume_access_scope,
-    worker_admission_with_volume_gate, worker_admission_with_volume_report, ScopedAccessGuard,
+    worker_admission_with_volume_report, ScopedAccessGuard,
 };
 use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
 use crate::runtime::{
@@ -495,7 +495,7 @@ fn execute_operation_inner(
             )?;
             cancellation.check()?;
             if access_gate.check(&operation).is_ok() {
-                let _security_scope = operation_security_accesses(&operation)?;
+                let _security_scope = operation_security_accesses(&operation, &volume_report)?;
                 let conflict_report = OperationConflictReport::evaluate(&operation, conflict)?;
                 if conflict_report.blocks_operation {
                     if let Some(store) = runtime_operation_conflict_store() {
@@ -1033,12 +1033,15 @@ fn mutation_allowed_for_role(path: &Path, role: OperationAccessRole) -> bool {
     )
 }
 
-fn operation_security_accesses(operation: &Operation) -> Result<Vec<SecurityScopedBookmarkAccess>> {
+fn operation_security_accesses(
+    operation: &Operation,
+    volume_report: &VolumeDiscoveryReport,
+) -> Result<Vec<SecurityScopedBookmarkAccess>> {
     let store = SecurityScopedBookmarkStore::new(default_security_bookmarks_path());
     let mut accesses = Vec::new();
     for requirement in operation.access_requirements() {
         let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
-        let admission = worker_admission_with_volume_gate(
+        let admission = worker_admission_with_volume_report(
             &probe_path,
             AccessIntent::Operate,
             format!(
@@ -1046,6 +1049,7 @@ fn operation_security_accesses(operation: &Operation) -> Result<Vec<SecurityScop
                 operation_kind(operation),
                 requirement.role.as_str()
             ),
+            volume_report,
         );
         let report = &admission.access;
         if !admission.needs_bookmark_access {

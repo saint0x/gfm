@@ -1,7 +1,7 @@
 use crate::access::{
     preflight_access_scope_checked, preflight_volume_access_scope,
     worker_admission_with_volume_gate, worker_admissions_with_shared_volume_report,
-    ScopedAccessGuard, WorkerAdmissionRequest,
+    worker_admissions_with_volume_report, ScopedAccessGuard, WorkerAdmissionRequest,
 };
 use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
 use crate::{
@@ -93,6 +93,32 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let requests = parse_worker_admission_requests(args)?;
             let admissions = worker_admissions_with_shared_volume_report(&path, &requests);
+            println!("{}", worker_admission_fanout_summary(&admissions));
+            for admission in admissions {
+                println!("{}", admission.as_tsv());
+            }
+        }
+        "security-worker-admission-fanout-unavailable-volume-api" => {
+            let path = required_path(
+                args.next(),
+                "security-worker-admission-fanout-unavailable-volume-api requires a path",
+            )?;
+            let root = required_path(
+                args.next(),
+                "security-worker-admission-fanout-unavailable-volume-api requires a volume root",
+            )?;
+            let requests = parse_worker_admission_requests(args)?;
+            let mut volume = VolumeDescriptor::for_path(&root)?;
+            volume.kind = gfm_mac::VolumeKind::Network;
+            volume.mount_state = gfm_mac::MountState::Mounted;
+            volume.reachable = Some(true);
+            volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            let report = VolumeDiscoveryReport {
+                volumes: vec![volume],
+            };
+            let admissions = worker_admissions_with_volume_report(&path, &requests, &report);
             println!("{}", worker_admission_fanout_summary(&admissions));
             for admission in admissions {
                 println!("{}", admission.as_tsv());

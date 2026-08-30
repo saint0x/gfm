@@ -63,6 +63,14 @@ pub(crate) fn worker_admissions_with_shared_volume_report(
 ) -> Vec<SecurityWorkerAdmissionReport> {
     let volume_path = absolute_volume_probe_path(path);
     let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    worker_admissions_with_volume_report(path, requests, &volume_report)
+}
+
+pub(crate) fn worker_admissions_with_volume_report(
+    path: &Path,
+    requests: &[WorkerAdmissionRequest],
+    volume_report: &VolumeDiscoveryReport,
+) -> Vec<SecurityWorkerAdmissionReport> {
     requests
         .iter()
         .map(|request| {
@@ -70,7 +78,7 @@ pub(crate) fn worker_admissions_with_shared_volume_report(
                 path,
                 request.intent,
                 request.worker.clone(),
-                &volume_report,
+                volume_report,
             )
         })
         .collect()
@@ -498,6 +506,46 @@ mod tests {
             assert_eq!(admission.access.action, SecurityDecisionAction::Deny);
             assert!(admission.reason.contains("unreachable volume network"));
             assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
+            assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_fanout_accepts_precomputed_volume_report() {
+        let root = unique_temp_dir("gfm-access-admission-fanout-report");
+        let path = root.join("Missing.pdf");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::Network;
+        volume.reachable = Some(true);
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+        let requests = [
+            WorkerAdmissionRequest {
+                worker: "index worker".to_string(),
+                intent: AccessIntent::Index,
+            },
+            WorkerAdmissionRequest {
+                worker: "preview worker".to_string(),
+                intent: AccessIntent::Preview,
+            },
+        ];
+
+        let admissions = worker_admissions_with_volume_report(&path, &requests, &report);
+
+        assert_eq!(admissions.len(), 2);
+        for admission in admissions {
+            assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
+            assert!(!admission.can_touch_filesystem);
+            assert!(admission.refresh_on_permission_change);
+            assert_eq!(admission.access.probe, gfm_mac::AccessProbeState::Unknown);
+            assert!(admission.reason.contains("unavailable volume network"));
+            assert!(admission.reason.contains("native-status=unavailable"));
             assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
         }
 

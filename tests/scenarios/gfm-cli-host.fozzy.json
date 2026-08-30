@@ -6633,6 +6633,23 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "security-worker-admission-fanout-unavailable-volume-api",
+        "tmp/gfm-fozzy-offline-volume/SecurityPreview.pdf",
+        "tmp/gfm-fozzy-offline-volume",
+        "index worker",
+        "index",
+        "preview worker",
+        "preview",
+        "operation worker",
+        "operate"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "security-worker-admission",
         "export worker",
         "tmp/gfm-fozzy-read-only-volume/Export.pdf",

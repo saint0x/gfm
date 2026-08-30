@@ -853,6 +853,71 @@ fn reports_security_worker_admission_fanout_from_binary() {
 }
 
 #[test]
+fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-security-worker-fanout-unavailable-{}",
+        std::process::id()
+    ));
+    let path = root.join("Missing.pdf");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("security-worker-admission-fanout-unavailable-volume-api")
+        .arg(&path)
+        .arg(&root)
+        .arg("index worker")
+        .arg("index")
+        .arg("preview worker")
+        .arg("preview")
+        .arg("operation worker")
+        .arg("operate")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "security-worker-admission-fanout\tworkers=3\tstart=0\tprompt=0\tmetadata-only=0\tdeny=3\t"
+    ));
+    assert!(stdout.contains("\tcan-touch-filesystem=0\t"));
+    assert!(stdout.contains("\trefresh-on-permission-change=3\n"));
+    assert_eq!(stdout.matches("\tprobe=unknown\t").count(), 3, "{stdout}");
+    assert_eq!(
+        stdout.matches("\tworker-action=deny\t").count(),
+        3,
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("unavailable volume network").count(),
+        3,
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("native-status=unavailable").count(),
+        3,
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("resource-status=unavailable").count(),
+        3,
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("mount-status=unavailable").count(),
+        3,
+        "{stdout}"
+    );
+    assert!(!stdout.contains("\tprobe=missing\t"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn security_scope_classifies_relative_home_paths_from_binary() {
     let root =
         std::env::temp_dir().join(format!("gfm-security-relative-home-{}", std::process::id()));
