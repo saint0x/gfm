@@ -1,7 +1,7 @@
 use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
 use crate::extract::{
     extraction_budget_profile, preflight_adaptive_extraction_worker_scratch,
-    read_extraction_quarantine, run_adaptive_extraction_worker_cancellable,
+    read_extraction_quarantine_cancellable, run_adaptive_extraction_worker_cancellable,
     run_quarantined_adaptive_extraction_worker_cancellable, ADAPTIVE_WORKER_TIMEOUT,
 };
 use crate::runtime::{
@@ -1615,7 +1615,8 @@ pub(crate) fn run_content_job(
                 ));
                 let worker = BackgroundContentIndexer::new(extractor, job_spec.options());
                 let quarantine_store = default_extraction_quarantine_path();
-                let mut extraction_quarantine = read_extraction_quarantine(&quarantine_store, 2)?;
+                let mut extraction_quarantine =
+                    read_extraction_quarantine_cancellable(&quarantine_store, 2, &cancellation)?;
                 let request = QuarantineContentIndexRequest {
                     snapshot: &snapshot,
                     previous_records: &previous_records,

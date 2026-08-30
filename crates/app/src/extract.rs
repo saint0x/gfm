@@ -287,14 +287,7 @@ pub(crate) fn run_quarantined_adaptive_extraction_worker_cancellable(
     }
 }
 
-pub(crate) fn read_extraction_quarantine(
-    store: &Path,
-    threshold: u32,
-) -> Result<ExtractionQuarantine> {
-    read_extraction_quarantine_checked(store, threshold, || Ok(()))
-}
-
-fn read_extraction_quarantine_cancellable(
+pub(crate) fn read_extraction_quarantine_cancellable(
     store: &Path,
     threshold: u32,
     cancellation: &Cancellation,
@@ -1106,7 +1099,7 @@ mod tests {
         let root = unique_temp_dir("gfm-extract-quarantine-store-probe");
         let store = root.join("quarantine-store-unavailable".repeat(16));
 
-        let err = read_extraction_quarantine(&store, 2).unwrap_err();
+        let err = read_extraction_quarantine_checked(&store, 2, || Ok(())).unwrap_err();
 
         assert!(matches!(err, GfmError::Io { .. }));
         assert!(err
