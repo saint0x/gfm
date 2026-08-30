@@ -29,7 +29,7 @@ use gfm_ui::{
     ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
     VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io;
@@ -920,14 +920,23 @@ fn retain_fileprovider_event_access(
     worker: &'static str,
 ) -> Result<Vec<crate::access::ScopedAccessGuard>> {
     let mut guards = Vec::new();
-    for path in fileprovider_event_access_paths(event, previous)? {
+    let paths = fileprovider_event_access_paths(event, previous)?;
+    for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
         guards.push(crate::access::preflight_access_scope(
-            &path,
+            path,
             AccessIntent::Read,
             worker,
         )?);
     }
     Ok(guards)
+}
+
+fn unique_fileprovider_paths<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<&'a Path> {
+    let mut seen = BTreeSet::new();
+    paths
+        .into_iter()
+        .filter(|path| seen.insert((*path).to_path_buf()))
+        .collect()
 }
 
 fn fileprovider_event_access_paths(
@@ -1145,8 +1154,9 @@ fn run_ui_fileprovider_observed_invalidation(
     const WORKER: &str = "ui fileprovider sidebar observed invalidation";
     let state_probe = write_probe_existing_ancestor(&state_path)?;
     crate::access::preflight_volume_access_scope(&state_probe, AccessIntent::Write, WORKER)?;
-    for path in fileprovider_raw_event_paths(&event) {
-        crate::access::preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
+    let raw_paths = fileprovider_raw_event_paths(&event);
+    for path in unique_fileprovider_paths(raw_paths.iter().map(PathBuf::as_path)) {
+        crate::access::preflight_volume_access_scope(path, AccessIntent::Read, WORKER)?;
     }
     let volume = crate::detect_volume_id(&state_probe)
         .ok()
@@ -1759,6 +1769,27 @@ mod tests {
         access.prompt_source = "missing-path".to_string();
 
         assert!(permission_access_requires_surface(&access));
+    }
+
+    #[test]
+    fn unique_fileprovider_paths_preserves_first_occurrence_order() {
+        let first = PathBuf::from("/tmp/gfm/a");
+        let second = PathBuf::from("/tmp/gfm/b");
+        let third = PathBuf::from("/tmp/gfm/c");
+        let paths = [
+            first.as_path(),
+            second.as_path(),
+            first.as_path(),
+            third.as_path(),
+            second.as_path(),
+        ];
+
+        let unique = unique_fileprovider_paths(paths);
+
+        assert_eq!(
+            unique,
+            vec![first.as_path(), second.as_path(), third.as_path()]
+        );
     }
 
     #[test]
