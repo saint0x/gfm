@@ -7,7 +7,10 @@ use crate::{
     detect_volume_id, index_volume_descriptor, parent_volume, parse_required_scheduling_pressure,
     run_preview_contract_adaptive_with_volume_and_payload_path,
     run_preview_contract_cancellable_with_payload_path,
-    runtime::{preflight_runtime_job_state, run_volume_task_cancellable, RuntimeJobHandle},
+    runtime::{
+        default_job_journal_path, preflight_runtime_job_state, run_volume_task_cancellable,
+        RuntimeJobHandle,
+    },
 };
 use gfm_fs::record_for_path_checked;
 use gfm_index::{
@@ -16,8 +19,9 @@ use gfm_index::{
     VolumeIndexPolicy, VolumeInvalidationReport,
 };
 use gfm_jobs::{
-    Cancellation, JobClass, JobIoPressure, JobPayloadKind, JobProgressState, Priority, Scheduler,
-    SchedulingAction, SchedulingPressure, Task, TaskStatus, VolumeConcurrencyPolicy, WorkerPool,
+    Cancellation, JobClass, JobIoPressure, JobJournal, JobPayloadKind, JobProgressState, Priority,
+    RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, TaskStatus,
+    VolumeConcurrencyPolicy, WorkerPool,
 };
 use gfm_mac::{
     current_host_profile, parse_spotlight_fixture, AccessIntent, CloudStorageState,
@@ -231,6 +235,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let cancel_after_access = command == "fileprovider-progress-job-cancel-after-access";
             let path = required_path(args.next(), "fileprovider-progress-job requires a path")?;
             let _runtime_access = preflight_runtime_job_state("fileprovider progress job")?;
+            let journal = default_job_journal_path();
+            let journal_probe = write_probe_path(&journal)?.to_path_buf();
+            let _journal_access = preflight_access_scope_checked(
+                &journal_probe,
+                AccessIntent::Write,
+                "fileprovider progress job",
+                || Ok(()),
+            )?;
             let report = match run_fileprovider_progress_job(path, cancel_after_access) {
                 Ok(report) => report,
                 Err(GfmError::Cancelled) if cancel_after_access => {
@@ -835,6 +847,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = required_path(args.next(), "quicklook-session requires a path")?;
             println!("{}", run_quicklook_session(path)?.as_tsv());
         }
+        "quicklook-session-retry-probe" => {
+            let path = required_path(args.next(), "quicklook-session-retry-probe requires a path")?;
+            let attempt_state = required_path(
+                args.next(),
+                "quicklook-session-retry-probe requires an attempt state path",
+            )?;
+            println!(
+                "{}",
+                run_quicklook_session_retry_probe(path, attempt_state)?.as_tsv()
+            );
+        }
         "quicklook-session-adaptive" | "quicklook-session-adaptive-cancel-after-access" => {
             let cancel_after_access = command == "quicklook-session-adaptive-cancel-after-access";
             let path = required_path(args.next(), &format!("{command} requires a path"))?;
@@ -899,6 +922,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "thumbnail-generation" => {
             let path = required_path(args.next(), "thumbnail-generation requires a path")?;
             println!("{}", run_thumbnail_generation(path)?.as_tsv());
+        }
+        "thumbnail-generation-retry-probe" => {
+            let path = required_path(
+                args.next(),
+                "thumbnail-generation-retry-probe requires a path",
+            )?;
+            let attempt_state = required_path(
+                args.next(),
+                "thumbnail-generation-retry-probe requires an attempt state path",
+            )?;
+            println!(
+                "{}",
+                run_thumbnail_generation_retry_probe(path, attempt_state)?.as_tsv()
+            );
         }
         "thumbnail-generation-adaptive" | "thumbnail-generation-adaptive-cancel-after-access" => {
             let cancel_after_access =
@@ -1288,6 +1325,7 @@ fn publish_fileprovider_progress_job(
     path: PathBuf,
     cancellation: &Cancellation,
 ) -> Result<FileProviderProgressReport> {
+    maybe_fail_fileprovider_progress_retry_probe(cancellation)?;
     let report = FileProviderProgressReport::read_path_checked(&path, || cancellation.check())?;
     let mut scheduler = Scheduler::new();
     let label = fileprovider_progress_label(report.state.progress.direction);
@@ -1313,6 +1351,79 @@ fn publish_fileprovider_progress_job(
         || cancellation.check(),
     )?;
     Ok(report)
+}
+
+fn maybe_fail_fileprovider_progress_retry_probe(cancellation: &Cancellation) -> Result<()> {
+    let Some(path) = std::env::var_os("GFM_FILEPROVIDER_PROGRESS_RETRY_PROBE").map(PathBuf::from)
+    else {
+        return Ok(());
+    };
+    cancellation.check()?;
+    let attempt = read_retry_probe_attempt_checked(&path, || cancellation.check())? + 1;
+    cancellation.check()?;
+    write_retry_probe_attempt_checked(&path, attempt, || cancellation.check())?;
+    cancellation.check()?;
+    if attempt == 1 {
+        Err(GfmError::Format(
+            "temporary fileprovider progress busy".to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn read_retry_probe_attempt_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<usize> {
+    check_control()?;
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return Ok(0),
+    };
+    check_control()?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        check_control()?;
+        let read = match file.read(&mut buffer) {
+            Ok(read) => read,
+            Err(_) => return Ok(0),
+        };
+        check_control()?;
+        if read == 0 {
+            break;
+        }
+        if bytes.len().saturating_add(read) > 4096 {
+            return Ok(0);
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    let Ok(value) = std::str::from_utf8(&bytes) else {
+        return Ok(0);
+    };
+    Ok(value.trim().parse::<usize>().unwrap_or(0))
+}
+
+fn write_retry_probe_attempt_checked(
+    path: &Path,
+    attempt: usize,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let encoded = attempt.to_string();
+    gfm_store::atomic_write_checked(path, &mut check_control, |writer, check_control| {
+        for chunk in encoded.as_bytes().chunks(4096) {
+            check_control()?;
+            writer
+                .write_all(chunk)
+                .map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
+        }
+        Ok(())
+    })?;
+    check_control()?;
+    Ok(())
 }
 
 fn fileprovider_progress_label(direction: CloudTransferDirection) -> &'static str {
@@ -1740,6 +1851,7 @@ fn run_fileprovider_progress_job(
     preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
     let volume = detect_volume_id(&path).ok();
     run_fileprovider_worker_without_runtime_progress(volume, WORKER, move |cancellation| {
+        let path = path.clone();
         cancellation.check()?;
         let _access = preflight_access_scope_checked(&path, AccessIntent::Read, WORKER, || {
             cancellation.check()
@@ -1835,28 +1947,31 @@ fn run_quicklook_session(path: PathBuf) -> Result<QuickLookSessionContract> {
         volume,
         WORKER,
         path.clone(),
+        move |cancellation| build_quicklook_session_contract(&path, WORKER, &cancellation),
+    )
+}
+
+fn run_quicklook_session_retry_probe(
+    path: PathBuf,
+    attempt_state: PathBuf,
+) -> Result<QuickLookSessionContract> {
+    const WORKER: &str = "quicklook preview";
+    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
+    preflight_volume_access_scope(
+        write_probe_path(&attempt_state)?,
+        AccessIntent::Write,
+        WORKER,
+    )?;
+    let volume = detect_volume_id(&path)
+        .ok()
+        .or_else(|| parent_volume(&path));
+    run_preview_contract_cancellable_with_payload_path(
+        volume,
+        WORKER,
+        path.clone(),
         move |cancellation| {
-            cancellation.check()?;
-            let record =
-                record_for_path_with_access(&path, AccessIntent::Preview, WORKER, &cancellation)?;
-            cancellation.check()?;
-            let cloud = fileprovider_materialization_for_preview(&path, &cancellation)?;
-            cancellation.check()?;
-            let input = QuickLookSessionInput::new(
-                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
-                Rect::new(0, 0, 640, 480),
-                Viewport::new(Rect::new(0, 0, 1024, 768), 256),
-            )
-            .with_cloud_materialization(cloud)
-            .with_invalidation(PreviewInvalidationEvent {
-                content_changed: true,
-                ..PreviewInvalidationEvent::default()
-            });
-            QuickLookSessionContract::from_input_checked(
-                &PreviewSecurityPolicy::default(),
-                input,
-                || cancellation.check(),
-            )
+            fail_first_retry_probe_attempt(&attempt_state, WORKER, &cancellation)?;
+            build_quicklook_session_contract(&path, WORKER, &cancellation)
         },
     )
 }
@@ -1871,31 +1986,109 @@ fn run_thumbnail_generation(path: PathBuf) -> Result<ThumbnailGenerationContract
         volume,
         WORKER,
         path.clone(),
+        move |cancellation| build_thumbnail_generation_contract(&path, WORKER, &cancellation),
+    )
+}
+
+fn run_thumbnail_generation_retry_probe(
+    path: PathBuf,
+    attempt_state: PathBuf,
+) -> Result<ThumbnailGenerationContract> {
+    const WORKER: &str = "thumbnail generation";
+    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
+    preflight_volume_access_scope(
+        write_probe_path(&attempt_state)?,
+        AccessIntent::Write,
+        WORKER,
+    )?;
+    let volume = detect_volume_id(&path)
+        .ok()
+        .or_else(|| parent_volume(&path));
+    run_preview_contract_cancellable_with_payload_path(
+        volume,
+        WORKER,
+        path.clone(),
         move |cancellation| {
-            cancellation.check()?;
-            let record =
-                record_for_path_with_access(&path, AccessIntent::Preview, WORKER, &cancellation)?;
-            cancellation.check()?;
-            let cloud = fileprovider_materialization_for_preview(&path, &cancellation)?;
-            cancellation.check()?;
-            let input = ThumbnailGenerationInput::new(
-                PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
-                Rect::new(0, 0, 160, 160),
-                Viewport::new(Rect::new(0, 0, 1024, 768), 256),
-            )
-            .with_cloud_materialization(cloud)
-            .with_size(512, 2_000)
-            .with_invalidation(PreviewInvalidationEvent {
-                metadata_changed: true,
-                ..PreviewInvalidationEvent::default()
-            });
-            ThumbnailGenerationContract::from_input_checked(
-                &PreviewSecurityPolicy::default(),
-                input,
-                || cancellation.check(),
-            )
+            fail_first_retry_probe_attempt(&attempt_state, WORKER, &cancellation)?;
+            build_thumbnail_generation_contract(&path, WORKER, &cancellation)
         },
     )
+}
+
+fn build_quicklook_session_contract(
+    path: &Path,
+    worker: &str,
+    cancellation: &Cancellation,
+) -> Result<QuickLookSessionContract> {
+    cancellation.check()?;
+    let record = record_for_path_with_access(path, AccessIntent::Preview, worker, cancellation)?;
+    cancellation.check()?;
+    let cloud = fileprovider_materialization_for_preview(path, cancellation)?;
+    cancellation.check()?;
+    let input = QuickLookSessionInput::new(
+        PreviewRequestKey::new(record.id, path.to_path_buf(), PreviewKind::QuickLook),
+        Rect::new(0, 0, 640, 480),
+        Viewport::new(Rect::new(0, 0, 1024, 768), 256),
+    )
+    .with_cloud_materialization(cloud)
+    .with_invalidation(PreviewInvalidationEvent {
+        content_changed: true,
+        ..PreviewInvalidationEvent::default()
+    });
+    QuickLookSessionContract::from_input_checked(&PreviewSecurityPolicy::default(), input, || {
+        cancellation.check()
+    })
+}
+
+fn build_thumbnail_generation_contract(
+    path: &Path,
+    worker: &str,
+    cancellation: &Cancellation,
+) -> Result<ThumbnailGenerationContract> {
+    cancellation.check()?;
+    let record = record_for_path_with_access(path, AccessIntent::Preview, worker, cancellation)?;
+    cancellation.check()?;
+    let cloud = fileprovider_materialization_for_preview(path, cancellation)?;
+    cancellation.check()?;
+    let input = ThumbnailGenerationInput::new(
+        PreviewRequestKey::new(record.id, path.to_path_buf(), PreviewKind::Thumbnail),
+        Rect::new(0, 0, 160, 160),
+        Viewport::new(Rect::new(0, 0, 1024, 768), 256),
+    )
+    .with_cloud_materialization(cloud)
+    .with_size(512, 2_000)
+    .with_invalidation(PreviewInvalidationEvent {
+        metadata_changed: true,
+        ..PreviewInvalidationEvent::default()
+    });
+    ThumbnailGenerationContract::from_input_checked(
+        &PreviewSecurityPolicy::default(),
+        input,
+        || cancellation.check(),
+    )
+}
+
+fn fail_first_retry_probe_attempt(
+    attempt_state: &Path,
+    worker: &str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    cancellation.check()?;
+    let probe = write_probe_path(attempt_state)?.to_path_buf();
+    let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, worker, || {
+        cancellation.check()
+    })?;
+    cancellation.check()?;
+    let attempts = read_retry_probe_attempt_checked(attempt_state, || cancellation.check())?;
+    cancellation.check()?;
+    write_retry_probe_attempt_checked(attempt_state, attempts + 1, || cancellation.check())?;
+    cancellation.check()?;
+    if attempts == 0 {
+        return Err(GfmError::Format(format!(
+            "temporary {worker} retry probe busy"
+        )));
+    }
+    Ok(())
 }
 
 fn run_adaptive_quicklook_session(
@@ -2376,7 +2569,7 @@ fn fileprovider_raw_event_paths(event: &FileEvent) -> Vec<PathBuf> {
 fn run_fileprovider_worker_without_runtime_progress<T>(
     volume: Option<VolumeId>,
     worker: &'static str,
-    work: impl FnOnce(Cancellation) -> Result<T> + Send + 'static,
+    work: impl Fn(Cancellation) -> Result<T> + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -2388,14 +2581,20 @@ where
     } else {
         scheduler.schedule_in_class(Priority::Visible, JobClass::Visible, worker)
     };
-    let task = Task::new(job.clone(), move |cancellation| {
+    let task = RetriableTask::new(job.clone(), move |cancellation| {
         let result = work(cancellation)?;
         result_tx
             .send(result)
             .map_err(|_| GfmError::Format(format!("{worker} result receiver dropped")))?;
         Ok(())
     });
-    let report = WorkerPool::new(1).run_isolated(vec![task], VolumeConcurrencyPolicy::new(1));
+    let journal = JobJournal::new(default_job_journal_path());
+    let report = WorkerPool::new(1).run_retriable_isolated(
+        vec![task],
+        &journal,
+        RetryPolicy { max_attempts: 2 },
+        VolumeConcurrencyPolicy::new(1),
+    );
     let outcome = report
         .outcomes
         .iter()

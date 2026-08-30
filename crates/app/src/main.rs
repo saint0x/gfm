@@ -621,12 +621,12 @@ pub(crate) fn run_preview_contract_cancellable_with_payload_path<T>(
     volume: Option<VolumeId>,
     label: &'static str,
     payload_path: impl Into<PathBuf>,
-    build: impl FnOnce(gfm_jobs::Cancellation) -> Result<T> + Send + 'static,
+    build: impl Fn(gfm_jobs::Cancellation) -> Result<T> + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
 {
-    runtime::run_volume_task_cancellable_with_payload_path(
+    runtime::run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
         label,

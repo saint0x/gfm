@@ -999,6 +999,109 @@ fn thumbnail_generation_refuses_missing_path_before_generation_from_binary() {
 }
 
 #[test]
+fn quicklook_session_retries_transient_preview_failure_from_binary() {
+    let root =
+        std::env::temp_dir().join(format!("gfm-quicklook-retry-probe-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let document = root.join("Retry.pdf");
+    let retry_probe = root.join("quicklook-retry.state");
+    let journal = root.join("jobs.gfmjournal");
+    std::fs::write(&document, b"%PDF-1.7\nretry quicklook").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .arg("quicklook-session-retry-probe")
+        .arg(&document)
+        .arg(&retry_probe)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.starts_with("quicklook-session\tquick-look\t"),
+        "{stdout}"
+    );
+    assert_eq!(std::fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = std::fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tquicklook preview"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains(
+            "1\t1\tfailed:temporary quicklook preview retry probe busy\tquicklook preview"
+        ),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tquicklook preview"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tquicklook preview"),
+        "{journal_text}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn thumbnail_generation_retries_transient_preview_failure_from_binary() {
+    let root =
+        std::env::temp_dir().join(format!("gfm-thumbnail-retry-probe-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let image = root.join("Retry.png");
+    let retry_probe = root.join("thumbnail-retry.state");
+    let journal = root.join("jobs.gfmjournal");
+    std::fs::write(&image, b"\x89PNG\r\n\x1a\nretry thumbnail").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .arg("thumbnail-generation-retry-probe")
+        .arg(&image)
+        .arg(&retry_probe)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("thumbnail-generation\t"), "{stdout}");
+    assert_eq!(std::fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = std::fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tthumbnail generation"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains(
+            "1\t1\tfailed:temporary thumbnail generation retry probe busy\tthumbnail generation"
+        ),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tthumbnail generation"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tthumbnail generation"),
+        "{journal_text}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_mac_bridge_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("mac-bridges")
@@ -1906,6 +2009,75 @@ fn publishes_fileprovider_progress_to_runtime_job_store_from_binary() {
         "operation-progress\tjob=1\tlabel=fileprovider download\tstate=running\tcompleted=0\ttotal=1"
     ));
     assert!(ui_stdout.contains("operation-progress-command\tstop\tjob=1\tenabled=true"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn fileprovider_progress_job_retries_transient_provider_publish_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-progress-job-retry-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let downloading = root.join("Downloading.icloud-downloading.md");
+    let progress = root.join("progress.gfmprogress");
+    let catalog = root.join("payloads.gfmjobs");
+    let journal = root.join("jobs.gfmjournal");
+    let retry_probe = root.join("progress-retry.state");
+    std::fs::write(&downloading, "downloading").unwrap();
+    xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_FILEPROVIDER_PROGRESS_RETRY_PROBE", &retry_probe)
+        .arg("fileprovider-progress-job")
+        .arg(&downloading)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("fileprovider-progress\t"), "{stdout}");
+    assert!(stdout.contains("\tstate=downloading\t"), "{stdout}");
+    assert_eq!(std::fs::read_to_string(&retry_probe).unwrap(), "2");
+
+    let journal_text = std::fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tfileprovider progress job"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains(
+            "1\t1\tfailed:temporary fileprovider progress busy\tfileprovider progress job"
+        ),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tfileprovider progress job"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tfileprovider progress job"),
+        "{journal_text}"
+    );
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tfileprovider download"),
+        "{progress_text}"
+    );
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains("payload\t1\toperation\tfileprovider download"),
+        "{catalog_text}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

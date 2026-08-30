@@ -53,6 +53,25 @@ where
     )
 }
 
+pub(crate) fn run_retriable_volume_task_cancellable_with_payload_path<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    label: &'static str,
+    payload_path: impl Into<PathBuf>,
+    work: impl Fn(Cancellation) -> Result<T> + Send + Sync + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    run_retriable_volume_task_cancellable_with_runtime_payload_path(
+        volume,
+        priority,
+        label,
+        payload_path,
+        move |cancellation, _runtime| work(cancellation),
+    )
+}
+
 pub(crate) fn run_volume_task_cancellable_with_runtime<T>(
     volume: Option<VolumeId>,
     priority: Priority,
@@ -69,6 +88,70 @@ where
         runtime_payload_path(payload_kind_for_label(label), label),
         work,
     )
+}
+
+fn run_retriable_volume_task_cancellable_with_runtime_payload_path<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    label: &'static str,
+    payload_path: impl Into<PathBuf>,
+    work: impl Fn(Cancellation, RuntimeJobHandle) -> Result<T> + Send + Sync + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let mut scheduler = Scheduler::new();
+    let job = if let Some(volume) = volume {
+        scheduler.schedule_on_volume(priority, label, volume)
+    } else {
+        scheduler.schedule(priority, label)
+    };
+    let journal = JobJournal::new(default_job_journal_path());
+    let _journal_access = preflight_runtime_write(journal.path(), label)?;
+    let job = drain_single_runtime_job(&mut scheduler, job, label)?;
+    let runtime = RuntimeJobHandle::begin_with_payload_path(
+        &job,
+        payload_kind_for_label(label),
+        label,
+        payload_path,
+        1,
+        format!("{}:{label}", priority.as_str()),
+    )?;
+    let runtime_task = runtime.clone();
+    let task = RetriableTask::new(job.clone(), move |cancellation| {
+        runtime_task.running_checked(|| cancellation.check())?;
+        let result = work(cancellation, runtime_task.clone())?;
+        result_tx
+            .send(result)
+            .map_err(|_| GfmError::Format(format!("{label} result receiver dropped")))?;
+        Ok(())
+    });
+    let report = WorkerPool::new(1).run_retriable_isolated(
+        vec![task],
+        &journal,
+        RetryPolicy { max_attempts: 2 },
+        VolumeConcurrencyPolicy::new(1),
+    );
+    let outcome = report
+        .outcomes
+        .iter()
+        .find(|outcome| outcome.id == job.id)
+        .ok_or_else(|| GfmError::Format(format!("{label} job did not run")))?;
+    runtime.finish(&outcome.status)?;
+    match &outcome.status {
+        TaskStatus::Completed => {}
+        TaskStatus::Started => {
+            return Err(GfmError::Format(format!("{label} job is still running")))
+        }
+        TaskStatus::Cancelled => return Err(GfmError::Cancelled),
+        TaskStatus::Failed(message) => {
+            return Err(GfmError::Format(format!("{label} job failed: {message}")))
+        }
+    }
+    result_rx
+        .try_recv()
+        .map_err(|_| GfmError::Format(format!("{label} job completed without a result")))
 }
 
 fn run_volume_task_cancellable_with_runtime_payload_path<T>(
