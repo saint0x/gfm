@@ -1,6 +1,5 @@
 use crate::access::{
-    preflight_access_scope, preflight_access_scope_checked, preflight_volume_access_scope,
-    ScopedAccessGuard,
+    preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
 };
 use crate::extract::{
     extraction_budget_profile, preflight_adaptive_extraction_worker_scratch,
@@ -58,12 +57,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Visible,
                 "content index",
                 move |cancellation| {
-                    let _access = retain_foreground_content_index_access(
+                    cancellation.check()?;
+                    let _access = retain_foreground_content_index_access_checked(
                         &root,
                         &records,
                         &content,
                         "content index",
+                        || cancellation.check(),
                     )?;
+                    cancellation.check()?;
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let records_len = snapshot.records.len();
                     let inaccessible_len = snapshot.inaccessible.len();
@@ -292,11 +294,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Visible,
                 "content segment index",
                 move |cancellation| {
-                    let _access = retain_content_segment_index_access(
+                    cancellation.check()?;
+                    let _access = retain_content_segment_index_access_checked(
                         &root,
                         &output,
                         "content segment index",
+                        || cancellation.check(),
                     )?;
+                    cancellation.check()?;
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let inaccessible_len = snapshot.inaccessible.len();
                     cancellation.check()?;
@@ -405,12 +410,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 },
                 output_archive.clone(),
                 move |cancellation| {
-                    let _access = retain_content_segments_access(
+                    cancellation.check()?;
+                    let _access = retain_content_segments_access_checked(
                         Some(&manifest_path),
                         &output_archive,
                         &segments,
                         "content maintenance",
+                        || cancellation.check(),
                     )?;
+                    cancellation.check()?;
                     worker.maintain_segments_cancellable(
                         &manifest_path,
                         &output_archive,
@@ -455,10 +463,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let mut spec = ContentIndexJobSpec::new(&root, segment_dir, records, content);
             let spec_path = default_content_job_path();
             if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
-                let _access = preflight_access_scope(
-                    write_probe_path(&spec_path)?,
+                let spec_probe = write_probe_path(&spec_path)?.to_path_buf();
+                let _access = preflight_access_scope_checked(
+                    &spec_probe,
                     AccessIntent::Write,
                     "background content index",
+                    || Ok(()),
                 )?;
             } else {
                 preflight_content_job_volumes(
@@ -778,7 +788,14 @@ pub(crate) fn run_content_search(
         Priority::Visible,
         "content extraction search",
         move |cancellation| {
-            let _access = preflight_access_scope(&root, AccessIntent::Index, "content search")?;
+            cancellation.check()?;
+            let _access = preflight_access_scope_checked(
+                &root,
+                AccessIntent::Index,
+                "content search",
+                || cancellation.check(),
+            )?;
+            cancellation.check()?;
             let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
             let mut live = snapshot.into_live();
             let indexed = live.index_content_cancellable(&extractor, &cancellation)?;
@@ -800,7 +817,9 @@ fn run_extraction_report(
         .or_else(|| parent_volume(&path));
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope(&path, AccessIntent::Read, worker)?;
+        let _access = preflight_access_scope_checked(&path, AccessIntent::Read, worker, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         let report = extractor.extract_path_report_checked(&path, || cancellation.check())?;
         let mut quarantine = ExtractionQuarantine::default();
@@ -817,7 +836,9 @@ fn run_extraction_cache(path: PathBuf) -> Result<String> {
         .or_else(|| parent_volume(&path));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
+        let _access = preflight_access_scope_checked(&path, AccessIntent::Read, WORKER, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
         cancellation.check()?;
@@ -840,7 +861,10 @@ fn run_content_compaction(output: PathBuf, segments: Vec<PathBuf>) -> Result<usi
     let volume = path_volume(&output_probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_content_segments_access(None, &output, &segments, WORKER)?;
+        let _access =
+            retain_content_segments_access_checked(None, &output, &segments, WORKER, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
         let terms = Indexer::default().compact_content_segments(output, &segments)?;
         cancellation.check()?;
@@ -858,7 +882,10 @@ fn run_tiered_content_compaction(
     let volume = path_volume(&output_probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_content_segments_access(None, &output, &segments, WORKER)?;
+        let _access =
+            retain_content_segments_access_checked(None, &output, &segments, WORKER, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
         let outcome = Indexer::default().compact_content_segments_with_policy(
             output,
@@ -882,11 +909,12 @@ fn run_content_segment_maintenance(
     let worker = BackgroundContentIndexer::default();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_content_segments_access(
+        let _access = retain_content_segments_access_checked(
             Some(&manifest_path),
             &output_archive,
             &segments,
             WORKER,
+            || cancellation.check(),
         )?;
         cancellation.check()?;
         let report = worker.maintain_segments_cancellable(
@@ -917,7 +945,8 @@ fn load_resumable_content_job_spec(
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let recoverable = recoverable_background_content_jobs(&journal)?;
+            let recoverable =
+                recoverable_background_content_jobs_checked(&journal, || cancellation.check())?;
             if recoverable.total == 0 {
                 return Ok(None);
             }
@@ -927,10 +956,11 @@ fn load_resumable_content_job_spec(
                 "resume background content index",
             )?;
             cancellation.check()?;
-            let _access = preflight_access_scope(
+            let _access = preflight_access_scope_checked(
                 &spec_path,
                 AccessIntent::Read,
                 "resume background content index",
+                || cancellation.check(),
             )?;
             let spec = ContentIndexJobSpec::read_checked(&spec_path, || cancellation.check())?;
             cancellation.check()?;
@@ -1299,6 +1329,95 @@ mod tests {
         assert!(!exists);
     }
 
+    #[test]
+    fn foreground_content_index_access_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-content-index-access-pre-cancel");
+        let records = root.join("records.gfmidx");
+        let content = root.join("content.gfmcontent");
+
+        let result = retain_foreground_content_index_access_checked(
+            &root,
+            &records,
+            &content,
+            "content index",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn content_segments_access_checked_can_cancel_before_output_probe() {
+        let root = unique_temp_dir("gfm-content-segments-access-pre-cancel");
+        let output = root.join("output.gfmcontent");
+
+        let result = retain_content_segments_access_checked(
+            None,
+            &output,
+            &[],
+            "content compaction",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn content_segments_access_checked_can_cancel_during_segment_walk() {
+        let root = unique_temp_dir("gfm-content-segments-access-walk-cancel");
+        let output = root.join("output.gfmcontent");
+        let first = root.join("first.gfmcontent");
+        let second = root.join("second.gfmcontent");
+        fs::write(&first, "first").unwrap();
+        fs::write(&second, "second").unwrap();
+        let mut checks = 0usize;
+
+        let result = retain_content_segments_access_checked(
+            None,
+            &output,
+            &[first, second],
+            "content compaction",
+            || {
+                checks += 1;
+                if checks >= 8 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 8);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn content_job_access_checked_honors_pre_cancelled_control_before_preflight() {
+        let root = unique_temp_dir("gfm-content-job-access-pre-cancel");
+        let spec = ContentIndexJobSpec::new(
+            root.join("missing-root"),
+            root.join("segments"),
+            root.join("records.gfmidx"),
+            root.join("content.gfmcontent"),
+        );
+        let spec_path = root.join("job.tsv");
+
+        let result = retain_content_job_access_checked(
+            &spec,
+            &spec_path,
+            "background content index",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!spec_path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "{}-{}-{}",
@@ -1311,29 +1430,39 @@ mod tests {
     }
 }
 
-fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<RecoverableContentJobs> {
-    let _journal_access = retain_optional_recovery_store_access(
+fn recoverable_background_content_jobs_checked(
+    journal: &JobJournal,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<RecoverableContentJobs> {
+    let _journal_access = retain_optional_recovery_store_access_checked(
         journal.path(),
         "background content recovery journal",
+        &mut check_control,
     )?;
+    check_control()?;
     let mut ids = HashSet::new();
     let mut recoverable = RecoverableContentJobs::default();
     for job in journal.recoverable(RetryPolicy { max_attempts: 2 })? {
+        check_control()?;
         if job.label == "background content index" && ids.insert(job.id) {
             recoverable.add_journal_job(job.reason, job.failure_class, job.next_delay_ms);
         }
     }
     if let Some(store) = runtime_progress_store() {
-        let _progress_access = retain_optional_recovery_store_access(
+        check_control()?;
+        let _progress_access = retain_optional_recovery_store_access_checked(
             store.path(),
             "background content recovery progress",
+            &mut check_control,
         )?;
         for snapshot in store.restorable()? {
+            check_control()?;
             if snapshot.label == "background content index" && ids.insert(snapshot.id) {
                 recoverable.add_progress_job();
             }
         }
     }
+    check_control()?;
     Ok(recoverable)
 }
 
@@ -1360,22 +1489,48 @@ fn preflight_optional_recovery_store_volumes(path: &Path, worker: &str) -> Resul
     Ok(())
 }
 
-fn retain_optional_recovery_store_access(
+fn retain_optional_recovery_store_access_checked(
     path: &Path,
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::with_capacity(2);
+    check_control()?;
     let parent = crate::parent_or_cwd(path);
-    guards.push(preflight_access_scope(parent, AccessIntent::Read, worker)?);
-    if optional_recovery_store_exists(path, worker)? {
-        guards.push(preflight_access_scope(path, AccessIntent::Read, worker)?);
+    guards.push(preflight_access_scope_checked(
+        parent,
+        AccessIntent::Read,
+        worker,
+        &mut check_control,
+    )?);
+    check_control()?;
+    if optional_recovery_store_exists_checked(path, worker, &mut check_control)? {
+        check_control()?;
+        guards.push(preflight_access_scope_checked(
+            path,
+            AccessIntent::Read,
+            worker,
+            &mut check_control,
+        )?);
     }
+    check_control()?;
     Ok(guards)
 }
 
 fn optional_recovery_store_exists(path: &Path, worker: &str) -> Result<bool> {
     path.try_exists()
         .map_err(|err| GfmError::io(path, format!("{worker} existence unavailable: {err}")))
+}
+
+fn optional_recovery_store_exists_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<bool> {
+    check_control()?;
+    let exists = optional_recovery_store_exists(path, worker)?;
+    check_control()?;
+    Ok(exists)
 }
 
 fn retain_extraction_quarantine_access_checked(
@@ -1448,16 +1603,32 @@ fn run_extraction_quarantine(
     })
 }
 
-fn retain_foreground_content_index_access(
+fn retain_foreground_content_index_access_checked(
     root: &Path,
     records: &Path,
     content: &Path,
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let records_probe = write_probe_path(records)?.to_path_buf();
+    check_control()?;
+    let content_probe = write_probe_path(content)?.to_path_buf();
+    check_control()?;
     Ok(vec![
-        preflight_access_scope(root, AccessIntent::Index, worker)?,
-        preflight_access_scope(write_probe_path(records)?, AccessIntent::Write, worker)?,
-        preflight_access_scope(write_probe_path(content)?, AccessIntent::Write, worker)?,
+        preflight_access_scope_checked(root, AccessIntent::Index, worker, &mut check_control)?,
+        preflight_access_scope_checked(
+            &records_probe,
+            AccessIntent::Write,
+            worker,
+            &mut check_control,
+        )?,
+        preflight_access_scope_checked(
+            &content_probe,
+            AccessIntent::Write,
+            worker,
+            &mut check_control,
+        )?,
     ])
 }
 
@@ -1472,14 +1643,23 @@ fn preflight_foreground_content_index_volumes(
     preflight_volume_access_scope(write_probe_path(content)?, AccessIntent::Write, worker)
 }
 
-fn retain_content_segment_index_access(
+fn retain_content_segment_index_access_checked(
     root: &Path,
     output: &Path,
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let output_probe = write_probe_path(output)?.to_path_buf();
+    check_control()?;
     Ok(vec![
-        preflight_access_scope(root, AccessIntent::Index, worker)?,
-        preflight_access_scope(write_probe_path(output)?, AccessIntent::Write, worker)?,
+        preflight_access_scope_checked(root, AccessIntent::Index, worker, &mut check_control)?,
+        preflight_access_scope_checked(
+            &output_probe,
+            AccessIntent::Write,
+            worker,
+            &mut check_control,
+        )?,
     ])
 }
 
@@ -1488,28 +1668,42 @@ fn preflight_content_segment_index_volumes(root: &Path, output: &Path, worker: &
     preflight_volume_access_scope(write_probe_path(output)?, AccessIntent::Write, worker)
 }
 
-fn retain_content_segments_access(
+fn retain_content_segments_access_checked(
     manifest_path: Option<&Path>,
     output_archive: &Path,
     segments: &[PathBuf],
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::with_capacity(segments.len() + 1 + usize::from(manifest_path.is_some()));
     if let Some(manifest_path) = manifest_path {
-        guards.push(preflight_access_scope(
+        check_control()?;
+        guards.push(preflight_access_scope_checked(
             manifest_path,
             AccessIntent::Read,
             worker,
+            &mut check_control,
         )?);
     }
-    guards.push(preflight_access_scope(
-        write_probe_path(output_archive)?,
+    check_control()?;
+    let output_probe = write_probe_path(output_archive)?.to_path_buf();
+    check_control()?;
+    guards.push(preflight_access_scope_checked(
+        &output_probe,
         AccessIntent::Write,
         worker,
+        &mut check_control,
     )?);
     for segment in segments {
-        guards.push(preflight_access_scope(segment, AccessIntent::Read, worker)?);
+        check_control()?;
+        guards.push(preflight_access_scope_checked(
+            segment,
+            AccessIntent::Read,
+            worker,
+            &mut check_control,
+        )?);
     }
+    check_control()?;
     Ok(guards)
 }
 
@@ -1533,34 +1727,62 @@ fn preflight_content_segments_volumes(
     Ok(())
 }
 
-fn retain_content_job_access(
+fn retain_content_job_access_checked(
     spec: &ContentIndexJobSpec,
     spec_path: &Path,
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
     preflight_content_job_volumes(spec, spec_path, None, worker)?;
+    check_control()?;
+    let segment_probe = write_probe_path(&spec.segment_dir)?.to_path_buf();
+    check_control()?;
+    let records_probe = write_probe_path(&spec.records_path)?.to_path_buf();
+    check_control()?;
+    let content_probe = write_probe_path(&spec.content_path)?.to_path_buf();
+    check_control()?;
+    let spec_probe = write_probe_path(spec_path)?.to_path_buf();
+    check_control()?;
+    let quarantine_path = default_extraction_quarantine_path();
+    let quarantine_probe = write_probe_path(&quarantine_path)?.to_path_buf();
+    check_control()?;
     Ok(vec![
-        preflight_access_scope(&spec.root, AccessIntent::Index, worker)?,
-        preflight_access_scope(
-            write_probe_path(&spec.segment_dir)?,
-            AccessIntent::Write,
+        preflight_access_scope_checked(
+            &spec.root,
+            AccessIntent::Index,
             worker,
+            &mut check_control,
         )?,
-        preflight_access_scope(
-            write_probe_path(&spec.records_path)?,
+        preflight_access_scope_checked(
+            &segment_probe,
             AccessIntent::Write,
             worker,
+            &mut check_control,
         )?,
-        preflight_access_scope(
-            write_probe_path(&spec.content_path)?,
+        preflight_access_scope_checked(
+            &records_probe,
             AccessIntent::Write,
             worker,
+            &mut check_control,
         )?,
-        preflight_access_scope(write_probe_path(spec_path)?, AccessIntent::Write, worker)?,
-        preflight_access_scope(
-            write_probe_path(&default_extraction_quarantine_path())?,
+        preflight_access_scope_checked(
+            &content_probe,
             AccessIntent::Write,
             worker,
+            &mut check_control,
+        )?,
+        preflight_access_scope_checked(
+            &spec_probe,
+            AccessIntent::Write,
+            worker,
+            &mut check_control,
+        )?,
+        preflight_access_scope_checked(
+            &quarantine_probe,
+            AccessIntent::Write,
+            worker,
+            &mut check_control,
         )?,
     ])
 }
@@ -1741,11 +1963,14 @@ pub(crate) fn run_content_job(
             let runtime = runtime.clone();
             RetriableTask::new(scheduled, move |cancellation| {
                 runtime.running()?;
-                let _access = retain_content_job_access(
+                cancellation.check()?;
+                let _access = retain_content_job_access_checked(
                     &job_spec,
                     &job_spec_path,
                     "background content index",
+                    || cancellation.check(),
                 )?;
+                cancellation.check()?;
                 let snapshot =
                     Indexer::default().build_cancellable(&job_spec.root, &cancellation)?;
                 let inaccessible = snapshot.inaccessible.len();
