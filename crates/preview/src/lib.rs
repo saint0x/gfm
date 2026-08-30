@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -197,7 +197,7 @@ impl PreviewCache {
         }
         if self.config.disk_enabled {
             cancellation.check()?;
-            self.write_disk(&entry)?;
+            self.write_disk_cancellable(&entry, cancellation)?;
             cancellation.check()?;
             self.write_disk_index_entry_cancellable(&entry.key, cancellation)?;
         }
@@ -365,10 +365,29 @@ impl PreviewCache {
         }
     }
 
-    fn write_disk(&self, entry: &PreviewEntry) -> Result<()> {
+    fn write_disk_cancellable(
+        &self,
+        entry: &PreviewEntry,
+        cancellation: &Cancellation,
+    ) -> Result<()> {
+        self.write_disk_checked(entry, || cancellation.check())
+    }
+
+    fn write_disk_checked(
+        &self,
+        entry: &PreviewEntry,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
         let path = self.disk_path(&entry.key);
         let tmp = path.with_extension("tmp");
-        fs::write(&tmp, &entry.bytes).map_err(|err| GfmError::io(&tmp, err))?;
+        if let Err(err) = write_disk_entry_bytes_checked(&tmp, &entry.bytes, &mut check_control) {
+            let _ = fs::remove_file(&tmp);
+            return Err(err);
+        }
+        if let Err(err) = check_control() {
+            let _ = fs::remove_file(&tmp);
+            return Err(err);
+        }
         fs::rename(&tmp, &path).map_err(|err| GfmError::io(&path, err))
     }
 
@@ -466,6 +485,27 @@ fn read_disk_entry_bytes_checked(
     }
     check_control()?;
     Ok(Some(bytes))
+}
+
+fn write_disk_entry_bytes_checked(
+    path: &Path,
+    bytes: &[u8],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    const CHUNK_BYTES: usize = 256 * 1024;
+
+    check_control()?;
+    let mut file = fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    for chunk in bytes.chunks(CHUNK_BYTES) {
+        check_control()?;
+        file.write_all(chunk)
+            .map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
+    }
+    file.flush().map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    Ok(())
 }
 
 fn disk_cache_path_exists(path: &Path) -> Result<bool> {
@@ -1040,6 +1080,38 @@ mod tests {
         assert_eq!(cache.memory_bytes(), 0);
         assert!(!disk_path.exists());
         assert!(!preview_cache_index_path(&PreviewCacheConfig::new(&root)).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_disk_write_removes_temporary_entry() {
+        let root = temp_root("cancel-disk-write");
+        let cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 1024 * 1024,
+            max_entry_bytes: 1024 * 1024,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        })
+        .unwrap();
+        let key = key("cancelled-large.png", PreviewKind::Thumbnail);
+        let disk_path = cache.disk_path(&key);
+        let tmp_path = disk_path.with_extension("tmp");
+        let bytes = vec![7; 300 * 1024];
+        let calls = Cell::new(0usize);
+
+        let result = cache.write_disk_checked(&PreviewEntry::new(key, bytes), || {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!disk_path.exists());
+        assert!(!tmp_path.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
