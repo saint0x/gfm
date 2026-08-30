@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::io::Read;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -460,14 +461,28 @@ fn preview_cache_index_path(config: &PreviewCacheConfig) -> PathBuf {
     config.disk_root.join("preview-cache-index.tsv")
 }
 
+fn read_disk_index_contents_cancellable(
+    path: &Path,
+    mut file: fs::File,
+    cancellation: &Cancellation,
+) -> Result<String> {
+    cancellation.check()?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).map_err(|err| {
+        GfmError::io(path, format!("preview disk cache index unavailable: {err}"))
+    })?;
+    cancellation.check()?;
+    Ok(contents)
+}
+
 fn load_disk_index_cancellable(
     config: &PreviewCacheConfig,
     cancellation: &Cancellation,
 ) -> Result<HashMap<(PathBuf, PreviewKind), PreviewRequestKey>> {
     cancellation.check()?;
     let path = preview_cache_index_path(config);
-    let contents = match fs::read_to_string(&path) {
-        Ok(contents) => contents,
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
         Err(err) => {
             return Err(GfmError::io(
@@ -476,6 +491,7 @@ fn load_disk_index_cancellable(
             ))
         }
     };
+    let contents = read_disk_index_contents_cancellable(&path, file, cancellation)?;
     let mut index = HashMap::new();
     let mut seen_path_kinds = HashSet::new();
     for (line_index, line) in contents.lines().enumerate() {
@@ -1048,6 +1064,27 @@ mod tests {
         assert_eq!(result, Err(GfmError::Cancelled));
         assert_eq!(calls.get(), 3);
         assert!(disk_path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_disk_index_load_honors_cancellation_before_file_open() {
+        let root = temp_root("cancel-disk-index-read");
+        fs::create_dir_all(&root).unwrap();
+        let config = PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        };
+        let index_path = preview_cache_index_path(&config);
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = load_disk_index_cancellable(&config, &cancellation);
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!index_path.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
