@@ -5269,6 +5269,38 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/permission-previous.tsv",
+      "data": "not a permission snapshot\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-offline-volume/permission-current.tsv",
+      "data": "not a permission snapshot\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "permission-invalidation-compare",
+        "tmp/gfm-fozzy-offline-volume/permission-previous.tsv",
+        "tmp/gfm-fozzy-offline-volume/permission-current.tsv"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-permission-refresh-compare-contract",
+        "tmp/gfm-fozzy-offline-volume/permission-previous.tsv",
+        "tmp/gfm-fozzy-offline-volume/permission-current.tsv"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

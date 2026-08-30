@@ -124,6 +124,16 @@ fn run() -> Result<()> {
                 args.next(),
                 "permission-invalidation-compare requires a current state path",
             )?;
+            access::preflight_volume_access_scope(
+                &previous_path,
+                AccessIntent::Read,
+                "permission invalidation previous state",
+            )?;
+            access::preflight_volume_access_scope(
+                &current_path,
+                AccessIntent::Read,
+                "permission invalidation current state",
+            )?;
             let previous = gfm_mac::PermissionStateSnapshot::read(&previous_path)?;
             let current = gfm_mac::PermissionStateSnapshot::read(&current_path)?;
             let report =

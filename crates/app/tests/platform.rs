@@ -619,6 +619,45 @@ fn permission_invalidation_compare_refuses_duplicate_scope_state_from_binary() {
 }
 
 #[test]
+fn permission_invalidation_compare_refuses_unreachable_volume_before_snapshot_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-permission-invalidation-compare-offline-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let previous = root.join("previous-permission-state.tsv");
+    let current = root.join("current-permission-state.tsv");
+    std::fs::write(&previous, "not a permission snapshot\n").unwrap();
+    std::fs::write(&current, "not a permission snapshot\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation-compare")
+        .arg(&previous)
+        .arg(&current)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("permission-invalidation\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "permission invalidation previous state volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("unsupported permission state header"),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_security_scoped_access_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-security-{}", std::process::id()));
     let unprotected = root.join("plain.md");

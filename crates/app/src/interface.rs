@@ -151,6 +151,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "ui-permission-refresh-compare-contract requires a current state path",
             )?;
+            crate::access::preflight_volume_access_scope(
+                &previous_path,
+                AccessIntent::Read,
+                "ui permission refresh previous state",
+            )?;
+            crate::access::preflight_volume_access_scope(
+                &current_path,
+                AccessIntent::Read,
+                "ui permission refresh current state",
+            )?;
             let previous = gfm_mac::PermissionStateSnapshot::read(&previous_path)?;
             let current = gfm_mac::PermissionStateSnapshot::read(&current_path)?;
             let refresh =
