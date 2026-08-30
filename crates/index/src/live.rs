@@ -891,45 +891,93 @@ impl LiveIndex {
     }
 
     pub fn apply_event(&mut self, event: &FileEvent) -> Result<UpdateOutcome> {
+        self.apply_event_cancellable(event, &Cancellation::default())
+    }
+
+    pub fn apply_event_cancellable(
+        &mut self,
+        event: &FileEvent,
+        cancellation: &Cancellation,
+    ) -> Result<UpdateOutcome> {
+        cancellation.check()?;
         match &event.kind {
-            FileEventKind::Create | FileEventKind::Other => self.upsert_path(&event.path),
+            FileEventKind::Create | FileEventKind::Other => {
+                self.upsert_path_cancellable(&event.path, cancellation)
+            }
             FileEventKind::Metadata | FileEventKind::Modify => {
-                let report = self.apply_metadata_update(&event.path)?;
+                let report = self.apply_metadata_update_cancellable(&event.path, cancellation)?;
                 Ok(UpdateOutcome::MetadataUpdated {
                     changed: report.changed.len(),
                 })
             }
             FileEventKind::Remove => {
+                cancellation.check()?;
                 let removed = self.index.remove_subtree(&event.path).len();
+                cancellation.check()?;
                 Ok(UpdateOutcome::Removed { records: removed })
             }
             FileEventKind::Rename { from, to } => {
-                let report = self.apply_rename(from, to)?;
+                let report = self.apply_rename_cancellable(from, to, cancellation)?;
                 Ok(UpdateOutcome::Renamed {
                     removed: report.removed,
                     inserted: report.inserted,
                 })
             }
-            FileEventKind::Rescan => Ok(UpdateOutcome::NeedsRescan),
+            FileEventKind::Rescan => {
+                cancellation.check()?;
+                Ok(UpdateOutcome::NeedsRescan)
+            }
         }
     }
 
     pub fn apply_rename(&mut self, from: &Path, to: &Path) -> Result<RenameCorrelationReport> {
-        crate::correlate_rename(&mut self.index, from, to)
+        self.apply_rename_cancellable(from, to, &Cancellation::default())
+    }
+
+    pub fn apply_rename_cancellable(
+        &mut self,
+        from: &Path,
+        to: &Path,
+        cancellation: &Cancellation,
+    ) -> Result<RenameCorrelationReport> {
+        crate::correlate_rename_checked(&mut self.index, from, to, || cancellation.check())
     }
 
     pub fn apply_metadata_update(&mut self, path: &Path) -> Result<MetadataUpdateReport> {
+        self.apply_metadata_update_cancellable(path, &Cancellation::default())
+    }
+
+    pub fn apply_metadata_update_cancellable(
+        &mut self,
+        path: &Path,
+        cancellation: &Cancellation,
+    ) -> Result<MetadataUpdateReport> {
+        cancellation.check()?;
         let previous = self.index.get_path(path).cloned();
-        let current =
-            gfm_fs::record_for_path(path, previous.as_ref().and_then(|r| r.parent), false)?;
+        cancellation.check()?;
+        let current = gfm_fs::record_for_path_checked(
+            path,
+            previous.as_ref().and_then(|r| r.parent),
+            false,
+            || cancellation.check(),
+        )?;
+        cancellation.check()?;
         let report = MetadataUpdateReport::from_records(path, previous.as_ref(), &current);
         self.index.insert(current);
+        cancellation.check()?;
         Ok(report)
     }
 
-    fn upsert_path(&mut self, path: &Path) -> Result<UpdateOutcome> {
-        let record = gfm_fs::record_for_path(path, None, false)?;
+    fn upsert_path_cancellable(
+        &mut self,
+        path: &Path,
+        cancellation: &Cancellation,
+    ) -> Result<UpdateOutcome> {
+        cancellation.check()?;
+        let record = gfm_fs::record_for_path_checked(path, None, false, || cancellation.check())?;
+        cancellation.check()?;
         self.index.insert(record);
+        cancellation.check()?;
         Ok(UpdateOutcome::Upserted)
     }
 }

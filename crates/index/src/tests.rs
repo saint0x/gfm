@@ -1483,6 +1483,25 @@ fn live_index_applies_create_modify_and_remove_events() {
 }
 
 #[test]
+fn live_index_apply_event_cancellable_stops_before_record_hydration() {
+    let root = unique_temp_dir("gfm-live-event-cancel-root");
+    let target = root.join("Needle.txt");
+    fs::write(&target, "first").unwrap();
+    let mut live = LiveIndex::new();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = live.apply_event_cancellable(
+        &FileEvent::new(&target, FileEventKind::Create),
+        &cancellation,
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(live.search("needle", 5).is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn live_index_applies_incremental_metadata_updates() {
     let root = unique_temp_dir("gfm-metadata-update-root");
     let target = root.join("Metadata.md");
@@ -1499,6 +1518,30 @@ fn live_index_applies_incremental_metadata_updates() {
     assert!(report.changed.contains(&"size"), "{report:?}");
     assert!(hits[0].record.len > old_len);
 
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn live_index_metadata_update_cancellable_stops_before_hydrating_record() {
+    let root = unique_temp_dir("gfm-metadata-update-cancel-root");
+    let target = root.join("Metadata.md");
+    fs::write(&target, "first").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let mut live = snapshot.into_live();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = live.apply_metadata_update_cancellable(&target, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert_eq!(
+        live.search("metadata", 5)
+            .into_iter()
+            .filter(|hit| hit.record.path == target)
+            .count(),
+        1
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -2752,6 +2795,25 @@ fn live_index_correlates_file_renames_without_identity_churn() {
 }
 
 #[test]
+fn live_index_rename_cancellable_stops_before_fresh_root_hydration() {
+    let root = unique_temp_dir("gfm-rename-cancel-root");
+    let from = root.join("NeedleOld.txt");
+    let to = root.join("NeedleNew.txt");
+    fs::write(&from, "first").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let mut live = snapshot.into_live();
+    fs::rename(&from, &to).unwrap();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = live.apply_rename_cancellable(&from, &to, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn live_index_correlates_directory_renames_across_subtrees() {
     let root = unique_temp_dir("gfm-rename-dir-root");
     let from = root.join("OldProject");
@@ -2786,6 +2848,73 @@ fn live_index_correlates_directory_renames_across_subtrees() {
     assert_eq!(hits[0].record.id, original_file_id);
     assert!(hits[0].record.path.ends_with("NewProject/Nested/Needle.md"));
 
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rename_correlation_cancel_after_removal_restores_original_records() {
+    let root = unique_temp_dir("gfm-rename-cancel-restore-root");
+    let from = root.join("OldProject");
+    let to = root.join("NewProject");
+    fs::create_dir_all(&from).unwrap();
+    fs::write(from.join("Needle.md"), "first").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let mut index = gfm_search::ShardedSearchIndex::new();
+    for record in snapshot.records.iter().cloned() {
+        index.insert(record);
+    }
+    let before = index.len();
+    fs::rename(&from, &to).unwrap();
+    let mut checks = 0usize;
+
+    let result = correlate_rename_checked(&mut index, &from, &to, || {
+        checks += 1;
+        if checks >= 2 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert_eq!(index.len(), before);
+    assert!(!index.query("oldproject", 5).is_empty());
+    assert!(index.query("newproject", 5).is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rename_correlation_cancel_during_moved_record_build_restores_original_records() {
+    let root = unique_temp_dir("gfm-rename-cancel-moved-root");
+    let from = root.join("OldProject");
+    let to = root.join("NewProject");
+    let nested = from.join("Nested");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(nested.join("Needle.md"), "first").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let mut index = gfm_search::ShardedSearchIndex::new();
+    for record in snapshot.records.iter().cloned() {
+        index.insert(record);
+    }
+    let before = index.len();
+    fs::rename(&from, &to).unwrap();
+    let mut checks = 0usize;
+
+    let result = correlate_rename_checked(&mut index, &from, &to, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert_eq!(index.len(), before);
+    assert_eq!(index.query("needle", 5).len(), 1);
+    assert!(index.query("newproject", 5).is_empty());
     fs::remove_dir_all(root).unwrap();
 }
 

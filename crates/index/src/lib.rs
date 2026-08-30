@@ -78,7 +78,7 @@ pub use recovery::{
     plan_persistent_index_recovery_cancellable, PersistentIndexAction, PersistentIndexPlan,
     PersistentIndexReason, PersistentIndexRecovery,
 };
-pub use rename::{correlate_rename, RenameCorrelationReport};
+pub use rename::{correlate_rename, correlate_rename_checked, RenameCorrelationReport};
 pub use repair::{RepairPriority, RepairReason, RepairSchedule, SubtreeRepairJob};
 pub use scan::{FairScanReport, FairScanScheduler, FairScanSummary, ScanLane};
 pub use session::{ContentIndexQuerySession, ContentQuerySessionReport};

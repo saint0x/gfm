@@ -29,11 +29,26 @@ pub fn correlate_rename(
     from: &Path,
     to: &Path,
 ) -> Result<RenameCorrelationReport> {
+    correlate_rename_checked(index, from, to, || Ok(()))
+}
+
+pub fn correlate_rename_checked(
+    index: &mut ShardedSearchIndex,
+    from: &Path,
+    to: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<RenameCorrelationReport> {
+    check_control()?;
     let removed_records = index.remove_subtree(from);
     let removed = removed_records.len();
+    if let Err(err) = check_control() {
+        restore_removed(index, removed_records);
+        return Err(err);
+    }
 
     if removed_records.is_empty() {
-        let record = gfm_fs::record_for_path(to, None, false)?;
+        let record = gfm_fs::record_for_path_checked(to, None, false, &mut check_control)?;
+        check_control()?;
         index.insert(record);
         return Ok(RenameCorrelationReport {
             from: from.to_path_buf(),
@@ -44,7 +59,12 @@ pub fn correlate_rename(
         });
     }
 
-    let fresh_root = match gfm_fs::record_for_path(to, root_parent(&removed_records, from), false) {
+    let fresh_root = match gfm_fs::record_for_path_checked(
+        to,
+        root_parent(&removed_records, from),
+        false,
+        &mut check_control,
+    ) {
         Ok(record) => record,
         Err(err) => {
             return match err {
@@ -55,19 +75,34 @@ pub fn correlate_rename(
                     inserted: 0,
                     preserved: 0,
                 }),
-                other => Err(other),
+                other => {
+                    restore_removed(index, removed_records);
+                    Err(other)
+                }
             };
         }
     };
 
-    let mut inserted = 0;
+    let mut moved_records = Vec::new();
     let mut preserved = 0;
-    for old in removed_records {
-        if let Some(moved) = moved_record(old, from, to, &fresh_root) {
-            preserved += 1;
-            inserted += 1;
-            index.insert(moved);
+    for old in &removed_records {
+        if let Err(err) = check_control() {
+            restore_removed(index, removed_records);
+            return Err(err);
         }
+        if let Some(moved) = moved_record(old.clone(), from, to, &fresh_root) {
+            preserved += 1;
+            moved_records.push(moved);
+        }
+    }
+    if let Err(err) = check_control() {
+        restore_removed(index, removed_records);
+        return Err(err);
+    }
+
+    let inserted = moved_records.len();
+    for moved in moved_records {
+        index.insert(moved);
     }
 
     Ok(RenameCorrelationReport {
@@ -77,6 +112,12 @@ pub fn correlate_rename(
         inserted,
         preserved,
     })
+}
+
+fn restore_removed(index: &mut ShardedSearchIndex, records: Vec<FileRecord>) {
+    for record in records {
+        index.insert(record);
+    }
 }
 
 fn moved_record(
