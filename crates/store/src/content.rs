@@ -124,7 +124,7 @@ pub fn read_content_postings_checked(
             path.display()
         )));
     }
-    verify_content_checksum_for_file(&mut file, path, version)?;
+    verify_content_checksum_for_file_checked(&mut file, path, version, &mut check_control)?;
     check_control()?;
 
     let count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
@@ -179,7 +179,7 @@ impl ContentArchive {
                 | ContentStoreVersion::IndexedBlockedPositions
                 | ContentStoreVersion::IndexedChecksummed
         ) {
-            verify_content_checksum_for_file(&mut file, path, version)?;
+            verify_content_checksum_for_file_checked(&mut file, path, version, || Ok(()))?;
             let directory = read_content_directory(&mut file, path)?;
             Ok(Self {
                 path: path.to_path_buf(),
@@ -732,24 +732,40 @@ pub(crate) fn content_format_error(path: &Path, reason: &str) -> GfmError {
     ))
 }
 
-fn verify_content_checksum_for_file(
+fn verify_content_checksum_for_file_checked(
     file: &mut File,
     path: &Path,
     version: ContentStoreVersion,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<()> {
     if !version.has_checksum() {
         return Ok(());
     }
+    const CHUNK_BYTES: usize = 256 * 1024;
+
+    check_control()?;
     let position = file
         .stream_position()
         .map_err(|err| GfmError::io(path, err))?;
     file.seek(SeekFrom::Start(0))
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|err| GfmError::io(path, err))?;
+    let mut buffer = [0; CHUNK_BYTES];
+    loop {
+        check_control()?;
+        let len = file
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        if len == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..len]);
+    }
+    check_control()?;
     file.seek(SeekFrom::Start(position))
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     verify_content_checksum_from_slice(&bytes, path, version)
 }
 

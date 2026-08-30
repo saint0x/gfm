@@ -206,7 +206,7 @@ pub fn read_metadata_postings_checked(
         .map_err(|err| GfmError::io(path, err))?;
     check_control()?;
     let version = metadata_version(&magic, path)?;
-    verify_metadata_checksum_for_file(&mut file, path, version)?;
+    verify_metadata_checksum_for_file_checked(&mut file, path, version, &mut check_control)?;
     check_control()?;
     let count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
@@ -842,24 +842,40 @@ fn metadata_format_error(path: &Path, reason: &str) -> GfmError {
     ))
 }
 
-fn verify_metadata_checksum_for_file(
+fn verify_metadata_checksum_for_file_checked(
     file: &mut File,
     path: &Path,
     version: MetadataStoreVersion,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<()> {
     if !version.has_checksum() {
         return Ok(());
     }
+    const CHUNK_BYTES: usize = 256 * 1024;
+
+    check_control()?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|err| GfmError::io(path, err))?;
+    let mut buffer = [0; CHUNK_BYTES];
+    loop {
+        check_control()?;
+        let len = file
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        if len == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..len]);
+    }
+    check_control()?;
     let mut full = Vec::with_capacity(METADATA_MAGIC_V1.len() + bytes.len());
     full.extend(METADATA_MAGIC_V3);
     full.extend(bytes);
     verify_metadata_checksum_from_slice(&full, path, version)?;
+    check_control()?;
     let data_start = METADATA_MAGIC_V1.len() as u64;
     file.seek(std::io::SeekFrom::Start(data_start))
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     Ok(())
 }
 

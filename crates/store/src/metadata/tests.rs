@@ -66,6 +66,33 @@ fn checked_metadata_postings_read_honors_pre_cancelled_control_before_file_open(
 }
 
 #[test]
+fn checked_metadata_postings_read_can_cancel_during_checksum_load() {
+    let path = temp_path("gfm-metadata-checksum-cancel", "gfmmeta");
+    let posting = MetadataPosting {
+        field: MetadataField::Tag,
+        term: "important".to_string(),
+        ids: (0..40_000)
+            .map(|node| FileId::new(VolumeId(4), node))
+            .collect(),
+    };
+    write_metadata_postings(&path, &[posting]).unwrap();
+    let mut checks = 0usize;
+
+    let result = read_metadata_postings_checked(&path, || {
+        checks += 1;
+        if checks >= 8 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 8);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn metadata_postings_merge_secondary_spotlight_records() {
     let primary = FileRecord {
         id: FileId::new(VolumeId(4), 12),

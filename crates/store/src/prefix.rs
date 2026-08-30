@@ -100,20 +100,33 @@ pub fn write_prefix_postings(path: impl AsRef<Path>, postings: &[PrefixPosting])
 }
 
 pub fn read_prefix_postings(path: impl AsRef<Path>) -> Result<Vec<PrefixPosting>> {
+    read_prefix_postings_checked(path, || Ok(()))
+}
+
+pub fn read_prefix_postings_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<PrefixPosting>> {
     let path = path.as_ref();
+    check_control()?;
     let mut file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let mut magic = vec![0; PREFIX_MAGIC_V1.len()];
     file.read_exact(&mut magic)
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     if magic != PREFIX_MAGIC_V1 {
         return Err(prefix_format_error(path, "unsupported prefix header"));
     }
-    verify_prefix_checksum_for_file(&mut file, path)?;
+    verify_prefix_checksum_for_file_checked(&mut file, path, &mut check_control)?;
+    check_control()?;
     let count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
+        check_control()?;
         postings.push(read_prefix_posting(&mut file, path)?);
     }
+    check_control()?;
     Ok(postings)
 }
 
@@ -494,12 +507,35 @@ fn read_prefix_directory_from_slice(
     Ok(directory)
 }
 
-fn verify_prefix_checksum_for_file(file: &mut File, path: &Path) -> Result<()> {
+fn verify_prefix_checksum_for_file_checked(
+    file: &mut File,
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    const CHUNK_BYTES: usize = 256 * 1024;
+
+    check_control()?;
+    let data_start = PREFIX_MAGIC_V1.len() as u64;
     let mut full = Vec::new();
     file.rewind().map_err(|err| GfmError::io(path, err))?;
-    file.read_to_end(&mut full)
+    check_control()?;
+    let mut buffer = [0; CHUNK_BYTES];
+    loop {
+        check_control()?;
+        let len = file
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        if len == 0 {
+            break;
+        }
+        full.extend_from_slice(&buffer[..len]);
+    }
+    check_control()?;
+    verify_prefix_checksum_from_slice(&full, path)?;
+    file.seek(std::io::SeekFrom::Start(data_start))
         .map_err(|err| GfmError::io(path, err))?;
-    verify_prefix_checksum_from_slice(&full, path)
+    check_control()?;
+    Ok(())
 }
 
 fn verify_prefix_checksum_from_slice(bytes: &[u8], path: &Path) -> Result<()> {
@@ -636,6 +672,36 @@ mod tests {
         assert!(!all_truncated);
         assert_eq!(all_limited, posting.ids);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn full_prefix_reader_round_trips_after_checksum_validation() {
+        let path = temp_path("gfm-prefix-full-read", "gfmprefix");
+        let postings = vec![
+            PrefixPosting {
+                prefix: "pro".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 2)],
+            },
+            PrefixPosting {
+                prefix: "proj".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 4), FileId::new(VolumeId(2), 1)],
+            },
+        ];
+
+        write_prefix_postings(&path, &postings).unwrap();
+        let read = read_prefix_postings(&path).unwrap();
+
+        assert_eq!(read, postings);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn checked_prefix_reader_honors_pre_cancelled_control_before_file_open() {
+        let path = temp_path("gfm-prefix-read-cancel", "gfmprefix");
+        let result = read_prefix_postings_checked(&path, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!path.exists());
     }
 
     #[test]

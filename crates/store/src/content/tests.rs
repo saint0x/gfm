@@ -71,6 +71,33 @@ fn checked_content_postings_read_honors_pre_cancelled_control_before_file_open()
 }
 
 #[test]
+fn checked_content_postings_read_can_cancel_during_checksum_load() {
+    let path = temp_path("gfm-content-checksum-cancel", "gfmcontent");
+    let posting = ContentPosting {
+        term: "alpha".to_string(),
+        ids: (0..40_000)
+            .map(|node| FileId::new(VolumeId(4), node))
+            .collect(),
+        positions: Vec::new(),
+    };
+    write_content_postings(&path, &[posting]).unwrap();
+    let mut checks = 0usize;
+
+    let result = read_content_postings_checked(&path, || {
+        checks += 1;
+        if checks >= 8 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 8);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn content_archive_reads_one_term_from_directory() {
     let path = temp_path("gfm-content-archive", "gfmcontent");
     let alpha = FileId::new(VolumeId(4), 12);

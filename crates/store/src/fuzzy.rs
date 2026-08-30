@@ -103,20 +103,33 @@ pub fn write_fuzzy_postings(path: impl AsRef<Path>, postings: &[FuzzyPosting]) -
 }
 
 pub fn read_fuzzy_postings(path: impl AsRef<Path>) -> Result<Vec<FuzzyPosting>> {
+    read_fuzzy_postings_checked(path, || Ok(()))
+}
+
+pub fn read_fuzzy_postings_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<FuzzyPosting>> {
     let path = path.as_ref();
+    check_control()?;
     let mut file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let mut magic = vec![0; FUZZY_MAGIC_V1.len()];
     file.read_exact(&mut magic)
         .map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     if magic != FUZZY_MAGIC_V1 {
         return Err(fuzzy_format_error(path, "unsupported fuzzy header"));
     }
-    verify_fuzzy_checksum_for_file(&mut file, path)?;
+    verify_fuzzy_checksum_for_file_checked(&mut file, path, &mut check_control)?;
+    check_control()?;
     let count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
+        check_control()?;
         postings.push(read_fuzzy_posting(&mut file, path)?);
     }
+    check_control()?;
     Ok(postings)
 }
 
@@ -440,12 +453,35 @@ fn read_fuzzy_directory_from_slice(bytes: &[u8], path: &Path) -> Result<Vec<Fuzz
     Ok(directory)
 }
 
-fn verify_fuzzy_checksum_for_file(file: &mut File, path: &Path) -> Result<()> {
+fn verify_fuzzy_checksum_for_file_checked(
+    file: &mut File,
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    const CHUNK_BYTES: usize = 256 * 1024;
+
+    check_control()?;
+    let data_start = FUZZY_MAGIC_V1.len() as u64;
     let mut full = Vec::new();
     file.rewind().map_err(|err| GfmError::io(path, err))?;
-    file.read_to_end(&mut full)
+    check_control()?;
+    let mut buffer = [0; CHUNK_BYTES];
+    loop {
+        check_control()?;
+        let len = file
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        if len == 0 {
+            break;
+        }
+        full.extend_from_slice(&buffer[..len]);
+    }
+    check_control()?;
+    verify_fuzzy_checksum_from_slice(&full, path)?;
+    file.seek(std::io::SeekFrom::Start(data_start))
         .map_err(|err| GfmError::io(path, err))?;
-    verify_fuzzy_checksum_from_slice(&full, path)
+    check_control()?;
+    Ok(())
 }
 
 fn verify_fuzzy_checksum_from_slice(bytes: &[u8], path: &Path) -> Result<()> {
@@ -619,6 +655,36 @@ mod tests {
         );
         assert!(archive.is_checksummed());
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn full_fuzzy_reader_round_trips_after_checksum_validation() {
+        let path = temp_path("gfm-fuzzy-full-read", "gfmfuzzy");
+        let postings = vec![
+            FuzzyPosting {
+                key: "pln".to_string(),
+                terms: vec!["plan".to_string()],
+            },
+            FuzzyPosting {
+                key: "projct".to_string(),
+                terms: vec!["project".to_string(), "projects".to_string()],
+            },
+        ];
+
+        write_fuzzy_postings(&path, &postings).unwrap();
+        let read = read_fuzzy_postings(&path).unwrap();
+
+        assert_eq!(read, postings);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn checked_fuzzy_reader_honors_pre_cancelled_control_before_file_open() {
+        let path = temp_path("gfm-fuzzy-read-cancel", "gfmfuzzy");
+        let result = read_fuzzy_postings_checked(&path, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!path.exists());
     }
 
     #[test]

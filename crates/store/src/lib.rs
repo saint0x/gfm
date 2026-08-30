@@ -56,8 +56,8 @@ pub use dictionary::{
 };
 pub use durable::{atomic_write, DurableCommit};
 pub use fuzzy::{
-    fuzzy_postings_from_records, read_fuzzy_postings, write_fuzzy_postings, FuzzyPosting,
-    LimitedFuzzyPosting, MmapFuzzyArchive,
+    fuzzy_postings_from_records, read_fuzzy_postings, read_fuzzy_postings_checked,
+    write_fuzzy_postings, FuzzyPosting, LimitedFuzzyPosting, MmapFuzzyArchive,
 };
 pub use metadata::{
     metadata_postings_from_records, metadata_postings_from_records_and_secondary,
@@ -65,8 +65,8 @@ pub use metadata::{
     LimitedMetadataPosting, MetadataField, MetadataPosting, MmapMetadataArchive,
 };
 pub use prefix::{
-    prefix_postings_from_records, read_prefix_postings, write_prefix_postings,
-    LimitedPrefixPosting, MmapPrefixArchive, PrefixPosting,
+    prefix_postings_from_records, read_prefix_postings, read_prefix_postings_checked,
+    write_prefix_postings, LimitedPrefixPosting, MmapPrefixArchive, PrefixPosting,
 };
 pub use rebuild::{
     plan_archive_rebuilds, plan_columns_archive_rebuild, plan_derived_sidecar_rebuild,
@@ -94,8 +94,8 @@ pub use sidecar::{
     SidecarRecoveryAction, SidecarRecoveryPlan, SidecarRecoveryReason,
 };
 pub use substring::{
-    read_substring_postings, substring_postings_from_records, write_substring_postings,
-    LimitedSubstringPosting, MmapSubstringArchive, SubstringPosting,
+    read_substring_postings, read_substring_postings_checked, substring_postings_from_records,
+    write_substring_postings, LimitedSubstringPosting, MmapSubstringArchive, SubstringPosting,
 };
 
 use gfm_types::{FileId, FileKind, FileRecord, GfmError, Result, VolumeId};
