@@ -230,10 +230,13 @@ impl VolumeDescriptor {
                     VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage
                 )
             });
-        let local = mount_table
-            .as_ref()
-            .and_then(|mount_table| mount_table.is_local)
-            .or_else(|| resource.as_ref().and_then(|resource| resource.is_local));
+        let local = volume_local_state(
+            marker_value,
+            native.as_ref(),
+            resource.as_ref(),
+            mount_table.as_ref(),
+            kind,
+        );
         let network = volume_network_state(
             marker_value,
             native.as_ref(),
@@ -2123,6 +2126,40 @@ fn volume_network_state(
         .unwrap_or(kind == VolumeKind::Network)
 }
 
+fn volume_local_state(
+    marker: Option<&str>,
+    native: Option<&NativeVolumeDescription>,
+    resource: Option<&NativeVolumeResourceValues>,
+    mount_table: Option<&NativeVolumeMountTableEntry>,
+    kind: VolumeKind,
+) -> Option<bool> {
+    if let Some(network) = marker_network(marker) {
+        return Some(!network);
+    }
+    if native
+        .filter(|native| native.status == NativeVolumeStatus::Available)
+        .and_then(|native| native.volume_network)
+        == Some(true)
+    {
+        return Some(false);
+    }
+    mount_table
+        .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
+        .and_then(|mount_table| mount_table.is_local)
+        .or_else(|| {
+            resource
+                .filter(|resource| resource.status == NativeVolumeStatus::Available)
+                .and_then(|resource| resource.is_local)
+        })
+        .or_else(|| {
+            native
+                .filter(|native| native.status == NativeVolumeStatus::Available)
+                .and_then(|native| native.volume_network)
+                .map(|network| !network)
+        })
+        .or_else(|| (kind == VolumeKind::Network).then_some(false))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VolumeAccessState {
     writable: bool,
@@ -2981,6 +3018,30 @@ mod tests {
     }
 
     #[test]
+    fn volume_local_state_prefers_positive_diskarbitration_network_truth() {
+        let native = native_description(|description| {
+            description.volume_network = Some(true);
+        });
+        let resource = resource_values(|values| {
+            values.is_local = Some(true);
+        });
+        let mount_table = mount_table_entry(|entry| {
+            entry.is_local = Some(true);
+        });
+
+        assert_eq!(
+            volume_local_state(
+                None,
+                Some(&native),
+                Some(&resource),
+                Some(&mount_table),
+                VolumeKind::Network,
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
     fn volume_network_state_uses_mount_table_network_when_diskarbitration_is_local() {
         let native = native_description(|description| {
             description.volume_network = Some(false);
@@ -2996,6 +3057,27 @@ mod tests {
             Some(&mount_table),
             VolumeKind::Internal,
         ));
+    }
+
+    #[test]
+    fn volume_local_state_uses_mount_table_network_when_diskarbitration_is_local() {
+        let native = native_description(|description| {
+            description.volume_network = Some(false);
+        });
+        let mount_table = mount_table_entry(|entry| {
+            entry.is_local = Some(false);
+        });
+
+        assert_eq!(
+            volume_local_state(
+                None,
+                Some(&native),
+                None,
+                Some(&mount_table),
+                VolumeKind::Internal,
+            ),
+            Some(false)
+        );
     }
 
     #[test]
