@@ -484,9 +484,9 @@ fn run_config_init(store: &ConfigStore) -> Result<GfmConfig> {
     let store = store.clone();
     runtime::run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_config_init(&store)?;
+        let _access = preflight_config_init_checked(&store, || cancellation.check())?;
         cancellation.check()?;
-        store.load_or_create_default()
+        store.load_or_create_default_checked(|| cancellation.check())
     })
 }
 
@@ -497,9 +497,9 @@ fn run_config_check(store: &ConfigStore) -> Result<GfmConfig> {
     let store = store.clone();
     runtime::run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_config_read(&store, WORKER)?;
+        let _access = preflight_config_read_checked(&store, WORKER, || cancellation.check())?;
         cancellation.check()?;
-        let config = store.load()?;
+        let config = store.load_checked(|| cancellation.check())?;
         config.validate()?;
         Ok(config)
     })
@@ -512,9 +512,9 @@ fn run_config_dump(store: &ConfigStore) -> Result<GfmConfig> {
     let store = store.clone();
     runtime::run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_config_read(&store, WORKER)?;
+        let _access = preflight_config_read_checked(&store, WORKER, || cancellation.check())?;
         cancellation.check()?;
-        store.load_or_create_default()
+        store.load_or_create_default_checked(|| cancellation.check())
     })
 }
 
@@ -552,15 +552,27 @@ pub(crate) fn preflight_config_write(
     )
 }
 
-fn preflight_config_read(store: &ConfigStore, worker: &str) -> Result<access::ScopedAccessGuard> {
-    access::preflight_access_scope(store.path(), AccessIntent::Read, worker)
+fn preflight_config_read_checked(
+    store: &ConfigStore,
+    worker: &str,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<access::ScopedAccessGuard> {
+    access::preflight_access_scope_checked(store.path(), AccessIntent::Read, worker, check_control)
 }
 
-fn preflight_config_init(store: &ConfigStore) -> Result<access::ScopedAccessGuard> {
+fn preflight_config_init_checked(
+    store: &ConfigStore,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<access::ScopedAccessGuard> {
     if config_path_exists(store.path())? {
-        preflight_config_read(store, "config init")
+        preflight_config_read_checked(store, "config init", check_control)
     } else {
-        preflight_config_write(store, "config init")
+        access::preflight_access_scope_checked(
+            config_write_probe_path(store.path())?,
+            AccessIntent::Write,
+            "config init",
+            check_control,
+        )
     }
 }
 

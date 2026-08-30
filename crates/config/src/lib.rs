@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
@@ -478,60 +479,115 @@ impl ConfigStore {
     }
 
     pub fn load(&self) -> Result<GfmConfig> {
-        let mut input = String::new();
-        File::open(&self.path)
-            .map_err(|err| GfmError::io(&self.path, err))?
-            .read_to_string(&mut input)
-            .map_err(|err| GfmError::io(&self.path, err))?;
+        self.load_checked(|| Ok(()))
+    }
+
+    pub fn load_checked(&self, mut check_control: impl FnMut() -> Result<()>) -> Result<GfmConfig> {
+        const CHUNK_BYTES: usize = 64 * 1024;
+
+        check_control()?;
+        let mut file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
+        check_control()?;
+        let mut bytes = Vec::new();
+        let mut buffer = [0; CHUNK_BYTES];
+        loop {
+            check_control()?;
+            let read = file
+                .read(&mut buffer)
+                .map_err(|err| GfmError::io(&self.path, err))?;
+            if read == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+            check_control()?;
+        }
+        check_control()?;
+        let input = String::from_utf8(bytes)
+            .map_err(|err| GfmError::Format(format!("invalid GFM config UTF-8: {err}")))?;
         GfmConfig::parse(&input)
     }
 
     pub fn load_or_create_default(&self) -> Result<GfmConfig> {
-        match self.load() {
+        self.load_or_create_default_checked(|| Ok(()))
+    }
+
+    pub fn load_or_create_default_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<GfmConfig> {
+        check_control()?;
+        match self.load_checked(&mut check_control) {
             Ok(config) => Ok(config),
-            Err(err @ GfmError::Io { .. }) => match self.path.try_exists() {
-                Ok(false) => {
-                    let config = GfmConfig::default();
-                    self.save(&config)?;
-                    Ok(config)
+            Err(err @ GfmError::Io { .. }) => {
+                check_control()?;
+                match self.path.try_exists() {
+                    Ok(false) => {
+                        check_control()?;
+                        let config = GfmConfig::default();
+                        self.save_checked(&config, &mut check_control)?;
+                        Ok(config)
+                    }
+                    Ok(true) => Err(err),
+                    Err(err) => Err(GfmError::io(
+                        &self.path,
+                        format!("config path existence unavailable: {err}"),
+                    )),
                 }
-                Ok(true) => Err(err),
-                Err(err) => Err(GfmError::io(
-                    &self.path,
-                    format!("config path existence unavailable: {err}"),
-                )),
-            },
+            }
             Err(err) => Err(err),
         }
     }
 
     pub fn save(&self, config: &GfmConfig) -> Result<()> {
+        self.save_checked(config, || Ok(()))
+    }
+
+    pub fn save_checked(
+        &self,
+        config: &GfmConfig,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
         let encoded = config.to_toml()?;
+        check_control()?;
         if let Some(parent) = real_parent(&self.path) {
             fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         }
+        check_control()?;
 
         let temp_path = self.temp_path();
-        {
+        let result = (|| {
             let mut file = File::create(&temp_path).map_err(|err| GfmError::io(&temp_path, err))?;
-            file.write_all(encoded.as_bytes())
-                .map_err(|err| GfmError::io(&temp_path, err))?;
+            check_control()?;
+            for chunk in encoded.as_bytes().chunks(64 * 1024) {
+                check_control()?;
+                file.write_all(chunk)
+                    .map_err(|err| GfmError::io(&temp_path, err))?;
+            }
+            check_control()?;
             file.sync_all()
                 .map_err(|err| GfmError::io(&temp_path, err))?;
+            check_control()?;
+            fs::rename(&temp_path, &self.path).map_err(|err| GfmError::io(&self.path, err))?;
+            sync_parent(&self.path)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
         }
-        fs::rename(&temp_path, &self.path).map_err(|err| GfmError::io(&self.path, err))?;
-        sync_parent(&self.path)
+        result
     }
 
     fn temp_path(&self) -> PathBuf {
-        let mut temp = self.path.clone();
-        let extension = temp
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| format!("{extension}.tmp"))
-            .unwrap_or_else(|| "tmp".to_string());
-        temp.set_extension(extension);
-        temp
+        let file_name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("config.toml");
+        self.path.with_file_name(format!(
+            ".{file_name}.{}.{nonce}.tmp",
+            std::process::id(),
+            nonce = now_nanos()
+        ))
     }
 }
 
@@ -557,6 +613,13 @@ fn sync_parent(path: &Path) -> Result<()> {
 fn real_parent(path: &Path) -> Option<&Path> {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
+}
+
+fn now_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
 }
 
 fn migrate_legacy_to_current(value: &mut toml::Value) -> Result<()> {
@@ -602,7 +665,6 @@ fn validate_range(label: &str, value: u16, min: u16, max: u16) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn default_config_round_trips() {
@@ -695,6 +757,33 @@ unexpected = true
     }
 
     #[test]
+    fn store_load_checked_honors_pre_cancelled_control_before_open() {
+        let root = unique_temp_dir("gfm-config-load-pre-cancel");
+        let store = ConfigStore::new(root.join("missing.toml"));
+
+        let err = store.load_checked(|| Err(GfmError::Cancelled)).unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn store_load_or_create_checked_honors_pre_cancelled_control_before_create() {
+        let root = unique_temp_dir("gfm-config-create-pre-cancel");
+        let store = ConfigStore::new(root.join("config.toml"));
+
+        let err = store
+            .load_or_create_default_checked(|| Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!store.path().exists());
+        assert_eq!(config_temp_count(store.path()), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn store_does_not_create_default_when_path_probe_fails() {
         let root = unique_temp_dir("gfm-config-store-probe");
         let path = root.join("config-path-unavailable".repeat(16));
@@ -726,6 +815,67 @@ unexpected = true
         assert!(loaded.features.internal_power_mode);
         assert!(loaded.performance.enabled);
         assert_eq!(loaded.performance.profile, PerformanceProfile::Aggressive);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn store_save_temp_paths_are_unique_within_process() {
+        let root = unique_temp_dir("gfm-config-unique-temp");
+        let store = ConfigStore::new(root.join("config.toml"));
+
+        let first = store.temp_path();
+        let second = store.temp_path();
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(root.as_path()));
+        assert_eq!(second.parent(), Some(root.as_path()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn store_save_checked_honors_pre_cancelled_control_before_file_create() {
+        let root = unique_temp_dir("gfm-config-save-pre-cancel");
+        let store = ConfigStore::new(root.join("config.toml"));
+
+        let err = store
+            .save_checked(&GfmConfig::default(), || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!store.path().exists());
+        assert_eq!(config_temp_count(store.path()), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn store_save_checked_preserves_existing_config_on_cancelled_write() {
+        let root = unique_temp_dir("gfm-config-save-cancel-preserve");
+        let store = ConfigStore::new(root.join("config.toml"));
+        let original = GfmConfig::default();
+        store.save(&original).unwrap();
+        let before = fs::read(store.path()).unwrap();
+        let mut replacement = GfmConfig::default();
+        replacement.features.internal_power_mode = true;
+        replacement.performance.enabled = true;
+        replacement.performance.profile = PerformanceProfile::Benchmark;
+        let mut checks = 0usize;
+
+        let err = store
+            .save_checked(&replacement, || {
+                checks += 1;
+                if checks >= 6 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(checks >= 6);
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+        assert_eq!(store.load().unwrap(), original);
+        assert_eq!(config_temp_count(store.path()), 0);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -783,5 +933,20 @@ unexpected = true
         let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn config_temp_count(path: &Path) -> usize {
+        let Some(parent) = real_parent(path) else {
+            return 0;
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            return 0;
+        };
+        let prefix = format!(".{file_name}.{}.", std::process::id());
+        fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+            .count()
     }
 }
