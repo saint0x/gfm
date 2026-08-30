@@ -1,5 +1,6 @@
 use crate::{record_for_path, PackageKind, PackagePolicy};
 use gfm_types::{FileKind, FileRecord, Result, SecondaryMetadataRecord};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 const USER_TAGS_XATTR: &str = "com.apple.metadata:_kMDItemUserTags";
@@ -7,6 +8,7 @@ const FINDER_COMMENT_XATTR: &str = "com.apple.metadata:kMDItemFinderComment";
 const FINDER_INFO_XATTR: &str = "com.apple.FinderInfo";
 const FINDER_FLAG_EXTENSION_HIDDEN: u16 = 0x0010;
 const FINDER_FLAG_ALIAS: u16 = 0x8000;
+const LOCALIZED_SIDECAR_READ_LIMIT: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FinderLabelColor {
@@ -299,13 +301,17 @@ fn localized_name(path: &Path) -> Option<String> {
     let parent = path.parent()?;
     let name = path.file_name()?.to_str()?;
     let localized = parent.join(".localized");
-    let text = std::fs::read_to_string(localized).ok()?;
-    text.lines().find_map(|line| {
-        let (source, translated) = line.split_once('\t')?;
-        (source == name)
-            .then(|| translated.trim().to_string())
-            .and_then(non_empty)
-    })
+    let file = std::fs::File::open(localized).ok()?;
+    BufReader::new(file)
+        .take(LOCALIZED_SIDECAR_READ_LIMIT)
+        .lines()
+        .find_map(|line| {
+            let line = line.ok()?;
+            let (source, translated) = line.split_once('\t')?;
+            (source == name)
+                .then(|| translated.trim().to_string())
+                .and_then(non_empty)
+        })
 }
 
 fn bundle_display_name(record: &FileRecord, role: FinderTypeRole) -> Option<String> {
@@ -525,6 +531,23 @@ mod tests {
         let link_report = FinderMetadataReport::read_path(&link).unwrap();
         assert_eq!(link_report.link_role, FinderLinkRole::Symlink);
         assert_eq!(link_report.kind_string, "Alias");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn localized_name_reads_bounded_sidecar_prefix() {
+        let root = unique_temp_dir();
+        let document = root.join("Guide.txt");
+        fs::write(&document, "localized metadata").unwrap();
+        let mut localized = String::from("Guide.txt\tLocalized Guide\n");
+        localized.push_str(&"Other.txt\tIgnored\n".repeat(8192));
+        fs::write(root.join(".localized"), localized).unwrap();
+
+        let report = FinderMetadataReport::read_path(&document).unwrap();
+
+        assert_eq!(report.localized_name.as_deref(), Some("Localized Guide"));
+        assert_eq!(report.display_name, "Localized Guide");
 
         fs::remove_dir_all(root).unwrap();
     }
