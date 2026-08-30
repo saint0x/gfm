@@ -2407,7 +2407,7 @@ fn preview_cache_fileprovider_observed_invalidation_removes_deleted_tracked_subt
         child.display()
     )));
     assert!(stdout.contains("preview-cache-invalidation\t"));
-    assert!(stdout.contains("\tkind=thumbnail\treason=content-or-icloud\t"));
+    assert!(stdout.contains("\tkind=thumbnail\treason=removed\t"));
     assert!(stdout.contains("\tremoved-memory=false\tremoved-disk=true\n"));
     let state_text = std::fs::read_to_string(&state).unwrap();
     assert!(!state_text.contains(&child.display().to_string()));

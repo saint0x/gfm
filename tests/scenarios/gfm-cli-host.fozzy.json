@@ -3003,6 +3003,44 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-removed-folder/Child.icloud.md",
+      "data": "downloaded child\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-fileprovider-removed-subtree-state.tsv",
+      "data": "gfm-fileprovider-state-v1\ndownloaded\ttmp/gfm-fozzy-fileprovider-removed-folder/Child.icloud.md\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "/bin/rm",
+      "args": [
+        "-rf",
+        "tmp/gfm-fozzy-fileprovider-removed-folder"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "preview-cache-fileprovider-observed-invalidation",
+        "tmp/gfm-fozzy-preview-cache-removed-subtree",
+        "tmp/gfm-fozzy-fileprovider-removed-subtree-state.tsv",
+        "thumbnail",
+        "remove",
+        "tmp/gfm-fozzy-fileprovider-removed-folder"
+      ],
+      "exit_code": 0,
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=remove\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-removed-folder/Child.icloud.md\tprevious=downloaded\tcurrent=removed\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\npreview-cache-invalidation\ttmp/gfm-fozzy-fileprovider-removed-folder/Child.icloud.md\tkind=thumbnail\treason=removed\tinvalidate-memory=true\tinvalidate-disk=true\tremoved-memory=false\tremoved-disk=false\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-local.fileprovider",
       "data": "ordinary local file\n"
     },

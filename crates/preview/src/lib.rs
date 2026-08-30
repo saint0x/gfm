@@ -769,6 +769,7 @@ pub fn preview_invalidation_for_fileprovider(
     report: &gfm_mac::FileProviderInvalidationReport,
 ) -> PreviewInvalidationEvent {
     PreviewInvalidationEvent {
+        removed: report.current.storage_state == gfm_mac::CloudStorageState::Removed,
         icloud_state_changed: report.invalidate_preview_memory || report.invalidate_preview_disk,
         metadata_changed: report.reindex_metadata
             && !report.invalidate_preview_memory
@@ -1194,6 +1195,29 @@ mod tests {
                 invalidate_memory: true,
                 invalidate_disk: false,
                 reason: "metadata-or-tags"
+            }
+        );
+    }
+
+    #[test]
+    fn removed_fileprovider_items_map_to_removed_preview_invalidation() {
+        let report = fileprovider_report(
+            gfm_mac::CloudStorageState::Downloaded,
+            gfm_mac::CloudStorageState::Removed,
+            true,
+        );
+
+        let event = preview_invalidation_for_fileprovider(&report);
+        let decision = decide_invalidation(event);
+
+        assert!(event.removed);
+        assert!(event.icloud_state_changed);
+        assert_eq!(
+            decision,
+            PreviewInvalidationDecision {
+                invalidate_memory: true,
+                invalidate_disk: true,
+                reason: "removed"
             }
         );
     }
