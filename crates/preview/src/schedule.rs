@@ -191,6 +191,7 @@ pub struct PreviewScheduler {
 struct InflightTask {
     cancellation: Cancellation,
     priority: PreviewPriority,
+    generation: u64,
     sequence: u64,
 }
 
@@ -257,6 +258,34 @@ impl PreviewScheduler {
         for item in desired {
             let key = item.task.key.clone();
             if let Some(inflight) = self.inflight.get_mut(&key) {
+                if inflight.generation != item.task.generation {
+                    let inflight = self
+                        .inflight
+                        .remove(&key)
+                        .expect("preview inflight generation changed during lookup");
+                    inflight.cancellation.cancel();
+                    decisions.push(PreviewTaskDecision::Cancelled {
+                        key: key.clone(),
+                        reason: "superseded-generation",
+                    });
+
+                    let sequence = self.next_sequence;
+                    self.next_sequence = self.next_sequence.saturating_add(1);
+                    self.inflight.insert(
+                        key.clone(),
+                        InflightTask {
+                            cancellation: Cancellation::default(),
+                            priority: item.priority,
+                            generation: item.task.generation,
+                            sequence,
+                        },
+                    );
+                    decisions.push(PreviewTaskDecision::Scheduled {
+                        key,
+                        priority: item.priority,
+                    });
+                    continue;
+                }
                 inflight.priority = item.priority;
                 decisions.push(PreviewTaskDecision::Coalesced {
                     key,
@@ -270,6 +299,7 @@ impl PreviewScheduler {
                     InflightTask {
                         cancellation: Cancellation::default(),
                         priority: item.priority,
+                        generation: item.task.generation,
                         sequence,
                     },
                 );
@@ -475,6 +505,42 @@ mod tests {
 
         second.cancel();
         assert!(first.is_cancelled());
+    }
+
+    #[test]
+    fn superseded_generation_cancels_old_preview_and_schedules_new_token() {
+        let viewport = Viewport::new(Rect::new(0, 0, 100, 100), 0);
+        let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy::default()).unwrap();
+        let mut first = task(1, Rect::new(0, 0, 20, 20));
+        first.generation = 1;
+        scheduler.schedule(viewport, vec![first.clone()]);
+        let old_cancellation = scheduler
+            .cancellation_for(&first.key)
+            .expect("first preview generation has a cancellation token");
+
+        let mut next = first.clone();
+        next.generation = 2;
+        let decisions = scheduler.schedule(viewport, vec![next.clone()]);
+        let new_cancellation = scheduler
+            .cancellation_for(&next.key)
+            .expect("superseding generation has a cancellation token");
+
+        assert_eq!(
+            decisions,
+            vec![
+                PreviewTaskDecision::Cancelled {
+                    key: first.key.clone(),
+                    reason: "superseded-generation",
+                },
+                PreviewTaskDecision::Scheduled {
+                    key: next.key.clone(),
+                    priority: PreviewPriority::Visible,
+                },
+            ]
+        );
+        assert!(old_cancellation.is_cancelled());
+        assert!(!new_cancellation.is_cancelled());
+        assert_eq!(scheduler.inflight_len(), 1);
     }
 
     #[test]

@@ -926,6 +926,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     preview_decision_priority(&decision)
                 );
             }
+            let mut superseding = preview_task(1, 0, 0);
+            superseding.generation = 1;
+            for decision in scheduler.schedule(viewport, vec![superseding, preview_task(2, 0, 130)])
+            {
+                println!(
+                    "{}\t{}",
+                    decision.as_str(),
+                    preview_decision_priority(&decision)
+                );
+            }
             for decision in scheduler.adapt_to_pressure(SchedulingPressure {
                 io: JobIoPressure::Saturated,
                 ..SchedulingPressure::default()
