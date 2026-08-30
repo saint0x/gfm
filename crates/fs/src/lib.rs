@@ -18,6 +18,7 @@ pub use metadata::{
 
 const USER_TAGS_XATTR: &str = "com.apple.metadata:_kMDItemUserTags";
 const FINDER_COMMENT_XATTR: &str = "com.apple.metadata:kMDItemFinderComment";
+const FINDER_METADATA_XATTR_MAX_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanOptions {
@@ -380,7 +381,7 @@ pub fn record_for_path(
 }
 
 fn finder_tags(path: &Path) -> Vec<String> {
-    let Some(raw) = xattr::get(path, USER_TAGS_XATTR).ok().flatten() else {
+    let Some(raw) = bounded_xattr(path, USER_TAGS_XATTR, FINDER_METADATA_XATTR_MAX_BYTES) else {
         return Vec::new();
     };
     let Ok(plist::Value::Array(values)) = plist::Value::from_reader(Cursor::new(raw)) else {
@@ -409,7 +410,7 @@ fn finder_tag_name(raw: &str) -> Option<String> {
 }
 
 fn finder_comment(path: &Path) -> Option<String> {
-    let raw = xattr::get(path, FINDER_COMMENT_XATTR).ok().flatten()?;
+    let raw = bounded_xattr(path, FINDER_COMMENT_XATTR, FINDER_METADATA_XATTR_MAX_BYTES)?;
     match plist::Value::from_reader(Cursor::new(raw)).ok()? {
         plist::Value::String(comment) if !comment.trim().is_empty() => Some(comment),
         _ => None,
@@ -417,22 +418,27 @@ fn finder_comment(path: &Path) -> Option<String> {
 }
 
 fn xattrs_digest(path: &Path) -> u64 {
-    let mut entries = Vec::new();
     let Ok(names) = xattr::list(path) else {
         return 0;
     };
-    for name in names {
-        let Some(name_text) = name.to_str().map(ToOwned::to_owned) else {
-            continue;
-        };
-        let value = xattr::get(path, &name).ok().flatten().unwrap_or_default();
-        entries.push((name_text, value));
-    }
-    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut names = names
+        .filter_map(|name| name.to_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    names.sort();
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    entries.hash(&mut hasher);
+    for name in names {
+        name.hash(&mut hasher);
+        let value = xattr::get(path, &name).ok().flatten().unwrap_or_default();
+        value.len().hash(&mut hasher);
+        value.hash(&mut hasher);
+    }
     hasher.finish()
+}
+
+fn bounded_xattr(path: &Path, name: &str, max_bytes: usize) -> Option<Vec<u8>> {
+    let value = xattr::get(path, name).ok().flatten()?;
+    (value.len() <= max_bytes).then_some(value)
 }
 
 fn finder_order(record: &FileRecord) -> (u8, String) {
@@ -768,6 +774,52 @@ mod tests {
 
         assert_eq!(record.finder_comment.as_deref(), Some("handoff notes"));
         assert_ne!(record.xattrs_digest, before.xattrs_digest);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_finder_metadata_xattrs_do_not_parse_on_scan_hot_path() {
+        let root = unique_temp_dir();
+        let path = root.join("oversized-comment.txt");
+        fs::write(&path, "commented").unwrap();
+        let mut payload = Vec::new();
+        plist::Value::String("x".repeat(FINDER_METADATA_XATTR_MAX_BYTES + 1))
+            .to_writer_binary(&mut payload)
+            .unwrap();
+        if xattr::set(&path, FINDER_COMMENT_XATTR, &payload).is_err() {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+
+        let record = record_for_path(&path, None, false).unwrap();
+
+        assert!(record.finder_comment.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn xattr_digest_hashes_complete_values_without_retaining_all_entries() {
+        let root = unique_temp_dir();
+        let path = root.join("digested.txt");
+        fs::write(&path, "digested").unwrap();
+        let mut first = b"prefix".to_vec();
+        first.extend(std::iter::repeat_n(
+            b'a',
+            FINDER_METADATA_XATTR_MAX_BYTES + 8,
+        ));
+        let mut second = first.clone();
+        let middle = second.len() / 2;
+        second[middle] = b'b';
+        if xattr::set(&path, "com.apple.gfm.digest-test", &first).is_err() {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let first_digest = record_for_path(&path, None, false).unwrap().xattrs_digest;
+        xattr::set(&path, "com.apple.gfm.digest-test", &second).unwrap();
+
+        let second_digest = record_for_path(&path, None, false).unwrap().xattrs_digest;
+
+        assert_ne!(first_digest, second_digest);
         fs::remove_dir_all(root).unwrap();
     }
 

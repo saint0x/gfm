@@ -8,6 +8,7 @@ const FINDER_COMMENT_XATTR: &str = "com.apple.metadata:kMDItemFinderComment";
 const FINDER_INFO_XATTR: &str = "com.apple.FinderInfo";
 const FINDER_FLAG_EXTENSION_HIDDEN: u16 = 0x0010;
 const FINDER_FLAG_ALIAS: u16 = 0x8000;
+const FINDER_METADATA_XATTR_MAX_BYTES: usize = 64 * 1024;
 const LOCALIZED_SIDECAR_READ_LIMIT: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,7 +257,7 @@ impl Default for FinderInfo {
 }
 
 fn finder_tag_entries(path: &Path) -> Vec<FinderTagEntry> {
-    let Some(raw) = xattr::get(path, USER_TAGS_XATTR).ok().flatten() else {
+    let Some(raw) = bounded_xattr(path, USER_TAGS_XATTR, FINDER_METADATA_XATTR_MAX_BYTES) else {
         return Vec::new();
     };
     let Ok(plist::Value::Array(values)) = plist::Value::from_reader(std::io::Cursor::new(raw))
@@ -290,7 +291,7 @@ fn finder_tag_entry(raw: &str) -> Option<FinderTagEntry> {
 }
 
 fn finder_comment(path: &Path) -> Option<String> {
-    let raw = xattr::get(path, FINDER_COMMENT_XATTR).ok().flatten()?;
+    let raw = bounded_xattr(path, FINDER_COMMENT_XATTR, FINDER_METADATA_XATTR_MAX_BYTES)?;
     match plist::Value::from_reader(std::io::Cursor::new(raw)).ok()? {
         plist::Value::String(value) => non_empty(value),
         _ => None,
@@ -312,6 +313,11 @@ fn localized_name(path: &Path) -> Option<String> {
                 .then(|| translated.trim().to_string())
                 .and_then(non_empty)
         })
+}
+
+fn bounded_xattr(path: &Path, name: &str, max_bytes: usize) -> Option<Vec<u8>> {
+    let value = xattr::get(path, name).ok().flatten()?;
+    (value.len() <= max_bytes).then_some(value)
 }
 
 fn bundle_display_name(record: &FileRecord, role: FinderTypeRole) -> Option<String> {
@@ -549,6 +555,36 @@ mod tests {
         assert_eq!(report.localized_name.as_deref(), Some("Localized Guide"));
         assert_eq!(report.display_name, "Localized Guide");
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_finder_metadata_xattrs_do_not_parse_for_display_report() {
+        let root = unique_temp_dir();
+        let path = root.join("Report.md");
+        fs::write(&path, "report").unwrap();
+        let mut comment = Vec::new();
+        plist::Value::String("x".repeat(FINDER_METADATA_XATTR_MAX_BYTES + 1))
+            .to_writer_binary(&mut comment)
+            .unwrap();
+        let mut tags = Vec::new();
+        plist::Value::Array(vec![plist::Value::String(format!(
+            "{}\n6",
+            "tag".repeat(FINDER_METADATA_XATTR_MAX_BYTES / 3)
+        ))])
+        .to_writer_binary(&mut tags)
+        .unwrap();
+        if xattr::set(&path, FINDER_COMMENT_XATTR, &comment).is_err()
+            || xattr::set(&path, USER_TAGS_XATTR, &tags).is_err()
+        {
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+
+        let report = FinderMetadataReport::read_path(&path).unwrap();
+
+        assert!(report.comment.is_none());
+        assert!(report.tags.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
