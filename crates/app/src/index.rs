@@ -398,7 +398,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 required_path(args.next(), "fsevents-cursor-resume requires a cursor path")?;
             println!("{}", run_fsevents_cursor_resume(state, cursor)?.as_tsv());
         }
-        "fsevents-repair-schedule" => {
+        "fsevents-repair-schedule" | "fsevents-repair-schedule-retry-probe" => {
             let state = required_path(
                 args.next(),
                 "fsevents-repair-schedule requires an index state path",
@@ -416,6 +416,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let reason = args
                 .next()
                 .and_then(|value| (value != "-").then_some(value));
+            let retry_probe = if command == "fsevents-repair-schedule-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "fsevents-repair-schedule-retry-probe requires an attempt state path",
+                )?)
+            } else {
+                None
+            };
             let dropped_roots: Vec<PathBuf> = args.map(PathBuf::from).collect();
             println!(
                 "{}",
@@ -424,7 +432,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     cursor,
                     observed_event_ids,
                     reason,
-                    dropped_roots
+                    dropped_roots,
+                    retry_probe
                 )?
                 .as_tsv()
             );
@@ -552,6 +561,7 @@ fn run_fsevents_repair_schedule(
     observed_event_ids: Vec<u64>,
     reason: Option<String>,
     dropped_roots: Vec<PathBuf>,
+    retry_probe: Option<PathBuf>,
 ) -> Result<gfm_index::RepairSchedule> {
     preflight_volume_access_scope(&state, AccessIntent::Read, "fsevents repair schedule state")?;
     preflight_volume_access_scope(
@@ -559,15 +569,32 @@ fn run_fsevents_repair_schedule(
         AccessIntent::Read,
         "fsevents repair schedule cursor",
     )?;
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_index_write(retry_probe, "fsevents repair schedule")?;
+    }
     let volume = path_volume(&state)
         .or_else(|| path_volume(&cursor))
         .or_else(|| dropped_roots.iter().find_map(|root| path_volume(root)));
-    run_volume_task_cancellable(
+    run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
         "fsevents repair schedule",
+        cursor.clone(),
         move |cancellation| {
+            let state = state.clone();
+            let cursor = cursor.clone();
+            let observed_event_ids = observed_event_ids.clone();
+            let reason = reason.clone();
+            let dropped_roots = dropped_roots.clone();
+            let retry_probe = retry_probe.clone();
             cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_index_retry_probe_attempt(
+                    retry_probe,
+                    "fsevents repair schedule",
+                    &cancellation,
+                )?;
+            }
             let existing_dropped_roots =
                 existing_dropped_roots_checked(&dropped_roots, || cancellation.check())?;
             cancellation.check()?;

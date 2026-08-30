@@ -137,7 +137,7 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
         &scratch.permission_state_path,
         || cancellation.check(),
     )?;
-    let mut command = sandbox.command(&exe, path, pressure, &scratch.permission_state_path);
+    let mut command = sandbox.command(&exe, path, pressure, &scratch);
     let output = run_supervised_worker(
         &mut command,
         path,
@@ -194,6 +194,9 @@ struct WorkerScratch {
     stderr_path: PathBuf,
     permission_state_dir: PathBuf,
     permission_state_path: PathBuf,
+    job_journal_path: PathBuf,
+    job_payload_catalog_path: PathBuf,
+    job_progress_store_path: PathBuf,
     _access_guards: Vec<ScopedAccessGuard>,
 }
 
@@ -203,6 +206,9 @@ impl WorkerScratch {
         let stderr_path = worker_temp_path("stderr");
         let permission_state_dir = worker_temp_dir("permission-state");
         let permission_state_path = permission_state_dir.join("state.tsv");
+        let job_journal_path = permission_state_dir.join("jobs.journal");
+        let job_payload_catalog_path = permission_state_dir.join("payloads.gfmjobs");
+        let job_progress_store_path = permission_state_dir.join("progress.gfmprogress");
         let access_guards = retain_worker_scratch_access_checked(
             &stdout_path,
             &stderr_path,
@@ -215,6 +221,9 @@ impl WorkerScratch {
             stderr_path,
             permission_state_dir,
             permission_state_path,
+            job_journal_path,
+            job_payload_catalog_path,
+            job_progress_store_path,
             _access_guards: access_guards,
         };
         scratch.create_checked(&mut check_control)?;
@@ -442,7 +451,7 @@ impl WorkerSandbox {
         exe: &Path,
         input: &Path,
         pressure: SchedulingPressure,
-        permission_state: &Path,
+        scratch: &WorkerScratch,
     ) -> Command {
         if let (Some(sandbox_exec), Some(profile_path)) =
             (&self.sandbox_exec_path, &self.profile_path)
@@ -455,9 +464,10 @@ impl WorkerSandbox {
                 .arg("extract-report-adaptive")
                 .arg(input)
                 .args(scheduling_pressure_args(pressure));
-            command.env("GFM_PERMISSION_STATE", permission_state);
-            command.env_remove("GFM_JOB_PAYLOAD_CATALOG");
-            command.env_remove("GFM_JOB_PROGRESS_STORE");
+            command.env("GFM_PERMISSION_STATE", &scratch.permission_state_path);
+            command.env("GFM_JOB_JOURNAL", &scratch.job_journal_path);
+            command.env("GFM_JOB_PAYLOAD_CATALOG", &scratch.job_payload_catalog_path);
+            command.env("GFM_JOB_PROGRESS_STORE", &scratch.job_progress_store_path);
             command
         } else {
             let mut command = Command::new(exe);
@@ -465,9 +475,10 @@ impl WorkerSandbox {
                 .arg("extract-report-adaptive")
                 .arg(input)
                 .args(scheduling_pressure_args(pressure));
-            command.env("GFM_PERMISSION_STATE", permission_state);
-            command.env_remove("GFM_JOB_PAYLOAD_CATALOG");
-            command.env_remove("GFM_JOB_PROGRESS_STORE");
+            command.env("GFM_PERMISSION_STATE", &scratch.permission_state_path);
+            command.env("GFM_JOB_JOURNAL", &scratch.job_journal_path);
+            command.env("GFM_JOB_PAYLOAD_CATALOG", &scratch.job_payload_catalog_path);
+            command.env("GFM_JOB_PROGRESS_STORE", &scratch.job_progress_store_path);
             command
         }
     }

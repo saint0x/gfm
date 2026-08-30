@@ -3199,6 +3199,103 @@ fn schedules_fsevents_repair_from_binary() {
 }
 
 #[test]
+fn fsevents_repair_schedule_retries_transient_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-repair-retry-root");
+    let index = unique_temp_path("gfm-cli-repair-retry-records", "gfmidx");
+    let state = unique_temp_path("gfm-cli-repair-retry-state", "gfmstate");
+    let cursor = unique_temp_path("gfm-cli-repair-retry-cursor", "gfmcursor");
+    let journal = unique_temp_path("gfm-cli-repair-retry", "journal");
+    let catalog = unique_temp_path("gfm-cli-repair-retry", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-repair-retry", "gfmprogress");
+    let retry_probe = unique_temp_path("gfm-cli-repair-retry", "state");
+    fs::write(root.join("RepairRetry.md"), "repair retry").unwrap();
+
+    let index_state = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            root.to_str().unwrap(),
+            index.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        index_state.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_state.stderr)
+    );
+
+    let checkpoint = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-cursor-checkpoint",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "200",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        checkpoint.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checkpoint.stderr)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "fsevents-repair-schedule-retry-probe",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "201,204",
+            "-",
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("repair-schedule\t"), "{stdout}");
+    assert!(stdout.contains("\tjobs=1\t"), "{stdout}");
+    assert!(stdout.contains("reason=event-id-gap:202-204"), "{stdout}");
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tfsevents repair schedule"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains(
+            "1\t1\tfailed:temporary fsevents repair schedule retry probe busy\tfsevents repair schedule"
+        ),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tfsevents repair schedule"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tfsevents repair schedule"),
+        "{journal_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(index).unwrap();
+    fs::remove_file(state).unwrap();
+    fs::remove_file(cursor).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
+}
+
+#[test]
 fn fsevents_repair_schedule_refuses_unreachable_dropped_root_before_reading_state_from_binary() {
     let local = unique_temp_dir("gfm-cli-fsevents-repair-local");
     let offline = unique_temp_dir("gfm-cli-fsevents-repair-dropped-unreachable");
