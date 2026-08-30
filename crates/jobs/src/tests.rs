@@ -630,6 +630,25 @@ fn child_cancellation_does_not_cancel_parent_or_siblings() {
 }
 
 #[test]
+fn cancellation_prunes_dropped_child_links_without_losing_live_children() {
+    let root = Cancellation::default();
+    let live = root.child();
+    for _ in 0..(1024 * 2) {
+        drop(root.child());
+    }
+
+    assert!(
+        root.child_link_count_for_tests() < 1024,
+        "dropped child links should be pruned before unbounded accumulation"
+    );
+
+    root.cancel();
+
+    assert!(live.is_cancelled());
+    assert_eq!(root.child_link_count_for_tests(), 1);
+}
+
+#[test]
 fn worker_pool_runs_tasks_and_reports_outcomes() {
     let mut scheduler = Scheduler::new();
     let first = scheduler.schedule(Priority::Background, "first");
