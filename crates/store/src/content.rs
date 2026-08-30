@@ -2,8 +2,9 @@ use crate::durable;
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use codec::{
     read_blocked_id_block, read_content_posting,
-    read_content_posting_for_volume_limited_from_slice, read_content_posting_limited_from_slice,
-    read_content_posting_term, write_content_posting, write_file_ids, write_varint,
+    read_content_posting_for_volume_limited_from_slice_checked,
+    read_content_posting_limited_from_slice_checked, read_content_posting_term,
+    write_content_posting, write_file_ids, write_varint,
 };
 pub(crate) use codec::{read_file_ids, read_varint};
 use gfm_types::{ContentPosting, ContentSegment, FileId, GfmError, Result, VolumeId};
@@ -419,8 +420,13 @@ impl MmapContentArchive {
         check_control()?;
         let bytes = self.posting_bytes(entry)?;
         check_control()?;
-        let (posting, truncated) =
-            read_content_posting_limited_from_slice(bytes, &self.path, self.version, limit)?;
+        let (posting, truncated) = read_content_posting_limited_from_slice_checked(
+            bytes,
+            &self.path,
+            self.version,
+            limit,
+            &mut check_control,
+        )?;
         check_control()?;
         if canonical_term_checked(&posting.term, &mut check_control)? == term {
             Ok((Some(posting), truncated))
@@ -553,11 +559,12 @@ impl MmapContentArchive {
                 if entry.term.as_str() == term.as_str() {
                     check_control()?;
                     let bytes = self.posting_bytes(entry)?;
-                    let (posting, truncated) = read_content_posting_limited_from_slice(
+                    let (posting, truncated) = read_content_posting_limited_from_slice_checked(
                         bytes,
                         &self.path,
                         self.version,
                         limit_per_term,
+                        &mut check_control,
                     )?;
                     if canonical_term_checked(&posting.term, &mut check_control)? == term {
                         postings.push(LimitedContentPosting { posting, truncated });
@@ -644,13 +651,15 @@ impl MmapContentArchive {
                 if entry.term.as_str() == term.as_str() {
                     check_control()?;
                     let bytes = self.posting_bytes(entry)?;
-                    let (posting, truncated) = read_content_posting_for_volume_limited_from_slice(
-                        bytes,
-                        &self.path,
-                        self.version,
-                        volume,
-                        limit_per_term,
-                    )?;
+                    let (posting, truncated) =
+                        read_content_posting_for_volume_limited_from_slice_checked(
+                            bytes,
+                            &self.path,
+                            self.version,
+                            volume,
+                            limit_per_term,
+                            &mut check_control,
+                        )?;
                     if canonical_term_checked(&posting.term, &mut check_control)? == term {
                         if !posting.ids.is_empty() || !posting.positions.is_empty() {
                             postings.push(LimitedContentPosting { posting, truncated });

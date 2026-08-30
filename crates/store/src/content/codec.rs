@@ -1,12 +1,14 @@
 use super::{content_format_error, ContentStoreVersion};
 use crate::ids::{
     read_blocked_file_id_block_from_slice, read_blocked_file_ids,
-    read_blocked_file_ids_for_volume_limited_from_slice,
-    read_blocked_file_ids_limited_report_from_slice, write_blocked_file_ids,
+    read_blocked_file_ids_for_volume_limited_from_slice_checked,
+    read_blocked_file_ids_limited_report_from_slice_checked, write_blocked_file_ids,
 };
 use gfm_types::{ContentPositions, ContentPosting, FileId, GfmError, Result, VolumeId};
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
+
+const CONTENT_DECODE_CHECK_STRIDE: u64 = 256;
 
 pub(super) fn write_content_posting(
     mut writer: impl Write,
@@ -51,29 +53,38 @@ pub(super) fn read_content_posting(
     })
 }
 
-pub(super) fn read_content_posting_limited_from_slice(
+pub(super) fn read_content_posting_limited_from_slice_checked(
     bytes: &[u8],
     path: &Path,
     version: ContentStoreVersion,
     limit: usize,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<(ContentPosting, bool)> {
+    check_control()?;
     let mut cursor = Cursor::new(bytes);
     let term = read_content_posting_term(&mut cursor, path)?;
+    check_control()?;
     let ids_start = usize::try_from(cursor.position())
         .map_err(|_| content_format_error(path, "content id offset overflow"))?;
     let id_bytes = bytes
         .get(ids_start..)
         .ok_or_else(|| content_format_error(path, "content id offset out of bounds"))?;
+    check_control()?;
 
     let (ids, ids_truncated, positions_start) = if version.uses_blocked_ids() {
-        let report = read_blocked_file_ids_limited_report_from_slice(id_bytes, limit, path)?;
+        let report = read_blocked_file_ids_limited_report_from_slice_checked(
+            id_bytes,
+            limit,
+            path,
+            &mut check_control,
+        )?;
         let positions_start = ids_start
             .checked_add(report.encoded_len)
             .ok_or_else(|| content_format_error(path, "content position offset overflow"))?;
         (report.ids, report.truncated, positions_start)
     } else {
         let mut id_cursor = Cursor::new(id_bytes);
-        let ids = read_file_ids(&mut id_cursor, path)?;
+        let ids = read_file_ids_checked(&mut id_cursor, path, &mut check_control)?;
         let truncated = ids.len() > limit;
         let ids = ids.into_iter().take(limit).collect();
         let consumed = usize::try_from(id_cursor.position())
@@ -88,10 +99,16 @@ pub(super) fn read_content_posting_limited_from_slice(
         let position_bytes = bytes
             .get(positions_start..)
             .ok_or_else(|| content_format_error(path, "content position range out of bounds"))?;
-        read_content_positions_limited(Cursor::new(position_bytes), path, limit)?
+        read_content_positions_limited_checked(
+            Cursor::new(position_bytes),
+            path,
+            limit,
+            &mut check_control,
+        )?
     } else {
         (Vec::new(), false)
     };
+    check_control()?;
 
     Ok((
         ContentPosting {
@@ -103,32 +120,46 @@ pub(super) fn read_content_posting_limited_from_slice(
     ))
 }
 
-pub(super) fn read_content_posting_for_volume_limited_from_slice(
+pub(super) fn read_content_posting_for_volume_limited_from_slice_checked(
     bytes: &[u8],
     path: &Path,
     version: ContentStoreVersion,
     volume: VolumeId,
     limit: usize,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<(ContentPosting, bool)> {
+    check_control()?;
     let mut cursor = Cursor::new(bytes);
     let term = read_content_posting_term(&mut cursor, path)?;
+    check_control()?;
     let ids_start = usize::try_from(cursor.position())
         .map_err(|_| content_format_error(path, "content id offset overflow"))?;
     let id_bytes = bytes
         .get(ids_start..)
         .ok_or_else(|| content_format_error(path, "content id offset out of bounds"))?;
+    check_control()?;
 
     let (ids, ids_truncated, positions_start) = if version.uses_blocked_ids() {
-        let report = read_blocked_file_ids_limited_report_from_slice(id_bytes, 0, path)?;
-        let (ids, truncated) =
-            read_blocked_file_ids_for_volume_limited_from_slice(id_bytes, volume, limit, path)?;
+        let report = read_blocked_file_ids_limited_report_from_slice_checked(
+            id_bytes,
+            0,
+            path,
+            &mut check_control,
+        )?;
+        let (ids, truncated) = read_blocked_file_ids_for_volume_limited_from_slice_checked(
+            id_bytes,
+            volume,
+            limit,
+            path,
+            &mut check_control,
+        )?;
         let positions_start = ids_start
             .checked_add(report.encoded_len)
             .ok_or_else(|| content_format_error(path, "content position offset overflow"))?;
         (ids, truncated, positions_start)
     } else {
         let mut id_cursor = Cursor::new(id_bytes);
-        let ids = read_file_ids(&mut id_cursor, path)?;
+        let ids = read_file_ids_checked(&mut id_cursor, path, &mut check_control)?;
         let matching_count = ids.iter().filter(|id| id.volume == volume).count();
         let ids = ids
             .into_iter()
@@ -147,10 +178,17 @@ pub(super) fn read_content_posting_for_volume_limited_from_slice(
         let position_bytes = bytes
             .get(positions_start..)
             .ok_or_else(|| content_format_error(path, "content position range out of bounds"))?;
-        read_content_positions_for_volume_limited(Cursor::new(position_bytes), path, volume, limit)?
+        read_content_positions_for_volume_limited_checked(
+            Cursor::new(position_bytes),
+            path,
+            volume,
+            limit,
+            &mut check_control,
+        )?
     } else {
         (Vec::new(), false)
     };
+    check_control()?;
 
     Ok((
         ContentPosting {
@@ -250,18 +288,23 @@ fn read_content_positions(mut reader: impl Read, path: &Path) -> Result<Vec<Cont
     Ok(entries)
 }
 
-fn read_content_positions_limited(
+fn read_content_positions_limited_checked(
     mut reader: impl Read,
     path: &Path,
     limit: usize,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<(Vec<ContentPositions>, bool)> {
+    check_control()?;
     let entry_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
     let entry_count_usize = usize::try_from(entry_count)
         .map_err(|_| content_format_error(path, "content position count overflow"))?;
     let read_entries = entry_count_usize.min(limit);
     let mut entries = Vec::with_capacity(read_entries);
     let mut previous = FileId::new(VolumeId(0), 0);
-    for _ in 0..read_entries {
+    for entry_index in 0..read_entries {
+        if (entry_index as u64).is_multiple_of(CONTENT_DECODE_CHECK_STRIDE) {
+            check_control()?;
+        }
         let volume_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
         let volume = previous
             .volume
@@ -281,7 +324,10 @@ fn read_content_positions_limited(
         let position_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
         let mut positions = Vec::with_capacity(position_count.min(1_000_000) as usize);
         let mut previous_position = 0u32;
-        for _ in 0..position_count {
+        for position_index in 0..position_count {
+            if position_index.is_multiple_of(CONTENT_DECODE_CHECK_STRIDE) {
+                check_control()?;
+            }
             let delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
             let delta = u32::try_from(delta)
                 .map_err(|_| content_format_error(path, "content position overflow"))?;
@@ -294,19 +340,25 @@ fn read_content_positions_limited(
         entries.push(ContentPositions { id, positions });
         previous = id;
     }
+    check_control()?;
     Ok((entries, entry_count_usize > limit))
 }
 
-fn read_content_positions_for_volume_limited(
+fn read_content_positions_for_volume_limited_checked(
     mut reader: impl Read,
     path: &Path,
     volume: VolumeId,
     limit: usize,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<(Vec<ContentPositions>, bool)> {
+    check_control()?;
     let entry_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
     let mut entries = Vec::with_capacity(limit.min(128));
     let mut previous = FileId::new(VolumeId(0), 0);
-    for _ in 0..entry_count {
+    for entry_index in 0..entry_count {
+        if entry_index.is_multiple_of(CONTENT_DECODE_CHECK_STRIDE) {
+            check_control()?;
+        }
         let volume_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
         let entry_volume = previous
             .volume
@@ -336,7 +388,10 @@ fn read_content_positions_for_volume_limited(
             positions = Vec::with_capacity(position_count.min(1_000_000) as usize);
         }
         let mut previous_position = 0u32;
-        for _ in 0..position_count {
+        for position_index in 0..position_count {
+            if position_index.is_multiple_of(CONTENT_DECODE_CHECK_STRIDE) {
+                check_control()?;
+            }
             let delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
             let delta = u32::try_from(delta)
                 .map_err(|_| content_format_error(path, "content position overflow"))?;
@@ -353,6 +408,7 @@ fn read_content_positions_for_volume_limited(
         }
         previous = id;
     }
+    check_control()?;
     Ok((entries, false))
 }
 
@@ -375,10 +431,22 @@ pub(super) fn write_file_ids(mut writer: impl Write, ids: &[FileId]) -> std::io:
 }
 
 pub(crate) fn read_file_ids(mut reader: impl Read, path: &Path) -> Result<Vec<FileId>> {
+    read_file_ids_checked(&mut reader, path, || Ok(()))
+}
+
+pub(crate) fn read_file_ids_checked(
+    mut reader: impl Read,
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<FileId>> {
+    check_control()?;
     let id_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
     let mut ids = Vec::with_capacity(id_count.min(1_000_000) as usize);
     let mut previous = FileId::new(VolumeId(0), 0);
-    for _ in 0..id_count {
+    for index in 0..id_count {
+        if index.is_multiple_of(CONTENT_DECODE_CHECK_STRIDE) {
+            check_control()?;
+        }
         let volume_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
         let volume = previous
             .volume
@@ -398,6 +466,7 @@ pub(crate) fn read_file_ids(mut reader: impl Read, path: &Path) -> Result<Vec<Fi
         ids.push(id);
         previous = id;
     }
+    check_control()?;
     Ok(ids)
 }
 

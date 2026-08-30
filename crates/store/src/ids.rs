@@ -130,17 +130,6 @@ pub(crate) fn read_blocked_file_ids_limited_from_slice_checked(
         .map(|report| report.ids)
 }
 
-pub(crate) fn read_blocked_file_ids_for_volume_limited_from_slice(
-    bytes: &[u8],
-    volume: VolumeId,
-    limit: usize,
-    path: &Path,
-) -> Result<(Vec<FileId>, bool)> {
-    read_blocked_file_ids_for_volume_limited_from_slice_checked(bytes, volume, limit, path, || {
-        Ok(())
-    })
-}
-
 pub(crate) fn read_blocked_file_ids_for_volume_limited_from_slice_checked(
     bytes: &[u8],
     volume: VolumeId,
@@ -225,14 +214,6 @@ pub(crate) struct BlockedFileIdsLimitedReport {
     pub ids: Vec<FileId>,
     pub truncated: bool,
     pub encoded_len: usize,
-}
-
-pub(crate) fn read_blocked_file_ids_limited_report_from_slice(
-    bytes: &[u8],
-    limit: usize,
-    path: &Path,
-) -> Result<BlockedFileIdsLimitedReport> {
-    read_blocked_file_ids_limited_report_from_slice_checked(bytes, limit, path, || Ok(()))
 }
 
 pub(crate) fn read_blocked_file_ids_limited_report_from_slice_checked(

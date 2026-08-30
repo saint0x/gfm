@@ -98,6 +98,108 @@ fn checked_content_postings_read_can_cancel_during_checksum_load() {
 }
 
 #[test]
+fn checked_limited_content_posting_can_cancel_during_legacy_id_decode() {
+    let path = temp_path("gfm-content-legacy-id-decode-cancel", "gfmcontent");
+    let posting = ContentPosting {
+        term: "alpha".to_string(),
+        ids: (0..1_024)
+            .map(|node| FileId::new(VolumeId(4), node))
+            .collect(),
+        positions: Vec::new(),
+    };
+    let mut bytes = Vec::new();
+    write_content_posting(&mut bytes, &posting, ContentStoreVersion::IndexedIds).unwrap();
+    let mut checks = 0usize;
+
+    let result = read_content_posting_limited_from_slice_checked(
+        &bytes,
+        &path,
+        ContentStoreVersion::IndexedIds,
+        usize::MAX,
+        || {
+            checks += 1;
+            if checks >= 5 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 5);
+}
+
+#[test]
+fn checked_limited_content_posting_can_cancel_during_position_decode() {
+    let path = temp_path("gfm-content-position-decode-cancel", "gfmcontent");
+    let posting = ContentPosting {
+        term: "alpha".to_string(),
+        ids: vec![FileId::new(VolumeId(4), 12)],
+        positions: vec![ContentPositions {
+            id: FileId::new(VolumeId(4), 12),
+            positions: (0..1_024).collect(),
+        }],
+    };
+    let mut bytes = Vec::new();
+    write_content_posting(&mut bytes, &posting, ContentStoreVersion::IndexedPositions).unwrap();
+    let mut checks = 0usize;
+
+    let result = read_content_posting_limited_from_slice_checked(
+        &bytes,
+        &path,
+        ContentStoreVersion::IndexedPositions,
+        usize::MAX,
+        || {
+            checks += 1;
+            if checks >= 8 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 8);
+}
+
+#[test]
+fn checked_volume_limited_content_posting_can_cancel_during_position_decode() {
+    let path = temp_path("gfm-content-volume-position-decode-cancel", "gfmcontent");
+    let posting = ContentPosting {
+        term: "alpha".to_string(),
+        ids: vec![FileId::new(VolumeId(7), 12)],
+        positions: vec![ContentPositions {
+            id: FileId::new(VolumeId(7), 12),
+            positions: (0..1_024).collect(),
+        }],
+    };
+    let mut bytes = Vec::new();
+    write_content_posting(&mut bytes, &posting, ContentStoreVersion::IndexedPositions).unwrap();
+    let mut checks = 0usize;
+
+    let result = read_content_posting_for_volume_limited_from_slice_checked(
+        &bytes,
+        &path,
+        ContentStoreVersion::IndexedPositions,
+        VolumeId(7),
+        usize::MAX,
+        || {
+            checks += 1;
+            if checks >= 8 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 8);
+}
+
+#[test]
 fn content_archive_reads_one_term_from_directory() {
     let path = temp_path("gfm-content-archive", "gfmcontent");
     let alpha = FileId::new(VolumeId(4), 12);
@@ -367,6 +469,39 @@ fn mmap_content_archive_checked_term_limit_can_cancel_during_term_canonicalizati
 
     assert!(matches!(result, Err(GfmError::Cancelled)));
     assert!(checks >= 3);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn mmap_content_archive_checked_term_limit_can_cancel_during_position_decode() {
+    let path = temp_path("gfm-content-position-decode-cancel", "gfmcontent");
+    let id = FileId::new(VolumeId(8), 30_003);
+    write_content_postings(
+        &path,
+        &[ContentPosting {
+            term: "needle".to_string(),
+            ids: vec![id],
+            positions: vec![ContentPositions {
+                id,
+                positions: (0..1_024).collect(),
+            }],
+        }],
+    )
+    .unwrap();
+    let archive = MmapContentArchive::open(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = archive.posting_for_term_limit_checked("needle", 1_024, || {
+        checks += 1;
+        if checks >= 8 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 8);
     std::fs::remove_file(path).unwrap();
 }
 
