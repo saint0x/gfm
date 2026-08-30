@@ -395,7 +395,7 @@ pub fn rebuild_derived_sidecar_checked(
     }
 
     check_control()?;
-    let records = MmapRecordArchive::open(records_path)?.records()?;
+    let records = MmapRecordArchive::open_checked(records_path, &mut check_control)?.records()?;
     check_control()?;
     let backup_path = if sidecar_path.try_exists().map_err(|err| {
         GfmError::io(
