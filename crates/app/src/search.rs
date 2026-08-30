@@ -240,7 +240,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
-        "search-content-index-manifest" => {
+        "search-content-index-manifest" | "search-content-index-manifest-retry-probe" => {
             let records = required_path(
                 args.next(),
                 "search-content-index-manifest requires a records path",
@@ -253,13 +253,22 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-content-index-manifest requires a query string",
             )?;
-            let output = run_content_index_manifest_search(records, manifest, query)?;
+            let retry_probe = if command == "search-content-index-manifest-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "search-content-index-manifest-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let output = run_content_index_manifest_search(records, manifest, query, retry_probe)?;
             eprintln!("{}", output.diagnostics);
             for hit in output.hits {
                 print_hit(&hit);
             }
         }
-        "search-content-index-manifest-session" => {
+        "search-content-index-manifest-session"
+        | "search-content-index-manifest-session-retry-probe" => {
             let records = required_path(
                 args.next(),
                 "search-content-index-manifest-session requires a records path",
@@ -272,7 +281,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-content-index-manifest-session requires a query string",
             )?;
-            let output = run_content_index_manifest_session(records, manifest, query)?;
+            let retry_probe = if command == "search-content-index-manifest-session-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "search-content-index-manifest-session-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let output = run_content_index_manifest_session(records, manifest, query, retry_probe)?;
             for diagnostic in output.diagnostics {
                 eprintln!("{diagnostic}");
             }
@@ -1527,27 +1544,43 @@ fn run_content_index_manifest_search(
     records: PathBuf,
     manifest: PathBuf,
     query: String,
+    retry_probe: Option<PathBuf>,
 ) -> Result<ContentIndexSetSearchOutput> {
     const WORKER: &str = "content index manifest search";
     preflight_volume_access_scope(&records, AccessIntent::Read, &format!("{WORKER} records"))?;
     preflight_volume_access_scope(&manifest, AccessIntent::Read, &format!("{WORKER} manifest"))?;
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    }
     let volume = path_volume(&records).or_else(|| path_volume(&manifest));
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = preflight_content_index_manifest_search_access_checked(
-            &records,
-            &manifest,
-            WORKER,
-            || cancellation.check(),
-        )?;
-        cancellation.check()?;
-        let (live, report) = Indexer::default().load_live_with_content_manifest_cancellable(
-            records,
-            manifest,
-            &query,
-            &cancellation,
-        )?;
-        let diagnostics = format!(
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        WORKER,
+        records.clone(),
+        move |cancellation| {
+            let records = records.clone();
+            let manifest = manifest.clone();
+            let query = query.clone();
+            let retry_probe = retry_probe.clone();
+            cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            }
+            let _access = preflight_content_index_manifest_search_access_checked(
+                &records,
+                &manifest,
+                WORKER,
+                || cancellation.check(),
+            )?;
+            cancellation.check()?;
+            let (live, report) = Indexer::default().load_live_with_content_manifest_cancellable(
+                records,
+                manifest,
+                &query,
+                &cancellation,
+            )?;
+            let diagnostics = format!(
             "content-manifest-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
             report.content_keys,
             report.records_loaded,
@@ -1555,72 +1588,90 @@ fn run_content_index_manifest_search(
             report.candidate_ids,
             report.full_hydration
         );
-        cancellation.check()?;
-        let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-        Ok(ContentIndexSetSearchOutput {
-            diagnostics,
-            hits: live.search_structured_with_volume_scope_cancellable(
-                &parsed,
-                50,
-                &SearchVolumeScope::All,
-                &cancellation,
-            )?,
-        })
-    })
+            cancellation.check()?;
+            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+            Ok(ContentIndexSetSearchOutput {
+                diagnostics,
+                hits: live.search_structured_with_volume_scope_cancellable(
+                    &parsed,
+                    50,
+                    &SearchVolumeScope::All,
+                    &cancellation,
+                )?,
+            })
+        },
+    )
 }
 
 fn run_content_index_manifest_session(
     records: PathBuf,
     manifest: PathBuf,
     query: String,
+    retry_probe: Option<PathBuf>,
 ) -> Result<ContentIndexSessionOutput> {
     const WORKER: &str = "content index manifest session";
     preflight_volume_access_scope(&records, AccessIntent::Read, &format!("{WORKER} records"))?;
     preflight_volume_access_scope(&manifest, AccessIntent::Read, &format!("{WORKER} manifest"))?;
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    }
     let volume = path_volume(&records).or_else(|| path_volume(&manifest));
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = preflight_content_index_manifest_search_access_checked(
-            &records,
-            &manifest,
-            WORKER,
-            || cancellation.check(),
-        )?;
-        cancellation.check()?;
-        let session = Indexer::default().load_content_manifest_query_session_cancellable(
-            &records,
-            &manifest,
-            &cancellation,
-        )?;
-        let archive_count = session.archive_count();
-        let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-        let first = session.search_structured_with_budget_cancellable(
-            &parsed,
-            50,
-            SearchLookupBudget::default(),
-            &cancellation,
-        )?;
-        let mut diagnostics = vec![format_content_session_report(
-            "content-manifest-session-first",
-            archive_count,
-            &first,
-        )];
-        let mut hits = first.search.hits;
-        cancellation.check()?;
-        let second = session.search_structured_with_budget_cancellable(
-            &parsed,
-            50,
-            SearchLookupBudget::default(),
-            &cancellation,
-        )?;
-        diagnostics.push(format_content_session_report(
-            "content-manifest-session-second",
-            archive_count,
-            &second,
-        ));
-        hits.extend(second.search.hits);
-        Ok(ContentIndexSessionOutput { diagnostics, hits })
-    })
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        WORKER,
+        records.clone(),
+        move |cancellation| {
+            let records = records.clone();
+            let manifest = manifest.clone();
+            let query = query.clone();
+            let retry_probe = retry_probe.clone();
+            cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            }
+            let _access = preflight_content_index_manifest_search_access_checked(
+                &records,
+                &manifest,
+                WORKER,
+                || cancellation.check(),
+            )?;
+            cancellation.check()?;
+            let session = Indexer::default().load_content_manifest_query_session_cancellable(
+                &records,
+                &manifest,
+                &cancellation,
+            )?;
+            let archive_count = session.archive_count();
+            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+            let first = session.search_structured_with_budget_cancellable(
+                &parsed,
+                50,
+                SearchLookupBudget::default(),
+                &cancellation,
+            )?;
+            let mut diagnostics = vec![format_content_session_report(
+                "content-manifest-session-first",
+                archive_count,
+                &first,
+            )];
+            let mut hits = first.search.hits;
+            cancellation.check()?;
+            let second = session.search_structured_with_budget_cancellable(
+                &parsed,
+                50,
+                SearchLookupBudget::default(),
+                &cancellation,
+            )?;
+            diagnostics.push(format_content_session_report(
+                "content-manifest-session-second",
+                archive_count,
+                &second,
+            ));
+            hits.extend(second.search.hits);
+            Ok(ContentIndexSessionOutput { diagnostics, hits })
+        },
+    )
 }
 
 fn preflight_content_index_set_volume_access(

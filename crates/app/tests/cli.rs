@@ -10646,6 +10646,304 @@ fn search_content_index_set_retries_transient_archive_read_failure_from_binary()
 }
 
 #[test]
+fn search_content_index_manifest_retries_transient_archive_read_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-content-index-manifest-retry-root");
+    let records = unique_temp_path(
+        "gfm-cli-search-content-index-manifest-retry-records",
+        "gfmidx",
+    );
+    let manifest = unique_temp_path("gfm-cli-search-content-index-manifest-retry", "gfmmanifest");
+    let first_content = unique_temp_path(
+        "gfm-cli-search-content-index-manifest-retry-first",
+        "gfmcontent",
+    );
+    let second_content = unique_temp_path(
+        "gfm-cli-search-content-index-manifest-retry-second",
+        "gfmcontent",
+    );
+    let journal = unique_temp_path("gfm-cli-search-content-index-manifest-retry", "journal");
+    let catalog = unique_temp_path("gfm-cli-search-content-index-manifest-retry", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-search-content-index-manifest-retry", "gfmprogress");
+    let retry_probe = unique_temp_path("gfm-cli-search-content-index-manifest-retry", "state");
+    fs::write(root.join("left-manifest-retry.md"), "metadata only").unwrap();
+    fs::write(root.join("right-manifest-retry.md"), "metadata only").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let indexed_records = read_records(&records).unwrap();
+    let left = indexed_records
+        .iter()
+        .find(|record| record.path.ends_with("left-manifest-retry.md"))
+        .unwrap()
+        .id;
+    let right = indexed_records
+        .iter()
+        .find(|record| record.path.ends_with("right-manifest-retry.md"))
+        .unwrap()
+        .id;
+    write_content_postings(
+        &first_content,
+        &[ContentPosting {
+            term: "manifestretrymarker".to_string(),
+            ids: vec![left],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    write_content_postings(
+        &second_content,
+        &[ContentPosting {
+            term: "manifestretrymarker".to_string(),
+            ids: vec![right],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    ContentArchiveManifest::new(vec![
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Hot,
+            path: first_content.clone(),
+        },
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: second_content.clone(),
+        },
+    ])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "search-content-index-manifest-retry-probe",
+            records.to_str().unwrap(),
+            manifest.to_str().unwrap(),
+            "manifestretrymarker",
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(stdout.contains("left-manifest-retry.md"), "{stdout}");
+    assert!(stdout.contains("right-manifest-retry.md"), "{stdout}");
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tcontent index manifest search"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains(
+            "1\t1\tfailed:temporary content index manifest search retry probe busy\tcontent index manifest search"
+        ),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tcontent index manifest search"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tcontent index manifest search"),
+        "{journal_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(manifest).unwrap();
+    fs::remove_file(first_content).unwrap();
+    fs::remove_file(second_content).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
+}
+
+#[test]
+fn search_content_index_manifest_session_retries_transient_archive_read_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-content-index-manifest-session-retry-root");
+    let records = unique_temp_path(
+        "gfm-cli-search-content-index-manifest-session-retry-records",
+        "gfmidx",
+    );
+    let manifest = unique_temp_path(
+        "gfm-cli-search-content-index-manifest-session-retry",
+        "gfmmanifest",
+    );
+    let first_content = unique_temp_path(
+        "gfm-cli-search-content-index-manifest-session-retry-first",
+        "gfmcontent",
+    );
+    let second_content = unique_temp_path(
+        "gfm-cli-search-content-index-manifest-session-retry-second",
+        "gfmcontent",
+    );
+    let journal = unique_temp_path(
+        "gfm-cli-search-content-index-manifest-session-retry",
+        "journal",
+    );
+    let catalog = unique_temp_path(
+        "gfm-cli-search-content-index-manifest-session-retry",
+        "gfmjobs",
+    );
+    let progress = unique_temp_path(
+        "gfm-cli-search-content-index-manifest-session-retry",
+        "gfmprogress",
+    );
+    let retry_probe = unique_temp_path(
+        "gfm-cli-search-content-index-manifest-session-retry",
+        "state",
+    );
+    fs::write(root.join("left-manifest-session-retry.md"), "metadata only").unwrap();
+    fs::write(
+        root.join("right-manifest-session-retry.md"),
+        "metadata only",
+    )
+    .unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let indexed_records = read_records(&records).unwrap();
+    let left = indexed_records
+        .iter()
+        .find(|record| record.path.ends_with("left-manifest-session-retry.md"))
+        .unwrap()
+        .id;
+    let right = indexed_records
+        .iter()
+        .find(|record| record.path.ends_with("right-manifest-session-retry.md"))
+        .unwrap()
+        .id;
+    write_content_postings(
+        &first_content,
+        &[ContentPosting {
+            term: "manifestsessionretrymarker".to_string(),
+            ids: vec![left],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    write_content_postings(
+        &second_content,
+        &[ContentPosting {
+            term: "manifestsessionretrymarker".to_string(),
+            ids: vec![right],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    ContentArchiveManifest::new(vec![
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Hot,
+            path: first_content.clone(),
+        },
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: second_content.clone(),
+        },
+    ])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "search-content-index-manifest-session-retry-probe",
+            records.to_str().unwrap(),
+            manifest.to_str().unwrap(),
+            "manifestsessionretrymarker",
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(
+        stdout.contains("left-manifest-session-retry.md"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("right-manifest-session-retry.md"),
+        "{stdout}"
+    );
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let stderr = String::from_utf8(search_output.stderr).unwrap();
+    assert!(
+        stderr.contains(
+            "content-manifest-session-second\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("\tposting-cache-hits=0\tposting-cache-misses=0")
+            && stderr.contains("\trecord-cache-hits=0\trecord-cache-misses=0")
+            && stderr.contains("\tresult-cache-hits=1\tresult-cache-misses=0"),
+        "{stderr}"
+    );
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tcontent index manifest session"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains(
+            "1\t1\tfailed:temporary content index manifest session retry probe busy\tcontent index manifest session"
+        ),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tcontent index manifest session"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tcontent index manifest session"),
+        "{journal_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(manifest).unwrap();
+    fs::remove_file(first_content).unwrap();
+    fs::remove_file(second_content).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
+}
+
+#[test]
 fn search_content_index_set_session_retries_transient_archive_read_failure_from_binary() {
     let root = unique_temp_dir("gfm-cli-search-content-index-set-session-retry-root");
     let records = unique_temp_path(
