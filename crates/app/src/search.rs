@@ -366,7 +366,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
-        "search-index-sidecars" => {
+        "search-index-sidecars" | "search-index-sidecars-retry-probe" => {
             let records =
                 required_path(args.next(), "search-index-sidecars requires a records path")?;
             let columns =
@@ -388,6 +388,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 required_path(args.next(), "search-index-sidecars requires a content path")?;
             let query =
                 required_string(args.next(), "search-index-sidecars requires a query string")?;
+            let retry_probe = if command == "search-index-sidecars-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "search-index-sidecars-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
             let sidecars = OwnedSidecarIndexAccessPaths {
                 records,
                 columns,
@@ -397,13 +405,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 fuzzy,
                 content,
             };
-            let output = run_sidecar_index_search(sidecars, query)?;
+            let output = run_sidecar_index_search(sidecars, query, retry_probe)?;
             eprintln!("{}", output.diagnostics);
             for hit in output.hits {
                 print_hit(&hit);
             }
         }
-        "search-index-sidecars-session" => {
+        "search-index-sidecars-session" | "search-index-sidecars-session-retry-probe" => {
             let records = required_path(
                 args.next(),
                 "search-index-sidecars-session requires a records path",
@@ -436,6 +444,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "search-index-sidecars-session requires a query string",
             )?;
+            let retry_probe = if command == "search-index-sidecars-session-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "search-index-sidecars-session-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
             let sidecars = OwnedSidecarIndexAccessPaths {
                 records,
                 columns,
@@ -445,7 +461,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 fuzzy,
                 content,
             };
-            let output = run_sidecar_index_session(sidecars, query)?;
+            let output = run_sidecar_index_session(sidecars, query, retry_probe)?;
             for diagnostic in output.diagnostics {
                 eprintln!("{diagnostic}");
             }
@@ -1816,6 +1832,7 @@ impl<'a> SidecarIndexAccessPaths<'a> {
     }
 }
 
+#[derive(Clone)]
 struct OwnedSidecarIndexAccessPaths {
     records: PathBuf,
     columns: PathBuf,
@@ -1865,48 +1882,63 @@ struct SidecarSessionOutput {
 fn run_sidecar_index_search(
     paths: OwnedSidecarIndexAccessPaths,
     query: String,
+    retry_probe: Option<PathBuf>,
 ) -> Result<SidecarSearchOutput> {
     const WORKER: &str = "sidecar search";
     preflight_sidecar_index_volume_access(&paths, WORKER)?;
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    }
     let volume = sidecar_index_volume(&paths);
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access =
-            preflight_sidecar_index_search_access_checked(paths.borrowed(), WORKER, || {
-                cancellation.check()
-            })?;
-        cancellation.check()?;
-        let OwnedSidecarIndexAccessPaths {
-            records,
-            columns,
-            metadata,
-            prefixes,
-            substrings,
-            fuzzy,
-            content,
-        } = paths;
-        let session = SidecarIndexQuerySession::open_cancellable(
-            records,
-            columns,
-            metadata,
-            prefixes,
-            substrings,
-            fuzzy,
-            content,
-            &cancellation,
-        )?;
-        cancellation.check()?;
-        let budget = SearchLookupBudget::default();
-        let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-        let report = session.search_structured_with_volume_scope_budget_cancellable(
-            &parsed,
-            50,
-            &SearchVolumeScope::All,
-            budget,
-            &cancellation,
-        )?;
-        let hydration = &report.hydration;
-        let diagnostics = format!(
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        WORKER,
+        paths.records.clone(),
+        move |cancellation| {
+            let paths = paths.clone();
+            let query = query.clone();
+            let retry_probe = retry_probe.clone();
+            cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            }
+            let _access =
+                preflight_sidecar_index_search_access_checked(paths.borrowed(), WORKER, || {
+                    cancellation.check()
+                })?;
+            cancellation.check()?;
+            let OwnedSidecarIndexAccessPaths {
+                records,
+                columns,
+                metadata,
+                prefixes,
+                substrings,
+                fuzzy,
+                content,
+            } = paths;
+            let session = SidecarIndexQuerySession::open_cancellable(
+                records,
+                columns,
+                metadata,
+                prefixes,
+                substrings,
+                fuzzy,
+                content,
+                &cancellation,
+            )?;
+            cancellation.check()?;
+            let budget = SearchLookupBudget::default();
+            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+            let report = session.search_structured_with_volume_scope_budget_cancellable(
+                &parsed,
+                50,
+                &SearchVolumeScope::All,
+                budget,
+                &cancellation,
+            )?;
+            let hydration = &report.hydration;
+            let diagnostics = format!(
             "columns-indexed {} records-loaded {} records-missing {} candidate-ids {} full-hydration {} metadata-keys {} prefix-keys {} substring-keys {} fuzzy-keys {} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {} content-cache-hits {} content-cache-misses {} metadata-budget {} substring-budget {} content-budget {}",
             hydration.columns_applied,
             hydration.records_loaded,
@@ -1927,54 +1959,81 @@ fn run_sidecar_index_search(
             budget.max_substring_ids_per_gram,
             budget.max_content_ids_per_term
         );
-        Ok(SidecarSearchOutput {
-            diagnostics,
-            hits: report.search.hits,
-        })
-    })
+            Ok(SidecarSearchOutput {
+                diagnostics,
+                hits: report.search.hits,
+            })
+        },
+    )
 }
 
 fn run_sidecar_index_session(
     paths: OwnedSidecarIndexAccessPaths,
     query: String,
+    retry_probe: Option<PathBuf>,
 ) -> Result<SidecarSessionOutput> {
     const WORKER: &str = "sidecar session";
     preflight_sidecar_index_volume_access(&paths, WORKER)?;
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    }
     let volume = sidecar_index_volume(&paths);
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access =
-            preflight_sidecar_index_search_access_checked(paths.borrowed(), WORKER, || {
-                cancellation.check()
-            })?;
-        cancellation.check()?;
-        let session = open_sidecar_index_query_session(paths, &cancellation)?;
-        cancellation.check()?;
-        let budget = SearchLookupBudget::default();
-        let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-        let first = session.search_structured_with_volume_scope_budget_cancellable(
-            &parsed,
-            50,
-            &SearchVolumeScope::All,
-            budget,
-            &cancellation,
-        )?;
-        cancellation.check()?;
-        let second = session.search_structured_with_volume_scope_budget_cancellable(
-            &parsed,
-            50,
-            &SearchVolumeScope::All,
-            budget,
-            &cancellation,
-        )?;
-        Ok(SidecarSessionOutput {
-            diagnostics: vec![
-                format_sidecar_session_report("sidecar-session-first", &session, &first, budget),
-                format_sidecar_session_report("sidecar-session-second", &session, &second, budget),
-            ],
-            hits: second.search.hits,
-        })
-    })
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        WORKER,
+        paths.records.clone(),
+        move |cancellation| {
+            let paths = paths.clone();
+            let query = query.clone();
+            let retry_probe = retry_probe.clone();
+            cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            }
+            let _access =
+                preflight_sidecar_index_search_access_checked(paths.borrowed(), WORKER, || {
+                    cancellation.check()
+                })?;
+            cancellation.check()?;
+            let session = open_sidecar_index_query_session(paths, &cancellation)?;
+            cancellation.check()?;
+            let budget = SearchLookupBudget::default();
+            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+            let first = session.search_structured_with_volume_scope_budget_cancellable(
+                &parsed,
+                50,
+                &SearchVolumeScope::All,
+                budget,
+                &cancellation,
+            )?;
+            cancellation.check()?;
+            let second = session.search_structured_with_volume_scope_budget_cancellable(
+                &parsed,
+                50,
+                &SearchVolumeScope::All,
+                budget,
+                &cancellation,
+            )?;
+            Ok(SidecarSessionOutput {
+                diagnostics: vec![
+                    format_sidecar_session_report(
+                        "sidecar-session-first",
+                        &session,
+                        &first,
+                        budget,
+                    ),
+                    format_sidecar_session_report(
+                        "sidecar-session-second",
+                        &session,
+                        &second,
+                        budget,
+                    ),
+                ],
+                hits: second.search.hits,
+            })
+        },
+    )
 }
 
 fn run_sidecar_index_budget(

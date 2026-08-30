@@ -1663,6 +1663,96 @@
     {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-sidecar-search-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-sidecar-search-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-sidecar-search-retry.progress"
+      },
+      "args": [
+        "search-index-sidecars-retry-probe",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "tag:Important",
+        "tmp/gfm-fozzy-sidecar-search-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-sidecar-search-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-sidecar-search-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-sidecar-search-retry.progress"
+      },
+      "args": [
+        "search-index-sidecars-retry-probe",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "tag:Important",
+        "tmp/gfm-fozzy-sidecar-search-retry.state"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-sidecar-session-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-sidecar-session-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-sidecar-session-retry.progress"
+      },
+      "args": [
+        "search-index-sidecars-session-retry-probe",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "tag:Important",
+        "tmp/gfm-fozzy-sidecar-session-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-sidecar-session-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-sidecar-session-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-sidecar-session-retry.progress"
+      },
+      "args": [
+        "search-index-sidecars-session-retry-probe",
+        "tmp/gfm-fozzy-metadata-records.gfmidx",
+        "/tmp/gfm-fozzy-columns.gfmcols",
+        "/tmp/gfm-fozzy-metadata.gfmmeta",
+        "/tmp/gfm-fozzy-prefixes.gfmprefix",
+        "/tmp/gfm-fozzy-substrings.gfmsubstr",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "/tmp/gfm-fozzy-host.gfmcontent",
+        "tag:Important",
+        "tmp/gfm-fozzy-sidecar-session-retry.state"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
         "search-index-sidecars-volume-scope",
         "tmp/gfm-fozzy-metadata-records.gfmidx",

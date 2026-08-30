@@ -4181,6 +4181,15 @@ fn searches_persisted_tags_from_binary() {
     let substrings = unique_temp_path("gfm-cli-tags", "gfmsubstr");
     let fuzzy = unique_temp_path("gfm-cli-tags", "gfmfuzzy");
     let content = unique_temp_path("gfm-cli-tags", "gfmcontent");
+    let retry_journal = unique_temp_path("gfm-cli-sidecar-search-retry", "journal");
+    let retry_catalog = unique_temp_path("gfm-cli-sidecar-search-retry", "gfmjobs");
+    let retry_progress = unique_temp_path("gfm-cli-sidecar-search-retry", "gfmprogress");
+    let retry_probe = unique_temp_path("gfm-cli-sidecar-search-retry", "state");
+    let session_retry_journal = unique_temp_path("gfm-cli-sidecar-search-session-retry", "journal");
+    let session_retry_catalog = unique_temp_path("gfm-cli-sidecar-search-session-retry", "gfmjobs");
+    let session_retry_progress =
+        unique_temp_path("gfm-cli-sidecar-search-session-retry", "gfmprogress");
+    let session_retry_probe = unique_temp_path("gfm-cli-sidecar-search-session-retry", "state");
     let assert_worker_admitted = |stderr: &[u8], worker: &str, path: &Path| {
         let stderr = String::from_utf8_lossy(stderr);
         assert!(
@@ -4791,6 +4800,51 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_content_stderr.contains("content-cache-misses 1"),
         "{sidecar_content_stderr}"
     );
+
+    let sidecar_retry_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &retry_journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &retry_catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &retry_progress)
+        .args([
+            "search-index-sidecars-retry-probe",
+            index.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+            substrings.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "bodymarker",
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        sidecar_retry_search.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sidecar_retry_search.stderr)
+    );
+    let sidecar_retry_stdout = String::from_utf8(sidecar_retry_search.stdout).unwrap();
+    assert!(
+        sidecar_retry_stdout.contains("tagged.md"),
+        "{sidecar_retry_stdout}"
+    );
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let retry_journal_text = fs::read_to_string(&retry_journal).unwrap();
+    assert!(
+        retry_journal_text.contains("1\t1\tstarted\tsidecar search"),
+        "{retry_journal_text}"
+    );
+    assert!(
+        retry_journal_text
+            .contains("1\t1\tfailed:temporary sidecar search retry probe busy\tsidecar search"),
+        "{retry_journal_text}"
+    );
+    assert!(
+        retry_journal_text.contains("1\t2\tcompleted\tsidecar search"),
+        "{retry_journal_text}"
+    );
+
     let sidecar_session_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "search-index-sidecars-session",
@@ -4840,6 +4894,52 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_session_stderr.contains("\tresult-cache-misses=0"),
         "{sidecar_session_stderr}"
     );
+
+    let sidecar_session_retry_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &session_retry_journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &session_retry_catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &session_retry_progress)
+        .args([
+            "search-index-sidecars-session-retry-probe",
+            index.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+            substrings.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "bodymarker",
+            session_retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        sidecar_session_retry_search.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sidecar_session_retry_search.stderr)
+    );
+    let sidecar_session_retry_stdout =
+        String::from_utf8(sidecar_session_retry_search.stdout).unwrap();
+    assert!(
+        sidecar_session_retry_stdout.contains("tagged.md"),
+        "{sidecar_session_retry_stdout}"
+    );
+    assert_eq!(fs::read_to_string(&session_retry_probe).unwrap(), "2");
+    let session_retry_journal_text = fs::read_to_string(&session_retry_journal).unwrap();
+    assert!(
+        session_retry_journal_text.contains("1\t1\tstarted\tsidecar session"),
+        "{session_retry_journal_text}"
+    );
+    assert!(
+        session_retry_journal_text
+            .contains("1\t1\tfailed:temporary sidecar session retry probe busy\tsidecar session"),
+        "{session_retry_journal_text}"
+    );
+    assert!(
+        session_retry_journal_text.contains("1\t2\tcompleted\tsidecar session"),
+        "{session_retry_journal_text}"
+    );
+
     let sidecar_scoped_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "search-index-sidecars-volume-scope",
@@ -4922,6 +5022,14 @@ fn searches_persisted_tags_from_binary() {
     fs::remove_file(substrings).unwrap();
     fs::remove_file(fuzzy).unwrap();
     fs::remove_file(content).unwrap();
+    fs::remove_file(retry_journal).unwrap();
+    fs::remove_file(retry_catalog).unwrap();
+    fs::remove_file(retry_progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
+    fs::remove_file(session_retry_journal).unwrap();
+    fs::remove_file(session_retry_catalog).unwrap();
+    fs::remove_file(session_retry_progress).unwrap();
+    fs::remove_file(session_retry_probe).unwrap();
 }
 
 #[test]
