@@ -1537,6 +1537,7 @@ fn permission_access_requires_surface(access: &PermissionAccessContract) -> bool
         || access.mode == "degraded-metadata-only"
         || access.promptable
         || concrete_permission_value(&access.prompt_source)
+        || concrete_permission_value(&access.prompt_action)
         || matches!(access.access_action.as_str(), "deny" | "prompt")
         || matches!(access.worker_action.as_str(), "deny" | "prompt")
         || access.probe == "denied"
@@ -1828,6 +1829,14 @@ mod tests {
         access.prompt_action = "choose-location".to_string();
         access.promptable = true;
         access.prompt_source = "security-scoped-bookmark".to_string();
+
+        assert!(permission_access_requires_surface(&access));
+    }
+
+    #[test]
+    fn permission_access_surface_is_required_for_prompt_actions() {
+        let mut access = allowed_permission_access();
+        access.prompt_action = "choose-location".to_string();
 
         assert!(permission_access_requires_surface(&access));
     }
