@@ -195,6 +195,9 @@ pub struct OperationProgressInput {
     pub completed_units: u64,
     pub total_units: u64,
     pub detail: String,
+    pub payload_kind: Option<OperationProgressPayloadKind>,
+    pub payload_path: Option<String>,
+    pub payload_summary: Option<String>,
 }
 
 impl OperationProgressInput {
@@ -212,6 +215,9 @@ impl OperationProgressInput {
             completed_units: completed_units.min(total_units),
             total_units,
             detail: detail.into(),
+            payload_kind: None,
+            payload_path: None,
+            payload_summary: None,
         }
     }
 
@@ -227,6 +233,18 @@ impl OperationProgressInput {
         self.job_id = Some(job_id);
         self
     }
+
+    pub fn with_payload(
+        mut self,
+        kind: OperationProgressPayloadKind,
+        path: impl Into<String>,
+        summary: impl Into<String>,
+    ) -> Self {
+        self.payload_kind = Some(kind);
+        self.payload_path = Some(path.into());
+        self.payload_summary = Some(summary.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,7 +258,33 @@ pub struct OperationProgressContract {
     pub detail_kind: OperationProgressDetailKind,
     pub detail: String,
     pub percent_complete: u64,
+    pub payload_kind: Option<OperationProgressPayloadKind>,
+    pub payload_path: Option<String>,
+    pub payload_summary: Option<String>,
     pub commands: Vec<OperationProgressCommandSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationProgressPayloadKind {
+    Operation,
+    Indexing,
+    Extraction,
+    Thumbnail,
+    Preview,
+    Repair,
+}
+
+impl OperationProgressPayloadKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Operation => "operation",
+            Self::Indexing => "indexing",
+            Self::Extraction => "extraction",
+            Self::Thumbnail => "thumbnail",
+            Self::Preview => "preview",
+            Self::Repair => "repair",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,13 +356,16 @@ impl OperationProgressContract {
             detail_kind: operation_progress_detail_kind(&input.detail),
             detail: input.detail,
             percent_complete,
+            payload_kind: input.payload_kind,
+            payload_path: input.payload_path,
+            payload_summary: input.payload_summary,
             commands: operation_progress_commands(input.job_id, input.state),
         }
     }
 
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!(
-            "{}\noperation-progress\tjob={}\tlabel={}\tstate={}\tcompleted={}\ttotal={}\tpercent={}\tdetail={}\tdetail-kind={}",
+            "{}\noperation-progress\tjob={}\tlabel={}\tstate={}\tcompleted={}\ttotal={}\tpercent={}\tdetail={}\tdetail-kind={}\tpayload-kind={}\tpayload-path={}\tpayload-summary={}",
             self.dialog.as_tsv(),
             self.job_id
                 .map(|id| id.to_string())
@@ -330,6 +377,17 @@ impl OperationProgressContract {
             self.percent_complete,
             escape_tsv(&self.detail),
             self.detail_kind.as_str(),
+            self.payload_kind
+                .map(OperationProgressPayloadKind::as_str)
+                .unwrap_or("-"),
+            self.payload_path
+                .as_deref()
+                .map(escape_tsv)
+                .unwrap_or_else(|| "-".to_string()),
+            self.payload_summary
+                .as_deref()
+                .map(escape_tsv)
+                .unwrap_or_else(|| "-".to_string()),
         )];
         lines.extend(self.commands.iter().map(|command| {
             format!(
@@ -1694,6 +1752,37 @@ mod tests {
             "operation-progress\tjob=-\tlabel=copy selected files\tstate=paused\tcompleted=42\ttotal=100\tpercent=42\tdetail=pressure:throttled"
         ));
         assert!(contract.as_tsv().contains("\tdetail-kind=pressure"));
+    }
+
+    #[test]
+    fn operation_progress_contract_carries_restore_payload_metadata() {
+        let contract = OperationProgressContract::from_input(
+            OperationProgressInput::new(
+                "sidecar repair",
+                OperationProgressState::Paused,
+                1,
+                4,
+                "interrupted:running:repair:sidecars",
+            )
+            .with_job_id(9)
+            .with_payload(
+                OperationProgressPayloadKind::Repair,
+                "repair/sidecar.gfmjob",
+                "repair:sidecars",
+            ),
+        );
+
+        assert_eq!(
+            contract.payload_kind,
+            Some(OperationProgressPayloadKind::Repair)
+        );
+        assert_eq!(
+            contract.payload_path.as_deref(),
+            Some("repair/sidecar.gfmjob")
+        );
+        assert!(contract.as_tsv().contains(
+            "\tpayload-kind=repair\tpayload-path=repair/sidecar.gfmjob\tpayload-summary=repair:sidecars"
+        ));
     }
 
     #[test]

@@ -1471,7 +1471,7 @@ pub(crate) fn runtime_operation_conflict_store() -> Option<OperationConflictStor
     env::var_os("GFM_OPERATION_CONFLICT_STORE").map(OperationConflictStore::new)
 }
 
-fn runtime_payload_catalog() -> Option<JobPayloadCatalog> {
+pub(crate) fn runtime_payload_catalog() -> Option<JobPayloadCatalog> {
     env::var_os("GFM_JOB_PAYLOAD_CATALOG").map(JobPayloadCatalog::new)
 }
 

@@ -37,8 +37,8 @@ pub use dialog::{
     DialogButtonSpec, DialogContract, DialogFieldKind, DialogFieldSpec, DialogPresentation,
     DialogSurface, OperationConflictContract, OperationConflictInput, OperationConflictPaths,
     OperationProgressCommand, OperationProgressCommandSpec, OperationProgressContract,
-    OperationProgressDetailKind, OperationProgressInput, OperationProgressState,
-    PermissionPromptKind, ProviderConflictContract, ProviderConflictInput,
+    OperationProgressDetailKind, OperationProgressInput, OperationProgressPayloadKind,
+    OperationProgressState, PermissionPromptKind, ProviderConflictContract, ProviderConflictInput,
 };
 pub use gallery::{
     render as render_gallery_view, GalleryFilmstripItemSpec, GalleryKeyboardFlow,

@@ -1076,7 +1076,23 @@ fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
         "gfm-ui-lifecycle-progress-{}.gfmprogress",
         std::process::id()
     ));
+    let catalog = std::env::temp_dir().join(format!(
+        "gfm-ui-lifecycle-payload-{}.gfmjobs",
+        std::process::id()
+    ));
     let _ = std::fs::remove_file(&progress);
+    let _ = std::fs::remove_file(&catalog);
+
+    let seed_payload = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("jobs-payload-catalog")
+        .arg(&catalog)
+        .output()
+        .unwrap();
+    assert!(
+        seed_payload.status.success(),
+        "{}",
+        String::from_utf8_lossy(&seed_payload.stderr)
+    );
 
     let seed = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("jobs-progress-snapshot")
@@ -1090,6 +1106,7 @@ fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
     );
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
         .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args(["ui-contract", "/tmp/gfm"])
         .output()
@@ -1110,7 +1127,19 @@ fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
     );
     assert!(
         stdout.contains(
+            "\tpayload-kind=operation\tpayload-path=operations/copy.gfmjob\tpayload-summary=copy:/source->/target"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
             "\noperation-progress\tjob=2\tlabel=index content\tstate=paused\tcompleted=128\ttotal=250\tpercent=51\t"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "\tpayload-kind=indexing\tpayload-path=index/content.gfmjob\tpayload-summary=index:/workspace"
         ),
         "{stdout}"
     );
@@ -1125,6 +1154,7 @@ fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
     assert!(!stdout.contains("compact content segments"), "{stdout}");
 
     let _ = std::fs::remove_file(progress);
+    let _ = std::fs::remove_file(catalog);
 }
 
 #[test]

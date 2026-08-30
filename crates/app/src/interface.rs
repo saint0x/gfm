@@ -4,7 +4,10 @@ use gfm_fs::{
     PackageTraversalReport, ScanOptions,
 };
 use gfm_index::Indexer;
-use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore, Priority};
+use gfm_jobs::{
+    JobId, JobPayloadCatalog, JobPayloadKind, JobPayloadRecord, JobProgressSnapshot,
+    JobProgressState, JobProgressStore, Priority,
+};
 use gfm_mac::{
     current_permission_onboarding, AccessIntent, AccessProbeState, CloudCommandState,
     CloudStorageState, FileProviderConflictReport, FileProviderInvalidationReport,
@@ -20,16 +23,17 @@ use gfm_ui::{
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
     MenuContract, OperationConflictContract, OperationConflictInput, OperationConflictPaths,
-    OperationProgressContract, OperationProgressInput, OperationProgressState,
-    PermissionAccessContract, PermissionPromptKind, PermissionRefreshChangeContract,
-    PermissionRefreshContract, ProviderConflictContract, ProviderConflictInput, SearchResultsBatch,
-    SearchResultsContract, SearchResultsOptions, SearchResultsStage, SidebarCloudInvalidation,
-    SidebarCloudState, SidebarContract, SidebarVolumeEventKind, SidebarVolumeInvalidation,
-    SidebarVolumeKind, SidebarVolumeMountState, SidebarVolumeSpec, TitlebarContract,
-    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
-    VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    OperationProgressContract, OperationProgressInput, OperationProgressPayloadKind,
+    OperationProgressState, PermissionAccessContract, PermissionPromptKind,
+    PermissionRefreshChangeContract, PermissionRefreshContract, ProviderConflictContract,
+    ProviderConflictInput, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
+    SearchResultsStage, SidebarCloudInvalidation, SidebarCloudState, SidebarContract,
+    SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind, SidebarVolumeMountState,
+    SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
+    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
+    WindowSessionContract, WindowSessionStore,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, BufReader};
@@ -187,7 +191,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         job_id.value()
                     ))
                 })?;
-            println!("{}", operation_progress_contract(snapshot).as_tsv());
+            println!("{}", operation_progress_contract(snapshot, None).as_tsv());
         }
         "ui-fileprovider-conflict-contract" => {
             let path = required_path(
@@ -1137,6 +1141,38 @@ fn read_ui_restorable_progress_snapshots(path: &Path) -> Result<Vec<JobProgressS
     read_ui_progress_snapshots_with(path, JobProgressStore::restorable)
 }
 
+fn read_ui_payload_records(path: &Path) -> Result<HashMap<JobId, JobPayloadRecord>> {
+    const WORKER: &str = "ui payload catalog";
+    crate::access::preflight_volume_access_scope(path, AccessIntent::Read, WORKER)?;
+    let volume = crate::detect_volume_id(path)
+        .ok()
+        .or_else(|| crate::parent_volume(path));
+    let path = path.to_path_buf();
+    crate::runtime::run_volume_task_cancellable_without_progress(
+        volume,
+        Priority::Visible,
+        WORKER,
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = crate::access::preflight_access_scope_checked(
+                &path,
+                AccessIntent::Read,
+                WORKER,
+                || cancellation.check(),
+            )?;
+            cancellation.check()?;
+            JobPayloadCatalog::new(&path)
+                .read_checked(|| cancellation.check())
+                .map(|records| {
+                    records
+                        .into_iter()
+                        .map(|record| (record.id, record))
+                        .collect()
+                })
+        },
+    )
+}
+
 fn read_ui_progress_snapshots_with(
     path: &Path,
     read: fn(&JobProgressStore) -> Result<Vec<JobProgressSnapshot>>,
@@ -1362,10 +1398,14 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
         .unwrap_or_default()
         .with_sidebar_volumes(native_sidebar_volumes());
     if let Some(store) = crate::runtime::runtime_progress_store() {
+        let payloads = crate::runtime::runtime_payload_catalog()
+            .map(|catalog| read_ui_payload_records(catalog.path()))
+            .transpose()?
+            .unwrap_or_default();
         let progress_surfaces = read_ui_restorable_progress_snapshots(store.path())?
             .iter()
             .filter(|snapshot| snapshot.label != "ui progress store")
-            .map(operation_progress_contract)
+            .map(|snapshot| operation_progress_contract(snapshot, payloads.get(&snapshot.id)))
             .collect();
         spec = spec.with_progress_surfaces(progress_surfaces);
     }
@@ -1790,17 +1830,26 @@ fn search_results_stage(stage: gfm_index::SearchStreamStage) -> SearchResultsSta
     }
 }
 
-fn operation_progress_contract(snapshot: &JobProgressSnapshot) -> OperationProgressContract {
-    OperationProgressContract::from_input(
-        OperationProgressInput::new(
-            snapshot.label.clone(),
-            operation_progress_state(snapshot.state),
-            snapshot.completed_units,
-            snapshot.total_units,
-            snapshot.detail.clone(),
-        )
-        .with_job_id(snapshot.id.value()),
+fn operation_progress_contract(
+    snapshot: &JobProgressSnapshot,
+    payload: Option<&JobPayloadRecord>,
+) -> OperationProgressContract {
+    let mut input = OperationProgressInput::new(
+        snapshot.label.clone(),
+        operation_progress_state(snapshot.state),
+        snapshot.completed_units,
+        snapshot.total_units,
+        snapshot.detail.clone(),
     )
+    .with_job_id(snapshot.id.value());
+    if let Some(payload) = payload {
+        input = input.with_payload(
+            operation_progress_payload_kind(payload.kind),
+            payload.payload_path.to_string_lossy(),
+            payload.summary.clone(),
+        );
+    }
+    OperationProgressContract::from_input(input)
 }
 
 fn operation_progress_state(state: JobProgressState) -> OperationProgressState {
@@ -1811,6 +1860,17 @@ fn operation_progress_state(state: JobProgressState) -> OperationProgressState {
         JobProgressState::Completed => OperationProgressState::Completed,
         JobProgressState::Cancelled => OperationProgressState::Cancelled,
         JobProgressState::Failed => OperationProgressState::Failed,
+    }
+}
+
+fn operation_progress_payload_kind(kind: JobPayloadKind) -> OperationProgressPayloadKind {
+    match kind {
+        JobPayloadKind::Operation => OperationProgressPayloadKind::Operation,
+        JobPayloadKind::Indexing => OperationProgressPayloadKind::Indexing,
+        JobPayloadKind::Extraction => OperationProgressPayloadKind::Extraction,
+        JobPayloadKind::Thumbnail => OperationProgressPayloadKind::Thumbnail,
+        JobPayloadKind::Preview => OperationProgressPayloadKind::Preview,
+        JobPayloadKind::Repair => OperationProgressPayloadKind::Repair,
     }
 }
 
