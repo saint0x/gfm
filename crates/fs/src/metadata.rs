@@ -8,6 +8,7 @@ const FINDER_COMMENT_XATTR: &str = "com.apple.metadata:kMDItemFinderComment";
 const FINDER_INFO_XATTR: &str = "com.apple.FinderInfo";
 const FINDER_FLAG_EXTENSION_HIDDEN: u16 = 0x0010;
 const FINDER_FLAG_ALIAS: u16 = 0x8000;
+const BUNDLE_INFO_PLIST_MAX_BYTES: u64 = 256 * 1024;
 const FINDER_METADATA_XATTR_MAX_BYTES: usize = 64 * 1024;
 const LOCALIZED_SIDECAR_READ_LIMIT: u64 = 64 * 1024;
 
@@ -325,7 +326,7 @@ fn bundle_display_name(record: &FileRecord, role: FinderTypeRole) -> Option<Stri
         return None;
     }
     let plist = record.path.join("Contents").join("Info.plist");
-    let value = plist::Value::from_file(plist).ok()?;
+    let value = bounded_plist_value(&plist, BUNDLE_INFO_PLIST_MAX_BYTES)?;
     let plist::Value::Dictionary(dictionary) = value else {
         return None;
     };
@@ -334,6 +335,15 @@ fn bundle_display_name(record: &FileRecord, role: FinderTypeRole) -> Option<Stri
         .and_then(plist_string)
         .or_else(|| dictionary.get("CFBundleName").and_then(plist_string))
         .and_then(non_empty)
+}
+
+fn bounded_plist_value(path: &Path, max_bytes: u64) -> Option<plist::Value> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if metadata.len() > max_bytes {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    plist::Value::from_reader(file.take(max_bytes)).ok()
 }
 
 fn plist_string(value: &plist::Value) -> Option<String> {
@@ -585,6 +595,29 @@ mod tests {
 
         assert!(report.comment.is_none());
         assert!(report.tags.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_bundle_info_plist_does_not_block_display_name_fallback() {
+        let root = unique_temp_dir();
+        let app = root.join("Huge.app");
+        fs::create_dir_all(app.join("Contents")).unwrap();
+        let plist = app.join("Contents").join("Info.plist");
+        let mut raw = String::from(
+            r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleDisplayName</key><string>"#,
+        );
+        raw.push_str(&"x".repeat(BUNDLE_INFO_PLIST_MAX_BYTES as usize));
+        raw.push_str("</string></dict></plist>");
+        fs::write(&plist, raw).unwrap();
+
+        let report = FinderMetadataReport::read_path(&app).unwrap();
+
+        assert_eq!(report.display_name, "Huge");
+        assert_eq!(
+            report.type_role,
+            FinderTypeRole::Package(PackageKind::Application)
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
