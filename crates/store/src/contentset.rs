@@ -244,15 +244,32 @@ impl ContentArchiveManifest {
         new_archive: ContentArchiveManifestEntry,
         retired_paths: &[impl AsRef<Path>],
     ) -> Result<ContentManifestPromotion> {
+        self.promote_archive_checked(manifest_path, new_archive, retired_paths, || Ok(()))
+    }
+
+    pub fn promote_archive_checked(
+        &self,
+        manifest_path: impl AsRef<Path>,
+        new_archive: ContentArchiveManifestEntry,
+        retired_paths: &[impl AsRef<Path>],
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ContentManifestPromotion> {
         let manifest_path = manifest_path.as_ref();
+        check_control()?;
         let retired_set = retired_paths
             .iter()
-            .map(|path| resolve_manifest_path(manifest_path, path.as_ref()))
-            .collect::<BTreeSet<_>>();
+            .map(|path| {
+                check_control()?;
+                Ok(resolve_manifest_path(manifest_path, path.as_ref()))
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        check_control()?;
         let new_resolved = resolve_manifest_path(manifest_path, &new_archive.path);
+        check_control()?;
         let mut retired_archives = Vec::new();
         let mut retained = Vec::new();
         for entry in &self.archives {
+            check_control()?;
             let resolved = resolve_manifest_path(manifest_path, &entry.path);
             if retired_set.contains(&resolved) || resolved == new_resolved {
                 retired_archives.push(resolved);
@@ -261,12 +278,14 @@ impl ContentArchiveManifest {
             }
         }
 
+        check_control()?;
         let retired_archives_set = retired_archives.iter().cloned().collect::<BTreeSet<_>>();
         let missing_retirements = retired_set
             .into_iter()
             .filter(|path| !retired_archives_set.contains(path))
             .collect();
         retained.push(new_archive);
+        check_control()?;
         Ok(ContentManifestPromotion {
             manifest: Self::new(retained)?,
             retired_archives,
@@ -577,9 +596,17 @@ impl ContentManifestPromotionJournal {
         .map(|_| ())
     }
 
-    fn promotion(&self, manifest_path: &Path) -> Result<ContentManifestPromotion> {
-        self.previous
-            .promote_archive(manifest_path, self.new_archive.clone(), &self.retired_paths)
+    fn promotion_checked(
+        &self,
+        manifest_path: &Path,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ContentManifestPromotion> {
+        self.previous.promote_archive_checked(
+            manifest_path,
+            self.new_archive.clone(),
+            &self.retired_paths,
+            check_control,
+        )
     }
 }
 
@@ -626,7 +653,10 @@ pub fn promote_content_archive_manifest_checked(
     check_control()?;
     journal.write(&journal_path)?;
     check_control()?;
-    let promotion = manifest.promote_archive(manifest_path, new_archive, &retired_paths)?;
+    let promotion =
+        manifest.promote_archive_checked(manifest_path, new_archive, &retired_paths, || {
+            check_control()
+        })?;
     check_control()?;
     promotion.manifest.write(manifest_path)?;
     check_control()?;
@@ -692,7 +722,7 @@ pub fn plan_content_manifest_promotion_recovery_checked(
             }
         };
     check_control()?;
-    let promotion = match journal.promotion(&manifest_path) {
+    let promotion = match journal.promotion_checked(&manifest_path, &mut check_control) {
         Ok(promotion) => promotion,
         Err(err) => {
             return Ok(ContentManifestPromotionRecoveryPlan {
@@ -773,7 +803,7 @@ pub fn recover_content_manifest_promotion_checked(
                 &mut check_control,
             )?;
             check_control()?;
-            let promotion = journal.promotion(manifest_path)?;
+            let promotion = journal.promotion_checked(manifest_path, &mut check_control)?;
             check_control()?;
             promotion.manifest.write(manifest_path)?;
             check_control()?;

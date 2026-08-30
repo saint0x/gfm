@@ -696,7 +696,9 @@ fn content_manifest_promotion_recovery_removes_stale_journal() {
         vec![PathBuf::from("hot-a.gfmcontent")],
     )
     .unwrap();
-    let promoted = journal.promotion(&manifest_path).unwrap();
+    let promoted = journal
+        .promotion_checked(&manifest_path, || Ok(()))
+        .unwrap();
     promoted.manifest.write(&manifest_path).unwrap();
     let journal_path = content_manifest_promotion_journal_path(&manifest_path);
     journal.write(&journal_path).unwrap();
@@ -711,6 +713,38 @@ fn content_manifest_promotion_recovery_removes_stale_journal() {
     );
     assert!(!journal_path.exists());
 
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn content_manifest_promotion_journal_checked_promotion_honors_cancellation() {
+    let dir = temp_dir("gfm-content-manifest-promotion-checked-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    std::fs::create_dir_all(&dir).unwrap();
+    let previous = ContentArchiveManifest::new(vec![
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Hot,
+            path: PathBuf::from("hot-a.gfmcontent"),
+        },
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: PathBuf::from("warm-a.gfmcontent"),
+        },
+    ])
+    .unwrap();
+    let journal = ContentManifestPromotionJournal::new(
+        previous,
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: PathBuf::from("warm-b.gfmcontent"),
+        },
+        vec![PathBuf::from("hot-a.gfmcontent")],
+    )
+    .unwrap();
+
+    let result = journal.promotion_checked(&manifest_path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
     std::fs::remove_dir_all(dir).unwrap();
 }
 
