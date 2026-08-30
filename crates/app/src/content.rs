@@ -25,8 +25,9 @@ use gfm_index::{
     Indexer, QuarantineContentIndexRequest,
 };
 use gfm_jobs::{
-    Cancellation, JobFairnessPolicy, JobJournal, JobPayloadKind, Priority, RetriableTask,
-    RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, TaskStatus, WorkerPool,
+    Cancellation, FailureClass, JobFairnessPolicy, JobJournal, JobPayloadKind, Priority,
+    RecoveryReason, RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure,
+    TaskStatus, WorkerPool,
 };
 use gfm_mac::AccessIntent;
 use gfm_store::{read_records, ContentArchiveManifest};
@@ -493,7 +494,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or_else(default_job_journal_path);
             let journal = JobJournal::new(journal);
-            let Some((recoverable, spec)) =
+            let Some((recovery, spec)) =
                 load_resumable_content_job_spec(spec_path.clone(), &journal)?
             else {
                 eprintln!("no recoverable background content jobs");
@@ -504,8 +505,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     run_content_job(&spec, &journal, SchedulingPressure::default(), &spec_path)?;
                 if outcome.deferred {
                     eprintln!(
-                        "resumed-background-content-deferred action={:?}; recoverable {}",
-                        outcome.scheduling_action, recoverable
+                        "resumed-background-content-deferred action={:?}; {}",
+                        outcome.scheduling_action,
+                        recovery.as_diagnostics()
                     );
                 } else {
                     let report = outcome.report.ok_or_else(|| {
@@ -514,7 +516,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         )
                     })?;
                     eprintln!(
-                        "resumed-background-content-indexed {} files; skipped {}; quarantined {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; recoverable {}",
+                        "resumed-background-content-indexed {} files; skipped {}; quarantined {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; {}",
                         report.indexed,
                         report.skipped,
                         report.quarantined,
@@ -523,7 +525,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         report.segments.len(),
                         report.terms,
                         outcome.scheduling_action,
-                        recoverable
+                        recovery.as_diagnostics()
                     );
                 }
             }
@@ -559,7 +561,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     outcome.scheduling_action
                 );
             } else {
-                let Some((recoverable, spec)) =
+                let Some((recovery, spec)) =
                     load_resumable_content_job_spec(spec_path.clone(), &journal)?
                 else {
                     eprintln!("no recoverable background content jobs");
@@ -569,8 +571,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
                     if outcome.deferred {
                         eprintln!(
-                            "resumed-background-content-deferred action={:?}; recoverable {}",
-                            outcome.scheduling_action, recoverable
+                            "resumed-background-content-deferred action={:?}; {}",
+                            outcome.scheduling_action,
+                            recovery.as_diagnostics()
                         );
                     } else {
                         let report = outcome.report.ok_or_else(|| {
@@ -579,7 +582,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                             )
                         })?;
                         eprintln!(
-                            "resumed-background-content-indexed {} files; skipped {}; quarantined {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; recoverable {}",
+                            "resumed-background-content-indexed {} files; skipped {}; quarantined {}; unchanged {}; tombstoned {}; segments {}; terms {}; action={:?}; {}",
                             report.indexed,
                             report.skipped,
                             report.quarantined,
@@ -588,7 +591,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                             report.segments.len(),
                             report.terms,
                             outcome.scheduling_action,
-                            recoverable
+                            recovery.as_diagnostics()
                         );
                     }
                 }
@@ -884,7 +887,7 @@ fn run_content_segment_maintenance(
 fn load_resumable_content_job_spec(
     spec_path: PathBuf,
     journal: &JobJournal,
-) -> Result<Option<(usize, ContentIndexJobSpec)>> {
+) -> Result<Option<(RecoverableContentJobs, ContentIndexJobSpec)>> {
     const WORKER: &str = "resume background content recovery";
     preflight_background_content_recovery_volumes(journal)?;
     let volume = parent_volume(journal.path())
@@ -898,7 +901,7 @@ fn load_resumable_content_job_spec(
         move |cancellation| {
             cancellation.check()?;
             let recoverable = recoverable_background_content_jobs(&journal)?;
-            if recoverable == 0 {
+            if recoverable.total == 0 {
                 return Ok(None);
             }
             preflight_volume_access_scope(
@@ -1045,6 +1048,72 @@ fn unique_path_refs<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<&'a Pa
         .collect()
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RecoverableContentJobs {
+    total: usize,
+    interrupted: usize,
+    retryable_failures: usize,
+    restorable_progress: usize,
+    transient_failures: usize,
+    offline_volume_failures: usize,
+    next_delay_ms: u64,
+}
+
+impl RecoverableContentJobs {
+    fn add_journal_job(
+        &mut self,
+        reason: RecoveryReason,
+        failure_class: Option<FailureClass>,
+        next_delay_ms: u64,
+    ) {
+        self.total += 1;
+        match reason {
+            RecoveryReason::Interrupted => self.interrupted += 1,
+            RecoveryReason::RetryableFailure => {
+                self.retryable_failures += 1;
+                self.next_delay_ms = self.next_delay_ms.max(next_delay_ms);
+                match failure_class {
+                    Some(FailureClass::Transient) => self.transient_failures += 1,
+                    Some(FailureClass::OfflineVolume) => self.offline_volume_failures += 1,
+                    Some(_) | None => {}
+                }
+            }
+        }
+    }
+
+    fn add_progress_job(&mut self) {
+        self.total += 1;
+        self.restorable_progress += 1;
+    }
+
+    fn as_diagnostics(&self) -> String {
+        format!(
+            "recoverable {}; recovery-interrupted {}; recovery-retryable {}; recovery-progress {}; recovery-classes {}; next-delay-ms {}",
+            self.total,
+            self.interrupted,
+            self.retryable_failures,
+            self.restorable_progress,
+            self.class_summary(),
+            self.next_delay_ms
+        )
+    }
+
+    fn class_summary(&self) -> String {
+        let mut classes = Vec::new();
+        if self.offline_volume_failures > 0 {
+            classes.push(format!("offline-volume:{}", self.offline_volume_failures));
+        }
+        if self.transient_failures > 0 {
+            classes.push(format!("transient:{}", self.transient_failures));
+        }
+        if classes.is_empty() {
+            "-".to_string()
+        } else {
+            classes.join(",")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1089,29 +1158,30 @@ mod tests {
     }
 }
 
-fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<usize> {
+fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<RecoverableContentJobs> {
     let _journal_access = retain_optional_recovery_store_access(
         journal.path(),
         "background content recovery journal",
     )?;
-    let mut ids = journal
-        .recoverable(RetryPolicy { max_attempts: 2 })?
-        .into_iter()
-        .filter(|job| job.label == "background content index")
-        .map(|job| job.id)
-        .collect::<HashSet<_>>();
+    let mut ids = HashSet::new();
+    let mut recoverable = RecoverableContentJobs::default();
+    for job in journal.recoverable(RetryPolicy { max_attempts: 2 })? {
+        if job.label == "background content index" && ids.insert(job.id) {
+            recoverable.add_journal_job(job.reason, job.failure_class, job.next_delay_ms);
+        }
+    }
     if let Some(store) = runtime_progress_store() {
         let _progress_access = retain_optional_recovery_store_access(
             store.path(),
             "background content recovery progress",
         )?;
         for snapshot in store.restorable()? {
-            if snapshot.label == "background content index" {
-                ids.insert(snapshot.id);
+            if snapshot.label == "background content index" && ids.insert(snapshot.id) {
+                recoverable.add_progress_job();
             }
         }
     }
-    Ok(ids.len())
+    Ok(recoverable)
 }
 
 fn preflight_background_content_recovery_volumes(journal: &JobJournal) -> Result<()> {
