@@ -858,7 +858,7 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     path
 }
 
-fn has_quarantine_temp_file(root: &PathBuf, prefix: &str) -> bool {
+fn has_quarantine_temp_file(root: &Path, prefix: &str) -> bool {
     fs::read_dir(root).unwrap().any(|entry| {
         entry
             .unwrap()
