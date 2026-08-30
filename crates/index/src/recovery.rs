@@ -405,7 +405,7 @@ fn write_state_from_records(
     check_control()?;
     let state = snapshot.volume_state(records_path.to_path_buf(), previous.as_ref())?;
     check_control()?;
-    state.write(state_path)
+    state.write_checked(state_path, &mut check_control)
 }
 
 fn quarantine_records(records_path: &Path, quarantine_dir: &Path) -> Result<PathBuf> {

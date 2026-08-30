@@ -4160,6 +4160,49 @@ fn persistent_index_recovery_rebuilds_missing_or_stale_state() {
 }
 
 #[test]
+fn persistent_index_recovery_checked_state_write_preserves_existing_state_on_cancel() {
+    let root = unique_temp_dir("gfm-index-recovery-state-write-cancel-root");
+    let records = unique_temp_path("gfm-index-recovery-state-write-cancel-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-index-recovery-state-write-cancel", "gfmstate");
+    let quarantine = unique_temp_dir("gfm-index-recovery-state-write-cancel-quarantine");
+    fs::write(root.join("Initial.md"), "state").unwrap();
+
+    let indexer = Indexer::default();
+    indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    let before = fs::read(&state_path).unwrap();
+    fs::write(root.join("Added.md"), "state").unwrap();
+    indexer.build(&root).unwrap().save(&records).unwrap();
+    let mut checks = 0usize;
+
+    let result = crate::recovery::recover_persistent_index_checked(
+        &root,
+        &records,
+        &state_path,
+        &quarantine,
+        || indexer.build_persistent(&root, &records, &state_path),
+        || {
+            checks += 1;
+            if checks >= 12 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 12);
+    assert_eq!(fs::read(&state_path).unwrap(), before);
+    assert!(!has_store_atomic_temp_file(&state_path));
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+    fs::remove_dir_all(quarantine).unwrap();
+}
+
+#[test]
 fn persistent_index_recovery_quarantines_corrupt_records_before_rebuild() {
     let root = unique_temp_dir("gfm-index-recovery-records-root");
     let records = unique_temp_path("gfm-index-recovery-records", "gfmidx");
