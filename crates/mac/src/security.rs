@@ -281,10 +281,13 @@ impl SecurityWorkerAdmissionReport {
         let refresh_on_permission_change = matches!(
             worker_action,
             SecurityWorkerAction::MetadataOnly | SecurityWorkerAction::Prompt
-        ) || matches!(
-            access.probe,
-            AccessProbeState::Denied | AccessProbeState::Unavailable | AccessProbeState::Unknown
-        );
+        ) || needs_bookmark_access
+            || matches!(
+                access.probe,
+                AccessProbeState::Denied
+                    | AccessProbeState::Unavailable
+                    | AccessProbeState::Unknown
+            );
         let reason = match worker_action {
             SecurityWorkerAction::Start if needs_bookmark_access => {
                 format!("{worker} may start after retained security-scoped bookmark access")
@@ -976,6 +979,35 @@ mod tests {
         assert!(admission.as_tsv().contains("worker-action=start"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_refreshes_permission_state_for_bookmark_backed_start() {
+        let report = SecurityScopedAccessReport {
+            path: PathBuf::from("/Users/me/Documents/Preview.md"),
+            intent: AccessIntent::Preview,
+            scope: ProtectedScope::Documents,
+            probe: AccessProbeState::Granted,
+            mode: SecurityAccessMode::SecurityScopedBookmark,
+            action: SecurityDecisionAction::Allow,
+            bookmark_required: true,
+            can_read: true,
+            can_write: false,
+            least_privilege: true,
+            reason: "path is readable now but should be retained with a security-scoped bookmark"
+                .to_string(),
+        };
+
+        let admission = report.worker_admission("preview worker");
+
+        assert_eq!(admission.worker_action, SecurityWorkerAction::Start);
+        assert!(admission.can_touch_filesystem);
+        assert!(admission.needs_bookmark_access);
+        assert!(admission.refresh_on_permission_change);
+        assert!(admission.as_tsv().contains("\tbookmark-access=true\t"));
+        assert!(admission
+            .as_tsv()
+            .contains("\trefresh-on-permission-change=true\t"));
     }
 
     #[test]

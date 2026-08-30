@@ -923,6 +923,7 @@ fn protected_worker_route_fails_closed_without_retained_bookmark_from_binary() {
     assert!(stderr.contains("security-worker-admission\tworker=native icon\t"));
     assert!(stderr.contains("\tscope=documents\t"));
     assert!(stderr.contains("\tbookmark-access=true\t"));
+    assert!(stderr.contains("\trefresh-on-permission-change=true\t"));
     assert!(stderr.contains("security-scope-access\t"));
     assert!(stderr.contains("\tstatus=missing\t"));
     assert!(
