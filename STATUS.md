@@ -72,7 +72,6 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 43. Complete automatic dependency-aware fair scheduling integration across foreground, visible, background, maintenance, and repair queues.
 44. Complete automatic persistent job progress restoration and GPUI progress-surface integration across remaining specialized producers.
 45. Bind thermal, battery, IO pressure, and user-activity adaptive scheduling into remaining foreground, preview, and thumbnail producers.
-47. Complete retry/backoff integration across remaining operation, indexing, extraction, thumbnail, preview, and repair producers.
 
 ## Preview And Thumbnails
 
