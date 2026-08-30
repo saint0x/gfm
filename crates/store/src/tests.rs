@@ -270,6 +270,159 @@ fn mmap_record_archive_batch_hydrates_sorted_ids_in_one_directory_pass() {
 }
 
 #[test]
+fn mmap_record_archive_checked_batch_hydration_honors_pre_cancelled_control() {
+    let path = temp_path("gfm-store-mmap-batch-cancel", "idx");
+    let records = vec![FileRecord {
+        id: FileId::new(VolumeId(4), 10),
+        parent: Some(FileId::new(VolumeId(4), 1)),
+        path: PathBuf::from("/tmp/a/alpha.txt"),
+        name: "alpha.txt".to_string(),
+        kind: FileKind::File,
+        len: 10,
+        mode: 0o100644,
+        owner: 501,
+        group: 20,
+        xattrs_digest: 0,
+        created: None,
+        modified: None,
+        changed: None,
+        hidden: false,
+        tags: Vec::new(),
+        finder_comment: None,
+    }];
+    write_records(&path, &records).unwrap();
+    let archive = MmapRecordArchive::open(&path).unwrap();
+
+    let result = archive.records_for_sorted_ids_checked([FileId::new(VolumeId(4), 10)], || {
+        Err(GfmError::Cancelled)
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn mmap_record_archive_checked_full_hydration_can_cancel_between_records() {
+    let path = temp_path("gfm-store-mmap-records-cancel", "idx");
+    let records = vec![
+        FileRecord {
+            id: FileId::new(VolumeId(4), 10),
+            parent: Some(FileId::new(VolumeId(4), 1)),
+            path: PathBuf::from("/tmp/a/alpha.txt"),
+            name: "alpha.txt".to_string(),
+            kind: FileKind::File,
+            len: 10,
+            mode: 0o100644,
+            owner: 501,
+            group: 20,
+            xattrs_digest: 0,
+            created: None,
+            modified: None,
+            changed: None,
+            hidden: false,
+            tags: Vec::new(),
+            finder_comment: None,
+        },
+        FileRecord {
+            id: FileId::new(VolumeId(4), 11),
+            parent: Some(FileId::new(VolumeId(4), 1)),
+            path: PathBuf::from("/tmp/a/beta.txt"),
+            name: "beta.txt".to_string(),
+            kind: FileKind::File,
+            len: 11,
+            mode: 0o100644,
+            owner: 501,
+            group: 20,
+            xattrs_digest: 0,
+            created: None,
+            modified: None,
+            changed: None,
+            hidden: false,
+            tags: Vec::new(),
+            finder_comment: None,
+        },
+    ];
+    write_records(&path, &records).unwrap();
+    let archive = MmapRecordArchive::open(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = archive.records_checked(|| {
+        checks += 1;
+        if checks >= 2 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 2);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn mmap_record_archive_checked_records_honors_pre_cancelled_control() {
+    let path = temp_path("gfm-store-mmap-records-cancel", "idx");
+    let records = vec![FileRecord {
+        id: FileId::new(VolumeId(4), 10),
+        parent: Some(FileId::new(VolumeId(4), 1)),
+        path: PathBuf::from("/tmp/a/alpha.txt"),
+        name: "alpha.txt".to_string(),
+        kind: FileKind::File,
+        len: 10,
+        mode: 0o100644,
+        owner: 501,
+        group: 20,
+        xattrs_digest: 0,
+        created: None,
+        modified: None,
+        changed: None,
+        hidden: false,
+        tags: Vec::new(),
+        finder_comment: None,
+    }];
+    write_records(&path, &records).unwrap();
+    let archive = MmapRecordArchive::open(&path).unwrap();
+
+    let result = archive.records_checked(|| Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn mmap_record_archive_checked_batch_honors_pre_cancelled_control() {
+    let path = temp_path("gfm-store-mmap-batch-cancel", "idx");
+    let records = vec![FileRecord {
+        id: FileId::new(VolumeId(4), 10),
+        parent: Some(FileId::new(VolumeId(4), 1)),
+        path: PathBuf::from("/tmp/a/alpha.txt"),
+        name: "alpha.txt".to_string(),
+        kind: FileKind::File,
+        len: 10,
+        mode: 0o100644,
+        owner: 501,
+        group: 20,
+        xattrs_digest: 0,
+        created: None,
+        modified: None,
+        changed: None,
+        hidden: false,
+        tags: Vec::new(),
+        finder_comment: None,
+    }];
+    write_records(&path, &records).unwrap();
+    let archive = MmapRecordArchive::open(&path).unwrap();
+
+    let result = archive.records_for_sorted_ids_checked([FileId::new(VolumeId(4), 10)], || {
+        Err(GfmError::Cancelled)
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn checksummed_record_archive_rejects_corruption() {
     let path = temp_path("gfm-store-checksum", "idx");
     let records = vec![FileRecord {

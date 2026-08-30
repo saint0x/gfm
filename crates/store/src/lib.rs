@@ -354,12 +354,24 @@ impl MmapRecordArchive {
     where
         I: IntoIterator<Item = FileId>,
     {
+        self.records_for_sorted_ids_checked(ids, || Ok(()))
+    }
+
+    pub fn records_for_sorted_ids_checked<I>(
+        &self,
+        ids: I,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<MmapRecordBatch>
+    where
+        I: IntoIterator<Item = FileId>,
+    {
         let mut records = Vec::new();
         let mut missing = 0usize;
         let mut directory_index = 0usize;
         let mut previous = None;
 
         for id in ids {
+            check_control()?;
             let key = record_id_key(id);
             if let Some(previous_key) = previous {
                 if key < previous_key {
@@ -375,6 +387,7 @@ impl MmapRecordArchive {
             previous = Some(key);
 
             while let Some(entry) = self.directory.get(directory_index) {
+                check_control()?;
                 if record_id_key(entry.id) >= key {
                     break;
                 }
@@ -383,17 +396,31 @@ impl MmapRecordArchive {
 
             match self.directory.get(directory_index) {
                 Some(entry) if record_id_key(entry.id) == key => {
+                    check_control()?;
                     records.push(self.record(entry.index)?);
                 }
                 _ => missing += 1,
             }
         }
 
+        check_control()?;
         Ok(MmapRecordBatch { records, missing })
     }
 
     pub fn records(&self) -> Result<Vec<FileRecord>> {
-        (0..self.len()).map(|index| self.record(index)).collect()
+        self.records_checked(|| Ok(()))
+    }
+
+    pub fn records_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<FileRecord>> {
+        (0..self.len())
+            .map(|index| {
+                check_control()?;
+                self.record(index)
+            })
+            .collect()
     }
 }
 

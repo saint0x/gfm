@@ -684,7 +684,7 @@ where
         cancellation.check()?;
         let archive = MmapRecordArchive::open_checked(records, || cancellation.check())?;
         cancellation.check()?;
-        let records = archive.records()?;
+        let records = archive.records_checked(|| cancellation.check())?;
         cancellation.check()?;
         build(output, records)
     })

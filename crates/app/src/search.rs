@@ -271,7 +271,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let parsed = SearchQuery::parse(&query);
                     let live = LiveIndex::from_records(
                         MmapRecordArchive::open_checked(index_path, || cancellation.check())?
-                            .records()?,
+                            .records_checked(|| cancellation.check())?,
                     );
                     live.search_structured_with_volume_scope_cancellable(
                         &parsed,
@@ -1113,8 +1113,10 @@ fn run_search_index_columns(
                     comment: column.comment,
                 });
             }
-            let (live, columns_applied) =
-                LiveIndex::from_records_with_columns(records.records()?, search_columns);
+            let (live, columns_applied) = LiveIndex::from_records_with_columns(
+                records.records_checked(|| cancellation.check())?,
+                search_columns,
+            );
             cancellation.check()?;
             let parsed = SearchQuery::parse(&query);
             Ok(SearchIndexColumnsOutput {

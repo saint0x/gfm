@@ -707,7 +707,7 @@ impl SidecarIndexQuerySession {
         cancellation.check()?;
         let batch = self
             .records
-            .records_for_sorted_ids(misses.iter().copied())?;
+            .records_for_sorted_ids_checked(misses.iter().copied(), || cancellation.check())?;
         let missing = batch.missing;
         let mut loaded = Vec::with_capacity(batch.records.len());
         for record in batch.records {

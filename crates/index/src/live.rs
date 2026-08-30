@@ -190,7 +190,8 @@ impl LiveIndex {
             }
         } else {
             let candidate_ids = sidecar_candidate_ids_cancellable(&import, cancellation)?;
-            let batch = records.records_for_sorted_ids(candidate_ids)?;
+            let batch =
+                records.records_for_sorted_ids_checked(candidate_ids, || cancellation.check())?;
             missing = batch.missing;
             loaded = batch.records.len();
             for record in batch.records {
@@ -252,7 +253,10 @@ impl LiveIndex {
                 loaded += 1;
             }
         } else {
-            let batch = records.records_for_sorted_ids(candidate_ids.iter().copied())?;
+            let batch = records
+                .records_for_sorted_ids_checked(candidate_ids.iter().copied(), || {
+                    cancellation.check()
+                })?;
             missing = batch.missing;
             loaded = batch.records.len();
             for record in batch.records {
