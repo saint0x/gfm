@@ -116,7 +116,23 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = required_path(args.next(), "extract-report requires a path")?;
             print!(
                 "{}",
-                run_extraction_report(path, "content extraction", Extractor::default(),)?
+                run_extraction_report(path, "content extraction", Extractor::default(), None,)?
+            );
+        }
+        "extract-report-retry-probe" => {
+            let path = required_path(args.next(), "extract-report-retry-probe requires a path")?;
+            let retry_probe = required_path(
+                args.next(),
+                "extract-report-retry-probe requires an attempt state path",
+            )?;
+            print!(
+                "{}",
+                run_extraction_report(
+                    path,
+                    "content extraction",
+                    Extractor::default(),
+                    Some(retry_probe),
+                )?
             );
         }
         "extract-report-adaptive" => {
@@ -130,7 +146,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
             print!(
                 "{}",
-                run_extraction_report(path, "adaptive content extraction", extractor,)?
+                run_extraction_report(path, "adaptive content extraction", extractor, None,)?
             );
         }
         "extract-worker-adaptive" => {
@@ -865,22 +881,42 @@ fn run_extraction_report(
     path: PathBuf,
     worker: &'static str,
     extractor: Extractor,
+    retry_probe: Option<PathBuf>,
 ) -> Result<String> {
     preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    if matches!(fs::metadata(&path), Err(err) if err.kind() == io::ErrorKind::NotFound) {
+        let _access = preflight_access_scope_checked(&path, AccessIntent::Read, worker, || Ok(()))?;
+    }
+    if let Some(retry_probe) = retry_probe.as_ref() {
+        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
+    }
     let volume = detect_volume_id(&path)
         .ok()
         .or_else(|| parent_volume(&path));
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        cancellation.check()?;
-        let _access = preflight_access_scope_checked(&path, AccessIntent::Read, worker, || {
-            cancellation.check()
-        })?;
-        cancellation.check()?;
-        let report = extractor.extract_path_report_checked(&path, || cancellation.check())?;
-        let mut quarantine = ExtractionQuarantine::default();
-        let decision = quarantine.record_report(&report);
-        Ok(format!("{}\n{}\n", report.as_tsv(), decision.as_tsv()))
-    })
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        worker,
+        path.clone(),
+        move |cancellation| {
+            let path = path.clone();
+            let extractor = extractor.clone();
+            let retry_probe = retry_probe.clone();
+            cancellation.check()?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                fail_first_content_retry_probe_attempt(retry_probe, worker, &cancellation)?;
+            }
+            let _access =
+                preflight_access_scope_checked(&path, AccessIntent::Read, worker, || {
+                    cancellation.check()
+                })?;
+            cancellation.check()?;
+            let report = extractor.extract_path_report_checked(&path, || cancellation.check())?;
+            let mut quarantine = ExtractionQuarantine::default();
+            let decision = quarantine.record_report(&report);
+            Ok(format!("{}\n{}\n", report.as_tsv(), decision.as_tsv()))
+        },
+    )
 }
 
 fn run_extraction_cache(path: PathBuf) -> Result<String> {

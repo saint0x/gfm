@@ -1,7 +1,9 @@
 use crate::{
     access::{preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard},
     parse_u64_arg, parse_usize_arg, path_volume, required_path,
-    runtime::run_volume_task_cancellable,
+    runtime::{
+        run_retriable_volume_task_cancellable_with_payload_path, run_volume_task_cancellable,
+    },
 };
 use gfm_fs::read_directory_checked;
 use gfm_index::{
@@ -10,9 +12,10 @@ use gfm_index::{
 };
 use gfm_jobs::{Cancellation, Priority};
 use gfm_mac::{AccessIntent, FileEventStream, WatchRoot};
+use gfm_store::atomic_write_checked;
 use gfm_types::{FileEvent, FileEventKind, FileKind, GfmError, Result};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -49,33 +52,56 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 eprintln!("inaccessible\t{}\t{}", issue.path.display(), issue.reason);
             }
         }
-        "index" => {
+        "index" | "index-retry-probe" => {
             let root = required_path(args.next(), "index requires a root path")?;
             let output = required_path(args.next(), "index requires an output path")?;
+            let retry_probe = if command == "index-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "index-retry-probe requires an attempt state path",
+                )?)
+            } else {
+                None
+            };
             preflight_index_volume_access(&root)?;
             let _output_access = preflight_index_write(&output, "index records")?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                preflight_index_write(retry_probe, "index")?;
+            }
             let output_probe = write_probe_path(&output)?.to_path_buf();
             let volume = path_volume(&root).or_else(|| path_volume(&output_probe));
-            let (record_count, inaccessible_count) = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
-                "index",
-                move |cancellation| {
-                    let _root_access =
-                        enforce_index_access_checked(&root, || cancellation.check())?;
-                    cancellation.check()?;
-                    let _output_access =
-                        preflight_index_write_checked(&output, "index records", || {
-                            cancellation.check()
-                        })?;
-                    cancellation.check()?;
-                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
-                    let record_count = snapshot.records.len();
-                    let inaccessible_count = snapshot.inaccessible.len();
-                    snapshot.save_checked(output, || cancellation.check())?;
-                    Ok((record_count, inaccessible_count))
-                },
-            )?;
+            let (record_count, inaccessible_count) =
+                run_retriable_volume_task_cancellable_with_payload_path(
+                    volume,
+                    Priority::Visible,
+                    "index",
+                    output.clone(),
+                    move |cancellation| {
+                        let root = root.clone();
+                        let output = output.clone();
+                        let retry_probe = retry_probe.clone();
+                        if let Some(retry_probe) = retry_probe.as_ref() {
+                            fail_first_index_retry_probe_attempt(
+                                retry_probe,
+                                "index",
+                                &cancellation,
+                            )?;
+                        }
+                        let _root_access =
+                            enforce_index_access_checked(&root, || cancellation.check())?;
+                        cancellation.check()?;
+                        let _output_access =
+                            preflight_index_write_checked(&output, "index records", || {
+                                cancellation.check()
+                            })?;
+                        cancellation.check()?;
+                        let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                        let record_count = snapshot.records.len();
+                        let inaccessible_count = snapshot.inaccessible.len();
+                        snapshot.save_checked(output, || cancellation.check())?;
+                        Ok((record_count, inaccessible_count))
+                    },
+                )?;
             eprintln!("indexed {record_count} records; {inaccessible_count} inaccessible");
         }
         "index-state" => {
@@ -675,6 +701,80 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
             format!("index write path metadata unavailable: {err}"),
         )),
     }
+}
+
+fn fail_first_index_retry_probe_attempt(
+    attempt_state: &Path,
+    worker: &str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    cancellation.check()?;
+    let _access = preflight_index_write_checked(attempt_state, worker, || cancellation.check())?;
+    cancellation.check()?;
+    let attempts = read_index_retry_probe_attempt_checked(attempt_state, || cancellation.check())?;
+    cancellation.check()?;
+    write_index_retry_probe_attempt_checked(attempt_state, attempts + 1, || cancellation.check())?;
+    cancellation.check()?;
+    if attempts == 0 {
+        return Err(GfmError::Format(format!(
+            "temporary {worker} retry probe busy"
+        )));
+    }
+    Ok(())
+}
+
+fn read_index_retry_probe_attempt_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<usize> {
+    check_control()?;
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(GfmError::io(path, err)),
+    };
+    check_control()?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        check_control()?;
+        let read = file
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
+        if read == 0 {
+            break;
+        }
+        if bytes.len().saturating_add(read) > 4096 {
+            return Ok(0);
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    let Ok(value) = std::str::from_utf8(&bytes) else {
+        return Ok(0);
+    };
+    Ok(value.trim().parse::<usize>().unwrap_or(0))
+}
+
+fn write_index_retry_probe_attempt_checked(
+    path: &Path,
+    attempt: usize,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let encoded = attempt.to_string();
+    atomic_write_checked(path, &mut check_control, |writer, check_control| {
+        for chunk in encoded.as_bytes().chunks(4096) {
+            check_control()?;
+            writer
+                .write_all(chunk)
+                .map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
+        }
+        Ok(())
+    })?;
+    check_control()?;
+    Ok(())
 }
 
 fn parse_usize(value: &str, message: &str) -> Result<usize> {

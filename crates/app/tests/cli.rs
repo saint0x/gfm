@@ -109,6 +109,74 @@ fn indexes_and_searches_real_files_from_binary() {
 }
 
 #[test]
+fn index_retries_transient_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-index-retry-root");
+    let index = unique_temp_path("gfm-cli-index-retry", "gfmidx");
+    let journal = unique_temp_path("gfm-cli-index-retry", "journal");
+    let catalog = unique_temp_path("gfm-cli-index-retry", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-index-retry", "gfmprogress");
+    let retry_probe = unique_temp_path("gfm-cli-index-retry", "state");
+    fs::create_dir_all(root.join("Reports")).unwrap();
+    fs::write(root.join("Reports").join("RetryPlan.md"), "metadata retry").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "index-retry-probe",
+            root.to_str().unwrap(),
+            index.to_str().unwrap(),
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tindex"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t1\tfailed:temporary index retry probe busy\tindex"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tindex"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tindex"),
+        "{journal_text}"
+    );
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search-index", index.to_str().unwrap(), "retryplan"])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(stdout.contains("RetryPlan.md"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(index).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
+}
+
+#[test]
 fn index_preflight_refreshes_permission_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-permission-worker-refresh");
     let index = root.join("records.gfmidx");
@@ -8212,6 +8280,67 @@ fn reports_compressed_pdf_extraction_from_binary() {
     assert!(stdout.contains("quarantine\tallow"), "{stdout}");
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extract_report_retries_transient_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-report-retry-root");
+    let path = root.join("Retry.txt");
+    let journal = unique_temp_path("gfm-cli-extract-report-retry", "journal");
+    let catalog = unique_temp_path("gfm-cli-extract-report-retry", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-extract-report-retry", "gfmprogress");
+    let retry_probe = unique_temp_path("gfm-cli-extract-report-retry", "state");
+    fs::write(&path, "visible extraction retry marker").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "extract-report-retry-probe",
+            path.to_str().unwrap(),
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("extract\tpath="), "{stdout}");
+    assert!(
+        stdout.contains("\tformat=text\tstatus=extracted\t"),
+        "{stdout}"
+    );
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tcontent extraction"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains(
+            "1\t1\tfailed:temporary content extraction retry probe busy\tcontent extraction"
+        ),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tcontent extraction"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tcontent extraction"),
+        "{journal_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
 }
 
 #[test]
