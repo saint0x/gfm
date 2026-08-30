@@ -947,7 +947,11 @@ impl FileProviderStateInvalidationReport {
             .unwrap_or_default();
         let mut changes = Vec::new();
         let mut current_entries = Vec::new();
+        let mut seen_current_paths = BTreeSet::new();
         for path in current_paths {
+            if !seen_current_paths.insert(path.clone()) {
+                continue;
+            }
             let previous_state = previous_states.get(path.as_path()).copied();
             let path_exists = path
                 .try_exists()
@@ -3225,6 +3229,39 @@ mod tests {
         assert!(report
             .as_tsv()
             .contains("previous=downloaded\tcurrent=evicted"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_state_invalidation_deduplicates_current_paths_before_reads() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: evicted.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+
+        let (report, snapshot) = FileProviderStateInvalidationReport::evaluate(
+            Some(&previous),
+            [evicted.clone(), evicted.clone(), evicted.clone()],
+        )
+        .unwrap();
+
+        assert!(!report.initialized);
+        assert_eq!(report.changes.len(), 1);
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].path, evicted);
+        assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
+        assert!(report.invalidate_icon);
+        assert!(report.invalidate_preview_memory);
+        assert!(report.invalidate_preview_disk);
+        assert!(report.invalidate_sidebar);
+        assert!(report.reindex_metadata);
+
         fs::remove_dir_all(root).unwrap();
     }
 
