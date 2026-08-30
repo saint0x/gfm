@@ -7,9 +7,9 @@ use crate::{
     required_path,
 };
 use gfm_jobs::{
-    Cancellation, JobClass, JobFairnessPolicy, JobJournal, JobPayloadCatalog, JobPayloadKind,
-    JobPayloadRecord, JobProgressCommand, JobProgressSnapshot, JobProgressState, JobProgressStore,
-    Priority, RecoveryReason, RetryPolicy, Scheduler,
+    Cancellation, FailureClass, JobClass, JobFairnessPolicy, JobJournal, JobPayloadCatalog,
+    JobPayloadKind, JobPayloadRecord, JobProgressCommand, JobProgressSnapshot, JobProgressState,
+    JobProgressStore, Priority, RecoveryReason, RetryPolicy, Scheduler,
 };
 use gfm_mac::AccessIntent;
 use gfm_types::{GfmError, Result, VolumeId};
@@ -207,10 +207,12 @@ fn run_jobs_recover(journal: PathBuf) -> Result<Vec<String>> {
             .into_iter()
             .map(|job| {
                 format!(
-                    "{}\t{}\t{}\t{}",
+                    "{}\t{}\t{}\tclass={}\tnext-delay-ms={}\t{}",
                     job.id.value(),
                     job.attempts,
                     recovery_reason(job.reason),
+                    recovery_failure_class(job.failure_class),
+                    job.next_delay_ms,
                     job.label
                 )
             })
@@ -414,6 +416,10 @@ fn recovery_reason(reason: RecoveryReason) -> &'static str {
         RecoveryReason::Interrupted => "interrupted",
         RecoveryReason::RetryableFailure => "retryable-failure",
     }
+}
+
+fn recovery_failure_class(class: Option<FailureClass>) -> &'static str {
+    class.map(FailureClass::as_str).unwrap_or("-")
 }
 
 fn sample_payload_catalog_records() -> Vec<JobPayloadRecord> {

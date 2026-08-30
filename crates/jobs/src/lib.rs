@@ -504,6 +504,8 @@ pub struct RecoveryJob {
     pub label: String,
     pub attempts: usize,
     pub reason: RecoveryReason,
+    pub failure_class: Option<FailureClass>,
+    pub next_delay_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -867,16 +869,19 @@ impl JobJournal {
                     label: state.label,
                     attempts: state.attempts,
                     reason: RecoveryReason::Interrupted,
+                    failure_class: None,
+                    next_delay_ms: 0,
                 });
             } else if let Some(TaskStatus::Failed(message)) = &state.last_status {
-                if policy.retry_decision(state.attempts, message).retryable
-                    && state.attempts < max_attempts
-                {
+                let decision = policy.retry_decision(state.attempts, message);
+                if decision.retryable && state.attempts < max_attempts {
                     jobs.push(RecoveryJob {
                         id: state.id,
                         label: state.label,
                         attempts: state.attempts,
                         reason: RecoveryReason::RetryableFailure,
+                        failure_class: Some(decision.class),
+                        next_delay_ms: decision.next_delay_ms,
                     });
                 }
             }

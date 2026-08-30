@@ -43,6 +43,48 @@ pub struct SidecarQueryImportReport {
     pub requires_full_record_hydration: bool,
 }
 
+impl SidecarQueryImport {
+    pub fn candidate_ids_cancellable(
+        &self,
+        cancellation: &Cancellation,
+    ) -> Result<BTreeSet<FileId>> {
+        let mut ids = BTreeSet::new();
+        for posting in &self.metadata {
+            cancellation.check()?;
+            for id in &posting.ids {
+                cancellation.check()?;
+                ids.insert(*id);
+            }
+        }
+        for posting in &self.prefixes {
+            cancellation.check()?;
+            for id in &posting.ids {
+                cancellation.check()?;
+                ids.insert(*id);
+            }
+        }
+        for posting in &self.substrings {
+            cancellation.check()?;
+            for id in &posting.ids {
+                cancellation.check()?;
+                ids.insert(*id);
+            }
+        }
+        for posting in &self.content {
+            cancellation.check()?;
+            for id in &posting.ids {
+                cancellation.check()?;
+                ids.insert(*id);
+            }
+            for positions in &posting.positions {
+                cancellation.check()?;
+                ids.insert(positions.id);
+            }
+        }
+        Ok(ids)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SidecarRecordHydrationReport {
     pub records_loaded: usize,
@@ -544,7 +586,10 @@ impl SidecarIndexQuerySession {
         let (records, missing) = if import.report.requires_full_record_hydration {
             self.hydrate_all_records(cancellation)?
         } else {
-            self.hydrate_record_ids(sidecar_candidate_ids(&import), cancellation)?
+            self.hydrate_record_ids(
+                sidecar_candidate_ids_cancellable(&import, cancellation)?,
+                cancellation,
+            )?
         };
         cancellation.check()?;
         let (live, applied, metadata_keys, prefix_keys, substring_keys, fuzzy_keys, content_keys) =
@@ -1493,22 +1538,11 @@ fn scoped_substring_postings(
     }
 }
 
-pub(crate) fn sidecar_candidate_ids(import: &SidecarQueryImport) -> BTreeSet<FileId> {
-    let mut ids = BTreeSet::new();
-    for posting in &import.metadata {
-        ids.extend(posting.ids.iter().copied());
-    }
-    for posting in &import.prefixes {
-        ids.extend(posting.ids.iter().copied());
-    }
-    for posting in &import.substrings {
-        ids.extend(posting.ids.iter().copied());
-    }
-    for posting in &import.content {
-        ids.extend(posting.ids.iter().copied());
-        ids.extend(posting.positions.iter().map(|positions| positions.id));
-    }
-    ids
+pub(crate) fn sidecar_candidate_ids_cancellable(
+    import: &SidecarQueryImport,
+    cancellation: &Cancellation,
+) -> Result<BTreeSet<FileId>> {
+    import.candidate_ids_cancellable(cancellation)
 }
 
 fn bounded_substring_grams(terms: &[String], budget: SearchLookupBudget) -> Vec<String> {
@@ -1703,6 +1737,38 @@ mod tests {
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert_eq!(session.content_cache_telemetry(), (0, 0));
         assert_eq!(session.record_cache_telemetry(), (0, 0));
+    }
+
+    #[test]
+    fn sidecar_candidate_expansion_honors_cancelled_tokens() {
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+        let import = SidecarQueryImport {
+            metadata: vec![SearchMetadataPosting {
+                field: SearchMetadataField::Tag,
+                term: "needle".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 1)],
+            }],
+            prefixes: vec![SearchPrefixPosting {
+                prefix: "nee".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 2)],
+            }],
+            substrings: Vec::new(),
+            fuzzy: Vec::new(),
+            content: vec![ContentPosting {
+                term: "needle".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 3)],
+                positions: vec![ContentPositions {
+                    id: FileId::new(VolumeId(1), 4),
+                    positions: vec![0],
+                }],
+            }],
+            report: SidecarQueryImportReport::default(),
+        };
+
+        let result = sidecar_candidate_ids_cancellable(&import, &cancellation);
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
     }
 
     #[test]

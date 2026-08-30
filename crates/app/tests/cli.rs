@@ -4600,6 +4600,25 @@ fn searches_persisted_tags_from_binary() {
 }
 
 #[test]
+fn reports_cancelled_sidecar_candidate_expansion_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("search-index-sidecars-cancel-candidates")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        "search-candidate-expansion\tstatus=cancelled\treason=cancelled-before-candidate-expansion\n"
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn archive_sidecar_write_reports_output_probe_failure_before_indexing_from_binary() {
     let root = unique_temp_dir("gfm-cli-archive-sidecar-write-probe");
     let records = root.join("records.gfmidx");
@@ -13939,7 +13958,7 @@ fn reports_recoverable_jobs_from_binary() {
     let journal = unique_temp_path("gfm-cli-recovery-jobs", "journal");
     fs::write(
         &journal,
-        "10\t1\tstarted\tinterrupted job\n11\t1\tstarted\tretry job\n11\t1\tfailed:temporary\tretry job\n12\t1\tstarted\tdone job\n12\t1\tcompleted\tdone job\n",
+        "10\t1\tstarted\tinterrupted job\n11\t1\tstarted\tretry job\n11\t1\tfailed:temporary\tretry job\n12\t1\tstarted\tdone job\n12\t1\tcompleted\tdone job\n13\t1\tstarted\toffline job\n13\t1\tfailed:volume is offline and not mounted\toffline job\n",
     )
     .unwrap();
 
@@ -13957,11 +13976,17 @@ fn reports_recoverable_jobs_from_binary() {
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("10\t1\tinterrupted\tinterrupted job"),
+        stdout.contains("10\t1\tinterrupted\tclass=-\tnext-delay-ms=0\tinterrupted job"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("11\t1\tretryable-failure\tretry job"),
+        stdout.contains("11\t1\tretryable-failure\tclass=transient\tnext-delay-ms=25\tretry job"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "13\t1\tretryable-failure\tclass=offline-volume\tnext-delay-ms=250\toffline job"
+        ),
         "{stdout}"
     );
     assert!(!stdout.contains("done job"), "{stdout}");

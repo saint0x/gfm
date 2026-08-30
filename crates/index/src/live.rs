@@ -1,4 +1,4 @@
-use crate::lookup::sidecar_candidate_ids;
+use crate::lookup::sidecar_candidate_ids_cancellable;
 use crate::{
     content_query_terms, ContentIndexBatchReport, ContentQueryLoadReport, MetadataUpdateReport,
     RenameCorrelationReport, SidecarQueryImport, SidecarRecordHydrationReport,
@@ -173,7 +173,8 @@ impl LiveIndex {
                 loaded += 1;
             }
         } else {
-            let candidate_ids = sidecar_candidate_ids(&import);
+            let cancellation = Cancellation::default();
+            let candidate_ids = sidecar_candidate_ids_cancellable(&import, &cancellation)?;
             let batch = records.records_for_sorted_ids(candidate_ids)?;
             missing = batch.missing;
             loaded = batch.records.len();

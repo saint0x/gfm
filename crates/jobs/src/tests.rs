@@ -1095,12 +1095,16 @@ fn journal_identifies_interrupted_and_retryable_jobs() {
                 label: "interrupted".to_string(),
                 attempts: 1,
                 reason: RecoveryReason::Interrupted,
+                failure_class: None,
+                next_delay_ms: 0,
             },
             RecoveryJob {
                 id: failed,
                 label: "failed".to_string(),
                 attempts: 1,
                 reason: RecoveryReason::RetryableFailure,
+                failure_class: Some(FailureClass::Transient),
+                next_delay_ms: 25,
             },
         ]
     );
@@ -1169,6 +1173,8 @@ fn journal_skips_non_retryable_failed_jobs() {
         .unwrap();
     assert_eq!(recoverable.len(), 1);
     assert_eq!(recoverable[0].id, transient);
+    assert_eq!(recoverable[0].failure_class, Some(FailureClass::Transient));
+    assert_eq!(recoverable[0].next_delay_ms, 25);
 
     std::fs::remove_file(path).unwrap();
 }

@@ -301,7 +301,7 @@ impl ContentIndexQuerySession {
         cancellation: &Cancellation,
     ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
         cancellation.check()?;
-        let candidate_ids = content_candidate_ids(&postings);
+        let candidate_ids = content_candidate_ids_cancellable(&postings, cancellation)?;
         let has_content_postings = !postings.is_empty();
         let full_hydration =
             !has_content_terms || (has_content_postings && candidate_ids.is_empty());
@@ -404,13 +404,23 @@ impl ContentIndexQuerySession {
     }
 }
 
-fn content_candidate_ids(postings: &[ContentPosting]) -> BTreeSet<FileId> {
+fn content_candidate_ids_cancellable(
+    postings: &[ContentPosting],
+    cancellation: &Cancellation,
+) -> Result<BTreeSet<FileId>> {
     let mut ids = BTreeSet::new();
     for posting in postings {
-        ids.extend(posting.ids.iter().copied());
-        ids.extend(posting.positions.iter().map(|positions| positions.id));
+        cancellation.check()?;
+        for id in &posting.ids {
+            cancellation.check()?;
+            ids.insert(*id);
+        }
+        for positions in &posting.positions {
+            cancellation.check()?;
+            ids.insert(positions.id);
+        }
     }
-    ids
+    Ok(ids)
 }
 
 fn empty_content_query_session_report() -> ContentQuerySessionReport {
@@ -653,6 +663,24 @@ mod tests {
         assert_eq!(session.posting_cache_telemetry(), (0, 0));
         assert_eq!(session.record_cache_telemetry(), (0, 0));
         assert_eq!(session.result_cache_telemetry(), (0, 0));
+    }
+
+    #[test]
+    fn content_candidate_expansion_honors_cancelled_tokens() {
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+        let posting = ContentPosting {
+            term: "needle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: vec![ContentPositions {
+                id: FileId::new(VolumeId(1), 2),
+                positions: vec![0],
+            }],
+        };
+
+        let result = content_candidate_ids_cancellable(&[posting], &cancellation);
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
     }
 
     fn poison_posting_cache(session: &ContentIndexQuerySession) {

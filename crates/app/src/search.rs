@@ -8,9 +8,11 @@ use crate::{
 };
 use gfm_content::Extractor;
 use gfm_index::{
-    Indexer, LiveIndex, SearchLookupBudget, SearchQuery, SearchRecordColumns, SearchStreamStage,
-    SearchVolumeScope, SidecarIndexQuerySession, SidecarQuerySessionReport,
+    Indexer, LiveIndex, SearchLookupBudget, SearchMetadataPosting, SearchPrefixPosting,
+    SearchQuery, SearchRecordColumns, SearchStreamStage, SearchVolumeScope,
+    SidecarIndexQuerySession, SidecarQueryImport, SidecarQuerySessionReport,
 };
+use gfm_jobs::Cancellation;
 use gfm_jobs::Priority;
 use gfm_mac::AccessIntent;
 use gfm_store::{
@@ -18,7 +20,9 @@ use gfm_store::{
     MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive,
     MmapRecordColumns, MmapSubstringArchive,
 };
-use gfm_types::{FileKind, GfmError, Result, SearchHit, VolumeId};
+use gfm_types::{
+    ContentPositions, ContentPosting, FileId, FileKind, GfmError, Result, SearchHit, VolumeId,
+};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -515,6 +519,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
+        "search-index-sidecars-cancel-candidates" => {
+            run_sidecar_candidate_cancellation_probe()?;
+        }
         "content-ids" => {
             let content = required_path(args.next(), "content-ids requires a content path")?;
             let term = required_string(args.next(), "content-ids requires a term")?;
@@ -786,6 +793,45 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+fn run_sidecar_candidate_cancellation_probe() -> Result<()> {
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+    let import = SidecarQueryImport {
+        metadata: vec![SearchMetadataPosting {
+            field: gfm_index::SearchMetadataField::Tag,
+            term: "needle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+        }],
+        prefixes: vec![SearchPrefixPosting {
+            prefix: "nee".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 2)],
+        }],
+        substrings: Vec::new(),
+        fuzzy: Vec::new(),
+        content: vec![ContentPosting {
+            term: "needle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 3)],
+            positions: vec![ContentPositions {
+                id: FileId::new(VolumeId(1), 4),
+                positions: vec![0],
+            }],
+        }],
+        report: Default::default(),
+    };
+    match import.candidate_ids_cancellable(&cancellation) {
+        Err(GfmError::Cancelled) => {
+            println!(
+                "search-candidate-expansion\tstatus=cancelled\treason=cancelled-before-candidate-expansion"
+            );
+            Ok(())
+        }
+        Err(error) => Err(error),
+        Ok(_) => Err(GfmError::Format(
+            "search candidate cancellation probe was not cancelled".to_string(),
+        )),
+    }
 }
 
 fn preflight_content_archive_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {

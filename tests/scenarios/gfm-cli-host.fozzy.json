@@ -1799,6 +1799,17 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "search-index-sidecars-cancel-candidates"
+      ],
+      "exit_code": 0,
+      "stdout": "search-candidate-expansion\tstatus=cancelled\treason=cancelled-before-candidate-expansion\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "index-content-background",
         ".",
         "/tmp/gfm-fozzy-host-segments",
@@ -1838,6 +1849,23 @@
         "/tmp/gfm-jobs.journal"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-recovery-classified.journal",
+      "data": "10\t1\tstarted\tinterrupted job\n11\t1\tstarted\tretry job\n11\t1\tfailed:temporary\tretry job\n12\t1\tstarted\tdone job\n12\t1\tcompleted\tdone job\n13\t1\tstarted\toffline job\n13\t1\tfailed:volume is offline and not mounted\toffline job\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "jobs-recover",
+        "tmp/gfm-fozzy-recovery-classified.journal"
+      ],
+      "exit_code": 0,
+      "stdout": "10\t1\tinterrupted\tclass=-\tnext-delay-ms=0\tinterrupted job\n11\t1\tretryable-failure\tclass=transient\tnext-delay-ms=25\tretry job\n13\t1\tretryable-failure\tclass=offline-volume\tnext-delay-ms=250\toffline job\n",
+      "stderr": "security-scope\ttmp/gfm-fozzy-recovery-classified.journal\tintent=read\ttrust=trusted\tprotected=false\tbookmark-required=false\tbookmark-status=not-required\tprompt=none\tdecision=allow\treason=trusted-path\nsecurity-worker-admission\tworker=jobs recover\tpath=tmp/gfm-fozzy-recovery-classified.journal\tintent=read\tworker-action=start\tcan-touch-filesystem=true\trefresh-on-permission-change=false\treason=trusted-path\n",
+      "times": 1
     },
     {
       "type": "proc_when",
