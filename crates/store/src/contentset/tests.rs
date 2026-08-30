@@ -260,6 +260,45 @@ fn content_archive_manifest_round_trips_and_resolves_relative_paths() {
 }
 
 #[test]
+fn content_archive_manifest_checked_read_honors_pre_cancelled_control_before_file_open() {
+    let dir = temp_dir("gfm-content-manifest-read-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let result = ContentArchiveManifest::read_checked(&manifest_path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!manifest_path.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn mmap_content_set_checked_manifest_open_can_cancel_before_archive_probe() {
+    let dir = temp_dir("gfm-content-manifest-set-open-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        &manifest_path,
+        "gfm-content-manifest-v1\narchive\thot\tmissing.gfmcontent\n",
+    )
+    .unwrap();
+    let mut checks = 0;
+
+    let result = MmapContentSet::open_manifest_checked(&manifest_path, || {
+        checks += 1;
+        if checks >= 10 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!dir.join("missing.gfmcontent").exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn content_archive_manifest_rejects_duplicate_constructed_archive_paths() {
     let err = ContentArchiveManifest::new(vec![
         ContentArchiveManifestEntry {

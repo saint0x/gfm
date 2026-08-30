@@ -933,7 +933,7 @@ fn run_index_footprint_inspect(
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
         let _access = retain_index_footprint_access(&spec, worker)?;
-        let archive_paths = index_footprint_content_archive_paths(&spec)?;
+        let archive_paths = index_footprint_content_archive_paths(&spec, &cancellation)?;
         preflight_index_footprint_archive_volumes(&archive_paths, worker)?;
         cancellation.check()?;
         let _archive_access = retain_index_footprint_archive_access(&archive_paths, worker)?;
@@ -942,11 +942,14 @@ fn run_index_footprint_inspect(
     })
 }
 
-fn index_footprint_content_archive_paths(spec: &IndexFootprintSpec) -> Result<Vec<PathBuf>> {
+fn index_footprint_content_archive_paths(
+    spec: &IndexFootprintSpec,
+    cancellation: &Cancellation,
+) -> Result<Vec<PathBuf>> {
     let Some(manifest_path) = &spec.content_manifest else {
         return Ok(Vec::new());
     };
-    let manifest = ContentArchiveManifest::read(manifest_path)?;
+    let manifest = ContentArchiveManifest::read_checked(manifest_path, || cancellation.check())?;
     Ok(manifest.resolved_archive_paths(manifest_path))
 }
 

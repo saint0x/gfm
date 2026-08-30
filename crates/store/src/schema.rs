@@ -435,7 +435,7 @@ fn inspect_archive_schema_result_checked(
             check_control,
             |check_control| {
                 check_control()?;
-                ContentArchiveManifest::read(path).map(|_| ())
+                ContentArchiveManifest::read_checked(path, check_control).map(|_| ())
             },
         ),
     }

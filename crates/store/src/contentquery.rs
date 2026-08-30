@@ -49,7 +49,7 @@ impl MmapContentSet {
         check_control()?;
         let path = path.as_ref();
         check_control()?;
-        let manifest = ContentArchiveManifest::read(path)?;
+        let manifest = ContentArchiveManifest::read_checked(path, &mut check_control)?;
         check_control()?;
         Self::open_checked(manifest.resolved_archive_paths(path), check_control)
     }

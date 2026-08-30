@@ -371,7 +371,8 @@ fn run_manifest_inspect(manifest_path: PathBuf) -> Result<Vec<String>> {
                 AccessIntent::Read,
                 "content manifest inspect",
             )?;
-            let manifest = ContentArchiveManifest::read(&manifest_path)?;
+            let manifest =
+                ContentArchiveManifest::read_checked(&manifest_path, || cancellation.check())?;
             let paths = manifest.resolved_archive_paths(&manifest_path);
             for path in &paths {
                 preflight_volume_access_scope(

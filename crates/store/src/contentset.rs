@@ -143,8 +143,17 @@ impl ContentArchiveManifest {
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_checked(path, || Ok(()))
+    }
+
+    pub fn read_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = std::fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mut lines = BufReader::new(file).lines();
         match lines.next() {
             Some(Ok(header)) if header == CONTENT_MANIFEST_HEADER => {}
@@ -162,11 +171,14 @@ impl ContentArchiveManifest {
                 )))
             }
         }
+        check_control()?;
 
         let mut archives = Vec::new();
         let mut seen_paths = BTreeSet::new();
         for (line_index, line) in lines.enumerate() {
+            check_control()?;
             let line = line.map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
             if line.trim().is_empty() {
                 continue;
             }
@@ -193,6 +205,7 @@ impl ContentArchiveManifest {
                 path: archive_path,
             });
         }
+        check_control()?;
         Self::new(archives)
     }
 

@@ -586,7 +586,11 @@ impl BackgroundContentIndexer {
                 tier: plan.tier,
                 merge_bytes: plan.merge_bytes,
                 tombstone_segments: plan.tombstone_segments,
-                manifest_archives: ContentArchiveManifest::read(manifest_path)?.archives.len(),
+                manifest_archives: ContentArchiveManifest::read_checked(manifest_path, || {
+                    cancellation.check()
+                })?
+                .archives
+                .len(),
                 removed_archives: Vec::new(),
                 active_archives: Vec::new(),
                 missing_archives: Vec::new(),
@@ -603,7 +607,8 @@ impl BackgroundContentIndexer {
             &options.merge_policy,
             || cancellation.check(),
         )?;
-        let manifest = ContentArchiveManifest::read(manifest_path)?;
+        let manifest =
+            ContentArchiveManifest::read_checked(manifest_path, || cancellation.check())?;
         let promotion = manifest.promote_archive(
             manifest_path,
             ContentArchiveManifestEntry {
