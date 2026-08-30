@@ -644,6 +644,7 @@ pub enum FileProviderOperationDisposition {
     Refused,
     Denied,
     Missing,
+    Unsupported,
     Unavailable,
     Failed,
 }
@@ -655,6 +656,7 @@ impl FileProviderOperationDisposition {
             Self::Refused => "refused",
             Self::Denied => "denied",
             Self::Missing => "missing",
+            Self::Unsupported => "unsupported",
             Self::Unavailable => "unavailable",
             Self::Failed => "failed",
         }
@@ -1445,8 +1447,10 @@ fn disposition_for_native_fileprovider_operation(
             FileProviderOperationDisposition::Unavailable
         }
         NativeFileProviderOperationStatus::Missing => FileProviderOperationDisposition::Missing,
-        NativeFileProviderOperationStatus::UnsupportedPath
-        | NativeFileProviderOperationStatus::Failed => FileProviderOperationDisposition::Failed,
+        NativeFileProviderOperationStatus::UnsupportedPath => {
+            FileProviderOperationDisposition::Unsupported
+        }
+        NativeFileProviderOperationStatus::Failed => FileProviderOperationDisposition::Failed,
     }
 }
 
@@ -4247,6 +4251,12 @@ mod tests {
                 NativeFileProviderOperationStatus::Missing
             ),
             FileProviderOperationDisposition::Missing
+        );
+        assert_eq!(
+            disposition_for_native_fileprovider_operation(
+                NativeFileProviderOperationStatus::UnsupportedPath
+            ),
+            FileProviderOperationDisposition::Unsupported
         );
     }
 
