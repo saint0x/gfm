@@ -1520,9 +1520,19 @@ fn disposition_for_native_fileprovider_operation(
 
 impl FileProviderStateReport {
     pub fn read_path(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_path_checked(path, || Ok(()))
+    }
+
+    pub fn read_path_checked(
+        path: impl AsRef<Path>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
         let path = path.as_ref().to_path_buf();
+        check()?;
         ensure_fileprovider_read_path(&path)?;
-        Ok(Self::from_path(path))
+        check()?;
+        Self::from_path_checked(path, check)
     }
 
     pub fn from_path(path: PathBuf) -> Self {
@@ -1530,9 +1540,26 @@ impl FileProviderStateReport {
         Self::from_hints(path, hints)
     }
 
+    pub fn from_path_checked(path: PathBuf, mut check: impl FnMut() -> Result<()>) -> Result<Self> {
+        check()?;
+        let hints = CloudHints::read_checked(&path, &mut check)?;
+        check()?;
+        Ok(Self::from_hints(path, hints))
+    }
+
     pub fn from_path_with_native_identity(path: PathBuf) -> Self {
         let hints = CloudHints::read_with_identity(&path);
         Self::from_hints(path, hints)
+    }
+
+    pub fn from_path_with_native_identity_checked(
+        path: PathBuf,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
+        let hints = CloudHints::read_with_identity_checked(&path, &mut check)?;
+        check()?;
+        Ok(Self::from_hints(path, hints))
     }
 
     fn from_hints(path: PathBuf, hints: CloudHints) -> Self {
@@ -1662,6 +1689,10 @@ impl CloudHints {
         Self::read_with_optional_identity(path, None)
     }
 
+    fn read_checked(path: &Path, check: &mut impl FnMut() -> Result<()>) -> Result<Self> {
+        Self::read_with_optional_identity_checked(path, None, check)
+    }
+
     fn read_with_identity(path: &Path) -> Self {
         let hints = Self::read(path);
         if should_query_native_fileprovider_identity(path, &hints) {
@@ -1671,17 +1702,46 @@ impl CloudHints {
         }
     }
 
+    fn read_with_identity_checked(
+        path: &Path,
+        check: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
+        let hints = Self::read_checked(path, check)?;
+        check()?;
+        if should_query_native_fileprovider_identity(path, &hints) {
+            check()?;
+            let identity = copy_fileprovider_identity(path);
+            check()?;
+            Self::read_with_optional_identity_checked(path, Some(identity), check)
+        } else {
+            Ok(hints)
+        }
+    }
+
     fn read_with_optional_identity(
         path: &Path,
         native_identity: Option<NativeFileProviderIdentity>,
     ) -> Self {
+        Self::read_with_optional_identity_checked(path, native_identity, &mut || Ok(()))
+            .expect("non-cancellable FileProvider hint read cannot cancel")
+    }
+
+    fn read_with_optional_identity_checked(
+        path: &Path,
+        native_identity: Option<NativeFileProviderIdentity>,
+        check: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
         let native = copy_fileprovider_resource_values(path);
+        check()?;
         let native_identity = native_identity.unwrap_or_else(identity_not_queried);
         let mut xattrs = Vec::new();
         let mut xattr_values = Vec::new();
         let mut provider_identifier = None;
         let mut sources = Vec::new();
         let path_sources = provider_path_sources(path);
+        check()?;
 
         if native_has_fileprovider_values(&native) {
             sources.push("native-url-resource".to_string());
@@ -1692,14 +1752,18 @@ impl CloudHints {
         }
 
         if should_read_provider_xattrs(&native, &native_identity, !path_sources.is_empty()) {
+            check()?;
             if let Ok(attrs) = xattr::list(path) {
                 for attr in attrs {
+                    check()?;
                     let attr = attr.to_string_lossy().to_string();
                     if attr.contains("icloud")
                         || attr.contains("fileprovider")
                         || attr.contains("ubiquit")
                     {
+                        check()?;
                         if let Some(value) = xattr_string_value(path, &attr) {
+                            check()?;
                             if provider_identifier.is_none() {
                                 provider_identifier =
                                     provider_identifier_from_xattr_value(&attr, &value);
@@ -1718,8 +1782,9 @@ impl CloudHints {
         if should_include_provider_path_sources(&native, &native_identity) {
             sources.extend(path_sources);
         }
+        check()?;
 
-        Self {
+        Ok(Self {
             native,
             native_identity,
             xattrs,
@@ -1732,7 +1797,7 @@ impl CloudHints {
                 sources.dedup();
                 sources.join("+")
             },
-        }
+        })
     }
 }
 
@@ -4266,6 +4331,40 @@ mod tests {
         let err = FileProviderStateReport::read_path(&path).unwrap_err();
 
         assert!(err.to_string().contains("path existence unavailable"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_state_report_honors_pre_cancelled_work_before_path_probe() {
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-fileprovider-state-cancelled\0path".to_vec(),
+        ));
+
+        let err = FileProviderStateReport::read_path_checked(&path, || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn checked_state_report_can_cancel_during_hint_collection() {
+        let root = unique_temp_dir();
+        let path = root.join("Remote.icloud");
+        fs::write(&path, "remote").unwrap();
+        let mut checks = 0usize;
+
+        let err = FileProviderStateReport::read_path_checked(&path, || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -1807,7 +1807,7 @@ fn run_quicklook_session(path: PathBuf) -> Result<QuickLookSessionContract> {
             cancellation.check()?;
             let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
             cancellation.check()?;
-            let cloud = FileProviderStateReport::read_path(&path)?.materialization;
+            let cloud = fileprovider_materialization_for_preview(&path, &cancellation)?;
             cancellation.check()?;
             let input = QuickLookSessionInput::new(
                 PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
@@ -1842,7 +1842,7 @@ fn run_thumbnail_generation(path: PathBuf) -> Result<ThumbnailGenerationContract
             cancellation.check()?;
             let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
             cancellation.check()?;
-            let cloud = FileProviderStateReport::read_path(&path)?.materialization;
+            let cloud = fileprovider_materialization_for_preview(&path, &cancellation)?;
             cancellation.check()?;
             let input = ThumbnailGenerationInput::new(
                 PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
@@ -1891,7 +1891,7 @@ fn run_adaptive_quicklook_session(
             cancellation.check()?;
             let record = record_for_path(&path, None, false)?;
             cancellation.check()?;
-            let cloud = FileProviderStateReport::read_path(&path)?.materialization;
+            let cloud = fileprovider_materialization_for_preview(&path, &cancellation)?;
             cancellation.check()?;
             let input = QuickLookSessionInput::new(
                 PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
@@ -1948,7 +1948,7 @@ fn run_adaptive_thumbnail_generation(
             cancellation.check()?;
             let record = record_for_path(&path, None, false)?;
             cancellation.check()?;
-            let cloud = FileProviderStateReport::read_path(&path)?.materialization;
+            let cloud = fileprovider_materialization_for_preview(&path, &cancellation)?;
             cancellation.check()?;
             let input = ThumbnailGenerationInput::new(
                 PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
@@ -1971,6 +1971,16 @@ fn run_adaptive_thumbnail_generation(
             )
         },
     )
+}
+
+fn fileprovider_materialization_for_preview(
+    path: &Path,
+    cancellation: &Cancellation,
+) -> Result<gfm_mac::CloudMaterialization> {
+    cancellation.check()?;
+    let report = FileProviderStateReport::read_path_checked(path, || cancellation.check())?;
+    cancellation.check()?;
+    Ok(report.materialization)
 }
 
 fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<Vec<String>> {
@@ -2786,6 +2796,18 @@ mod tests {
             &cancellation,
         )
         .expect_err("pre-cancelled preview cache key resolution should not touch the path");
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn preview_fileprovider_materialization_honors_pre_cancelled_token_before_state_read() {
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+        let path = std::env::temp_dir().join("gfm-preview-materialization-cancelled");
+
+        let err = fileprovider_materialization_for_preview(&path, &cancellation)
+            .expect_err("pre-cancelled preview materialization should not read FileProvider state");
 
         assert_eq!(err, GfmError::Cancelled);
     }
