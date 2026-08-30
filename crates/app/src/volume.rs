@@ -59,10 +59,11 @@ pub(crate) fn resolve_volume_event_path(
         }),
         Ok(true) => {
             let descriptor = VolumeDescriptor::for_path(&path)?;
+            let native_status = native_status_for_event_descriptor(&descriptor);
             Ok(VolumeEventPathResolution {
                 path: Some(path),
                 descriptor: Some(descriptor),
-                native_status: NativeVolumeStatus::Available,
+                native_status,
                 native_reason: None,
             })
         }
@@ -73,6 +74,12 @@ pub(crate) fn resolve_volume_event_path(
             native_reason: Some(format!("volume path state unavailable: {err}")),
         }),
     }
+}
+
+fn native_status_for_event_descriptor(descriptor: &VolumeDescriptor) -> NativeVolumeStatus {
+    descriptor
+        .native_status
+        .unwrap_or(NativeVolumeStatus::Available)
 }
 
 fn native_status_for_path_probe_error(kind: ErrorKind) -> NativeVolumeStatus {
@@ -134,5 +141,23 @@ mod tests {
         assert!(report.invalidate_operation_policy);
         assert!(report.invalidate_index_admission);
         assert!(report.rescan_index);
+    }
+
+    #[test]
+    fn descriptor_native_status_is_preserved_for_event_resolution() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-volume-event-descriptor-status-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let mut descriptor = VolumeDescriptor::for_path(&path).unwrap();
+        descriptor.native_status = Some(NativeVolumeStatus::Unavailable);
+
+        assert_eq!(
+            native_status_for_event_descriptor(&descriptor),
+            NativeVolumeStatus::Unavailable
+        );
+
+        std::fs::remove_dir_all(path).unwrap();
     }
 }
