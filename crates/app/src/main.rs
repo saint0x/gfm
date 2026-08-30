@@ -541,17 +541,6 @@ fn config_volume(store: &ConfigStore) -> Result<Option<VolumeId>> {
         .or_else(|| parent_volume(probe)))
 }
 
-pub(crate) fn preflight_config_write(
-    store: &ConfigStore,
-    worker: &str,
-) -> Result<access::ScopedAccessGuard> {
-    access::preflight_access_scope(
-        config_write_probe_path(store.path())?,
-        AccessIntent::Write,
-        worker,
-    )
-}
-
 fn preflight_config_read_checked(
     store: &ConfigStore,
     worker: &str,

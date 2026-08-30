@@ -1,8 +1,5 @@
 use crate::{
-    access::{
-        preflight_access_scope, preflight_access_scope_checked, preflight_volume_access_scope,
-        ScopedAccessGuard,
-    },
+    access::{preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard},
     parse_u64_arg, parse_usize_arg, path_volume, required_path,
     runtime::run_volume_task_cancellable,
 };
@@ -627,7 +624,7 @@ where
 }
 
 fn enforce_index_access(root: &Path) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(root, AccessIntent::Index, "index")
+    enforce_index_access_checked(root, || Ok(()))
 }
 
 fn enforce_index_access_checked(
@@ -650,7 +647,7 @@ fn preflight_index_read_checked(
 }
 
 fn preflight_index_write(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(write_probe_path(path)?, AccessIntent::Write, worker)
+    preflight_index_write_checked(path, worker, || Ok(()))
 }
 
 fn preflight_index_write_checked(
@@ -730,6 +727,31 @@ mod tests {
 
         assert_eq!(result, Err(GfmError::Cancelled));
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn enforce_index_access_checked_honors_pre_cancelled_control() {
+        let root =
+            std::env::temp_dir().join(format!("gfm-index-root-pre-cancel-{}", std::process::id()));
+
+        let result = enforce_index_access_checked(&root, || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn preflight_index_write_checked_can_cancel_before_write_probe() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-index-write-pre-cancel-{}.gfmidx",
+            std::process::id()
+        ));
+
+        let result =
+            preflight_index_write_checked(&path, "index records", || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
     }
 
     #[test]

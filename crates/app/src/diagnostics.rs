@@ -1,6 +1,5 @@
 use crate::access::{
-    preflight_access_scope, preflight_access_scope_checked, preflight_volume_access_scope,
-    ScopedAccessGuard,
+    preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
 };
 use crate::runtime::{
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
@@ -8,7 +7,7 @@ use crate::runtime::{
 };
 use crate::{
     config_store, config_write_probe_path, detect_volume_id, existing_read_probe_path,
-    parent_volume, parse_required_scheduling_pressure, preflight_config_write, required_path,
+    parent_volume, parse_required_scheduling_pressure, required_path,
 };
 use gfm_config::ConfigStore;
 use gfm_diagnostics::{
@@ -50,7 +49,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 spec.records_path.clone(),
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = retain_rebuild_access(&spec)?;
+                    let _access = retain_rebuild_access_checked(&spec, || cancellation.check())?;
                     cancellation.check()?;
                     rebuild_index_cancellable(&spec, &cancellation)
                 },
@@ -95,7 +94,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         },
                         spec.records_path.clone(),
                         move |cancellation| {
-                            let _access = retain_rebuild_access(&spec)?;
+                            cancellation.check()?;
+                            let _access =
+                                retain_rebuild_access_checked(&spec, || cancellation.check())?;
+                            cancellation.check()?;
                             rebuild_index_cancellable(&spec, &cancellation)
                         },
                     )?
@@ -162,7 +164,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 spec.state_path.clone(),
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = retain_recovery_access(&spec)?;
+                    let _access = retain_recovery_access_checked(&spec, || cancellation.check())?;
                     cancellation.check()?;
                     recover_index_cancellable(&spec, &cancellation)
                 },
@@ -212,7 +214,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         },
                         spec.state_path.clone(),
                         move |cancellation| {
-                            let _access = retain_recovery_access(&spec)?;
+                            cancellation.check()?;
+                            let _access =
+                                retain_recovery_access_checked(&spec, || cancellation.check())?;
+                            cancellation.check()?;
                             recover_index_cancellable(&spec, &cancellation)
                         },
                     )?
@@ -263,25 +268,41 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     Ok(true)
 }
 
-fn retain_rebuild_access(spec: &RebuildSpec) -> Result<Vec<ScopedAccessGuard>> {
+fn retain_rebuild_access_checked(
+    spec: &RebuildSpec,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let records_probe = write_probe_path(&spec.records_path)?.to_path_buf();
+    check_control()?;
+    let content_probe = spec
+        .content_path
+        .as_ref()
+        .map(|content_path| write_probe_path(content_path).map(Path::to_path_buf))
+        .transpose()?;
+    check_control()?;
     let mut guards = Vec::new();
-    guards.push(preflight_access_scope(
+    guards.push(preflight_access_scope_checked(
         &spec.root,
         AccessIntent::Index,
         "index rebuild root",
+        &mut check_control,
     )?);
-    guards.push(preflight_access_scope(
-        write_probe_path(&spec.records_path)?,
+    guards.push(preflight_access_scope_checked(
+        &records_probe,
         AccessIntent::Write,
         "index rebuild records",
+        &mut check_control,
     )?);
-    if let Some(content_path) = &spec.content_path {
-        guards.push(preflight_access_scope(
-            write_probe_path(content_path)?,
+    if let Some(content_probe) = &content_probe {
+        guards.push(preflight_access_scope_checked(
+            content_probe,
             AccessIntent::Write,
             "index rebuild content",
+            &mut check_control,
         )?);
     }
+    check_control()?;
     Ok(guards)
 }
 
@@ -310,45 +331,62 @@ fn run_recovery_plan(spec: PersistentIndexRecoverySpec) -> Result<PersistentInde
         .or_else(|| parent_volume(&spec.records_path));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_recovery_plan_access(&spec)?;
+        let _access = retain_recovery_plan_access_checked(&spec, || cancellation.check())?;
         cancellation.check()?;
         plan_index_recovery_cancellable(&spec, &cancellation)
     })
 }
 
-fn retain_recovery_plan_access(
+fn retain_recovery_plan_access_checked(
     spec: &PersistentIndexRecoverySpec,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    Ok(vec![preflight_access_scope(
+    Ok(vec![preflight_access_scope_checked(
         &spec.root,
         AccessIntent::Index,
         "persistent index repair root",
+        check_control,
     )?])
 }
 
-fn retain_recovery_access(spec: &PersistentIndexRecoverySpec) -> Result<Vec<ScopedAccessGuard>> {
+fn retain_recovery_access_checked(
+    spec: &PersistentIndexRecoverySpec,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let records_probe = write_probe_path(&spec.records_path)?.to_path_buf();
+    check_control()?;
+    let state_probe = write_probe_path(&spec.state_path)?.to_path_buf();
+    check_control()?;
+    let quarantine_probe = write_probe_path(&spec.quarantine_dir)?.to_path_buf();
+    check_control()?;
     let guards = vec![
-        preflight_access_scope(
+        preflight_access_scope_checked(
             &spec.root,
             AccessIntent::Index,
             "persistent index repair root",
+            &mut check_control,
         )?,
-        preflight_access_scope(
-            write_probe_path(&spec.records_path)?,
+        preflight_access_scope_checked(
+            &records_probe,
             AccessIntent::Write,
             "persistent index repair records",
+            &mut check_control,
         )?,
-        preflight_access_scope(
-            write_probe_path(&spec.state_path)?,
+        preflight_access_scope_checked(
+            &state_probe,
             AccessIntent::Write,
             "persistent index repair state",
+            &mut check_control,
         )?,
-        preflight_access_scope(
-            write_probe_path(&spec.quarantine_dir)?,
+        preflight_access_scope_checked(
+            &quarantine_probe,
             AccessIntent::Write,
             "persistent index repair quarantine",
+            &mut check_control,
         )?,
     ];
+    check_control()?;
     Ok(guards)
 }
 
@@ -422,11 +460,22 @@ fn run_parity_baseline(
         "diagnostics parity baseline",
         move |cancellation| {
             cancellation.check()?;
-            let _config_access = preflight_config_write(&store, "diagnostics parity config")?;
-            let _baseline_access = preflight_access_scope(
-                existing_read_probe_path(&baseline)?,
+            let config_probe = config_write_probe_path(store.path())?.to_path_buf();
+            cancellation.check()?;
+            let baseline_probe = existing_read_probe_path(&baseline)?.to_path_buf();
+            cancellation.check()?;
+            let _config_access = preflight_access_scope_checked(
+                &config_probe,
+                AccessIntent::Write,
+                "diagnostics parity config",
+                || cancellation.check(),
+            )?;
+            cancellation.check()?;
+            let _baseline_access = preflight_access_scope_checked(
+                &baseline_probe,
                 AccessIntent::Read,
                 "diagnostics parity baseline",
+                || cancellation.check(),
             )?;
             cancellation.check()?;
             let report = select_parity_baseline_checked(&store, baseline, macos_build, || {
@@ -450,7 +499,9 @@ fn run_storage_inspect(storage: PathBuf) -> Result<String> {
         .or_else(|| parent_volume(&storage));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope(&storage, AccessIntent::Read, WORKER)?;
+        let _access = preflight_access_scope_checked(&storage, AccessIntent::Read, WORKER, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         match inspect_storage_checked(storage, || cancellation.check())? {
             StorageInspection::Records(report) => Ok(format!(
@@ -517,4 +568,61 @@ fn print_persistent_index_recovery_report(report: PersistentIndexRecovery) {
             .unwrap_or_else(|| "-".to_string())
     );
     println!("{}", report.after.as_tsv());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn rebuild_access_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-diagnostics-rebuild-access-pre-cancel");
+        let spec = RebuildSpec::records(root.clone(), root.join("records.gfmidx"));
+
+        let result = retain_rebuild_access_checked(&spec, || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!spec.records_path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_access_checked_can_cancel_before_state_probe() {
+        let root = unique_temp_dir("gfm-diagnostics-recovery-access-cancel");
+        let spec = PersistentIndexRecoverySpec::new(
+            root.clone(),
+            root.join("records.gfmidx"),
+            root.join("state.tsv"),
+            root.join("quarantine"),
+        );
+        let mut checks = 0usize;
+
+        let result = retain_recovery_access_checked(&spec, || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 3);
+        assert!(!spec.state_path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "{}-{}-{}",
+            prefix,
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
 }
