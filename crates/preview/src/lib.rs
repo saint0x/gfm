@@ -221,7 +221,7 @@ impl PreviewCache {
         }
         if self.config.disk_enabled {
             cancellation.check()?;
-            if let Some(entry) = self.read_disk(key)? {
+            if let Some(entry) = self.read_disk_cancellable(key, cancellation)? {
                 cancellation.check()?;
                 self.insert_memory(entry.clone());
                 return Ok(Some(CacheHit::Disk(entry)));
@@ -401,13 +401,30 @@ impl PreviewCache {
         Ok(())
     }
 
-    fn read_disk(&self, key: &PreviewRequestKey) -> Result<Option<PreviewEntry>> {
+    fn read_disk_cancellable(
+        &self,
+        key: &PreviewRequestKey,
+        cancellation: &Cancellation,
+    ) -> Result<Option<PreviewEntry>> {
+        self.read_disk_checked(key, || cancellation.check())
+    }
+
+    fn read_disk_checked(
+        &self,
+        key: &PreviewRequestKey,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<PreviewEntry>> {
+        check_control()?;
         let path = self.disk_path(key);
+        check_control()?;
         if !disk_cache_file_exists(&path)? {
             return Ok(None);
         }
+        check_control()?;
         let bytes = fs::read(&path).map_err(|err| GfmError::io(&path, err))?;
+        check_control()?;
         if bytes.len() > self.config.max_entry_bytes {
+            check_control()?;
             fs::remove_file(&path).map_err(|err| GfmError::io(&path, err))?;
             return Ok(None);
         }
@@ -869,6 +886,7 @@ pub fn preview_invalidation_for_fileprovider(
 mod tests {
     use super::*;
     use gfm_types::VolumeId;
+    use std::cell::Cell;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -988,6 +1006,48 @@ mod tests {
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert_eq!(reloaded.memory_bytes(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_disk_entry_read_honors_cancellation_before_byte_load() {
+        let root = temp_root("cancel-disk-read");
+        let key = key("disk.png", PreviewKind::Thumbnail);
+        {
+            let mut cache = PreviewCache::new(PreviewCacheConfig {
+                memory_budget_bytes: 16,
+                max_entry_bytes: 16,
+                disk_root: root.clone(),
+                disk_enabled: true,
+            })
+            .unwrap();
+            cache
+                .insert(PreviewEntry::new(key.clone(), b"disk".to_vec()))
+                .unwrap();
+        }
+        let reloaded = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        })
+        .unwrap();
+        let disk_path = reloaded.disk_path(&key);
+        let calls = Cell::new(0usize);
+
+        let result = reloaded.read_disk_checked(&key, || {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call >= 2 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert_eq!(calls.get(), 3);
+        assert!(disk_path.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
