@@ -2089,7 +2089,8 @@ fn run_preview_cache_fileprovider_invalidation(
         let report = FileProviderInvalidationReport::evaluate(path.clone(), previous)?;
         let key = PreviewRequestKey::new(record.id, path, kind);
         cancellation.check()?;
-        let mut cache = PreviewCache::new(PreviewCacheConfig::new(cache_root))?;
+        let mut cache =
+            PreviewCache::new_cancellable(PreviewCacheConfig::new(cache_root), &cancellation)?;
         let invalidation_key = cache
             .disk_key_for_path_kind(&key.path, key.kind)
             .unwrap_or_else(|| key.clone());
@@ -2360,11 +2361,12 @@ fn observed_preview_cache_invalidation_tsv(
     cancellation: &Cancellation,
 ) -> Result<String> {
     cancellation.check()?;
-    let mut cache = PreviewCache::new(PreviewCacheConfig::new(cache_root))?;
+    let mut cache =
+        PreviewCache::new_cancellable(PreviewCacheConfig::new(cache_root), cancellation)?;
     let mut lines = vec![observed.as_tsv()];
     for report in &observed.report.changes {
         cancellation.check()?;
-        let key = preview_cache_key_for_path_kind(&cache, &report.path, kind)?;
+        let key = preview_cache_key_for_path_kind(&cache, &report.path, kind, cancellation)?;
         let invalidation_key = cache
             .disk_key_for_path_kind(&key.path, key.kind)
             .unwrap_or_else(|| key.clone());
@@ -2386,10 +2388,13 @@ fn preview_cache_key_for_path_kind(
     cache: &PreviewCache,
     path: &Path,
     kind: PreviewKind,
+    cancellation: &Cancellation,
 ) -> Result<PreviewRequestKey> {
+    cancellation.check()?;
     if let Some(key) = cache.disk_key_for_path_kind(path, kind) {
         return Ok(key);
     }
+    cancellation.check()?;
     let file_id = match path.try_exists() {
         Ok(true) => record_for_path(path, None, false)?.id,
         Ok(false) => FileId::new(VolumeId(0), 0),
@@ -2400,6 +2405,7 @@ fn preview_cache_key_for_path_kind(
             ))
         }
     };
+    cancellation.check()?;
     Ok(PreviewRequestKey::new(file_id, path.to_path_buf(), kind))
 }
 
@@ -2755,6 +2761,33 @@ mod tests {
 
         assert_eq!(err, GfmError::Cancelled);
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn preview_cache_key_resolution_honors_pre_cancelled_token_before_path_probe() {
+        let cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: std::env::temp_dir().join(format!(
+                "gfm-platform-preview-cache-key-cancelled-{}",
+                std::process::id()
+            )),
+            disk_enabled: false,
+        })
+        .unwrap();
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+        let unprobeable = std::env::temp_dir().join("gfm-preview-cache-key".repeat(64));
+
+        let err = preview_cache_key_for_path_kind(
+            &cache,
+            &unprobeable,
+            PreviewKind::Thumbnail,
+            &cancellation,
+        )
+        .expect_err("pre-cancelled preview cache key resolution should not touch the path");
+
+        assert_eq!(err, GfmError::Cancelled);
     }
 
     #[test]

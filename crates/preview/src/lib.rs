@@ -138,6 +138,14 @@ pub struct PreviewCache {
 
 impl PreviewCache {
     pub fn new(config: PreviewCacheConfig) -> Result<Self> {
+        Self::new_cancellable(config, &Cancellation::default())
+    }
+
+    pub fn new_cancellable(
+        config: PreviewCacheConfig,
+        cancellation: &Cancellation,
+    ) -> Result<Self> {
+        cancellation.check()?;
         if config.memory_budget_bytes == 0 {
             return Err(GfmError::Format(
                 "preview cache memory budget must be non-zero".to_string(),
@@ -149,14 +157,17 @@ impl PreviewCache {
             ));
         }
         if config.disk_enabled {
+            cancellation.check()?;
             fs::create_dir_all(&config.disk_root)
                 .map_err(|err| GfmError::io(&config.disk_root, err))?;
+            cancellation.check()?;
         }
         let disk_index = if config.disk_enabled {
-            load_disk_index(&config)?
+            load_disk_index_cancellable(&config, cancellation)?
         } else {
             HashMap::new()
         };
+        cancellation.check()?;
         Ok(Self {
             config,
             memory: HashMap::new(),
@@ -187,7 +198,7 @@ impl PreviewCache {
             cancellation.check()?;
             self.write_disk(&entry)?;
             cancellation.check()?;
-            self.write_disk_index_entry(&entry.key)?;
+            self.write_disk_index_entry_cancellable(&entry.key, cancellation)?;
         }
         cancellation.check()?;
         self.insert_memory(entry);
@@ -241,7 +252,7 @@ impl PreviewCache {
                 fs::remove_file(&path).map_err(|err| GfmError::io(&path, err))?;
             }
             cancellation.check()?;
-            self.remove_disk_index_entry(key)?;
+            self.remove_disk_index_entry_cancellable(key, cancellation)?;
         }
         Ok(())
     }
@@ -316,13 +327,13 @@ impl PreviewCache {
         let path = self.disk_path(key);
         if !disk_cache_path_exists(&path)? {
             cancellation.check()?;
-            self.remove_disk_index_entry(key)?;
+            self.remove_disk_index_entry_cancellable(key, cancellation)?;
             return Ok(false);
         }
         cancellation.check()?;
         fs::remove_file(&path).map_err(|err| GfmError::io(&path, err))?;
         cancellation.check()?;
-        self.remove_disk_index_entry(key)?;
+        self.remove_disk_index_entry_cancellable(key, cancellation)?;
         Ok(true)
     }
 
@@ -360,22 +371,32 @@ impl PreviewCache {
         fs::rename(&tmp, &path).map_err(|err| GfmError::io(&path, err))
     }
 
-    fn write_disk_index_entry(&mut self, key: &PreviewRequestKey) -> Result<()> {
+    fn write_disk_index_entry_cancellable(
+        &mut self,
+        key: &PreviewRequestKey,
+        cancellation: &Cancellation,
+    ) -> Result<()> {
         if !self.config.disk_enabled {
             return Ok(());
         }
+        cancellation.check()?;
         self.disk_index
             .insert((key.path.clone(), key.kind), key.clone());
-        write_disk_index(&self.config, &self.disk_index)
+        write_disk_index_cancellable(&self.config, &self.disk_index, cancellation)
     }
 
-    fn remove_disk_index_entry(&mut self, key: &PreviewRequestKey) -> Result<()> {
+    fn remove_disk_index_entry_cancellable(
+        &mut self,
+        key: &PreviewRequestKey,
+        cancellation: &Cancellation,
+    ) -> Result<()> {
         if !self.config.disk_enabled {
             return Ok(());
         }
+        cancellation.check()?;
         let removed = self.disk_index.remove(&(key.path.clone(), key.kind));
         if removed.is_some() {
-            write_disk_index(&self.config, &self.disk_index)?;
+            write_disk_index_cancellable(&self.config, &self.disk_index, cancellation)?;
         }
         Ok(())
     }
@@ -422,9 +443,11 @@ fn preview_cache_index_path(config: &PreviewCacheConfig) -> PathBuf {
     config.disk_root.join("preview-cache-index.tsv")
 }
 
-fn load_disk_index(
+fn load_disk_index_cancellable(
     config: &PreviewCacheConfig,
+    cancellation: &Cancellation,
 ) -> Result<HashMap<(PathBuf, PreviewKind), PreviewRequestKey>> {
+    cancellation.check()?;
     let path = preview_cache_index_path(config);
     let contents = match fs::read_to_string(&path) {
         Ok(contents) => contents,
@@ -439,6 +462,7 @@ fn load_disk_index(
     let mut index = HashMap::new();
     let mut seen_path_kinds = HashSet::new();
     for (line_index, line) in contents.lines().enumerate() {
+        cancellation.check()?;
         if line.is_empty() {
             continue;
         }
@@ -457,25 +481,32 @@ fn load_disk_index(
                 key.path.display()
             )));
         }
+        cancellation.check()?;
         if disk_cache_file_exists(&config.disk_root.join(key.stable_name()))? {
             index.insert(path_kind, key);
         }
     }
+    cancellation.check()?;
     Ok(index)
 }
 
-fn write_disk_index(
+fn write_disk_index_cancellable(
     config: &PreviewCacheConfig,
     index: &HashMap<(PathBuf, PreviewKind), PreviewRequestKey>,
+    cancellation: &Cancellation,
 ) -> Result<()> {
+    cancellation.check()?;
     let path = preview_cache_index_path(config);
     let tmp = path.with_extension("tmp");
     let mut lines = Vec::new();
     for key in index.values() {
+        cancellation.check()?;
         lines.push(format_disk_index_line(key));
     }
     lines.sort();
+    cancellation.check()?;
     fs::write(&tmp, lines.join("\n")).map_err(|err| GfmError::io(&tmp, err))?;
+    cancellation.check()?;
     fs::rename(&tmp, &path).map_err(|err| GfmError::io(&path, err))
 }
 
@@ -1183,6 +1214,60 @@ mod tests {
             None
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_open_honors_pre_cancelled_token_before_directory_creation() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-preview-cancelled-open-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = PreviewCache::new_cancellable(
+            PreviewCacheConfig {
+                memory_budget_bytes: 16,
+                max_entry_bytes: 16,
+                disk_root: root.clone(),
+                disk_enabled: true,
+            },
+            &cancellation,
+        )
+        .map(|_| ());
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn cache_open_honors_pre_cancelled_token_when_disk_is_disabled() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-preview-cancelled-memory-open-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = PreviewCache::new_cancellable(
+            PreviewCacheConfig {
+                memory_budget_bytes: 16,
+                max_entry_bytes: 16,
+                disk_root: root.clone(),
+                disk_enabled: false,
+            },
+            &cancellation,
+        )
+        .map(|_| ());
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(!root.exists());
     }
 
     #[test]

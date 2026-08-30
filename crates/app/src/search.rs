@@ -246,7 +246,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 index_path,
                 "search index",
                 move |index_path, cancellation| {
-                    let session = Indexer::default().load_query_session(index_path)?;
+                    let session = Indexer::default()
+                        .load_query_session_cancellable(index_path, cancellation)?;
                     session.search_structured_with_volume_scope_cancellable(
                         &SearchQuery::parse(&query),
                         50,

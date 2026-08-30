@@ -322,6 +322,19 @@ fn indexer_build_honors_pre_cancelled_token_without_scanning() {
 }
 
 #[test]
+fn query_session_load_honors_pre_cancelled_token_before_records_open() {
+    let root = unique_temp_dir("gfm-query-session-load-cancel-root");
+    let records = unprobeable_child_path(&root, "records-unavailable", "gfmidx");
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = Indexer::default().load_query_session_cancellable(&records, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn persistent_index_build_honors_pre_cancelled_token_without_publishing() {
     let root = unique_temp_dir("gfm-index-state-cancel-root");
     let records = unique_temp_path("gfm-index-state-cancel-records", "gfmidx");
