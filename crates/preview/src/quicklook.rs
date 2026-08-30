@@ -33,6 +33,7 @@ pub struct QuickLookSessionInput {
     pub rect: Rect,
     pub viewport: Viewport,
     pub scheduling_policy: PreviewSchedulingPolicy,
+    pub is_remote: bool,
     pub invalidation_event: PreviewInvalidationEvent,
     pub cloud_state: CloudStorageState,
     pub cloud_materialization: CloudMaterialization,
@@ -49,6 +50,7 @@ impl QuickLookSessionInput {
                 max_prefetch: 1,
                 cancel_offscreen: true,
             },
+            is_remote: false,
             invalidation_event: PreviewInvalidationEvent::default(),
             cloud_state: CloudStorageState::LocalOnly,
             cloud_materialization: CloudMaterialization::NotProviderBacked,
@@ -72,6 +74,11 @@ impl QuickLookSessionInput {
 
     pub fn with_scheduling_policy(mut self, policy: PreviewSchedulingPolicy) -> Self {
         self.scheduling_policy = policy;
+        self
+    }
+
+    pub fn with_remote_volume(mut self, is_remote: bool) -> Self {
+        self.is_remote = is_remote;
         self
     }
 
@@ -111,7 +118,8 @@ impl QuickLookSessionContract {
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check()?;
-        let security_input = security_input_for_path(&input.key.path, PreviewKind::QuickLook);
+        let mut security_input = security_input_for_path(&input.key.path, PreviewKind::QuickLook);
+        security_input.is_remote |= input.is_remote;
         check()?;
         let security = decide_preview_security(policy, &security_input);
         let cloud = decide_cloud_preview_for_materialization(input.cloud_materialization);
@@ -261,6 +269,25 @@ mod tests {
             contract.schedule_decision,
             PreviewTaskDecision::Cancelled {
                 reason: "metadata-only",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn descriptor_remote_untrusted_items_are_denied() {
+        let contract = QuickLookSessionContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Installer.dmg", Rect::new(0, 0, 400, 300)).with_remote_volume(true),
+        )
+        .unwrap();
+
+        assert_eq!(contract.security, PreviewSecurityDecision::Deny);
+        assert_eq!(contract.controller_mode, QuickLookControllerMode::Denied);
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "denied",
                 ..
             }
         ));

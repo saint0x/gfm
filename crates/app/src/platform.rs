@@ -1719,12 +1719,16 @@ fn volume_event_runtime_fanout_summary(
 
 fn preview_security_input_with_volume(path: &Path, kind: PreviewKind) -> PreviewSecurityInput {
     let mut input = security_input_for_path(path, kind);
+    input.is_remote = preview_remote_volume_for_path(path);
+    input
+}
+
+fn preview_remote_volume_for_path(path: &Path) -> bool {
     let volume_path = absolute_preview_path(path);
     let report = VolumeDiscoveryReport::for_containing_path(&volume_path);
-    if let Some(volume) = report.volume_for_path(&volume_path) {
-        input.is_remote = volume_reports_remote_for_preview(volume);
-    }
-    input
+    report
+        .volume_for_path(&volume_path)
+        .is_some_and(volume_reports_remote_for_preview)
 }
 
 fn absolute_preview_path(path: &Path) -> PathBuf {
@@ -2465,12 +2469,21 @@ fn build_quicklook_session_contract(
     cancellation.check()?;
     let cloud = fileprovider_materialization_for_preview(path, cancellation)?;
     cancellation.check()?;
+    let volume_report = VolumeDiscoveryReport::for_containing_path(absolute_preview_path(path));
+    let (_, is_remote, _) = preview_volume_scheduling_facts(path, &volume_report);
     let input = QuickLookSessionInput::new(
         PreviewRequestKey::new(record.id, path.to_path_buf(), PreviewKind::QuickLook),
         Rect::new(0, 0, 640, 480),
         Viewport::new(Rect::new(0, 0, 1024, 768), 256),
     )
     .with_cloud_materialization(cloud)
+    .with_remote_volume(is_remote)
+    .with_scheduling_policy(preview_scheduling_policy_from_volume_report(
+        path,
+        preview_base_scheduling_policy(PreviewKind::QuickLook),
+        SchedulingPressure::default(),
+        &volume_report,
+    ))
     .with_invalidation(PreviewInvalidationEvent {
         content_changed: true,
         ..PreviewInvalidationEvent::default()
@@ -2490,12 +2503,21 @@ fn build_thumbnail_generation_contract(
     cancellation.check()?;
     let cloud = fileprovider_materialization_for_preview(path, cancellation)?;
     cancellation.check()?;
+    let volume_report = VolumeDiscoveryReport::for_containing_path(absolute_preview_path(path));
+    let (_, is_remote, _) = preview_volume_scheduling_facts(path, &volume_report);
     let input = ThumbnailGenerationInput::new(
         PreviewRequestKey::new(record.id, path.to_path_buf(), PreviewKind::Thumbnail),
         Rect::new(0, 0, 160, 160),
         Viewport::new(Rect::new(0, 0, 1024, 768), 256),
     )
     .with_cloud_materialization(cloud)
+    .with_remote_volume(is_remote)
+    .with_scheduling_policy(preview_scheduling_policy_from_volume_report(
+        path,
+        preview_base_scheduling_policy(PreviewKind::Thumbnail),
+        SchedulingPressure::default(),
+        &volume_report,
+    ))
     .with_size(512, 2_000)
     .with_invalidation(PreviewInvalidationEvent {
         metadata_changed: true,
@@ -2569,6 +2591,7 @@ fn run_adaptive_quicklook_session(
                 Viewport::new(Rect::new(0, 0, 1024, 768), 256),
             )
             .with_cloud_materialization(cloud)
+            .with_remote_volume(preview_remote_volume_for_path(&path))
             .with_scheduling_policy(preview_scheduling_policy_for_path(
                 &path,
                 PreviewKind::QuickLook,
@@ -2626,6 +2649,7 @@ fn run_adaptive_thumbnail_generation(
                 Viewport::new(Rect::new(0, 0, 1024, 768), 256),
             )
             .with_cloud_materialization(cloud)
+            .with_remote_volume(preview_remote_volume_for_path(&path))
             .with_scheduling_policy(preview_scheduling_policy_for_path(
                 &path,
                 PreviewKind::Thumbnail,

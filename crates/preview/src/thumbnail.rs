@@ -52,6 +52,7 @@ pub struct ThumbnailGenerationInput {
     pub rect: Rect,
     pub viewport: Viewport,
     pub scheduling_policy: PreviewSchedulingPolicy,
+    pub is_remote: bool,
     pub max_pixel_size: u16,
     pub scale_factor_milli: u16,
     pub invalidation_event: PreviewInvalidationEvent,
@@ -66,6 +67,7 @@ impl ThumbnailGenerationInput {
             rect,
             viewport,
             scheduling_policy: PreviewSchedulingPolicy::default(),
+            is_remote: false,
             max_pixel_size: 512,
             scale_factor_milli: 2_000,
             invalidation_event: PreviewInvalidationEvent::default(),
@@ -99,6 +101,11 @@ impl ThumbnailGenerationInput {
 
     pub fn with_scheduling_policy(mut self, policy: PreviewSchedulingPolicy) -> Self {
         self.scheduling_policy = policy;
+        self
+    }
+
+    pub fn with_remote_volume(mut self, is_remote: bool) -> Self {
+        self.is_remote = is_remote;
         self
     }
 
@@ -141,7 +148,8 @@ impl ThumbnailGenerationContract {
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check()?;
-        let security_input = security_input_for_path(&input.key.path, PreviewKind::Thumbnail);
+        let mut security_input = security_input_for_path(&input.key.path, PreviewKind::Thumbnail);
+        security_input.is_remote |= input.is_remote;
         check()?;
         let security = decide_preview_security(policy, &security_input);
         let cloud = decide_cloud_preview_for_materialization(input.cloud_materialization);
@@ -319,6 +327,29 @@ mod tests {
             contract.schedule_decision,
             PreviewTaskDecision::Cancelled {
                 reason: "metadata-only",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn descriptor_remote_untrusted_items_are_denied_for_thumbnails() {
+        let contract = ThumbnailGenerationContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Installer.dmg", Rect::new(0, 0, 128, 128)).with_remote_volume(true),
+        )
+        .unwrap();
+
+        assert_eq!(contract.security, PreviewSecurityDecision::Deny);
+        assert_eq!(contract.generator_mode, ThumbnailGeneratorMode::Denied);
+        assert_eq!(
+            contract.cache_disposition,
+            ThumbnailCacheDisposition::Bypass
+        );
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "denied",
                 ..
             }
         ));

@@ -2604,6 +2604,42 @@ fn quicklook_refuses_unreachable_network_volume_before_preview_from_binary() {
 }
 
 #[test]
+fn quicklook_denies_untrusted_remote_volume_preview_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-quicklook-remote-untrusted-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network\n").unwrap();
+    let path = root.join("Installer.dmg");
+    std::fs::write(&path, "disk image fixture").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("quicklook-session")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "quicklook preview", &path);
+    assert!(stdout.starts_with("quicklook-session\tquick-look\t"));
+    assert!(
+        stdout.contains("\tdeny\tcloud=native-eligible\tdenied\t"),
+        "{stdout}"
+    );
+    assert!(stdout.ends_with("schedule=cancelled:denied\n"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn adaptive_quicklook_session_stays_visible_under_pressure_from_binary() {
     let path =
         std::env::temp_dir().join(format!("gfm-quicklook-adaptive-{}.pdf", std::process::id()));
@@ -2833,6 +2869,43 @@ fn thumbnail_refuses_unreachable_network_volume_before_generation_from_binary() 
         !stderr.contains("security-worker-admission\tworker=thumbnail generation\t"),
         "{stderr}"
     );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn thumbnail_generation_denies_untrusted_remote_volume_preview_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-thumbnail-remote-untrusted-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network\n").unwrap();
+    let path = root.join("Installer.dmg");
+    std::fs::write(&path, "disk image fixture").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("thumbnail-generation")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "thumbnail generation", &path);
+    assert!(stdout.starts_with("thumbnail-generation\t"));
+    assert!(
+        stdout.contains("\tdeny\tcloud=native-eligible\tdenied\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tcache=bypass\t"), "{stdout}");
+    assert!(stdout.ends_with("schedule=cancelled:denied\n"), "{stdout}");
 
     let _ = std::fs::remove_dir_all(root);
 }
