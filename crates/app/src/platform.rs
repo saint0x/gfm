@@ -1,5 +1,6 @@
 use crate::access::{
-    preflight_access_scope_checked, preflight_volume_access_scope,
+    preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
+    preflight_volume_access_scope, preflight_volume_access_scope_with_report,
     worker_admission_with_volume_gate, worker_admissions_with_shared_volume_report,
     worker_admissions_with_volume_report, ScopedAccessGuard, WorkerAdmissionRequest,
 };
@@ -1719,16 +1720,20 @@ fn volume_event_runtime_fanout_summary(
 
 fn preview_security_input_with_volume(path: &Path, kind: PreviewKind) -> PreviewSecurityInput {
     let mut input = security_input_for_path(path, kind);
-    input.is_remote = preview_remote_volume_for_path(path);
+    let volume_path = absolute_preview_path(path);
+    let report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    input.is_remote = preview_remote_volume_from_report(&volume_path, &report);
     input
 }
 
-fn preview_remote_volume_for_path(path: &Path) -> bool {
-    let volume_path = absolute_preview_path(path);
-    let report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+fn preview_remote_volume_from_report(path: &Path, report: &VolumeDiscoveryReport) -> bool {
     report
-        .volume_for_path(&volume_path)
+        .volume_for_path(path)
         .is_some_and(volume_reports_remote_for_preview)
+}
+
+fn preview_volume_id_from_report(path: &Path, report: &VolumeDiscoveryReport) -> Option<VolumeId> {
+    report.volume_for_path(path).map(|volume| volume.id)
 }
 
 fn absolute_preview_path(path: &Path) -> PathBuf {
@@ -1756,20 +1761,6 @@ fn preview_base_scheduling_policy(kind: PreviewKind) -> PreviewSchedulingPolicy 
             PreviewSchedulingPolicy::default()
         }
     }
-}
-
-fn preview_scheduling_policy_for_path(
-    path: &Path,
-    kind: PreviewKind,
-    pressure: SchedulingPressure,
-) -> PreviewSchedulingPolicy {
-    let report = VolumeDiscoveryReport::for_containing_path(absolute_preview_path(path));
-    preview_scheduling_policy_from_volume_report(
-        path,
-        preview_base_scheduling_policy(kind),
-        pressure,
-        &report,
-    )
 }
 
 fn preview_scheduling_policy_from_volume_report(
@@ -2363,15 +2354,22 @@ fn run_icon_preview_retry_probe(
 
 fn run_quicklook_session(path: PathBuf) -> Result<QuickLookSessionContract> {
     const WORKER: &str = "quicklook preview";
-    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| parent_volume(&path));
+    let volume_path = absolute_preview_path(&path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    preflight_volume_access_scope_with_report(
+        &path,
+        AccessIntent::Preview,
+        WORKER,
+        &volume_report,
+    )?;
+    let volume = preview_volume_id_from_report(&volume_path, &volume_report);
     run_preview_contract_cancellable_with_payload_path(
         volume,
         WORKER,
         path.clone(),
-        move |cancellation| build_quicklook_session_contract(&path, WORKER, &cancellation),
+        move |cancellation| {
+            build_quicklook_session_contract(&path, WORKER, &volume_report, &cancellation)
+        },
     )
 }
 
@@ -2380,37 +2378,49 @@ fn run_quicklook_session_retry_probe(
     attempt_state: PathBuf,
 ) -> Result<QuickLookSessionContract> {
     const WORKER: &str = "quicklook preview";
-    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
+    let volume_path = absolute_preview_path(&path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    preflight_volume_access_scope_with_report(
+        &path,
+        AccessIntent::Preview,
+        WORKER,
+        &volume_report,
+    )?;
     preflight_volume_access_scope(
         write_probe_path(&attempt_state)?,
         AccessIntent::Write,
         WORKER,
     )?;
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| parent_volume(&path));
+    let volume = preview_volume_id_from_report(&volume_path, &volume_report);
     run_preview_contract_cancellable_with_payload_path(
         volume,
         WORKER,
         path.clone(),
         move |cancellation| {
             fail_first_retry_probe_attempt(&attempt_state, WORKER, &cancellation)?;
-            build_quicklook_session_contract(&path, WORKER, &cancellation)
+            build_quicklook_session_contract(&path, WORKER, &volume_report, &cancellation)
         },
     )
 }
 
 fn run_thumbnail_generation(path: PathBuf) -> Result<ThumbnailGenerationContract> {
     const WORKER: &str = "thumbnail generation";
-    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| parent_volume(&path));
+    let volume_path = absolute_preview_path(&path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    preflight_volume_access_scope_with_report(
+        &path,
+        AccessIntent::Preview,
+        WORKER,
+        &volume_report,
+    )?;
+    let volume = preview_volume_id_from_report(&volume_path, &volume_report);
     run_preview_contract_cancellable_with_payload_path(
         volume,
         WORKER,
         path.clone(),
-        move |cancellation| build_thumbnail_generation_contract(&path, WORKER, &cancellation),
+        move |cancellation| {
+            build_thumbnail_generation_contract(&path, WORKER, &volume_report, &cancellation)
+        },
     )
 }
 
@@ -2419,22 +2429,27 @@ fn run_thumbnail_generation_retry_probe(
     attempt_state: PathBuf,
 ) -> Result<ThumbnailGenerationContract> {
     const WORKER: &str = "thumbnail generation";
-    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
+    let volume_path = absolute_preview_path(&path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    preflight_volume_access_scope_with_report(
+        &path,
+        AccessIntent::Preview,
+        WORKER,
+        &volume_report,
+    )?;
     preflight_volume_access_scope(
         write_probe_path(&attempt_state)?,
         AccessIntent::Write,
         WORKER,
     )?;
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| parent_volume(&path));
+    let volume = preview_volume_id_from_report(&volume_path, &volume_report);
     run_preview_contract_cancellable_with_payload_path(
         volume,
         WORKER,
         path.clone(),
         move |cancellation| {
             fail_first_retry_probe_attempt(&attempt_state, WORKER, &cancellation)?;
-            build_thumbnail_generation_contract(&path, WORKER, &cancellation)
+            build_thumbnail_generation_contract(&path, WORKER, &volume_report, &cancellation)
         },
     )
 }
@@ -2462,15 +2477,21 @@ fn build_icon_preview_contract(
 fn build_quicklook_session_contract(
     path: &Path,
     worker: &str,
+    volume_report: &VolumeDiscoveryReport,
     cancellation: &Cancellation,
 ) -> Result<QuickLookSessionContract> {
     cancellation.check()?;
-    let record = record_for_path_with_access(path, AccessIntent::Preview, worker, cancellation)?;
+    let record = record_for_path_with_access_in_volume_report(
+        path,
+        AccessIntent::Preview,
+        worker,
+        volume_report,
+        cancellation,
+    )?;
     cancellation.check()?;
     let cloud = fileprovider_materialization_for_preview(path, cancellation)?;
     cancellation.check()?;
-    let volume_report = VolumeDiscoveryReport::for_containing_path(absolute_preview_path(path));
-    let (_, is_remote, _) = preview_volume_scheduling_facts(path, &volume_report);
+    let (_, is_remote, _) = preview_volume_scheduling_facts(path, volume_report);
     let input = QuickLookSessionInput::new(
         PreviewRequestKey::new(record.id, path.to_path_buf(), PreviewKind::QuickLook),
         Rect::new(0, 0, 640, 480),
@@ -2482,7 +2503,7 @@ fn build_quicklook_session_contract(
         path,
         preview_base_scheduling_policy(PreviewKind::QuickLook),
         SchedulingPressure::default(),
-        &volume_report,
+        volume_report,
     ))
     .with_invalidation(PreviewInvalidationEvent {
         content_changed: true,
@@ -2496,15 +2517,21 @@ fn build_quicklook_session_contract(
 fn build_thumbnail_generation_contract(
     path: &Path,
     worker: &str,
+    volume_report: &VolumeDiscoveryReport,
     cancellation: &Cancellation,
 ) -> Result<ThumbnailGenerationContract> {
     cancellation.check()?;
-    let record = record_for_path_with_access(path, AccessIntent::Preview, worker, cancellation)?;
+    let record = record_for_path_with_access_in_volume_report(
+        path,
+        AccessIntent::Preview,
+        worker,
+        volume_report,
+        cancellation,
+    )?;
     cancellation.check()?;
     let cloud = fileprovider_materialization_for_preview(path, cancellation)?;
     cancellation.check()?;
-    let volume_report = VolumeDiscoveryReport::for_containing_path(absolute_preview_path(path));
-    let (_, is_remote, _) = preview_volume_scheduling_facts(path, &volume_report);
+    let (_, is_remote, _) = preview_volume_scheduling_facts(path, volume_report);
     let input = ThumbnailGenerationInput::new(
         PreviewRequestKey::new(record.id, path.to_path_buf(), PreviewKind::Thumbnail),
         Rect::new(0, 0, 160, 160),
@@ -2516,7 +2543,7 @@ fn build_thumbnail_generation_contract(
         path,
         preview_base_scheduling_policy(PreviewKind::Thumbnail),
         SchedulingPressure::default(),
-        &volume_report,
+        volume_report,
     ))
     .with_size(512, 2_000)
     .with_invalidation(PreviewInvalidationEvent {
@@ -2559,24 +2586,36 @@ fn run_adaptive_quicklook_session(
     cancel_after_access: bool,
 ) -> Result<crate::runtime::ScheduledTaskOutcome<QuickLookSessionContract>> {
     const WORKER: &str = "adaptive quicklook preview";
-    let volume_path = path.clone();
+    let volume_path = absolute_preview_path(&path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    let volume_path_for_volume = volume_path.clone();
+    let volume_report_for_volume = volume_report.clone();
     run_preview_contract_adaptive_with_volume_and_payload_path(
         Priority::Visible,
         "quicklook preview",
         pressure,
         move || {
-            preflight_volume_access_scope(&volume_path, AccessIntent::Preview, WORKER)?;
-            Ok(detect_volume_id(&volume_path)
-                .ok()
-                .or_else(|| parent_volume(&volume_path)))
+            preflight_volume_access_scope_with_report(
+                &volume_path_for_volume,
+                AccessIntent::Preview,
+                WORKER,
+                &volume_report_for_volume,
+            )?;
+            Ok(preview_volume_id_from_report(
+                &volume_path_for_volume,
+                &volume_report_for_volume,
+            ))
         },
         path.clone(),
         move |cancellation| {
             cancellation.check()?;
-            let _access =
-                preflight_access_scope_checked(&path, AccessIntent::Preview, WORKER, || {
-                    cancellation.check()
-                })?;
+            let _access = preflight_access_scope_checked_with_volume_report(
+                &path,
+                AccessIntent::Preview,
+                WORKER,
+                &volume_report,
+                || cancellation.check(),
+            )?;
             if cancel_after_access {
                 cancellation.cancel();
             }
@@ -2591,11 +2630,15 @@ fn run_adaptive_quicklook_session(
                 Viewport::new(Rect::new(0, 0, 1024, 768), 256),
             )
             .with_cloud_materialization(cloud)
-            .with_remote_volume(preview_remote_volume_for_path(&path))
-            .with_scheduling_policy(preview_scheduling_policy_for_path(
+            .with_remote_volume(preview_remote_volume_from_report(
+                &volume_path,
+                &volume_report,
+            ))
+            .with_scheduling_policy(preview_scheduling_policy_from_volume_report(
                 &path,
-                PreviewKind::QuickLook,
+                preview_base_scheduling_policy(PreviewKind::QuickLook),
                 pressure,
+                &volume_report,
             ))
             .with_invalidation(PreviewInvalidationEvent {
                 content_changed: true,
@@ -2617,24 +2660,36 @@ fn run_adaptive_thumbnail_generation(
 ) -> Result<crate::runtime::ScheduledTaskOutcome<ThumbnailGenerationContract>> {
     const VOLUME_WORKER: &str = "adaptive thumbnail generation volume";
     const WORKER: &str = "adaptive thumbnail generation";
-    let volume_path = path.clone();
+    let volume_path = absolute_preview_path(&path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    let volume_path_for_volume = volume_path.clone();
+    let volume_report_for_volume = volume_report.clone();
     run_preview_contract_adaptive_with_volume_and_payload_path(
         Priority::Background,
         "thumbnail generation",
         pressure,
         move || {
-            preflight_volume_access_scope(&volume_path, AccessIntent::Preview, VOLUME_WORKER)?;
-            Ok(detect_volume_id(&volume_path)
-                .ok()
-                .or_else(|| parent_volume(&volume_path)))
+            preflight_volume_access_scope_with_report(
+                &volume_path_for_volume,
+                AccessIntent::Preview,
+                VOLUME_WORKER,
+                &volume_report_for_volume,
+            )?;
+            Ok(preview_volume_id_from_report(
+                &volume_path_for_volume,
+                &volume_report_for_volume,
+            ))
         },
         path.clone(),
         move |cancellation| {
             cancellation.check()?;
-            let _access =
-                preflight_access_scope_checked(&path, AccessIntent::Preview, WORKER, || {
-                    cancellation.check()
-                })?;
+            let _access = preflight_access_scope_checked_with_volume_report(
+                &path,
+                AccessIntent::Preview,
+                WORKER,
+                &volume_report,
+                || cancellation.check(),
+            )?;
             if cancel_after_access {
                 cancellation.cancel();
             }
@@ -2649,11 +2704,15 @@ fn run_adaptive_thumbnail_generation(
                 Viewport::new(Rect::new(0, 0, 1024, 768), 256),
             )
             .with_cloud_materialization(cloud)
-            .with_remote_volume(preview_remote_volume_for_path(&path))
-            .with_scheduling_policy(preview_scheduling_policy_for_path(
+            .with_remote_volume(preview_remote_volume_from_report(
+                &volume_path,
+                &volume_report,
+            ))
+            .with_scheduling_policy(preview_scheduling_policy_from_volume_report(
                 &path,
-                PreviewKind::Thumbnail,
+                preview_base_scheduling_policy(PreviewKind::Thumbnail),
                 pressure,
+                &volume_report,
             ))
             .with_size(512, 2_000)
             .with_invalidation(PreviewInvalidationEvent {
@@ -3519,6 +3578,24 @@ fn record_for_path_with_access(
     cancellation: &Cancellation,
 ) -> Result<FileRecord> {
     let _access = preflight_access_scope_checked(path, intent, worker, || cancellation.check())?;
+    cancellation.check()?;
+    record_for_path_checked(path, None, false, || cancellation.check())
+}
+
+fn record_for_path_with_access_in_volume_report(
+    path: &Path,
+    intent: AccessIntent,
+    worker: &str,
+    volume_report: &VolumeDiscoveryReport,
+    cancellation: &Cancellation,
+) -> Result<FileRecord> {
+    let _access = preflight_access_scope_checked_with_volume_report(
+        path,
+        intent,
+        worker,
+        volume_report,
+        || cancellation.check(),
+    )?;
     cancellation.check()?;
     record_for_path_checked(path, None, false, || cancellation.check())
 }

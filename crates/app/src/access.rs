@@ -88,12 +88,31 @@ pub(crate) fn preflight_access_scope_checked(
     path: &Path,
     intent: AccessIntent,
     worker: &str,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    let volume_path = absolute_volume_probe_path(path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    preflight_access_scope_checked_with_volume_report(
+        path,
+        intent,
+        worker,
+        &volume_report,
+        check_control,
+    )
+}
+
+pub(crate) fn preflight_access_scope_checked_with_volume_report(
+    path: &Path,
+    intent: AccessIntent,
+    worker: &str,
+    volume_report: &VolumeDiscoveryReport,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
     check_control()?;
     let _ = refresh_permission_state(PermissionRefreshAudience::Workers, worker)?;
     check_control()?;
-    preflight_volume_access(path, intent, worker)?;
+    let volume_path = absolute_volume_probe_path(path);
+    preflight_volume_access_in_report(path, &volume_path, intent, worker, volume_report)?;
     check_control()?;
     let report = SecurityScopedAccessReport::evaluate(path, intent);
     check_control()?;
@@ -124,6 +143,16 @@ pub(crate) fn preflight_volume_access_scope(
     worker: &str,
 ) -> Result<()> {
     preflight_volume_access(path, intent, worker)
+}
+
+pub(crate) fn preflight_volume_access_scope_with_report(
+    path: &Path,
+    intent: AccessIntent,
+    worker: &str,
+    volume_report: &VolumeDiscoveryReport,
+) -> Result<()> {
+    let volume_path = absolute_volume_probe_path(path);
+    preflight_volume_access_in_report(path, &volume_path, intent, worker, volume_report)
 }
 
 fn preflight_volume_access(path: &Path, intent: AccessIntent, worker: &str) -> Result<()> {
@@ -655,6 +684,40 @@ mod tests {
         assert!(err
             .to_string()
             .contains("quicklook preview volume access blocked"));
+        assert!(err.to_string().contains("unavailable volume network"));
+        assert!(err.to_string().contains("native-status=unavailable"));
+        assert!(err.to_string().contains("resource-status=unavailable"));
+        assert!(err.to_string().contains("mount-status=unavailable"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn access_preflight_reuses_volume_report_before_filesystem_probe() {
+        let root = unique_temp_dir("gfm-access-preflight-shared-volume-report");
+        let file = root.join("Missing.pdf");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::Network;
+        volume.reachable = Some(true);
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let err = match preflight_access_scope_checked_with_volume_report(
+            &file,
+            AccessIntent::Preview,
+            "preview worker",
+            &report,
+            || Ok(()),
+        ) {
+            Ok(_) => panic!("shared volume preflight unexpectedly admitted unavailable volume"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, GfmError::Permission { .. }));
         assert!(err.to_string().contains("unavailable volume network"));
         assert!(err.to_string().contains("native-status=unavailable"));
         assert!(err.to_string().contains("resource-status=unavailable"));
