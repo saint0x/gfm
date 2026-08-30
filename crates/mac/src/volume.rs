@@ -3,7 +3,7 @@ use gfm_mac_sys::{
     NativeVolumeOperationStatus, NativeVolumeResourceValues, NativeVolumeStatus,
 };
 use gfm_types::{GfmError, Result, VolumeId};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -600,7 +600,7 @@ impl VolumeDiscoveryReport {
     }
 
     pub fn from_paths(paths: Vec<PathBuf>) -> Self {
-        let mut volumes: Vec<_> = paths
+        let mut volumes: Vec<_> = unique_volume_paths(paths)
             .into_iter()
             .filter_map(|path| VolumeDescriptor::for_path(path).ok())
             .collect();
@@ -615,6 +615,7 @@ impl VolumeDiscoveryReport {
     }
 
     pub fn from_paths_checked(paths: Vec<PathBuf>) -> Result<Self> {
+        let paths = unique_volume_paths(paths);
         let mut volumes = Vec::with_capacity(paths.len());
         for path in paths {
             volumes.push(VolumeDescriptor::for_path(path)?);
@@ -1876,6 +1877,14 @@ fn volume_map(volumes: &[VolumeDescriptor]) -> BTreeMap<String, &VolumeDescripto
         .collect()
 }
 
+fn unique_volume_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = BTreeSet::new();
+    paths
+        .into_iter()
+        .filter(|path| seen.insert(path.clone()))
+        .collect()
+}
+
 fn topology_change_reason(
     previous: &VolumeDescriptor,
     current: &VolumeDescriptor,
@@ -2945,6 +2954,40 @@ mod tests {
         assert_eq!(volume.kind, VolumeKind::Network);
 
         fs::remove_dir_all(volume.path.clone()).unwrap();
+    }
+
+    #[test]
+    fn volume_discovery_deduplicates_input_paths_before_descriptor_output() {
+        let root = unique_temp_dir("gfm-volume-discovery-dedup");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+
+        let report =
+            VolumeDiscoveryReport::from_paths(vec![root.clone(), root.clone(), root.clone()]);
+
+        assert_eq!(report.volumes.len(), 1);
+        assert_eq!(report.volumes[0].path, root);
+        assert_eq!(report.volumes[0].kind, VolumeKind::External);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_volume_discovery_deduplicates_input_paths_before_descriptor_output() {
+        let root = unique_temp_dir("gfm-volume-discovery-checked-dedup");
+        fs::write(root.join(VOLUME_MARKER), "network-smb\n").unwrap();
+
+        let report = VolumeDiscoveryReport::from_paths_checked(vec![
+            root.clone(),
+            root.clone(),
+            root.clone(),
+        ])
+        .unwrap();
+
+        assert_eq!(report.volumes.len(), 1);
+        assert_eq!(report.volumes[0].path, root);
+        assert_eq!(report.volumes[0].kind, VolumeKind::Network);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
