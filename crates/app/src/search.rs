@@ -1027,7 +1027,8 @@ where
     let volume = path_volume(&manifest);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_content_manifest_access(&manifest, worker)?;
+        let _access =
+            preflight_content_manifest_access_checked(&manifest, worker, || cancellation.check())?;
         cancellation.check()?;
         read(manifest, &cancellation)
     })
@@ -1263,7 +1264,12 @@ fn run_content_index_manifest_search(
     let volume = path_volume(&records).or_else(|| path_volume(&manifest));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_content_index_manifest_search_access(&records, &manifest, WORKER)?;
+        let _access = preflight_content_index_manifest_search_access_checked(
+            &records,
+            &manifest,
+            WORKER,
+            || cancellation.check(),
+        )?;
         cancellation.check()?;
         let (live, report) = Indexer::default().load_live_with_content_manifest_cancellable(
             records,
@@ -1304,7 +1310,12 @@ fn run_content_index_manifest_session(
     let volume = path_volume(&records).or_else(|| path_volume(&manifest));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_content_index_manifest_search_access(&records, &manifest, WORKER)?;
+        let _access = preflight_content_index_manifest_search_access_checked(
+            &records,
+            &manifest,
+            WORKER,
+            || cancellation.check(),
+        )?;
         cancellation.check()?;
         let session = Indexer::default().load_content_manifest_query_session_cancellable(
             &records,
@@ -1379,11 +1390,13 @@ fn preflight_content_index_search_access(
     ])
 }
 
-fn preflight_content_index_manifest_search_access(
+fn preflight_content_index_manifest_search_access_checked(
     records: &Path,
     manifest_path: &Path,
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
     let mut guards = vec![
         preflight_access_scope(records, AccessIntent::Read, &format!("{worker} records"))?,
         preflight_access_scope(
@@ -1392,12 +1405,15 @@ fn preflight_content_index_manifest_search_access(
             &format!("{worker} manifest"),
         )?,
     ];
-    let manifest = ContentArchiveManifest::read(manifest_path)?;
+    check_control()?;
+    let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
+    check_control()?;
     let content_worker = format!("{worker} content");
     guards.extend(preflight_content_archives_access(
         &manifest.resolved_archive_paths(manifest_path),
         &content_worker,
     )?);
+    check_control()?;
     Ok(guards)
 }
 
@@ -1748,16 +1764,21 @@ fn unique_sidecar_search_paths<'a>(
         .collect()
 }
 
-fn preflight_content_manifest_access(
+fn preflight_content_manifest_access_checked(
     manifest_path: &Path,
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
     let mut guards = vec![preflight_content_archive_access(manifest_path, worker)?];
-    let manifest = ContentArchiveManifest::read(manifest_path)?;
+    check_control()?;
+    let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
+    check_control()?;
     guards.extend(preflight_content_archives_access(
         &manifest.resolved_archive_paths(manifest_path),
         worker,
     )?);
+    check_control()?;
     Ok(guards)
 }
 

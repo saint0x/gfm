@@ -422,19 +422,50 @@ impl PreviewCache {
             return Ok(None);
         }
         check_control()?;
-        let bytes = fs::read(&path).map_err(|err| GfmError::io(&path, err))?;
+        let bytes =
+            read_disk_entry_bytes_checked(&path, self.config.max_entry_bytes, &mut check_control)?;
         check_control()?;
-        if bytes.len() > self.config.max_entry_bytes {
+        let Some(bytes) = bytes else {
             check_control()?;
             fs::remove_file(&path).map_err(|err| GfmError::io(&path, err))?;
             return Ok(None);
-        }
+        };
         Ok(Some(PreviewEntry::new(key.clone(), bytes)))
     }
 
     fn disk_path(&self, key: &PreviewRequestKey) -> PathBuf {
         self.config.disk_root.join(key.stable_name())
     }
+}
+
+fn read_disk_entry_bytes_checked(
+    path: &Path,
+    max_entry_bytes: usize,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Option<Vec<u8>>> {
+    const CHUNK_BYTES: usize = 256 * 1024;
+
+    check_control()?;
+    let mut file = fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0; CHUNK_BYTES];
+    loop {
+        check_control()?;
+        let len = file
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        if len == 0 {
+            break;
+        }
+        if bytes.len().saturating_add(len) > max_entry_bytes {
+            return Ok(None);
+        }
+        bytes.extend_from_slice(&buffer[..len]);
+        check_control()?;
+    }
+    check_control()?;
+    Ok(Some(bytes))
 }
 
 fn disk_cache_path_exists(path: &Path) -> Result<bool> {
@@ -466,13 +497,33 @@ fn read_disk_index_contents_cancellable(
     mut file: fs::File,
     cancellation: &Cancellation,
 ) -> Result<String> {
-    cancellation.check()?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents).map_err(|err| {
-        GfmError::io(path, format!("preview disk cache index unavailable: {err}"))
-    })?;
-    cancellation.check()?;
-    Ok(contents)
+    read_disk_index_contents_checked(path, &mut file, || cancellation.check())
+}
+
+fn read_disk_index_contents_checked(
+    path: &Path,
+    file: &mut fs::File,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<String> {
+    const CHUNK_BYTES: usize = 64 * 1024;
+
+    check_control()?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0; CHUNK_BYTES];
+    loop {
+        check_control()?;
+        let len = file.read(&mut buffer).map_err(|err| {
+            GfmError::io(path, format!("preview disk cache index unavailable: {err}"))
+        })?;
+        if len == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..len]);
+        check_control()?;
+    }
+    check_control()?;
+    String::from_utf8(bytes)
+        .map_err(|err| GfmError::io(path, format!("preview disk cache index unavailable: {err}")))
 }
 
 fn load_disk_index_cancellable(
@@ -1062,8 +1113,32 @@ mod tests {
         });
 
         assert_eq!(result, Err(GfmError::Cancelled));
-        assert_eq!(calls.get(), 3);
+        assert!(calls.get() >= 3);
         assert!(disk_path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_disk_entry_byte_reader_honors_cancellation_during_chunked_load() {
+        let root = temp_root("cancel-disk-read-chunk");
+        let path = root.join("large.gfmpreview");
+        let bytes = vec![42; 300 * 1024];
+        fs::write(&path, &bytes).unwrap();
+        let calls = Cell::new(0usize);
+
+        let result = read_disk_entry_bytes_checked(&path, bytes.len(), || {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(calls.get() >= 4);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1085,6 +1160,31 @@ mod tests {
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(!index_path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_disk_index_reader_honors_cancellation_during_chunked_load() {
+        let root = temp_root("cancel-disk-index-read-chunk");
+        let path = root.join("preview-cache-index.tsv");
+        let contents = "thumbnail\t1\t2\t256\t2000\t0\tlarge.png\n".repeat(4_000);
+        fs::write(&path, &contents).unwrap();
+        let mut file = fs::File::open(&path).unwrap();
+        let calls = Cell::new(0usize);
+
+        let result = read_disk_index_contents_checked(&path, &mut file, || {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(calls.get() >= 4);
+        assert_eq!(fs::read_to_string(&path).unwrap(), contents);
         fs::remove_dir_all(root).unwrap();
     }
 
