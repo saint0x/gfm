@@ -1875,8 +1875,9 @@ fn storage_state_for_path(
     }
 
     let name = file_name_lower(path);
+    let allow_name_state_hints = provider_state_name_hints_allowed(hints);
     let attr_blob = xattr_signal_blob(hints);
-    if name.contains("conflict")
+    if (allow_name_state_hints && name.contains("conflict"))
         || contains_state_phrase_without_false_marker(
             &attr_blob,
             &["unresolved-conflict", "unresolved conflict", "conflict"],
@@ -1889,7 +1890,7 @@ fn storage_state_for_path(
         )
     {
         CloudStorageState::Conflict
-    } else if name.contains("offline")
+    } else if (allow_name_state_hints && name.contains("offline"))
         || contains_state_phrase_without_false_marker(
             &attr_blob,
             &["offline", "network-unavailable", "network unavailable"],
@@ -1902,7 +1903,7 @@ fn storage_state_for_path(
         || attr_blob.contains("evict")
     {
         CloudStorageState::Evicted
-    } else if name.contains("downloading")
+    } else if (allow_name_state_hints && name.contains("downloading"))
         || contains_state_phrase_without_false_marker(
             &attr_blob,
             &[
@@ -1914,7 +1915,7 @@ fn storage_state_for_path(
         )
     {
         CloudStorageState::Downloading
-    } else if name.contains("uploading")
+    } else if (allow_name_state_hints && name.contains("uploading"))
         || contains_state_phrase_without_false_marker(
             &attr_blob,
             &["upload-in-progress", "upload in progress", "uploading"],
@@ -1922,7 +1923,7 @@ fn storage_state_for_path(
         )
     {
         CloudStorageState::Uploading
-    } else if name.contains("waiting")
+    } else if (allow_name_state_hints && name.contains("waiting"))
         || contains_state_phrase_without_false_marker(
             &attr_blob,
             &["waiting", "queued", "requested"],
@@ -1942,6 +1943,14 @@ fn storage_state_for_path(
     } else {
         CloudStorageState::Unknown
     }
+}
+
+fn provider_state_name_hints_allowed(hints: &CloudHints) -> bool {
+    hints.native_identity.status == NativeFileProviderIdentityStatus::Available
+        || native_has_ubiquitous_materialization_evidence(&hints.native)
+        || !hints.xattrs.is_empty()
+        || !hints.xattr_values.is_empty()
+        || !native_provider_state_unavailable(hints)
 }
 
 fn xattr_storage_state(hints: &CloudHints) -> Option<CloudStorageState> {
@@ -5365,6 +5374,64 @@ mod tests {
         assert!(report.as_tsv().contains(
             "\tmaterialization-source=native-url-resource:unavailable\tmaterialization-confidence=native\tmaterialization-reason=native FileProvider URL resource values unavailable\t"
         ));
+    }
+
+    #[test]
+    fn native_unavailable_state_ignores_bare_filename_state_words() {
+        let path = PathBuf::from("/tmp/OfflineConflictDownloading.fileprovider");
+        let mut native = native_values();
+        native.status = gfm_mac_sys::NativeFileProviderStatus::Unavailable;
+        native.reason = Some("native FileProvider URL resource values unavailable".to_string());
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::FileProvider);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResourceUnavailable
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native FileProvider URL resource values unavailable")
+        );
+    }
+
+    #[test]
+    fn native_identity_allows_filename_state_words_as_explicit_provider_hints() {
+        let path = PathBuf::from("/tmp/Conflict.fileprovider");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::Available,
+                item_identifier: Some("item".to_string()),
+                domain_identifier: Some("com.example.drive".to_string()),
+                reason: None,
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: Some("com.example.drive".to_string()),
+            source: "nsfileprovidermanager+fixture-name".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::FileProvider);
+        assert_eq!(report.storage_state, CloudStorageState::Conflict);
+        assert_eq!(report.materialization, CloudMaterialization::Conflict);
     }
 
     #[test]
