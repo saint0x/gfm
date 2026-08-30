@@ -8,7 +8,7 @@ use crate::extract::{
 };
 use crate::runtime::{
     default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
-    run_scheduled_volume_task_cancellable,
+    run_retriable_volume_task_cancellable_with_payload_path, run_scheduled_volume_task_cancellable,
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
     run_volume_task_cancellable, run_volume_task_cancellable_without_progress,
     runtime_progress_store, RuntimeJobHandle,
@@ -32,11 +32,11 @@ use gfm_jobs::{
     TaskStatus, WorkerPool,
 };
 use gfm_mac::AccessIntent;
-use gfm_store::{read_records_checked, ContentArchiveManifest};
+use gfm_store::{atomic_write_checked, read_records_checked, ContentArchiveManifest};
 use gfm_types::{GfmError, Result, SearchHit};
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -44,41 +44,69 @@ use std::time::Duration;
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
-        "index-content" => {
+        "index-content" | "index-content-retry-probe" => {
             let root = required_path(args.next(), "index-content requires a root path")?;
             let records = required_path(args.next(), "index-content requires a records path")?;
             let content = required_path(args.next(), "index-content requires a content path")?;
+            let retry_probe = if command == "index-content-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "index-content-retry-probe requires an attempt state path",
+                )?)
+            } else {
+                None
+            };
             preflight_foreground_content_index_volumes(&root, &records, &content, "content index")?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                preflight_volume_access_scope(
+                    write_probe_path(retry_probe)?,
+                    AccessIntent::Write,
+                    "content index",
+                )?;
+            }
             let volume = detect_volume_id(&root)
                 .ok()
                 .or_else(|| parent_volume(&root));
-            let (records_len, inaccessible_len, indexed) = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
-                "content index",
-                move |cancellation| {
-                    cancellation.check()?;
-                    let _access = retain_foreground_content_index_access_checked(
-                        &root,
-                        &records,
-                        &content,
-                        "content index",
-                        || cancellation.check(),
-                    )?;
-                    cancellation.check()?;
-                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
-                    let records_len = snapshot.records.len();
-                    let inaccessible_len = snapshot.inaccessible.len();
-                    cancellation.check()?;
-                    let indexed = snapshot.save_with_content_cancellable(
-                        records,
-                        content,
-                        &Extractor::default(),
-                        &cancellation,
-                    )?;
-                    Ok((records_len, inaccessible_len, indexed))
-                },
-            )?;
+            let (records_len, inaccessible_len, indexed) =
+                run_retriable_volume_task_cancellable_with_payload_path(
+                    volume,
+                    Priority::Visible,
+                    "content index",
+                    content.clone(),
+                    move |cancellation| {
+                        let root = root.clone();
+                        let records = records.clone();
+                        let content = content.clone();
+                        let retry_probe = retry_probe.clone();
+                        cancellation.check()?;
+                        if let Some(retry_probe) = retry_probe.as_ref() {
+                            fail_first_content_retry_probe_attempt(
+                                retry_probe,
+                                "content index",
+                                &cancellation,
+                            )?;
+                        }
+                        let _access = retain_foreground_content_index_access_checked(
+                            &root,
+                            &records,
+                            &content,
+                            "content index",
+                            || cancellation.check(),
+                        )?;
+                        cancellation.check()?;
+                        let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                        let records_len = snapshot.records.len();
+                        let inaccessible_len = snapshot.inaccessible.len();
+                        cancellation.check()?;
+                        let indexed = snapshot.save_with_content_cancellable(
+                            records,
+                            content,
+                            &Extractor::default(),
+                            &cancellation,
+                        )?;
+                        Ok((records_len, inaccessible_len, indexed))
+                    },
+                )?;
             eprintln!(
                 "indexed {} records; content-indexed {} files; {} inaccessible",
                 records_len, indexed, inaccessible_len
@@ -279,41 +307,68 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 println!("{line}");
             }
         }
-        "index-content-segment" => {
+        "index-content-segment" | "index-content-segment-retry-probe" => {
             let root = required_path(args.next(), "index-content-segment requires a root path")?;
             let output = required_path(
                 args.next(),
                 "index-content-segment requires an output segment path",
             )?;
+            let retry_probe = if command == "index-content-segment-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "index-content-segment-retry-probe requires an attempt state path",
+                )?)
+            } else {
+                None
+            };
             preflight_content_segment_index_volumes(&root, &output, "content segment index")?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                preflight_volume_access_scope(
+                    write_probe_path(retry_probe)?,
+                    AccessIntent::Write,
+                    "content segment index",
+                )?;
+            }
             let volume = detect_volume_id(&root)
                 .ok()
                 .or_else(|| parent_volume(&root));
-            let (inaccessible_len, indexed) = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
-                "content segment index",
-                move |cancellation| {
-                    cancellation.check()?;
-                    let _access = retain_content_segment_index_access_checked(
-                        &root,
-                        &output,
-                        "content segment index",
-                        || cancellation.check(),
-                    )?;
-                    cancellation.check()?;
-                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
-                    let inaccessible_len = snapshot.inaccessible.len();
-                    cancellation.check()?;
-                    let indexed = snapshot.save_content_segment_cancellable(
-                        output,
-                        &Extractor::default(),
-                        Vec::new(),
-                        &cancellation,
-                    )?;
-                    Ok((inaccessible_len, indexed))
-                },
-            )?;
+            let (inaccessible_len, indexed) =
+                run_retriable_volume_task_cancellable_with_payload_path(
+                    volume,
+                    Priority::Visible,
+                    "content segment index",
+                    output.clone(),
+                    move |cancellation| {
+                        let root = root.clone();
+                        let output = output.clone();
+                        let retry_probe = retry_probe.clone();
+                        cancellation.check()?;
+                        if let Some(retry_probe) = retry_probe.as_ref() {
+                            fail_first_content_retry_probe_attempt(
+                                retry_probe,
+                                "content segment index",
+                                &cancellation,
+                            )?;
+                        }
+                        let _access = retain_content_segment_index_access_checked(
+                            &root,
+                            &output,
+                            "content segment index",
+                            || cancellation.check(),
+                        )?;
+                        cancellation.check()?;
+                        let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                        let inaccessible_len = snapshot.inaccessible.len();
+                        cancellation.check()?;
+                        let indexed = snapshot.save_content_segment_cancellable(
+                            output,
+                            &Extractor::default(),
+                            Vec::new(),
+                            &cancellation,
+                        )?;
+                        Ok((inaccessible_len, indexed))
+                    },
+                )?;
             eprintln!(
                 "content-segmented {} files; {} inaccessible",
                 indexed, inaccessible_len
@@ -1880,6 +1935,86 @@ fn content_input_file_exists_checked(
             format!("{worker} previous index metadata unavailable: {err}"),
         )),
     }
+}
+
+fn fail_first_content_retry_probe_attempt(
+    attempt_state: &Path,
+    worker: &str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    cancellation.check()?;
+    let probe = write_probe_path(attempt_state)?.to_path_buf();
+    let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, worker, || {
+        cancellation.check()
+    })?;
+    cancellation.check()?;
+    let attempts =
+        read_content_retry_probe_attempt_checked(attempt_state, || cancellation.check())?;
+    cancellation.check()?;
+    write_content_retry_probe_attempt_checked(attempt_state, attempts + 1, || {
+        cancellation.check()
+    })?;
+    cancellation.check()?;
+    if attempts == 0 {
+        return Err(GfmError::Format(format!(
+            "temporary {worker} retry probe busy"
+        )));
+    }
+    Ok(())
+}
+
+fn read_content_retry_probe_attempt_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<usize> {
+    check_control()?;
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(GfmError::io(path, err)),
+    };
+    check_control()?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        check_control()?;
+        let read = file
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
+        if read == 0 {
+            break;
+        }
+        if bytes.len().saturating_add(read) > 4096 {
+            return Ok(0);
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    let Ok(value) = std::str::from_utf8(&bytes) else {
+        return Ok(0);
+    };
+    Ok(value.trim().parse::<usize>().unwrap_or(0))
+}
+
+fn write_content_retry_probe_attempt_checked(
+    path: &Path,
+    attempt: usize,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let encoded = attempt.to_string();
+    atomic_write_checked(path, &mut check_control, |writer, check_control| {
+        for chunk in encoded.as_bytes().chunks(4096) {
+            check_control()?;
+            writer
+                .write_all(chunk)
+                .map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
+        }
+        Ok(())
+    })?;
+    check_control()?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

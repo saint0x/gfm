@@ -843,6 +843,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = required_path(args.next(), "icon-preview requires a path")?;
             println!("{}", run_icon_preview(path)?.as_tsv());
         }
+        "icon-preview-retry-probe" => {
+            let path = required_path(args.next(), "icon-preview-retry-probe requires a path")?;
+            let attempt_state = required_path(
+                args.next(),
+                "icon-preview-retry-probe requires an attempt state path",
+            )?;
+            println!(
+                "{}",
+                run_icon_preview_retry_probe(path, attempt_state)?.as_tsv()
+            );
+        }
         "quicklook-session" => {
             let path = required_path(args.next(), "quicklook-session requires a path")?;
             println!("{}", run_quicklook_session(path)?.as_tsv());
@@ -1919,22 +1930,37 @@ fn run_icon_preview(path: PathBuf) -> Result<IconPreviewContract> {
     let volume = detect_volume_id(&path)
         .ok()
         .or_else(|| parent_volume(&path));
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let record =
-            record_for_path_with_access(&path, AccessIntent::Preview, WORKER, &cancellation)?;
-        cancellation.check()?;
-        let input = IconPreviewInput::new(
-            PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Icon),
-            record,
-        )
-        .with_invalidation(PreviewInvalidationEvent {
-            tags_changed: true,
-            ..PreviewInvalidationEvent::default()
-        });
-        cancellation.check()?;
-        Ok(IconPreviewContract::from_input(input))
-    })
+    run_preview_contract_cancellable_with_payload_path(
+        volume,
+        WORKER,
+        path.clone(),
+        move |cancellation| build_icon_preview_contract(&path, WORKER, &cancellation),
+    )
+}
+
+fn run_icon_preview_retry_probe(
+    path: PathBuf,
+    attempt_state: PathBuf,
+) -> Result<IconPreviewContract> {
+    const WORKER: &str = "icon preview";
+    preflight_volume_access_scope(&path, AccessIntent::Preview, WORKER)?;
+    preflight_volume_access_scope(
+        write_probe_path(&attempt_state)?,
+        AccessIntent::Write,
+        WORKER,
+    )?;
+    let volume = detect_volume_id(&path)
+        .ok()
+        .or_else(|| parent_volume(&path));
+    run_preview_contract_cancellable_with_payload_path(
+        volume,
+        WORKER,
+        path.clone(),
+        move |cancellation| {
+            fail_first_retry_probe_attempt(&attempt_state, WORKER, &cancellation)?;
+            build_icon_preview_contract(&path, WORKER, &cancellation)
+        },
+    )
 }
 
 fn run_quicklook_session(path: PathBuf) -> Result<QuickLookSessionContract> {
@@ -2013,6 +2039,26 @@ fn run_thumbnail_generation_retry_probe(
             build_thumbnail_generation_contract(&path, WORKER, &cancellation)
         },
     )
+}
+
+fn build_icon_preview_contract(
+    path: &Path,
+    worker: &str,
+    cancellation: &Cancellation,
+) -> Result<IconPreviewContract> {
+    cancellation.check()?;
+    let record = record_for_path_with_access(path, AccessIntent::Preview, worker, cancellation)?;
+    cancellation.check()?;
+    let input = IconPreviewInput::new(
+        PreviewRequestKey::new(record.id, path.to_path_buf(), PreviewKind::Icon),
+        record,
+    )
+    .with_invalidation(PreviewInvalidationEvent {
+        tags_changed: true,
+        ..PreviewInvalidationEvent::default()
+    });
+    cancellation.check()?;
+    Ok(IconPreviewContract::from_input(input))
 }
 
 fn build_quicklook_session_contract(

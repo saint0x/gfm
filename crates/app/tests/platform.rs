@@ -1491,6 +1491,55 @@ fn reports_icon_preview_contract_from_binary() {
 }
 
 #[test]
+fn icon_preview_retries_transient_preview_failure_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-icon-preview-retry-probe-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("GFM.app")).unwrap();
+    let app = root.join("GFM.app");
+    let retry_probe = root.join("icon-preview-retry.state");
+    let journal = root.join("jobs.gfmjournal");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .arg("icon-preview-retry-probe")
+        .arg(&app)
+        .arg(&retry_probe)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("icon-preview\t"), "{stdout}");
+    assert_eq!(std::fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = std::fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\ticon preview"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t1\tfailed:temporary icon preview retry probe busy\ticon preview"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\ticon preview"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\ticon preview"),
+        "{journal_text}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn icon_preview_refuses_unreachable_network_volume_before_record_read_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-icon-preview-unreachable-volume-{}",
