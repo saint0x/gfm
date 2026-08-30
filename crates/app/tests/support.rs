@@ -2507,6 +2507,42 @@ fn reports_preview_security_from_binary() {
 }
 
 #[test]
+fn preview_volume_check_marks_network_untrusted_preview_remote_from_binary() {
+    let root =
+        std::env::temp_dir().join(format!("gfm-preview-volume-network-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+    let image = root.join("Installer.dmg");
+    std::fs::write(&image, "disk image").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("preview-volume-check")
+        .arg(&image)
+        .arg("quick-look")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let fields: Vec<_> = stdout.trim().split('\t').collect();
+
+    assert_eq!(fields.len(), 7, "{stdout}");
+    assert_eq!(fields[0], "quick-look", "{stdout}");
+    assert_eq!(fields[1], "untrusted", "{stdout}");
+    assert_eq!(fields[2], "false", "{stdout}");
+    assert_eq!(fields[3], "true", "{stdout}");
+    assert_eq!(fields[4], "deny", "{stdout}");
+    assert_eq!(fields[5], "true", "{stdout}");
+    assert_eq!(fields[6], image.display().to_string(), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_quicklook_session_from_binary() {
     let path = std::env::temp_dir().join(format!("gfm-quicklook-{}.pdf", std::process::id()));
     std::fs::write(&path, b"%PDF-1.7\n").unwrap();

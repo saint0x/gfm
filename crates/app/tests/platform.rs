@@ -1676,6 +1676,37 @@ fn icon_preview_retries_transient_preview_failure_from_binary() {
 }
 
 #[test]
+fn preview_volume_check_uses_descriptor_remote_truth_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-preview-volume-check-network-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network\n").unwrap();
+    let path = root.join("Installer.dmg");
+    std::fs::write(&path, "disk image fixture").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("preview-volume-check")
+        .arg(&path)
+        .arg("quick-look")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("quick-look\tuntrusted\tfalse\ttrue\tdeny\ttrue\t"));
+    assert!(stdout.contains(&path.display().to_string()), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn icon_preview_refuses_unreachable_network_volume_before_record_read_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-icon-preview-unreachable-volume-{}",

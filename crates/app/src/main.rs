@@ -884,6 +884,7 @@ fn print_usage() {
   gfm volume-topology-api-status
   gfm spotlight-reconcile <path> [spotlight-fixture.tsv]
   gfm preview-check <path> [icon|thumbnail|quick-look|text]
+  gfm preview-volume-check <path> [icon|thumbnail|quick-look|text]
   gfm icon-preview <path>
   gfm quicklook-session <path>
   gfm quicklook-session-adaptive <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>

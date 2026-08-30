@@ -42,8 +42,9 @@ use gfm_preview::{
     decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
     security_input_for_path, IconPreviewContract, IconPreviewInput, PreviewCache,
     PreviewCacheConfig, PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
-    PreviewSchedulingPolicy, PreviewSecurityPolicy, PreviewTask, QuickLookSessionContract,
-    QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
+    PreviewSchedulingPolicy, PreviewSecurityInput, PreviewSecurityPolicy, PreviewTask,
+    QuickLookSessionContract, QuickLookSessionInput, Rect, ThumbnailGenerationContract,
+    ThumbnailGenerationInput, Viewport,
 };
 use gfm_types::{FileEvent, FileEventKind, FileId, FileRecord, GfmError, Result, VolumeId};
 use gfm_ui::{
@@ -888,6 +889,26 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 path.display()
             );
         }
+        "preview-volume-check" => {
+            let path = required_path(args.next(), "preview-volume-check requires a path")?;
+            let kind = parse_preview_kind(args.next())?;
+            let input = preview_security_input_with_volume(&path, kind);
+            let decision = decide_preview_security(&PreviewSecurityPolicy::default(), &input);
+            let invalidation = decide_invalidation(PreviewInvalidationEvent {
+                content_changed: true,
+                ..PreviewInvalidationEvent::default()
+            });
+            println!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                kind.as_str(),
+                input.trust.as_str(),
+                input.is_executable,
+                input.is_remote,
+                decision.as_str(),
+                invalidation.invalidate_disk,
+                path.display()
+            );
+        }
         "icon-preview" => {
             let path = required_path(args.next(), "icon-preview requires a path")?;
             println!("{}", run_icon_preview(path)?.as_tsv());
@@ -1673,6 +1694,26 @@ fn volume_event_runtime_fanout_summary(
         sidebar.invalidate_section,
         platform.reason
     )
+}
+
+fn preview_security_input_with_volume(path: &Path, kind: PreviewKind) -> PreviewSecurityInput {
+    let mut input = security_input_for_path(path, kind);
+    let volume_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    let report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    if let Some(volume) = report.volume_for_path(&volume_path) {
+        input.is_remote = volume_reports_remote_for_preview(volume);
+    }
+    input
+}
+
+fn volume_reports_remote_for_preview(volume: &VolumeDescriptor) -> bool {
+    volume.network || volume.local == Some(false) || volume.kind == gfm_mac::VolumeKind::Network
 }
 
 fn volume_event_operation_policy_invalidation_tsv(
