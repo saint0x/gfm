@@ -2,7 +2,9 @@ use crate::access::{
     preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
 };
 use crate::runtime::{
-    run_scheduled_volume_task_cancellable_with_volume_and_payload_path, run_volume_task_cancellable,
+    run_retriable_volume_task_cancellable_with_payload_path,
+    run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
+    run_volume_task_cancellable,
 };
 use crate::{
     detect_volume_id, optional_path_arg, parent_volume, parse_required_scheduling_pressure,
@@ -12,7 +14,7 @@ use gfm_index::{ContentArchiveManifestEntry, ContentMergeTier};
 use gfm_jobs::{Cancellation, Priority};
 use gfm_mac::AccessIntent;
 use gfm_store::{
-    dictionary_term_report_from_records, fuzzy_postings_from_records,
+    atomic_write_checked, dictionary_term_report_from_records, fuzzy_postings_from_records,
     inspect_archive_schema_checked, metadata_postings_from_records,
     migrate_content_archive_checked, migrate_metadata_archive_checked,
     migrate_record_archive_checked, plan_archive_rebuilds, plan_columns_archive_rebuild,
@@ -28,7 +30,7 @@ use gfm_store::{
 };
 use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -251,7 +253,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let report = run_derived_sidecar_rebuild_plan(records, kind, sidecar)?;
             println!("{report}");
         }
-        "derived-sidecar-rebuild" => {
+        "derived-sidecar-rebuild" | "derived-sidecar-rebuild-retry-probe" => {
             let records = required_path(
                 args.next(),
                 "derived-sidecar-rebuild requires a records path",
@@ -265,16 +267,43 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "derived-sidecar-rebuild requires a backup directory",
             )?;
+            let retry_probe = if command == "derived-sidecar-rebuild-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "derived-sidecar-rebuild-retry-probe requires an attempt state path",
+                )?)
+            } else {
+                None
+            };
             let volume = detect_volume_id(&records)
                 .ok()
                 .or_else(|| parent_volume(&records));
             preflight_derived_sidecar_rebuild_volumes(&records, &sidecar, &backup_dir)?;
-            let rebuild = run_volume_task_cancellable(
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                preflight_volume_access_scope(
+                    write_probe_path(retry_probe)?,
+                    AccessIntent::Write,
+                    "derived sidecar rebuild",
+                )?;
+            }
+            let rebuild = run_retriable_volume_task_cancellable_with_payload_path(
                 volume,
                 Priority::Visible,
                 "derived sidecar rebuild",
+                sidecar.clone(),
                 move |cancellation| {
+                    let records = records.clone();
+                    let sidecar = sidecar.clone();
+                    let backup_dir = backup_dir.clone();
+                    let retry_probe = retry_probe.clone();
                     cancellation.check()?;
+                    if let Some(retry_probe) = retry_probe.as_ref() {
+                        fail_first_archive_retry_probe_attempt(
+                            retry_probe,
+                            "derived sidecar rebuild",
+                            &cancellation,
+                        )?;
+                    }
                     let _access = retain_derived_sidecar_rebuild_access_checked(
                         &records,
                         &sidecar,
@@ -467,22 +496,50 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             println!("{}", plan.as_tsv());
             print_sidecar_health("invalid", &plan.invalid_sidecars);
         }
-        "sidecar-recover" => {
+        "sidecar-recover" | "sidecar-recover-retry-probe" => {
             let records = required_path(args.next(), "sidecar-recover requires a records path")?;
             let quarantine = required_path(
                 args.next(),
                 "sidecar-recover requires a quarantine directory",
             )?;
+            let retry_probe = if command == "sidecar-recover-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "sidecar-recover-retry-probe requires an attempt state path",
+                )?)
+            } else {
+                None
+            };
             let sidecars = parse_sidecar_paths(args, "sidecar-recover")?;
             let volume = detect_volume_id(&records)
                 .ok()
                 .or_else(|| parent_volume(&records));
             preflight_sidecar_recovery_volumes(&records, &sidecars, &quarantine)?;
-            let report = run_volume_task_cancellable(
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                preflight_volume_access_scope(
+                    write_probe_path(retry_probe)?,
+                    AccessIntent::Write,
+                    "sidecar repair",
+                )?;
+            }
+            let report = run_retriable_volume_task_cancellable_with_payload_path(
                 volume,
                 Priority::Visible,
                 "sidecar repair",
+                quarantine.clone(),
                 move |cancellation| {
+                    let records = records.clone();
+                    let sidecars = sidecars.clone();
+                    let quarantine = quarantine.clone();
+                    let retry_probe = retry_probe.clone();
+                    cancellation.check()?;
+                    if let Some(retry_probe) = retry_probe.as_ref() {
+                        fail_first_archive_retry_probe_attempt(
+                            retry_probe,
+                            "sidecar repair",
+                            &cancellation,
+                        )?;
+                    }
                     let _access = retain_sidecar_recovery_access_checked(
                         &records,
                         &sidecars,
@@ -1202,6 +1259,86 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
             format!("archive write path metadata unavailable: {err}"),
         )),
     }
+}
+
+fn fail_first_archive_retry_probe_attempt(
+    attempt_state: &Path,
+    worker: &str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    cancellation.check()?;
+    let probe = write_probe_path(attempt_state)?.to_path_buf();
+    let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, worker, || {
+        cancellation.check()
+    })?;
+    cancellation.check()?;
+    let attempts =
+        read_archive_retry_probe_attempt_checked(attempt_state, || cancellation.check())?;
+    cancellation.check()?;
+    write_archive_retry_probe_attempt_checked(attempt_state, attempts + 1, || {
+        cancellation.check()
+    })?;
+    cancellation.check()?;
+    if attempts == 0 {
+        return Err(GfmError::Format(format!(
+            "temporary {worker} retry probe busy"
+        )));
+    }
+    Ok(())
+}
+
+fn read_archive_retry_probe_attempt_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<usize> {
+    check_control()?;
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(GfmError::io(path, err)),
+    };
+    check_control()?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        check_control()?;
+        let read = file
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
+        if read == 0 {
+            break;
+        }
+        if bytes.len().saturating_add(read) > 4096 {
+            return Ok(0);
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    let Ok(value) = std::str::from_utf8(&bytes) else {
+        return Ok(0);
+    };
+    Ok(value.trim().parse::<usize>().unwrap_or(0))
+}
+
+fn write_archive_retry_probe_attempt_checked(
+    path: &Path,
+    attempt: usize,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let encoded = attempt.to_string();
+    atomic_write_checked(path, &mut check_control, |writer, check_control| {
+        for chunk in encoded.as_bytes().chunks(4096) {
+            check_control()?;
+            writer
+                .write_all(chunk)
+                .map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
+        }
+        Ok(())
+    })?;
+    check_control()?;
+    Ok(())
 }
 
 fn archive_probe_path(path: &Path) -> &Path {

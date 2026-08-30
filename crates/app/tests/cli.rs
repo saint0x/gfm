@@ -2468,6 +2468,94 @@ fn derived_sidecar_rebuild_refuses_unreachable_volume_before_repair_from_binary(
 }
 
 #[test]
+fn derived_sidecar_rebuild_retry_probe_recovers_transient_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-derived-rebuild-retry-root");
+    let records = unique_temp_path("gfm-cli-derived-rebuild-retry-records", "gfmidx");
+    let prefixes = unique_temp_path("gfm-cli-derived-rebuild-retry-prefixes", "gfmprefix");
+    let backup = unique_temp_dir("gfm-cli-derived-rebuild-retry-backup");
+    let journal = unique_temp_path("gfm-cli-derived-rebuild-retry", "journal");
+    let catalog = unique_temp_path("gfm-cli-derived-rebuild-retry", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-derived-rebuild-retry", "gfmprogress");
+    let retry_probe = unique_temp_path("gfm-cli-derived-rebuild-retry", "state");
+    fs::write(root.join("RetrySidecar.md"), "derived retry").unwrap();
+
+    let index = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index.stderr)
+    );
+
+    let rebuild = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "derived-sidecar-rebuild-retry-probe",
+            records.to_str().unwrap(),
+            "prefixes",
+            prefixes.to_str().unwrap(),
+            backup.to_str().unwrap(),
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        rebuild.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuild.stderr)
+    );
+    let stdout = String::from_utf8(rebuild.stdout).unwrap();
+    assert!(
+        stdout.contains(
+            "derived-sidecar-rebuild\trebuilt-records=2\tkind=prefixes\trecords-status=current\tbefore-status=missing\tafter-status=current",
+        ),
+        "{stdout}"
+    );
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tderived sidecar rebuild"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains(
+            "1\t1\tfailed:temporary derived sidecar rebuild retry probe busy\tderived sidecar rebuild"
+        ),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tderived sidecar rebuild"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tderived sidecar rebuild"),
+        "{journal_text}"
+    );
+    let verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["prefix-verify", prefixes.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        verify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify.stderr)
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(prefixes).unwrap();
+    fs::remove_dir_all(backup).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
+}
+
+#[test]
 fn derived_sidecar_rebuild_reports_output_probe_failure_before_repair_from_binary() {
     let root = unique_temp_dir("gfm-cli-derived-rebuild-output-probe");
     let records = root.join("records.gfmidx");
@@ -5719,6 +5807,91 @@ fn recovers_missing_and_corrupt_sidecars_from_binary() {
 }
 
 #[test]
+fn sidecar_recover_retries_transient_corrupt_sidecar_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-recovery-retry-root");
+    let records = unique_temp_path("gfm-cli-sidecar-recovery-retry", "gfmidx");
+    let prefixes = unique_temp_path("gfm-cli-sidecar-recovery-retry", "gfmprefix");
+    let quarantine = unique_temp_dir("gfm-cli-sidecar-recovery-retry-quarantine");
+    let journal = unique_temp_path("gfm-cli-sidecar-recovery-retry", "journal");
+    let catalog = unique_temp_path("gfm-cli-sidecar-recovery-retry", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-sidecar-recovery-retry", "gfmprogress");
+    let retry_probe = unique_temp_path("gfm-cli-sidecar-recovery-retry", "state");
+    fs::write(root.join("RepairPrefix.md"), "sidecar retry").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let recover_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "sidecar-recover-retry-probe",
+            records.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            retry_probe.to_str().unwrap(),
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            "-",
+            "-",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        recover_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recover_output.stderr)
+    );
+    let stdout = String::from_utf8(recover_output.stdout).unwrap();
+    assert!(
+        stdout.contains("sidecar-recovery\trebuilt=1\tquarantined=0"),
+        "{stdout}"
+    );
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tsidecar repair"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text
+            .contains("1\t1\tfailed:temporary sidecar repair retry probe busy\tsidecar repair"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tsidecar repair"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tsidecar repair"),
+        "{journal_text}"
+    );
+    let prefix_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["prefix-verify", prefixes.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(prefix_verify.status.success());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(prefixes).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
+    fs::remove_dir_all(quarantine).unwrap();
+}
+
+#[test]
 fn sidecar_recovery_plan_refuses_unreachable_sidecar_before_inspection_from_binary() {
     let root = unique_temp_dir("gfm-cli-sidecar-recovery-plan-root");
     let offline = unique_temp_dir("gfm-cli-sidecar-recovery-plan-offline");
@@ -6087,6 +6260,99 @@ fn sidecar_recover_reports_output_probe_failure_before_repair_from_binary() {
     assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sidecar_recover_retries_transient_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-recovery-retry-root");
+    let records = unique_temp_path("gfm-cli-sidecar-recovery-retry-records", "gfmidx");
+    let prefixes = unique_temp_path("gfm-cli-sidecar-recovery-retry-prefixes", "gfmprefix");
+    let quarantine = unique_temp_dir("gfm-cli-sidecar-recovery-retry-quarantine");
+    let journal = unique_temp_path("gfm-cli-sidecar-recovery-retry", "journal");
+    let catalog = unique_temp_path("gfm-cli-sidecar-recovery-retry", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-sidecar-recovery-retry", "gfmprogress");
+    let retry_probe = unique_temp_path("gfm-cli-sidecar-recovery-retry", "state");
+    fs::write(root.join("RecoverRetry.md"), "recover retry").unwrap();
+
+    let index = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index.stderr)
+    );
+    fs::write(&prefixes, "not-a-prefix-archive").unwrap();
+
+    let recover = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "sidecar-recover-retry-probe",
+            records.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            retry_probe.to_str().unwrap(),
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            "-",
+            "-",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        recover.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recover.stderr)
+    );
+    let stdout = String::from_utf8(recover.stdout).unwrap();
+    assert!(
+        stdout.contains("sidecar-recovery\trebuilt=1\tquarantined=1"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("quarantined\t"), "{stdout}");
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
+    let journal_text = fs::read_to_string(&journal).unwrap();
+    assert!(
+        journal_text.contains("1\t1\tstarted\tsidecar repair"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text
+            .contains("1\t1\tfailed:temporary sidecar repair retry probe busy\tsidecar repair"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tstarted\tsidecar repair"),
+        "{journal_text}"
+    );
+    assert!(
+        journal_text.contains("1\t2\tcompleted\tsidecar repair"),
+        "{journal_text}"
+    );
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["prefix-verify", prefixes.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        verify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify.stderr)
+    );
+    assert!(fs::read_dir(&quarantine).unwrap().next().is_some());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(prefixes).unwrap();
+    fs::remove_dir_all(quarantine).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_file(retry_probe).unwrap();
 }
 
 #[test]
