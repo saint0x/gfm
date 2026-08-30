@@ -582,6 +582,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "volume-removable-media-invalidation" => {
             println!("{}", volume_removable_media_invalidation().as_tsv());
         }
+        "volume-root-filesystem-invalidation" => {
+            println!("{}", volume_root_filesystem_invalidation().as_tsv());
+        }
         "volume-event-runtime-invalidation" => {
             let report = volume_event_index_invalidation_from_args(args)?;
             println!("{}", report.as_tsv());
@@ -1342,6 +1345,36 @@ fn volume_removable_media_invalidation() -> VolumeEventIndexInvalidationReport {
     VolumeEventIndexInvalidationReport::from_event(
         IndexVolumeEventKind::DescriptionChanged,
         Some(PathBuf::from("/Volumes/Removable Test")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    )
+}
+
+fn volume_root_filesystem_invalidation() -> VolumeEventIndexInvalidationReport {
+    let previous = IndexVolumeDescriptor::new(
+        "Root Filesystem Test",
+        "/Volumes/Root Filesystem Test",
+        IndexVolumeClass::System,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(44))
+    .with_stable_identity("diskarbitration:uuid:ROOT-FILESYSTEM-TEST")
+    .with_filesystem_signature("fs=apfs|root-filesystem=0");
+    let current = IndexVolumeDescriptor::new(
+        "Root Filesystem Test",
+        "/Volumes/Root Filesystem Test",
+        IndexVolumeClass::System,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(44))
+    .with_stable_identity("diskarbitration:uuid:ROOT-FILESYSTEM-TEST")
+    .with_filesystem_signature("fs=apfs|root-filesystem=1");
+
+    VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/Root Filesystem Test")),
         Some(&previous),
         Some(&current),
         false,

@@ -3575,6 +3575,17 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-root-filesystem-invalidation"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-index-invalidation\tkind=description-changed\tpath=/Volumes/Root Filesystem Test\tprevious-volume=44\tprevious-class=system\tprevious-mount=mounted\tprevious-reachable=true\tprevious-read-only=-\tcurrent-volume=44\tcurrent-class=system\tcurrent-mount=mounted\tcurrent-reachable=true\tcurrent-read-only=-\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=true\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\tprevious-writable=-\tprevious-ejectable=-\tprevious-mountable=-\tprevious-case-sensitive=-\tcurrent-writable=-\tcurrent-ejectable=-\tcurrent-mountable=-\tcurrent-case-sensitive=-\twritable-changed=false\tejectable-changed=false\tmountable-changed=false\tcase-sensitive-changed=false\treason=volume-event-filesystem-changed\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-event-index-invalidation",
         "appeared",
         "tmp/gfm-fozzy-dist"

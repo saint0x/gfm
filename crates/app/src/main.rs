@@ -334,6 +334,11 @@ fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
     push_signature_bool(&mut tokens, "resource-reachable", volume.resource_reachable);
     push_signature_bool(
         &mut tokens,
+        "root-filesystem",
+        volume.resource_root_file_system,
+    );
+    push_signature_bool(
+        &mut tokens,
         "resource-cloning",
         volume.resource_supports_file_cloning,
     );
@@ -1104,6 +1109,24 @@ mod tests {
         assert!(current_signature.contains("removable=1"));
         assert!(previous_signature.contains("ejectable=1"));
         assert!(current_signature.contains("ejectable=1"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_volume_filesystem_signature_tracks_root_filesystem_truth() {
+        let root = unique_temp_dir("gfm-app-volume-root-filesystem-signature");
+        let mut previous = VolumeDescriptor::for_path(&root).unwrap();
+        previous.resource_root_file_system = Some(false);
+        let mut current = previous.clone();
+        current.resource_root_file_system = Some(true);
+
+        let previous_signature = index_volume_filesystem_signature(&previous);
+        let current_signature = index_volume_filesystem_signature(&current);
+
+        assert_ne!(previous_signature, current_signature);
+        assert!(previous_signature.contains("root-filesystem=0"));
+        assert!(current_signature.contains("root-filesystem=1"));
 
         std::fs::remove_dir_all(root).unwrap();
     }

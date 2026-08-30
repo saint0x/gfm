@@ -5383,6 +5383,30 @@ fn reports_removable_media_volume_event_index_invalidation_from_binary() {
 }
 
 #[test]
+fn reports_root_filesystem_volume_event_index_invalidation_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-root-filesystem-invalidation")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "volume-event-index-invalidation\tkind=description-changed\tpath=/Volumes/Root Filesystem Test\t"
+    ));
+    assert!(stdout.contains("\tprevious-volume=44\tprevious-class=system\t"));
+    assert!(stdout.contains("\tcurrent-volume=44\tcurrent-class=system\t"));
+    assert!(stdout.contains("\tfilesystem-changed=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.ends_with("reason=volume-event-filesystem-changed\n"));
+}
+
+#[test]
 fn reports_volume_event_runtime_cancellation_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-event-runtime-invalidation-{}",

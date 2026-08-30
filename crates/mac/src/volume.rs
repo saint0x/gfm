@@ -1989,6 +1989,7 @@ fn topology_change_reason(
         || previous.resource_browsable != current.resource_browsable
         || previous.resource_encrypted != current.resource_encrypted
         || previous.resource_reachable != current.resource_reachable
+        || previous.resource_root_file_system != current.resource_root_file_system
         || previous.resource_supports_file_cloning != current.resource_supports_file_cloning
         || previous.resource_supports_hard_links != current.resource_supports_hard_links
         || previous.resource_supports_sparse_files != current.resource_supports_sparse_files
@@ -3793,6 +3794,33 @@ mod tests {
         current_volume.media_size_bytes = Some(1024 * 1024 * 1024);
         current_volume.device_path = Some("IODeviceTree:/PCI0".to_string());
         current_volume.internal = Some(false);
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].reason, "volume-filesystem-changed");
+        assert!(diff.changes[0].invalidate_sidebar);
+        assert!(diff.changes[0].invalidate_operation_policy);
+        assert!(diff.changes[0].invalidate_index_admission);
+        assert!(diff.changes[0].rescan_index);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_invalidates_policy_for_root_filesystem_resource_changes() {
+        let root = unique_temp_dir("gfm-volume-topology-root-filesystem");
+        fs::write(root.join(VOLUME_MARKER), "system\n").unwrap();
+        let mut previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        previous_volume.resource_root_file_system = Some(false);
+        let mut current_volume = previous_volume.clone();
+        current_volume.resource_root_file_system = Some(true);
         let previous = VolumeDiscoveryReport {
             volumes: vec![previous_volume],
         };
