@@ -743,6 +743,42 @@ pub struct FileProviderStateObserver {
     snapshot: FileProviderStateSnapshot,
 }
 
+struct FileProviderSnapshotLookup<'a> {
+    snapshot: Option<&'a FileProviderStateSnapshot>,
+    states: BTreeMap<&'a Path, CloudStorageState>,
+}
+
+impl<'a> FileProviderSnapshotLookup<'a> {
+    fn new(snapshot: Option<&'a FileProviderStateSnapshot>) -> Self {
+        Self {
+            snapshot,
+            states: snapshot
+                .map(FileProviderStateSnapshot::state_index)
+                .unwrap_or_default(),
+        }
+    }
+
+    fn contains_path(&self, path: &Path) -> bool {
+        self.states.contains_key(path)
+    }
+
+    fn contains_path_or_descendant(&self, path: &Path) -> bool {
+        self.contains_path(path)
+            || self.snapshot.is_some_and(|snapshot| {
+                snapshot
+                    .entries
+                    .iter()
+                    .any(|entry| entry.path.starts_with(path))
+            })
+    }
+
+    fn tracked_descendants_of(&self, root: &Path) -> Vec<PathBuf> {
+        self.snapshot
+            .map(|snapshot| snapshot.tracked_descendants_of(root))
+            .unwrap_or_default()
+    }
+}
+
 impl FileProviderInvalidationReport {
     pub fn evaluate(
         path: impl AsRef<Path>,
@@ -913,22 +949,11 @@ impl FileProviderStateSnapshot {
         atomic_write_text(path.as_ref(), &output)
     }
 
-    fn previous_state_for(&self, path: &Path) -> Option<CloudStorageState> {
-        self.entries
-            .iter()
-            .find(|entry| entry.path == path)
-            .map(|entry| entry.state)
-    }
-
     fn state_index(&self) -> BTreeMap<&Path, CloudStorageState> {
         self.entries
             .iter()
             .map(|entry| (entry.path.as_path(), entry.state))
             .collect()
-    }
-
-    fn contains_path(&self, path: &Path) -> bool {
-        self.previous_state_for(path).is_some()
     }
 
     fn tracked_descendants_of(&self, root: &Path) -> Vec<PathBuf> {
@@ -1045,10 +1070,11 @@ impl FileProviderObservedInvalidation {
         let mut event_count = 0;
         let mut event_kinds = BTreeSet::new();
         let mut paths = BTreeSet::new();
+        let previous_lookup = FileProviderSnapshotLookup::new(previous);
         for event in events {
             event_count += 1;
             event_kinds.insert(fileprovider_observed_event_kind(&event.kind));
-            for path in paths_for_fileprovider_event(previous, &event)? {
+            for path in paths_for_fileprovider_event(&previous_lookup, &event)? {
                 paths.insert(path);
             }
         }
@@ -1177,15 +1203,14 @@ fn fileprovider_observed_event_kind(kind: &FileEventKind) -> FileProviderObserve
 }
 
 fn paths_for_fileprovider_event(
-    previous: Option<&FileProviderStateSnapshot>,
+    previous: &FileProviderSnapshotLookup<'_>,
     event: &FileEvent,
 ) -> Result<Vec<PathBuf>> {
     match &event.kind {
         FileEventKind::Rename { from, to } => {
             let mut paths = BTreeSet::new();
             paths.extend(observed_fileprovider_paths_for_root(previous, from)?);
-            if fileprovider_observed_path_exists(to)?
-                && snapshot_contains_path_or_descendant(previous, from)
+            if fileprovider_observed_path_exists(to)? && previous.contains_path_or_descendant(from)
             {
                 paths.insert(to.clone());
             }
@@ -1209,41 +1234,24 @@ fn paths_for_fileprovider_event(
 }
 
 fn observed_fileprovider_paths_for_root(
-    previous: Option<&FileProviderStateSnapshot>,
+    previous: &FileProviderSnapshotLookup<'_>,
     root: &Path,
 ) -> Result<Vec<PathBuf>> {
     let mut paths = BTreeSet::new();
     if should_read_observed_fileprovider_path(previous, root)? {
         paths.insert(root.to_path_buf());
     }
-    if let Some(snapshot) = previous {
-        paths.extend(snapshot.tracked_descendants_of(root));
-    }
+    paths.extend(previous.tracked_descendants_of(root));
     Ok(paths.into_iter().collect())
 }
 
-fn snapshot_contains_path_or_descendant(
-    previous: Option<&FileProviderStateSnapshot>,
-    path: &Path,
-) -> bool {
-    previous.is_some_and(|snapshot| {
-        snapshot
-            .entries
-            .iter()
-            .any(|entry| entry.path == path || entry.path.starts_with(path))
-    })
-}
-
 fn remapped_tracked_fileprovider_paths(
-    previous: Option<&FileProviderStateSnapshot>,
+    previous: &FileProviderSnapshotLookup<'_>,
     from: &Path,
     to: &Path,
 ) -> Result<Vec<PathBuf>> {
-    let Some(snapshot) = previous else {
-        return Ok(Vec::new());
-    };
     let mut paths = Vec::new();
-    for path in snapshot.tracked_descendants_of(from) {
+    for path in previous.tracked_descendants_of(from) {
         let Some(path) = path.strip_prefix(from).ok().map(|suffix| to.join(suffix)) else {
             continue;
         };
@@ -1255,10 +1263,10 @@ fn remapped_tracked_fileprovider_paths(
 }
 
 fn should_read_observed_fileprovider_path(
-    previous: Option<&FileProviderStateSnapshot>,
+    previous: &FileProviderSnapshotLookup<'_>,
     path: &Path,
 ) -> Result<bool> {
-    if previous.is_some_and(|snapshot| snapshot.contains_path(path)) {
+    if previous.contains_path(path) {
         return Ok(true);
     }
     if !fileprovider_observed_path_exists(path)? {
@@ -1268,10 +1276,10 @@ fn should_read_observed_fileprovider_path(
 }
 
 fn is_observable_fileprovider_path(
-    previous: Option<&FileProviderStateSnapshot>,
+    previous: &FileProviderSnapshotLookup<'_>,
     path: &Path,
 ) -> Result<bool> {
-    if previous.is_some_and(|snapshot| snapshot.contains_path(path)) {
+    if previous.contains_path(path) {
         return Ok(true);
     }
     if !fileprovider_observed_path_exists(path)? {
@@ -3328,6 +3336,37 @@ mod tests {
         assert!(observed.as_tsv().contains(
             "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1"
         ));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_coalesces_duplicate_event_paths() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: evicted.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+        let events = vec![
+            FileEvent::new(&evicted, FileEventKind::Metadata),
+            FileEvent::new(&evicted, FileEventKind::Metadata),
+            FileEvent::new(&evicted, FileEventKind::Metadata),
+        ];
+
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate(Some(&previous), events).unwrap();
+
+        assert_eq!(observed.events, 3);
+        assert_eq!(observed.paths, vec![evicted.clone()]);
+        assert_eq!(observed.report.changes.len(), 1);
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].path, evicted);
+        assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
 
         fs::remove_dir_all(root).unwrap();
     }
