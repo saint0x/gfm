@@ -316,7 +316,11 @@ impl SearchIndex {
         let expression_candidates = query
             .expression
             .as_ref()
-            .and_then(|expression| self.expression_candidate_ids(expression, pass));
+            .map(|expression| {
+                self.expression_candidate_ids_cancellable(expression, pass, cancellation)
+            })
+            .transpose()?
+            .flatten();
 
         if !text.is_empty() {
             if let Some(ids) = self.name_exact.get(&text) {

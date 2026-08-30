@@ -181,7 +181,7 @@ impl SearchIndex {
             } else {
                 BTreeSet::new()
             };
-            let mut candidates = self.term_candidate_ids(term, pass);
+            let mut candidates = self.term_candidate_ids_cancellable(term, pass, cancellation)?;
             candidates.extend(fuzzy_ids.iter().copied());
             if candidates.is_empty() {
                 return Ok(Some(SearchQueryReport {

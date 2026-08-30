@@ -933,6 +933,31 @@ fn lookup_expansion_honors_cancelled_tokens_before_sidecar_requests() {
 }
 
 #[test]
+fn candidate_construction_honors_cancelled_tokens_before_materializing_sets() {
+    let mut index = SearchIndex::new();
+    for node in 1..=2048 {
+        let item = record(
+            node,
+            &format!("/tmp/candidates/needle-{node:04}.md"),
+            &format!("needle-{node:04}.md"),
+        );
+        index.insert(item.clone());
+        index.insert_content(item.id, "needle body text");
+    }
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let term = index.term_candidate_ids_cancellable("needle", SearchPass::Full, &cancellation);
+    assert!(matches!(term, Err(GfmError::Cancelled)));
+
+    let query = SearchQuery::parse("(needle OR body)");
+    let expression = query.expression.as_ref().expect("boolean expression");
+    let expression_candidates =
+        index.expression_candidate_ids_cancellable(expression, SearchPass::Full, &cancellation);
+    assert!(matches!(expression_candidates, Err(GfmError::Cancelled)));
+}
+
+#[test]
 fn supersession_cancels_stale_query_tokens() {
     let supersession = SearchSupersession::new();
     let first = supersession.begin();

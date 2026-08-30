@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 const CANCELLATION_STRIDE: usize = 256;
 
 impl SearchIndex {
+    #[cfg(test)]
     pub(super) fn expression_candidate_ids(
         &self,
         expression: &QueryExpr,
@@ -51,10 +52,7 @@ impl SearchIndex {
             QueryExpr::Proximity(proximity) => pass
                 .includes_deep()
                 .then(|| {
-                    collect_ids_cancellable(
-                        self.content_proximity_ids(proximity).into_iter(),
-                        cancellation,
-                    )
+                    collect_ids_cancellable(self.content_proximity_ids(proximity), cancellation)
                 })
                 .transpose(),
             QueryExpr::Filter(filter) => {
@@ -118,6 +116,7 @@ impl SearchIndex {
         Ok(smallest)
     }
 
+    #[cfg(test)]
     pub(super) fn exact_expression_candidate_ids(
         &self,
         expression: &QueryExpr,
@@ -155,10 +154,7 @@ impl SearchIndex {
             QueryExpr::Proximity(proximity) => pass
                 .includes_deep()
                 .then(|| {
-                    collect_ids_cancellable(
-                        self.content_proximity_ids(proximity).into_iter(),
-                        cancellation,
-                    )
+                    collect_ids_cancellable(self.content_proximity_ids(proximity), cancellation)
                 })
                 .transpose(),
             QueryExpr::Filter(filter) => {
@@ -209,11 +205,6 @@ impl SearchIndex {
             intersect_candidate_sets_cancellable(candidate_sets, cancellation)?
                 .or_else(|| Some(BTreeSet::new())),
         )
-    }
-
-    pub(super) fn term_candidate_ids(&self, term: &str, pass: SearchPass) -> BTreeSet<FileId> {
-        self.term_candidate_ids_cancellable(term, pass, &Cancellation::default())
-            .unwrap_or_default()
     }
 
     pub(super) fn term_candidate_ids_cancellable(
@@ -341,6 +332,7 @@ pub(super) fn expression_has_positive_anchor(expression: &QueryExpr) -> bool {
     }
 }
 
+#[cfg(test)]
 pub(super) fn intersect_candidate_sets<I>(candidate_sets: I) -> Option<BTreeSet<FileId>>
 where
     I: IntoIterator<Item = BTreeSet<FileId>>,
