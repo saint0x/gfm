@@ -209,7 +209,19 @@ impl LiveIndex {
         records: &MmapRecordArchive,
         postings: Vec<ContentPosting>,
     ) -> Result<(Self, ContentQueryLoadReport)> {
-        let candidate_ids = content_candidate_ids(&postings);
+        Self::from_mmap_records_with_content_postings_cancellable(
+            records,
+            postings,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn from_mmap_records_with_content_postings_cancellable(
+        records: &MmapRecordArchive,
+        postings: Vec<ContentPosting>,
+        cancellation: &Cancellation,
+    ) -> Result<(Self, ContentQueryLoadReport)> {
+        let candidate_ids = content_candidate_ids_cancellable(&postings, cancellation)?;
         let full_hydration = candidate_ids.is_empty();
         let mut live = Self::new();
         let mut loaded = 0usize;
@@ -217,6 +229,7 @@ impl LiveIndex {
 
         if full_hydration {
             for index in 0..records.len() {
+                cancellation.check()?;
                 live.index.insert(records.record(index)?);
                 loaded += 1;
             }
@@ -225,6 +238,7 @@ impl LiveIndex {
             missing = batch.missing;
             loaded = batch.records.len();
             for record in batch.records {
+                cancellation.check()?;
                 live.index.insert(record);
             }
         }
@@ -747,11 +761,45 @@ fn insert_mmap_record_with_columns(
     }
 }
 
-fn content_candidate_ids(postings: &[ContentPosting]) -> BTreeSet<FileId> {
+fn content_candidate_ids_cancellable(
+    postings: &[ContentPosting],
+    cancellation: &Cancellation,
+) -> Result<BTreeSet<FileId>> {
     let mut ids = BTreeSet::new();
     for posting in postings {
-        ids.extend(posting.ids.iter().copied());
-        ids.extend(posting.positions.iter().map(|positions| positions.id));
+        cancellation.check()?;
+        for id in &posting.ids {
+            cancellation.check()?;
+            ids.insert(*id);
+        }
+        for positions in &posting.positions {
+            cancellation.check()?;
+            ids.insert(positions.id);
+        }
     }
-    ids
+    Ok(ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gfm_types::{ContentPositions, GfmError, VolumeId};
+
+    #[test]
+    fn mmap_content_candidate_expansion_honors_cancelled_tokens() {
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+        let posting = ContentPosting {
+            term: "needle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: vec![ContentPositions {
+                id: FileId::new(VolumeId(1), 2),
+                positions: vec![0],
+            }],
+        };
+
+        let result = content_candidate_ids_cancellable(&[posting], &cancellation);
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
 }
