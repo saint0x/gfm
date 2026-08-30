@@ -11,7 +11,7 @@ use gfm_mac::{
     FileProviderObservedInvalidation, FileProviderStateReport, FileProviderStateSnapshot,
     MountState, SecurityAccessMode, SecurityDecisionAction, SecurityWorkerAction,
     SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport, VolumeEventKind,
-    VolumeKind,
+    VolumeEventState, VolumeKind,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
 use gfm_types::{DirectoryPage, FileEvent, FileEventKind, FileKind, GfmError, Result};
@@ -335,6 +335,56 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let invalidation = SidebarVolumeInvalidation::from_event(
                 sidebar_volume_event_kind(kind),
                 resolution.path,
+                previous.as_ref(),
+                current.as_ref(),
+                platform.invalidate_sidebar,
+                platform.reason,
+            )
+            .with_platform_statuses(
+                volume_status_string(platform.previous_native_status),
+                volume_status_string(platform.previous_resource_status),
+                volume_status_string(platform.previous_mount_table_status),
+                volume_status_string(platform.current_native_status),
+                volume_status_string(platform.current_resource_status),
+                volume_status_string(platform.current_mount_table_status),
+            );
+            println!("{}", invalidation.as_tsv());
+        }
+        "ui-sidebar-volume-state-invalidation" => {
+            let mut previous_paths = Vec::new();
+            loop {
+                let arg = required_string(
+                    args.next(),
+                    "ui-sidebar-volume-state-invalidation requires previous paths, `--`, event kind, and optional event path",
+                )?;
+                if arg == "--" {
+                    break;
+                }
+                previous_paths.push(PathBuf::from(arg));
+            }
+            let kind = parse_volume_event_kind(&required_string(
+                args.next(),
+                "ui-sidebar-volume-state-invalidation requires an event kind after `--`",
+            )?)?;
+            let resolution = resolve_volume_event_path(kind, args.next().map(PathBuf::from))?;
+            let mut state =
+                VolumeEventState::new(VolumeDiscoveryReport::from_paths_checked(previous_paths)?);
+            let current = (kind != VolumeEventKind::Disappeared)
+                .then_some(resolution.descriptor)
+                .flatten();
+            let transition = state.apply_parts_transition(
+                kind,
+                resolution.native_status,
+                resolution.path.clone(),
+                current,
+                resolution.native_reason,
+            );
+            let previous = transition.previous.as_ref().map(sidebar_volume_spec);
+            let current = transition.current.as_ref().map(sidebar_volume_spec);
+            let platform = transition.invalidation;
+            let invalidation = SidebarVolumeInvalidation::from_event(
+                sidebar_volume_event_kind(kind),
+                platform.path,
                 previous.as_ref(),
                 current.as_ref(),
                 platform.invalidate_sidebar,

@@ -3399,6 +3399,21 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-event-state-index-invalidation",
+        "tmp/gfm-fozzy-dist",
+        "--",
+        "disappeared",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-event-index-invalidation\tkind=disappeared\tpath=tmp/gfm-fozzy-dist\tprevious-volume=16777230\tprevious-class=external\tprevious-mount=mounted\tprevious-reachable=true\tprevious-read-only=false\tcurrent-volume=-\tcurrent-class=-\tcurrent-mount=-\tcurrent-reachable=-\tcurrent-read-only=-\tread-only-changed=false\tidentity-changed=false\tfilesystem-changed=false\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\treason=volume-event-disconnected\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-event-invalidation",
         "unavailable"
       ],
@@ -5746,6 +5761,21 @@
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
         "ui-sidebar-volume-invalidation",
+        "disappeared",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 0,
+      "stdout": "sidebar-volume-invalidation\trow=volume-dev-16777230-tmp-gfm-fozzy-dist\tpath=tmp/gfm-fozzy-dist\tkind=disappeared\tprevious-kind=external\tprevious-mount=mounted\tprevious-read-only=false\tprevious-network=false\tprevious-reachable=true\tprevious-native-status=available\tprevious-resource-status=available\tprevious-mount-status=available\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\tcurrent-native-status=-\tcurrent-resource-status=-\tcurrent-mount-status=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "ui-sidebar-volume-state-invalidation",
+        "tmp/gfm-fozzy-dist",
+        "--",
         "disappeared",
         "tmp/gfm-fozzy-dist"
       ],

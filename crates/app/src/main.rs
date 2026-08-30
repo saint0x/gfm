@@ -685,6 +685,7 @@ fn print_usage() {
   gfm ui-sidebar-fileprovider-observed-invalidation <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
   gfm ui-sidebar-fileprovider-observer-probe <state.tsv> <root> <target>
   gfm ui-sidebar-volume-invalidation <appeared|description-changed|disappeared|unavailable> [path]
+  gfm ui-sidebar-volume-state-invalidation <previous-paths...> -- <appeared|description-changed|disappeared|unavailable> [path]
   gfm ui-icon-view-contract <path> [columns] [viewport-rows] [scroll-row]
   gfm ui-virtualization-contract <icon-grid|list-rows|column-rows|gallery-filmstrip|search-results|trash-rows> <total> <viewport> <scroll> [columns]
   gfm package-traversal <root> [opaque|traverse]
