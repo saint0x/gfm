@@ -2040,6 +2040,14 @@ fn xattr_storage_state(hints: &CloudHints) -> Option<CloudStorageState> {
         &["downloaded", "isdownloaded", "current", "materialized"],
     ) {
         Some(CloudStorageState::Downloaded)
+    } else if has_truthy_marker(&blob, &["unknown", "unknown-provider-state"])
+        || contains_state_phrase_without_false_marker(
+            &blob,
+            &["unknown-provider-state", "unknown provider state"],
+            &["unknown", "unknown-provider-state"],
+        )
+    {
+        Some(CloudStorageState::Unknown)
     } else {
         None
     }
@@ -5914,6 +5922,39 @@ mod tests {
         assert!(!report
             .as_tsv()
             .contains(&"a".repeat(MAX_PROVIDER_XATTR_VALUE_BYTES + 1)));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn state_read_treats_unknown_provider_xattr_as_unknown_materialization() {
+        let root = unique_temp_dir();
+        let path = root.join("Unknown.icloud.md");
+        fs::write(&path, "unknown").unwrap();
+        xattr::set(&path, "com.apple.fileprovider.state", b"unknown=true").unwrap();
+        xattr::set(&path, "com.apple.fileprovider.domain", b"com.example.drive").unwrap();
+
+        let report = FileProviderStateReport::read_path(&path).unwrap();
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::XattrFallback
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("unknown-provider-state")
+        );
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("unknown-provider-state")
+        );
+        assert_eq!(
+            report.commands.reason.as_deref(),
+            Some("unknown-provider-state")
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

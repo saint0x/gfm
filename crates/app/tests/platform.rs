@@ -1928,10 +1928,13 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let evicted = root.join("Remote.icloud-placeholder.pdf");
     let downloading = root.join("Downloading.icloud-downloading.png");
+    let unknown = root.join("Unknown.icloud.md");
     std::fs::write(&evicted, "%PDF-1.7\nplaceholder").unwrap();
     mark_evicted_fixture(&evicted);
     std::fs::write(&downloading, "png").unwrap();
     xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
+    std::fs::write(&unknown, "unknown").unwrap();
+    xattr::set(&unknown, "com.apple.fileprovider.state", b"unknown=true").unwrap();
 
     let quicklook = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("quicklook-session")
@@ -1991,6 +1994,50 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
     assert!(
         thumbnail_stdout.ends_with("schedule=cancelled:fileprovider-in-flight\n"),
         "{thumbnail_stdout}"
+    );
+
+    let unknown_quicklook = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("quicklook-session")
+        .arg(&unknown)
+        .output()
+        .unwrap();
+    assert!(
+        unknown_quicklook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unknown_quicklook.stderr)
+    );
+    let unknown_quicklook_stderr = String::from_utf8_lossy(&unknown_quicklook.stderr);
+    assert_worker_admitted(&unknown_quicklook_stderr, "quicklook preview", &unknown);
+    let unknown_quicklook_stdout = String::from_utf8(unknown_quicklook.stdout).unwrap();
+    assert!(
+        unknown_quicklook_stdout.contains("\tallow-native\tcloud=metadata-only\tmetadata-only\t"),
+        "{unknown_quicklook_stdout}"
+    );
+    assert!(
+        unknown_quicklook_stdout.ends_with("schedule=cancelled:metadata-only\n"),
+        "{unknown_quicklook_stdout}"
+    );
+
+    let unknown_thumbnail = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("thumbnail-generation")
+        .arg(&unknown)
+        .output()
+        .unwrap();
+    assert!(
+        unknown_thumbnail.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unknown_thumbnail.stderr)
+    );
+    let unknown_thumbnail_stderr = String::from_utf8_lossy(&unknown_thumbnail.stderr);
+    assert_worker_admitted(&unknown_thumbnail_stderr, "thumbnail generation", &unknown);
+    let unknown_thumbnail_stdout = String::from_utf8(unknown_thumbnail.stdout).unwrap();
+    assert!(
+        unknown_thumbnail_stdout.contains("\tallow-native\tcloud=metadata-only\tmetadata-only\t"),
+        "{unknown_thumbnail_stdout}"
+    );
+    assert!(
+        unknown_thumbnail_stdout.ends_with("schedule=cancelled:metadata-only\n"),
+        "{unknown_thumbnail_stdout}"
     );
 
     let _ = std::fs::remove_dir_all(root);

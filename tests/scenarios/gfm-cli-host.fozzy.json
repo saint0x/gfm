@@ -2351,6 +2351,11 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-unknown.icloud.md",
+      "data": "icloud unknown provider state"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-false-prefix.icloud.md",
       "data": "icloud false prefix"
     },
@@ -2412,10 +2417,34 @@
     },
     {
       "type": "proc_when",
+      "cmd": "/usr/bin/xattr",
+      "args": [
+        "-w",
+        "com.apple.fileprovider.state",
+        "unknown=true",
+        "tmp/gfm-fozzy-unknown.icloud.md"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
         "native-icon",
         "tmp/gfm-fozzy-downloaded.icloud.md"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-state",
+        "tmp/gfm-fozzy-unknown.icloud.md"
       ],
       "exit_code": 0,
       "times": 1
@@ -6109,6 +6138,16 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "quicklook-session",
+        "tmp/gfm-fozzy-unknown.icloud.md"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-quicklook-permission-state.tsv",
       "data": "gfm-permission-state-v1\ndocuments\tgranted\ttmp/gfm-fozzy-home/Documents\treadable\n"
@@ -6289,6 +6328,16 @@
       "args": [
         "thumbnail-generation",
         "tmp/gfm-fozzy-thumbnail.png"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "thumbnail-generation",
+        "tmp/gfm-fozzy-unknown.icloud.md"
       ],
       "exit_code": 0,
       "times": 1

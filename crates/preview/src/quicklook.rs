@@ -330,6 +330,29 @@ mod tests {
     }
 
     #[test]
+    fn unknown_fileprovider_items_are_metadata_only_for_quicklook() {
+        let contract = QuickLookSessionContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Unknown.icloud", Rect::new(0, 0, 400, 300))
+                .with_cloud_state(CloudStorageState::Unknown),
+        )
+        .unwrap();
+
+        assert_eq!(contract.cloud, CloudPreviewDecision::MetadataOnly);
+        assert_eq!(
+            contract.controller_mode,
+            QuickLookControllerMode::MetadataOnly
+        );
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "metadata-only",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn in_flight_fileprovider_items_defer_quicklook() {
         let contract = QuickLookSessionContract::from_input(
             &PreviewSecurityPolicy::default(),

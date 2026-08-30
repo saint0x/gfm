@@ -394,6 +394,33 @@ mod tests {
     }
 
     #[test]
+    fn unknown_fileprovider_items_are_metadata_only_for_thumbnails() {
+        let contract = ThumbnailGenerationContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Unknown.icloud", Rect::new(0, 0, 128, 128))
+                .with_cloud_state(CloudStorageState::Unknown),
+        )
+        .unwrap();
+
+        assert_eq!(contract.cloud, CloudPreviewDecision::MetadataOnly);
+        assert_eq!(
+            contract.generator_mode,
+            ThumbnailGeneratorMode::MetadataOnly
+        );
+        assert_eq!(
+            contract.cache_disposition,
+            ThumbnailCacheDisposition::Bypass
+        );
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "metadata-only",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn in_flight_fileprovider_items_defer_thumbnails() {
         let contract = ThumbnailGenerationContract::from_input(
             &PreviewSecurityPolicy::default(),
