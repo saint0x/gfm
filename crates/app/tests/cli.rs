@@ -14303,7 +14303,7 @@ fn reports_job_fairness_plan_from_binary() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("ready\t5\trepair\tvisible\trepair derived sidecar"),
+        stdout.contains("blocked\t5\trepair\t4\trepair derived sidecar"),
         "{stdout}"
     );
     assert!(

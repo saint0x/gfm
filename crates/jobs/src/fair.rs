@@ -78,7 +78,6 @@ impl JobFairnessPlanner {
 
     pub fn plan(&self, jobs: impl IntoIterator<Item = Job>) -> JobFairnessPlan {
         let mut pending: VecDeque<Job> = jobs.into_iter().collect();
-        let mut satisfied = self.completed.clone();
         let mut ready = Vec::new();
 
         loop {
@@ -86,12 +85,11 @@ impl JobFairnessPlanner {
             for class in JOB_CLASS_ORDER {
                 for _ in 0..self.policy.quota(class) {
                     let Some(index) = pending.iter().position(|job| {
-                        job.class == class && dependencies_satisfied(job, &satisfied)
+                        job.class == class && dependencies_satisfied(job, &self.completed)
                     }) else {
                         break;
                     };
                     let job = pending.remove(index).expect("fairness job vanished");
-                    satisfied.insert(job.id);
                     ready.push(job);
                     progressed = true;
                 }
@@ -110,7 +108,7 @@ impl JobFairnessPlanner {
                 missing_dependencies: job
                     .dependencies
                     .into_iter()
-                    .filter(|dependency| !satisfied.contains(dependency))
+                    .filter(|dependency| !self.completed.contains(dependency))
                     .collect(),
             })
             .collect();
