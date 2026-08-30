@@ -8,7 +8,7 @@ use crate::{
 };
 use gfm_content::Extractor;
 use gfm_index::{
-    Indexer, LiveIndex, SearchLookupBudget, SearchRecordColumns, SearchStreamStage,
+    Indexer, LiveIndex, SearchLookupBudget, SearchQuery, SearchRecordColumns, SearchStreamStage,
     SearchVolumeScope, SidecarIndexQuerySession, SidecarQuerySessionReport,
 };
 use gfm_jobs::Priority;
@@ -34,9 +34,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "search",
                 move |cancellation| {
                     let _access = preflight_access_scope(&root, AccessIntent::Index, "search")?;
+                    let parsed = SearchQuery::parse(&query);
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let session = snapshot.query_session();
-                    Ok(session.search(&query, 50))
+                    session.search_structured_with_volume_scope_cancellable(
+                        &parsed,
+                        50,
+                        &SearchVolumeScope::All,
+                        &cancellation,
+                    )
                 },
             )?;
             for hit in hits {
@@ -55,9 +61,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 move |cancellation| {
                     let _access =
                         preflight_access_scope(&root, AccessIntent::Index, "search stream")?;
+                    let parsed = SearchQuery::parse(&query);
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let session = snapshot.query_session();
-                    session.stream_search(&query, 50)
+                    session.stream_structured_search(&parsed, 50)
                 },
             )?;
             for batch in batches {
@@ -232,7 +239,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let query = required_string(args.next(), "search-index requires a query string")?;
             let hits = run_search_archive_read(index_path, "search index", move |index_path| {
                 let session = Indexer::default().load_query_session(index_path)?;
-                Ok(session.search(&query, 50))
+                session.search_structured_with_volume_scope_cancellable(
+                    &SearchQuery::parse(&query),
+                    50,
+                    &SearchVolumeScope::All,
+                    &gfm_jobs::Cancellation::default(),
+                )
             })?;
             for hit in hits {
                 print_hit(&hit);
@@ -244,9 +256,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let query = required_string(args.next(), "search-index-mmap requires a query string")?;
             let hits =
                 run_search_archive_read(index_path, "search index mmap", move |index_path| {
+                    let parsed = SearchQuery::parse(&query);
                     let live =
                         LiveIndex::from_records(MmapRecordArchive::open(index_path)?.records()?);
-                    Ok(live.search(&query, 50))
+                    live.search_structured_with_volume_scope_cancellable(
+                        &parsed,
+                        50,
+                        &SearchVolumeScope::All,
+                        &gfm_jobs::Cancellation::default(),
+                    )
                 })?;
             for hit in hits {
                 print_hit(&hit);
@@ -906,9 +924,15 @@ fn run_search_index_columns(
             let (live, columns_applied) =
                 LiveIndex::from_records_with_columns(records.records()?, search_columns);
             cancellation.check()?;
+            let parsed = SearchQuery::parse(&query);
             Ok(SearchIndexColumnsOutput {
                 columns_applied,
-                hits: live.search(&query, 50),
+                hits: live.search_structured_with_volume_scope_cancellable(
+                    &parsed,
+                    50,
+                    &SearchVolumeScope::All,
+                    &cancellation,
+                )?,
             })
         },
     )
@@ -969,9 +993,15 @@ fn run_content_index_set_search(
             report.full_hydration
         );
         cancellation.check()?;
+        let parsed = SearchQuery::parse(&query);
         Ok(ContentIndexSetSearchOutput {
             diagnostics,
-            hits: live.search(&query, 50),
+            hits: live.search_structured_with_volume_scope_cancellable(
+                &parsed,
+                50,
+                &SearchVolumeScope::All,
+                &cancellation,
+            )?,
         })
     })
 }
@@ -990,7 +1020,13 @@ fn run_content_index_set_session(
         cancellation.check()?;
         let session =
             Indexer::default().load_content_set_query_session(&records, &content_paths)?;
-        let first = session.search(&query, 50)?;
+        let parsed = SearchQuery::parse(&query);
+        let first = session.search_structured_with_budget_cancellable(
+            &parsed,
+            50,
+            SearchLookupBudget::default(),
+            &cancellation,
+        )?;
         let mut diagnostics = vec![format_content_session_report(
             "content-session-first",
             content_paths.len(),
@@ -998,7 +1034,12 @@ fn run_content_index_set_session(
         )];
         let mut hits = first.search.hits;
         cancellation.check()?;
-        let second = session.search(&query, 50)?;
+        let second = session.search_structured_with_budget_cancellable(
+            &parsed,
+            50,
+            SearchLookupBudget::default(),
+            &cancellation,
+        )?;
         diagnostics.push(format_content_session_report(
             "content-session-second",
             content_paths.len(),
@@ -1033,9 +1074,15 @@ fn run_content_index_manifest_search(
             report.full_hydration
         );
         cancellation.check()?;
+        let parsed = SearchQuery::parse(&query);
         Ok(ContentIndexSetSearchOutput {
             diagnostics,
-            hits: live.search(&query, 50),
+            hits: live.search_structured_with_volume_scope_cancellable(
+                &parsed,
+                50,
+                &SearchVolumeScope::All,
+                &cancellation,
+            )?,
         })
     })
 }
@@ -1056,7 +1103,13 @@ fn run_content_index_manifest_session(
         let session =
             Indexer::default().load_content_manifest_query_session(&records, &manifest)?;
         let archive_count = session.archive_count();
-        let first = session.search(&query, 50)?;
+        let parsed = SearchQuery::parse(&query);
+        let first = session.search_structured_with_budget_cancellable(
+            &parsed,
+            50,
+            SearchLookupBudget::default(),
+            &cancellation,
+        )?;
         let mut diagnostics = vec![format_content_session_report(
             "content-manifest-session-first",
             archive_count,
@@ -1064,7 +1117,12 @@ fn run_content_index_manifest_session(
         )];
         let mut hits = first.search.hits;
         cancellation.check()?;
-        let second = session.search(&query, 50)?;
+        let second = session.search_structured_with_budget_cancellable(
+            &parsed,
+            50,
+            SearchLookupBudget::default(),
+            &cancellation,
+        )?;
         diagnostics.push(format_content_session_report(
             "content-manifest-session-second",
             archive_count,
@@ -1233,7 +1291,14 @@ fn run_sidecar_index_search(
         )?;
         cancellation.check()?;
         let budget = SearchLookupBudget::default();
-        let report = session.search_with_budget(&query, 50, budget)?;
+        let parsed = SearchQuery::parse(&query);
+        let report = session.search_structured_with_volume_scope_budget_cancellable(
+            &parsed,
+            50,
+            &SearchVolumeScope::All,
+            budget,
+            &cancellation,
+        )?;
         let hydration = &report.hydration;
         let diagnostics = format!(
             "columns-indexed {} records-loaded {} records-missing {} candidate-ids {} full-hydration {} metadata-keys {} prefix-keys {} substring-keys {} fuzzy-keys {} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {} content-cache-hits {} content-cache-misses {} metadata-budget {} substring-budget {} content-budget {}",
@@ -1277,9 +1342,22 @@ fn run_sidecar_index_session(
         let session = open_sidecar_index_query_session(paths)?;
         cancellation.check()?;
         let budget = SearchLookupBudget::default();
-        let first = session.search_with_budget(&query, 50, budget)?;
+        let parsed = SearchQuery::parse(&query);
+        let first = session.search_structured_with_volume_scope_budget_cancellable(
+            &parsed,
+            50,
+            &SearchVolumeScope::All,
+            budget,
+            &cancellation,
+        )?;
         cancellation.check()?;
-        let second = session.search_with_budget(&query, 50, budget)?;
+        let second = session.search_structured_with_volume_scope_budget_cancellable(
+            &parsed,
+            50,
+            &SearchVolumeScope::All,
+            budget,
+            &cancellation,
+        )?;
         Ok(SidecarSessionOutput {
             diagnostics: vec![
                 format_sidecar_session_report("sidecar-session-first", &session, &first, budget),
@@ -1304,7 +1382,14 @@ fn run_sidecar_index_budget(
         cancellation.check()?;
         let session = open_sidecar_index_query_session(paths)?;
         cancellation.check()?;
-        let report = session.search_with_budget(&query, 50, budget)?;
+        let parsed = SearchQuery::parse(&query);
+        let report = session.search_structured_with_volume_scope_budget_cancellable(
+            &parsed,
+            50,
+            &SearchVolumeScope::All,
+            budget,
+            &cancellation,
+        )?;
         Ok(SidecarSearchOutput {
             diagnostics: format_sidecar_budget_report(&session, &report, budget),
             hits: report.search.hits,
@@ -1327,7 +1412,14 @@ fn run_sidecar_index_volume_scope(
         cancellation.check()?;
         let session = open_sidecar_index_query_session(paths)?;
         cancellation.check()?;
-        let report = session.search_with_volume_scope(&query, 50, &scope)?;
+        let parsed = SearchQuery::parse(&query);
+        let report = session.search_structured_with_volume_scope_budget_cancellable(
+            &parsed,
+            50,
+            &scope,
+            budget,
+            &cancellation,
+        )?;
         Ok(SidecarSearchOutput {
             diagnostics: format_sidecar_session_report(
                 "sidecar-volume-scope",

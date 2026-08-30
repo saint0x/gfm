@@ -5,10 +5,10 @@ pub use gfm_search::substring_candidate_grams;
 pub use gfm_search::{
     SearchFuzzyPosting, SearchLookup, SearchLookupBudget, SearchLookupIds, SearchLookupTelemetry,
     SearchLookupTerms, SearchMetadataField, SearchMetadataPosting, SearchPrefixPosting,
-    SearchQueryReport, SearchRecordColumns, SearchStreamStage, SearchSubstringPosting,
+    SearchQuery, SearchQueryReport, SearchRecordColumns, SearchStreamStage, SearchSubstringPosting,
     SearchVolumeScope,
 };
-use gfm_search::{SearchQuery, SearchStreamBatch, ShardedSearchIndex};
+use gfm_search::{SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
     compact_content_segments, compact_content_segments_with_policy, read_records, write_records,
     MmapContentArchive, MmapContentSet, MmapRecordArchive,
@@ -172,6 +172,14 @@ impl IndexQuerySession {
 
     pub fn stream_search(&self, query: &str, limit: usize) -> Result<Vec<SearchStreamBatch>> {
         self.live.stream_search(query, limit)
+    }
+
+    pub fn stream_structured_search(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.live.stream_structured_search(query, limit)
     }
 
     pub fn stream_search_with_volume_scope(

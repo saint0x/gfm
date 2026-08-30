@@ -181,8 +181,8 @@ impl SidecarIndexQuerySession {
         limit: usize,
         budget: SearchLookupBudget,
     ) -> Result<SidecarQuerySessionReport> {
-        self.search_with_volume_scope_budget_cancellable(
-            query,
+        self.search_structured_with_volume_scope_budget_cancellable(
+            &SearchQuery::parse(query),
             limit,
             &SearchVolumeScope::All,
             budget,
@@ -244,9 +244,25 @@ impl SidecarIndexQuerySession {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<SidecarQuerySessionReport> {
+        self.search_structured_with_volume_scope_budget_cancellable(
+            &SearchQuery::parse(query),
+            limit,
+            scope,
+            budget,
+            cancellation,
+        )
+    }
+
+    pub fn search_structured_with_volume_scope_budget_cancellable(
+        &self,
+        parsed: &SearchQuery,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<SidecarQuerySessionReport> {
         cancellation.check()?;
-        let parsed = SearchQuery::parse(query);
-        let result_cache_key = query_result_cache_key(&parsed, limit, scope, budget);
+        let result_cache_key = query_result_cache_key(parsed, limit, scope, budget);
         if let Some(mut report) = self.result_cache_lock().get(&result_cache_key) {
             self.result_cache_hits.fetch_add(1, Ordering::Relaxed);
             report.search.lookup = SearchLookupTelemetry::default();
@@ -276,7 +292,7 @@ impl SidecarIndexQuerySession {
                 lookup: &self.lookup,
                 substrings: &self.substrings,
             },
-            &parsed,
+            parsed,
             SidecarContentImport {
                 terms: content_terms,
                 postings: content_postings,
@@ -290,7 +306,7 @@ impl SidecarIndexQuerySession {
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
         let (live, hydration) = self.live_from_import(import, cancellation)?;
         let search = live.search_structured_with_volume_scope_lookup_budget_cancellable(
-            &parsed,
+            parsed,
             limit,
             scope,
             &self.lookup,

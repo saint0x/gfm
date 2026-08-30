@@ -125,7 +125,12 @@ impl ContentIndexQuerySession {
         limit: usize,
         budget: SearchLookupBudget,
     ) -> Result<ContentQuerySessionReport> {
-        self.search_with_budget_cancellable(query, limit, budget, &Cancellation::default())
+        self.search_structured_with_budget_cancellable(
+            &SearchQuery::parse(query),
+            limit,
+            budget,
+            &Cancellation::default(),
+        )
     }
 
     pub fn search_cancellable(
@@ -149,9 +154,23 @@ impl ContentIndexQuerySession {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<ContentQuerySessionReport> {
+        self.search_structured_with_budget_cancellable(
+            &SearchQuery::parse(query),
+            limit,
+            budget,
+            cancellation,
+        )
+    }
+
+    pub fn search_structured_with_budget_cancellable(
+        &self,
+        parsed: &SearchQuery,
+        limit: usize,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<ContentQuerySessionReport> {
         cancellation.check()?;
-        let parsed = SearchQuery::parse(query);
-        let result_cache_key = content_query_result_cache_key(&parsed, limit, budget);
+        let result_cache_key = content_query_result_cache_key(parsed, limit, budget);
         if let Some(mut report) = self.result_cache_lock().get(&result_cache_key) {
             self.result_cache_hits.fetch_add(1, Ordering::Relaxed);
             report.search.lookup = SearchLookupTelemetry::default();
@@ -174,7 +193,7 @@ impl ContentIndexQuerySession {
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
         let (live, load) = self.live_from_postings(postings, has_content_terms, cancellation)?;
         let hits = live.search_structured_with_volume_scope_cancellable(
-            &parsed,
+            parsed,
             limit,
             &gfm_search::SearchVolumeScope::All,
             cancellation,

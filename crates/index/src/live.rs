@@ -425,7 +425,15 @@ impl LiveIndex {
     }
 
     pub fn stream_search(&self, query: &str, limit: usize) -> Result<Vec<SearchStreamBatch>> {
-        self.index.stream(query, limit)
+        self.stream_structured_search(&SearchQuery::parse(query), limit)
+    }
+
+    pub fn stream_structured_search(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        self.index.stream_structured(query, limit)
     }
 
     pub fn stream_search_with_volume_scope(
