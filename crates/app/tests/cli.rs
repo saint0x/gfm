@@ -4409,6 +4409,18 @@ fn searches_persisted_tags_from_binary() {
     let substring_block_retry_progress =
         unique_temp_path("gfm-cli-substring-id-block-retry", "gfmprogress");
     let substring_block_retry_probe = unique_temp_path("gfm-cli-substring-id-block-retry", "state");
+    let dictionary_lookup_retry_journal =
+        unique_temp_path("gfm-cli-dictionary-lookup-retry", "journal");
+    let dictionary_lookup_retry_catalog =
+        unique_temp_path("gfm-cli-dictionary-lookup-retry", "gfmjobs");
+    let dictionary_lookup_retry_progress =
+        unique_temp_path("gfm-cli-dictionary-lookup-retry", "gfmprogress");
+    let dictionary_lookup_retry_probe =
+        unique_temp_path("gfm-cli-dictionary-lookup-retry", "state");
+    let fuzzy_terms_retry_journal = unique_temp_path("gfm-cli-fuzzy-terms-retry", "journal");
+    let fuzzy_terms_retry_catalog = unique_temp_path("gfm-cli-fuzzy-terms-retry", "gfmjobs");
+    let fuzzy_terms_retry_progress = unique_temp_path("gfm-cli-fuzzy-terms-retry", "gfmprogress");
+    let fuzzy_terms_retry_probe = unique_temp_path("gfm-cli-fuzzy-terms-retry", "state");
     let assert_worker_admitted = |stderr: &[u8], worker: &str, path: &Path| {
         let stderr = String::from_utf8_lossy(stderr);
         assert!(
@@ -4610,6 +4622,17 @@ fn searches_persisted_tags_from_binary() {
     assert!(
         lookup_stdout.starts_with("dictionary\tfound\t"),
         "{lookup_stdout}"
+    );
+    assert_retry_probe(
+        "dictionary-lookup-retry-probe",
+        &dictionary,
+        &["Important"],
+        "dictionary lookup",
+        &lookup_stdout,
+        &dictionary_lookup_retry_journal,
+        &dictionary_lookup_retry_catalog,
+        &dictionary_lookup_retry_progress,
+        &dictionary_lookup_retry_probe,
     );
 
     let prefix_lookup_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -4839,6 +4862,17 @@ fn searches_persisted_tags_from_binary() {
     );
     assert_worker_admitted(&fuzzy_terms.stderr, "fuzzy terms mmap", &fuzzy);
     assert_eq!(String::from_utf8(fuzzy_terms.stdout).unwrap(), "tagged\n");
+    assert_retry_probe(
+        "fuzzy-terms-mmap-retry-probe",
+        &fuzzy,
+        &["tagge"],
+        "fuzzy terms mmap",
+        "tagged\n",
+        &fuzzy_terms_retry_journal,
+        &fuzzy_terms_retry_catalog,
+        &fuzzy_terms_retry_progress,
+        &fuzzy_terms_retry_probe,
+    );
 
     let fuzzy_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["fuzzy-verify", fuzzy.to_str().unwrap()])
@@ -5539,6 +5573,14 @@ fn searches_persisted_tags_from_binary() {
         substring_block_retry_catalog,
         substring_block_retry_progress,
         substring_block_retry_probe,
+        dictionary_lookup_retry_journal,
+        dictionary_lookup_retry_catalog,
+        dictionary_lookup_retry_progress,
+        dictionary_lookup_retry_probe,
+        fuzzy_terms_retry_journal,
+        fuzzy_terms_retry_catalog,
+        fuzzy_terms_retry_progress,
+        fuzzy_terms_retry_probe,
     ] {
         fs::remove_file(path).unwrap();
     }

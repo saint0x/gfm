@@ -913,6 +913,39 @@
     {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-dictionary-lookup-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-dictionary-lookup-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-dictionary-lookup-retry.progress"
+      },
+      "args": [
+        "dictionary-lookup-retry-probe",
+        "/tmp/gfm-fozzy-dictionary.gfmdict",
+        "Important",
+        "tmp/gfm-fozzy-dictionary-lookup-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-dictionary-lookup-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-dictionary-lookup-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-dictionary-lookup-retry.progress"
+      },
+      "args": [
+        "dictionary-lookup-retry-probe",
+        "/tmp/gfm-fozzy-dictionary.gfmdict",
+        "Important",
+        "tmp/gfm-fozzy-dictionary-lookup-retry.state"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
         "dictionary-verify",
         "/tmp/gfm-fozzy-dictionary.gfmdict"
@@ -1369,6 +1402,39 @@
         "fuzzy-terms-mmap",
         "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
         "tagge"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-fuzzy-terms-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-fuzzy-terms-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-fuzzy-terms-retry.progress"
+      },
+      "args": [
+        "fuzzy-terms-mmap-retry-probe",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "tagge",
+        "tmp/gfm-fozzy-fuzzy-terms-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-fuzzy-terms-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-fuzzy-terms-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-fuzzy-terms-retry.progress"
+      },
+      "args": [
+        "fuzzy-terms-mmap-retry-probe",
+        "/tmp/gfm-fozzy-fuzzy.gfmfuzzy",
+        "tagge",
+        "tmp/gfm-fozzy-fuzzy-terms-retry.state"
       ],
       "expect_exit": 0
     },

@@ -871,12 +871,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!("{report}");
         }
-        "fuzzy-terms-mmap" => {
+        "fuzzy-terms-mmap" | "fuzzy-terms-mmap-retry-probe" => {
             let fuzzy = required_path(args.next(), "fuzzy-terms-mmap requires a fuzzy path")?;
             let key = required_string(args.next(), "fuzzy-terms-mmap requires a key")?;
-            let terms = run_search_archive_read_cancellable(
+            let retry_probe = if command == "fuzzy-terms-mmap-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "fuzzy-terms-mmap-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let terms = run_search_archive_read_cancellable_with_retry_probe(
                 fuzzy,
                 "fuzzy terms mmap",
+                retry_probe,
                 move |fuzzy, cancellation| {
                     let archive = MmapFuzzyArchive::open_checked(fuzzy, || cancellation.check())?;
                     cancellation.check()?;
@@ -1067,13 +1076,22 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!("{report}");
         }
-        "dictionary-lookup" => {
+        "dictionary-lookup" | "dictionary-lookup-retry-probe" => {
             let dictionary =
                 required_path(args.next(), "dictionary-lookup requires a dictionary path")?;
             let term = required_string(args.next(), "dictionary-lookup requires a term")?;
-            let report = run_search_archive_read_cancellable(
+            let retry_probe = if command == "dictionary-lookup-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "dictionary-lookup-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
+            let report = run_search_archive_read_cancellable_with_retry_probe(
                 dictionary,
                 "dictionary lookup",
+                retry_probe,
                 move |dictionary, cancellation| {
                     let archive =
                         MmapDictionary::open_checked(dictionary, || cancellation.check())?;
