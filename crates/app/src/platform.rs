@@ -1,6 +1,6 @@
 use crate::access::{
-    preflight_access_scope, preflight_volume_access_scope, worker_admission_with_volume_gate,
-    ScopedAccessGuard,
+    preflight_access_scope, preflight_access_scope_checked, preflight_volume_access_scope,
+    worker_admission_with_volume_gate, ScopedAccessGuard,
 };
 use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
 use crate::{
@@ -365,10 +365,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "preview cache fileprovider observer cache",
                     move |cancellation| {
                         cancellation.check()?;
-                        let _cache_access = preflight_access_scope(
+                        let _cache_access = preflight_access_scope_checked(
                             &cache_probe,
                             AccessIntent::Write,
                             "preview cache fileprovider observer cache",
+                            || cancellation.check(),
                         )?;
                         cancellation.check()?;
                         observed_preview_cache_invalidation_tsv(
@@ -1707,7 +1708,9 @@ where
     let volume = detect_volume_id(&path).ok();
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope(&path, AccessIntent::Read, worker)?;
+        let _access = preflight_access_scope_checked(&path, AccessIntent::Read, worker, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         read(path)
     })
@@ -1719,7 +1722,9 @@ fn run_fileprovider_progress_job(path: PathBuf) -> Result<FileProviderProgressRe
     let volume = detect_volume_id(&path).ok();
     run_fileprovider_worker_without_runtime_progress(volume, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
+        let _access = preflight_access_scope_checked(&path, AccessIntent::Read, WORKER, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         publish_fileprovider_progress_job(path)
     })
@@ -1734,7 +1739,9 @@ fn run_fileprovider_operation(
     let volume = detect_volume_id(&path).ok();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope(&path, AccessIntent::Operate, WORKER)?;
+        let _access = preflight_access_scope_checked(&path, AccessIntent::Operate, WORKER, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         FileProviderOperationReport::execute(path, operation)
     })
@@ -1884,7 +1891,10 @@ fn run_adaptive_quicklook_session(
         path.clone(),
         move |cancellation| {
             cancellation.check()?;
-            let _access = preflight_access_scope(&path, AccessIntent::Preview, WORKER)?;
+            let _access =
+                preflight_access_scope_checked(&path, AccessIntent::Preview, WORKER, || {
+                    cancellation.check()
+                })?;
             if cancel_after_access {
                 cancellation.cancel();
             }
@@ -1941,7 +1951,10 @@ fn run_adaptive_thumbnail_generation(
         path.clone(),
         move |cancellation| {
             cancellation.check()?;
-            let _access = preflight_access_scope(&path, AccessIntent::Preview, WORKER)?;
+            let _access =
+                preflight_access_scope_checked(&path, AccessIntent::Preview, WORKER, || {
+                    cancellation.check()
+                })?;
             if cancel_after_access {
                 cancellation.cancel();
             }
@@ -2001,8 +2014,12 @@ fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<V
         .or_else(|| parent_volume(&path));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _store_access =
-            preflight_access_scope(&store_probe, AccessIntent::Write, STORE_WORKER)?;
+        let _store_access = preflight_access_scope_checked(
+            &store_probe,
+            AccessIntent::Write,
+            STORE_WORKER,
+            || cancellation.check(),
+        )?;
         cancellation.check()?;
         let bookmark = gfm_mac::SecurityScopedBookmark::create(&path, report.read_only).map_err(
             |failure| GfmError::Permission {
@@ -2027,7 +2044,10 @@ fn run_security_bookmark_reconcile() -> Result<gfm_mac::SecurityScopedBookmarkSt
         let store_probe = store_probe.clone();
         move |cancellation| {
             cancellation.check()?;
-            let _store_access = preflight_access_scope(&store_probe, AccessIntent::Write, WORKER)?;
+            let _store_access =
+                preflight_access_scope_checked(&store_probe, AccessIntent::Write, WORKER, || {
+                    cancellation.check()
+                })?;
             cancellation.check()?;
             store.reconcile_checked(|| cancellation.check())
         }
@@ -2058,8 +2078,12 @@ fn run_spotlight_reconcile(
         cancellation.check()?;
         let snapshot = match fixture_path {
             Some(fixture_path) => {
-                let _fixture_access =
-                    preflight_access_scope(&fixture_path, AccessIntent::Read, FIXTURE_WORKER)?;
+                let _fixture_access = preflight_access_scope_checked(
+                    &fixture_path,
+                    AccessIntent::Read,
+                    FIXTURE_WORKER,
+                    || cancellation.check(),
+                )?;
                 cancellation.check()?;
                 let text = std::fs::read_to_string(&fixture_path)
                     .map_err(|err| GfmError::io(&fixture_path, err))?;
@@ -2091,8 +2115,12 @@ fn run_preview_cache_fileprovider_invalidation(
         .or_else(|| parent_volume(&path));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _cache_access =
-            preflight_access_scope(&cache_probe, AccessIntent::Write, CACHE_WORKER)?;
+        let _cache_access = preflight_access_scope_checked(
+            &cache_probe,
+            AccessIntent::Write,
+            CACHE_WORKER,
+            || cancellation.check(),
+        )?;
         cancellation.check()?;
         let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
         cancellation.check()?;

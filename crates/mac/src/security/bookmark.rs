@@ -442,10 +442,25 @@ impl SecurityScopedBookmarkStore {
         start_access: bool,
         repair_stale: bool,
     ) -> Result<SecurityScopedBookmarkLookup> {
+        self.resolve_for_path_checked(path, read_only, start_access, repair_stale, || Ok(()))
+    }
+
+    pub fn resolve_for_path_checked(
+        &self,
+        path: impl AsRef<Path>,
+        read_only: bool,
+        start_access: bool,
+        repair_stale: bool,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<SecurityScopedBookmarkLookup> {
+        check_control()?;
         let requested_path = path.as_ref().to_path_buf();
+        check_control()?;
         let requested_identity = path_identity(&requested_path);
+        check_control()?;
         let mut resolution = None;
-        for candidate in self.resolve_all(start_access, repair_stale)? {
+        for candidate in self.resolve_all_checked(start_access, repair_stale, &mut check_control)? {
+            check_control()?;
             if candidate.record.read_only == read_only
                 && same_path_identity(
                     &requested_identity,
@@ -456,7 +471,9 @@ impl SecurityScopedBookmarkStore {
                 resolution = Some(candidate);
                 break;
             }
+            check_control()?;
         }
+        check_control()?;
         Ok(SecurityScopedBookmarkLookup {
             requested_path,
             resolution,
@@ -469,14 +486,34 @@ impl SecurityScopedBookmarkStore {
         read_only: bool,
         repair_stale: bool,
     ) -> Result<SecurityScopedBookmarkAccessLookup> {
+        self.start_access_for_path_checked(path, read_only, repair_stale, || Ok(()))
+    }
+
+    pub fn start_access_for_path_checked(
+        &self,
+        path: impl AsRef<Path>,
+        read_only: bool,
+        repair_stale: bool,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<SecurityScopedBookmarkAccessLookup> {
+        check_control()?;
         let requested_path = path.as_ref().to_path_buf();
-        let lookup = self.resolve_for_path(&requested_path, read_only, false, repair_stale)?;
+        check_control()?;
+        let lookup = self.resolve_for_path_checked(
+            &requested_path,
+            read_only,
+            false,
+            repair_stale,
+            &mut check_control,
+        )?;
+        check_control()?;
         let Some(resolution) = lookup.resolution else {
             return Ok(SecurityScopedBookmarkAccessLookup {
                 requested_path,
                 access: None,
             });
         };
+        check_control()?;
         let access = resolution
             .record
             .bookmark()
@@ -487,6 +524,7 @@ impl SecurityScopedBookmarkStore {
                     .reason
                     .unwrap_or_else(|| "security-scoped access did not start".to_string()),
             })?;
+        check_control()?;
         Ok(SecurityScopedBookmarkAccessLookup {
             requested_path,
             access: Some(access),
@@ -996,6 +1034,39 @@ mod tests {
     }
 
     #[test]
+    fn checked_bookmark_store_resolve_for_path_honors_pre_cancelled_control() {
+        let root = temp_root("security-bookmark-lookup-cancel");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        let path = root.join("Documents").join("Plan.md");
+
+        let error = store
+            .resolve_for_path_checked(&path, true, false, true, || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(error, GfmError::Cancelled);
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_bookmark_store_start_access_honors_pre_cancelled_control() {
+        let root = temp_root("security-bookmark-access-cancel");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        let path = root.join("Documents").join("Plan.md");
+
+        let error = match store
+            .start_access_for_path_checked(&path, true, true, || Err(GfmError::Cancelled))
+        {
+            Ok(_) => panic!("pre-cancelled lookup must not start access"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, GfmError::Cancelled);
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn directory_bookmark_covers_descendant_paths_only() {
         let root = temp_root("security-bookmark-descendant");
         let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
@@ -1125,6 +1196,45 @@ mod tests {
     }
 
     #[test]
+    fn checked_bookmark_lookup_honors_pre_cancelled_control_before_identity_probe() {
+        let root = temp_root("security-bookmark-lookup-cancel");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+
+        let error = match store.resolve_for_path_checked(
+            invalid_path_or_missing("gfm-security-bookmark-lookup-cancelled"),
+            true,
+            false,
+            true,
+            || Err(GfmError::Cancelled),
+        ) {
+            Ok(_) => panic!("pre-cancelled lookup must not probe path identity"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_bookmark_start_access_honors_pre_cancelled_control_before_store_read() {
+        let root = temp_root("security-bookmark-start-access-cancel");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+
+        let error = match store.start_access_for_path_checked(
+            root.join("Documents").join("Plan.md"),
+            true,
+            true,
+            || Err(GfmError::Cancelled),
+        ) {
+            Ok(_) => panic!("pre-cancelled lookup must not start access"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn checked_bookmark_store_write_preserves_existing_records_on_cancel() {
         let root = temp_root("security-bookmark-write-cancel");
         let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
@@ -1250,5 +1360,15 @@ mod tests {
         bytes.extend_from_slice(prefix.as_bytes());
         bytes.push(0);
         PathBuf::from(OsString::from_vec(bytes))
+    }
+
+    #[cfg(unix)]
+    fn invalid_path_or_missing(prefix: &str) -> PathBuf {
+        invalid_path(prefix)
+    }
+
+    #[cfg(not(unix))]
+    fn invalid_path_or_missing(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(prefix)
     }
 }

@@ -56,15 +56,28 @@ pub(crate) fn preflight_access_scope(
     intent: AccessIntent,
     worker: &str,
 ) -> Result<ScopedAccessGuard> {
+    preflight_access_scope_checked(path, intent, worker, || Ok(()))
+}
+
+pub(crate) fn preflight_access_scope_checked(
+    path: &Path,
+    intent: AccessIntent,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    check_control()?;
     let _ = refresh_permission_state(PermissionRefreshAudience::Workers, worker)?;
+    check_control()?;
     preflight_volume_access(path, intent, worker)?;
+    check_control()?;
     let report = SecurityScopedAccessReport::evaluate(path, intent);
+    check_control()?;
     eprintln!("{}", report.as_tsv());
     let admission = report.worker_admission(worker);
     eprintln!("{}", admission.as_tsv());
     match admission.worker_action {
         SecurityWorkerAction::Start => {
-            let accesses = retained_security_accesses(&report)?;
+            let accesses = retained_security_accesses_checked(&report, &mut check_control)?;
             Ok(ScopedAccessGuard {
                 _accesses: accesses,
             })
@@ -201,23 +214,33 @@ fn absolute_volume_probe_path(path: &Path) -> std::path::PathBuf {
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn retained_security_accesses(
+fn retained_security_accesses_checked(
     report: &SecurityScopedAccessReport,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<SecurityScopedBookmarkAccess>> {
     if !report.bookmark_required || !matches!(report.action, SecurityDecisionAction::Allow) {
         return Ok(Vec::new());
     }
+    check_control()?;
     let store = SecurityScopedBookmarkStore::new(default_security_bookmarks_path());
-    retained_security_accesses_from_store(report, &store)
+    retained_security_accesses_from_store_checked(report, &store, &mut check_control)
 }
 
-fn retained_security_accesses_from_store(
+fn retained_security_accesses_from_store_checked(
     report: &SecurityScopedAccessReport,
     store: &SecurityScopedBookmarkStore,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<SecurityScopedBookmarkAccess>> {
+    check_control()?;
     preflight_volume_access(store.path(), AccessIntent::Read, "security bookmark store")?;
-    let lookup =
-        store.start_access_for_path(&report.path, read_only_intent(report.intent), true)?;
+    check_control()?;
+    let lookup = store.start_access_for_path_checked(
+        &report.path,
+        read_only_intent(report.intent),
+        true,
+        &mut check_control,
+    )?;
+    check_control()?;
     let Some(access) = lookup.access else {
         eprintln!(
             "security-scope-access\t{}\tstatus=missing\tread-only={}\taccess-started=false\treason=current-access-without-retained-bookmark",
@@ -251,6 +274,7 @@ fn retained_security_accesses_from_store(
             ),
         });
     }
+    check_control()?;
     Ok(vec![access])
 }
 
@@ -323,7 +347,7 @@ mod tests {
                 .to_string(),
         };
 
-        let err = match retained_security_accesses_from_store(&report, &store) {
+        let err = match retained_security_accesses_from_store_checked(&report, &store, || Ok(())) {
             Ok(_) => panic!("missing retained bookmark must fail closed"),
             Err(err) => err,
         };
@@ -333,6 +357,42 @@ mod tests {
             .to_string()
             .contains("retained security-scoped bookmark required before touching filesystem"));
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retained_bookmark_preflight_checked_honors_pre_cancelled_control_before_store_read() {
+        let root = unique_temp_dir("gfm-access-cancelled-bookmark");
+        let path = root.join("Documents").join("Plan.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "plan").unwrap();
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        let report = SecurityScopedAccessReport {
+            path,
+            intent: AccessIntent::Index,
+            scope: gfm_mac::ProtectedScope::Documents,
+            probe: gfm_mac::AccessProbeState::Granted,
+            mode: gfm_mac::SecurityAccessMode::SecurityScopedBookmark,
+            action: SecurityDecisionAction::Allow,
+            bookmark_required: true,
+            can_read: true,
+            can_write: false,
+            least_privilege: true,
+            reason: "path is readable now but should be retained with a security-scoped bookmark"
+                .to_string(),
+        };
+
+        let err = match retained_security_accesses_from_store_checked(&report, &store, || {
+            Err(GfmError::Cancelled)
+        }) {
+            Ok(_) => {
+                panic!("pre-cancelled retained bookmark preflight should stop before store read")
+            }
+            Err(err) => err,
+        };
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!store.path().exists());
         fs::remove_dir_all(root).unwrap();
     }
 
