@@ -1,6 +1,9 @@
 use crate::{normalize_text, ContentDocument, ExtractionPolicy};
 use flate2::read::ZlibDecoder;
+use gfm_types::{GfmError, Result};
 use std::io::Read;
+
+const PDF_INFLATE_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PdfExtractStatus {
@@ -13,32 +16,44 @@ pub(crate) enum PdfExtractStatus {
     Corrupt,
 }
 
-pub(crate) fn extract_pdf(
+#[cfg(test)]
+fn extract_pdf(
     bytes: &[u8],
     policy: &ExtractionPolicy,
 ) -> (PdfExtractStatus, Option<ContentDocument>) {
+    extract_pdf_checked(bytes, policy, || Ok(()))
+        .expect("non-cancellable PDF extraction cannot cancel")
+}
+
+pub(crate) fn extract_pdf_checked(
+    bytes: &[u8],
+    policy: &ExtractionPolicy,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(PdfExtractStatus, Option<ContentDocument>)> {
+    check_control()?;
     if bytes.len() as u64 > policy.max_pdf_bytes {
-        return (PdfExtractStatus::TooLarge, None);
+        return Ok((PdfExtractStatus::TooLarge, None));
     }
     if !bytes.starts_with(b"%PDF-") {
-        return (PdfExtractStatus::Unsupported, None);
+        return Ok((PdfExtractStatus::Unsupported, None));
     }
     if has_encryption_dictionary(bytes) {
-        return (PdfExtractStatus::Encrypted, None);
+        return Ok((PdfExtractStatus::Encrypted, None));
     }
 
     let objects = count_marker(bytes, b" obj");
     if objects > policy.max_pdf_objects {
-        return (PdfExtractStatus::TooManyObjects, None);
+        return Ok((PdfExtractStatus::TooManyObjects, None));
     }
 
     let pages = count_pages(bytes);
     if pages > policy.max_pdf_pages {
-        return (PdfExtractStatus::TooManyPages, None);
+        return Ok((PdfExtractStatus::TooManyPages, None));
     }
 
     let mut text = String::new();
     for stream in streams(bytes) {
+        check_control()?;
         if stream_has_filter(stream.header, b"LZWDecode")
             || stream_has_filter(stream.header, b"ASCII85Decode")
             || stream_has_filter(stream.header, b"DCTDecode")
@@ -46,47 +61,67 @@ pub(crate) fn extract_pdf(
             continue;
         }
         if stream_has_filter(stream.header, b"FlateDecode") {
-            match inflate_stream(stream.body, policy.max_pdf_stream_bytes) {
+            match inflate_stream_checked(
+                stream.body,
+                policy.max_pdf_stream_bytes,
+                &mut check_control,
+            ) {
                 Ok(decoded) => extract_text_stream(&decoded, &mut text),
-                Err(InflateError::TooLarge) => return (PdfExtractStatus::TooLarge, None),
-                Err(InflateError::Corrupt) => return (PdfExtractStatus::Corrupt, None),
+                Err(InflateError::TooLarge) => return Ok((PdfExtractStatus::TooLarge, None)),
+                Err(InflateError::Corrupt) => return Ok((PdfExtractStatus::Corrupt, None)),
+                Err(InflateError::Control(err)) => return Err(err),
             }
         } else {
             extract_text_stream(stream.body, &mut text);
         }
+        check_control()?;
     }
 
     let text = normalize_text(text.trim());
     if text.is_empty() {
-        return (PdfExtractStatus::Unsupported, None);
+        return Ok((PdfExtractStatus::Unsupported, None));
     }
 
-    (
+    Ok((
         PdfExtractStatus::Extracted,
         Some(ContentDocument {
             bytes_read: bytes.len(),
             text,
         }),
-    )
+    ))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum InflateError {
     TooLarge,
     Corrupt,
+    Control(GfmError),
 }
 
-fn inflate_stream(bytes: &[u8], max_bytes: usize) -> std::result::Result<Vec<u8>, InflateError> {
+fn inflate_stream_checked(
+    bytes: &[u8],
+    max_bytes: usize,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> std::result::Result<Vec<u8>, InflateError> {
+    check_control().map_err(InflateError::Control)?;
     let limit = u64::try_from(max_bytes).unwrap_or(u64::MAX);
     let mut decoder = ZlibDecoder::new(bytes);
     let mut decoded = Vec::new();
-    let bytes_read = decoder
-        .by_ref()
-        .take(limit.saturating_add(1))
-        .read_to_end(&mut decoded)
-        .map_err(|_| InflateError::Corrupt)?;
-    if bytes_read > max_bytes {
-        return Err(InflateError::TooLarge);
+    let mut reader = decoder.by_ref().take(limit.saturating_add(1));
+    let mut buffer = [0_u8; PDF_INFLATE_CHUNK_BYTES];
+    loop {
+        check_control().map_err(InflateError::Control)?;
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|_| InflateError::Corrupt)?;
+        check_control().map_err(InflateError::Control)?;
+        if read == 0 {
+            break;
+        }
+        decoded.extend_from_slice(&buffer[..read]);
+        if decoded.len() > max_bytes {
+            return Err(InflateError::TooLarge);
+        }
     }
     Ok(decoded)
 }
@@ -321,6 +356,7 @@ fn find_from(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
     fn extracts_literal_pdf_text_streams() {
@@ -412,6 +448,51 @@ endobj
 
         assert_eq!(status, PdfExtractStatus::Extracted);
         assert_eq!(doc.unwrap().text, "compressed pdfneedle");
+    }
+
+    #[test]
+    fn checked_extraction_can_cancel_while_inflating_flate_stream() {
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(
+            &mut encoder,
+            format!("BT ({}) Tj ET", "pdf body ".repeat(32 * 1024)).as_bytes(),
+        )
+        .unwrap();
+        let compressed = encoder.finish().unwrap();
+        let mut pdf = b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Contents 2 0 R >>
+endobj
+2 0 obj
+<< /Length "
+            .to_vec();
+        pdf.extend(compressed.len().to_string().as_bytes());
+        pdf.extend(
+            b" /Filter /FlateDecode >>
+stream
+",
+        );
+        pdf.extend(compressed);
+        pdf.extend(
+            b"
+endstream
+endobj
+%%EOF",
+        );
+        let checks = Cell::new(0);
+
+        let result = extract_pdf_checked(&pdf, &ExtractionPolicy::default(), || {
+            let next = checks.get() + 1;
+            checks.set(next);
+            if next >= 6 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
     }
 
     #[test]

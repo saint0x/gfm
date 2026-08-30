@@ -1,7 +1,10 @@
 use crate::{normalize_text, ContentDocument, ExtractionPolicy};
 use flate2::read::GzDecoder;
+use gfm_types::Result;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
+
+const ARCHIVE_DECODE_CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArchiveKind {
@@ -19,36 +22,51 @@ pub(crate) enum ArchiveExtractStatus {
     Corrupt,
 }
 
-pub(crate) fn extract_archive_metadata(
+#[cfg(test)]
+fn extract_archive_metadata(
     bytes: &[u8],
     kind: ArchiveKind,
     policy: &ExtractionPolicy,
 ) -> (ArchiveExtractStatus, Option<ContentDocument>) {
+    extract_archive_metadata_checked(bytes, kind, policy, || Ok(()))
+        .expect("non-cancellable archive metadata extraction cannot cancel")
+}
+
+pub(crate) fn extract_archive_metadata_checked(
+    bytes: &[u8],
+    kind: ArchiveKind,
+    policy: &ExtractionPolicy,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(ArchiveExtractStatus, Option<ContentDocument>)> {
+    check_control()?;
     match kind {
-        ArchiveKind::Tar => extract_tar_metadata(bytes, policy),
-        ArchiveKind::TarGz => extract_tar_gz_metadata(bytes, policy),
-        ArchiveKind::Zip => extract_zip_metadata(bytes, policy),
+        ArchiveKind::Tar => extract_tar_metadata_checked(bytes, policy, check_control),
+        ArchiveKind::TarGz => extract_tar_gz_metadata_checked(bytes, policy, check_control),
+        ArchiveKind::Zip => extract_zip_metadata_checked(bytes, policy, check_control),
     }
 }
 
-fn extract_zip_metadata(
+fn extract_zip_metadata_checked(
     bytes: &[u8],
     policy: &ExtractionPolicy,
-) -> (ArchiveExtractStatus, Option<ContentDocument>) {
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(ArchiveExtractStatus, Option<ContentDocument>)> {
+    check_control()?;
     if bytes.len() as u64 > policy.max_archive_bytes {
-        return (ArchiveExtractStatus::TooLarge, None);
+        return Ok((ArchiveExtractStatus::TooLarge, None));
     }
     let Ok(mut archive) = ZipArchive::new(Cursor::new(bytes)) else {
-        return (ArchiveExtractStatus::Corrupt, None);
+        return Ok((ArchiveExtractStatus::Corrupt, None));
     };
     if archive.len() > policy.max_archive_entries {
-        return (ArchiveExtractStatus::TooManyEntries, None);
+        return Ok((ArchiveExtractStatus::TooManyEntries, None));
     }
 
     let mut text = String::new();
     for index in 0..archive.len() {
+        check_control()?;
         let Ok(file) = archive.by_index(index) else {
-            return (ArchiveExtractStatus::Corrupt, None);
+            return Ok((ArchiveExtractStatus::Corrupt, None));
         };
         push_entry_metadata(
             &mut text,
@@ -63,69 +81,84 @@ fn extract_zip_metadata(
 
     let text = normalize_text(text.trim());
     if text.is_empty() {
-        return (ArchiveExtractStatus::Unsupported, None);
+        return Ok((ArchiveExtractStatus::Unsupported, None));
     }
 
-    (
+    Ok((
         ArchiveExtractStatus::Extracted,
         Some(ContentDocument {
             bytes_read: bytes.len(),
             text,
         }),
-    )
+    ))
 }
 
-fn extract_tar_gz_metadata(
+fn extract_tar_gz_metadata_checked(
     bytes: &[u8],
     policy: &ExtractionPolicy,
-) -> (ArchiveExtractStatus, Option<ContentDocument>) {
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(ArchiveExtractStatus, Option<ContentDocument>)> {
+    check_control()?;
     if bytes.len() as u64 > policy.max_archive_bytes {
-        return (ArchiveExtractStatus::TooLarge, None);
+        return Ok((ArchiveExtractStatus::TooLarge, None));
     }
     let mut decoder = GzDecoder::new(bytes);
     let mut decoded = Vec::new();
     let limit = policy.max_archive_bytes.saturating_add(1);
-    match decoder.by_ref().take(limit).read_to_end(&mut decoded) {
-        Ok(read) if read as u64 > policy.max_archive_bytes => {
-            return (ArchiveExtractStatus::TooLarge, None);
+    let mut reader = decoder.by_ref().take(limit);
+    let mut buffer = [0_u8; ARCHIVE_DECODE_CHUNK_BYTES];
+    loop {
+        check_control()?;
+        let read = match reader.read(&mut buffer) {
+            Ok(read) => read,
+            Err(_) => return Ok((ArchiveExtractStatus::Corrupt, None)),
+        };
+        check_control()?;
+        if read == 0 {
+            break;
         }
-        Ok(_) => {}
-        Err(_) => return (ArchiveExtractStatus::Corrupt, None),
+        decoded.extend_from_slice(&buffer[..read]);
+        if decoded.len() as u64 > policy.max_archive_bytes {
+            return Ok((ArchiveExtractStatus::TooLarge, None));
+        }
     }
-    extract_tar_metadata(&decoded, policy)
+    extract_tar_metadata_checked(&decoded, policy, check_control)
 }
 
-fn extract_tar_metadata(
+fn extract_tar_metadata_checked(
     bytes: &[u8],
     policy: &ExtractionPolicy,
-) -> (ArchiveExtractStatus, Option<ContentDocument>) {
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(ArchiveExtractStatus, Option<ContentDocument>)> {
+    check_control()?;
     if bytes.len() as u64 > policy.max_archive_bytes {
-        return (ArchiveExtractStatus::TooLarge, None);
+        return Ok((ArchiveExtractStatus::TooLarge, None));
     }
     let mut text = String::new();
     let mut cursor = 0usize;
     let mut entries = 0usize;
     let mut pending_path: Option<String> = None;
     while cursor + 512 <= bytes.len() {
+        check_control()?;
         let header = &bytes[cursor..cursor + 512];
         if header.iter().all(|byte| *byte == 0) {
             break;
         }
         if !tar_checksum_is_plausible(header) {
-            return (ArchiveExtractStatus::Corrupt, None);
+            return Ok((ArchiveExtractStatus::Corrupt, None));
         }
         let Some(size) = parse_tar_size(&header[124..136]) else {
-            return (ArchiveExtractStatus::Corrupt, None);
+            return Ok((ArchiveExtractStatus::Corrupt, None));
         };
         let data_blocks = (usize::try_from(size)
             .unwrap_or(usize::MAX)
             .saturating_add(511))
             / 512;
         let Some(next) = cursor.checked_add(512 + data_blocks.saturating_mul(512)) else {
-            return (ArchiveExtractStatus::Corrupt, None);
+            return Ok((ArchiveExtractStatus::Corrupt, None));
         };
         if next > bytes.len() {
-            return (ArchiveExtractStatus::Corrupt, None);
+            return Ok((ArchiveExtractStatus::Corrupt, None));
         }
         let payload_start = cursor + 512;
         let payload_end = payload_start + usize::try_from(size).unwrap_or(usize::MAX);
@@ -144,13 +177,13 @@ fn extract_tar_metadata(
             _ => {
                 entries += 1;
                 if entries > policy.max_archive_entries {
-                    return (ArchiveExtractStatus::TooManyEntries, None);
+                    return Ok((ArchiveExtractStatus::TooManyEntries, None));
                 }
                 let name = match pending_path.take() {
                     Some(path) => path,
                     None => {
                         let Some(name) = tar_entry_name(header) else {
-                            return (ArchiveExtractStatus::Corrupt, None);
+                            return Ok((ArchiveExtractStatus::Corrupt, None));
                         };
                         name
                     }
@@ -168,16 +201,16 @@ fn extract_tar_metadata(
 
     let text = normalize_text(text.trim());
     if text.is_empty() {
-        return (ArchiveExtractStatus::Unsupported, None);
+        return Ok((ArchiveExtractStatus::Unsupported, None));
     }
 
-    (
+    Ok((
         ArchiveExtractStatus::Extracted,
         Some(ContentDocument {
             bytes_read: bytes.len(),
             text,
         }),
-    )
+    ))
 }
 
 fn pax_path(payload: &[u8]) -> Option<String> {
@@ -292,6 +325,8 @@ fn floor_char_boundary(text: &str, mut index: usize) -> usize {
 mod tests {
     use super::*;
     use flate2::{write::GzEncoder, Compression};
+    use gfm_types::GfmError;
+    use std::cell::Cell;
     use std::io::{Cursor, Write};
     use zip::write::SimpleFileOptions;
 
@@ -378,6 +413,29 @@ mod tests {
 
         assert_eq!(status, ArchiveExtractStatus::TooManyEntries);
         assert!(doc.is_none());
+    }
+
+    #[test]
+    fn checked_tar_gz_extraction_can_cancel_during_decode() {
+        let bytes = tar_gz_file(&[("large.txt", &"payload ".repeat(128 * 1024))]);
+        let checks = Cell::new(0);
+
+        let result = extract_archive_metadata_checked(
+            &bytes,
+            ArchiveKind::TarGz,
+            &ExtractionPolicy::default(),
+            || {
+                let next = checks.get() + 1;
+                checks.set(next);
+                if next >= 6 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
     }
 
     fn zip_file(parts: &[(&str, &str)]) -> Vec<u8> {

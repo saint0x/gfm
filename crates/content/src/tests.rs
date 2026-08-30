@@ -1,4 +1,8 @@
 use super::*;
+use flate2::{
+    write::{GzEncoder, ZlibEncoder},
+    Compression,
+};
 use gfm_types::{FileId, GfmError, VolumeId};
 use std::fs;
 use std::io::{Cursor, Write};
@@ -127,6 +131,30 @@ fn extraction_report_checked_can_cancel_while_reading_ooxml_entry() {
     fs::write(
         &path,
         ooxml_package(&[("word/document.xml", body.as_str())]),
+    )
+    .unwrap();
+    let mut checks = 0usize;
+
+    let result = Extractor::default().extract_path_report_checked(&path, || {
+        checks += 1;
+        if checks >= 15 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extraction_report_checked_can_cancel_while_decoding_tar_gz_archive() {
+    let root = unique_temp_dir("gfm-content-targz-decode-cancel");
+    let path = root.join("large.tar.gz");
+    fs::write(
+        &path,
+        tar_gz_package(&[("large.txt", &"payload ".repeat(128 * 1024))]),
     )
     .unwrap();
     let mut checks = 0usize;
@@ -277,6 +305,26 @@ fn extracts_uncompressed_pdf_text() {
     let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
 
     assert!(doc.text.contains("pdfneedle inside document"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extraction_report_checked_can_cancel_while_inflating_compressed_pdf_stream() {
+    let root = unique_temp_dir("gfm-content-pdf-flate-cancel");
+    let path = root.join("large.pdf");
+    fs::write(&path, compressed_pdf(&"pdf body ".repeat(32 * 1024))).unwrap();
+    let mut checks = 0usize;
+
+    let result = Extractor::default().extract_path_report_checked(&path, || {
+        checks += 1;
+        if checks >= 15 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -934,6 +982,35 @@ endobj
     .into_bytes()
 }
 
+fn compressed_pdf(text: &str) -> Vec<u8> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(format!("BT /F1 12 Tf 72 720 Td ({text}) Tj ET").as_bytes())
+        .unwrap();
+    let compressed = encoder.finish().unwrap();
+    let mut pdf = b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Contents 2 0 R >>
+endobj
+2 0 obj
+<< /Length "
+        .to_vec();
+    pdf.extend(compressed.len().to_string().as_bytes());
+    pdf.extend(
+        b" /Filter /FlateDecode >>
+stream
+",
+    );
+    pdf.extend(compressed);
+    pdf.extend(
+        b"
+endstream
+endobj
+%%EOF",
+    );
+    pdf
+}
+
 fn multi_page_pdf(pages: usize) -> Vec<u8> {
     let mut pdf = b"%PDF-1.4\n".to_vec();
     for index in 0..pages {
@@ -947,6 +1024,39 @@ fn ooxml_package(parts: &[(&str, &str)]) -> Vec<u8> {
     zip_package(parts)
 }
 
+fn tar_gz_package(parts: &[(&str, &str)]) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&tar_package(parts)).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn tar_package(parts: &[(&str, &str)]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for (name, text) in parts {
+        let mut header = [0u8; 512];
+        write_tar_string(&mut header[0..100], name);
+        write_tar_octal(&mut header[100..108], 0o644);
+        write_tar_octal(&mut header[108..116], 0);
+        write_tar_octal(&mut header[116..124], 0);
+        write_tar_octal(&mut header[124..136], text.len() as u64);
+        write_tar_octal(&mut header[136..148], 0);
+        header[156] = b'0';
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        for byte in &mut header[148..156] {
+            *byte = b' ';
+        }
+        let checksum: u32 = header.iter().map(|byte| u32::from(*byte)).sum();
+        write_tar_checksum(&mut header[148..156], checksum);
+        bytes.extend_from_slice(&header);
+        bytes.extend_from_slice(text.as_bytes());
+        let padding = (512 - (text.len() % 512)) % 512;
+        bytes.extend(std::iter::repeat_n(0, padding));
+    }
+    bytes.extend([0u8; 1024]);
+    bytes
+}
+
 fn zip_package(parts: &[(&str, &str)]) -> Vec<u8> {
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -955,4 +1065,20 @@ fn zip_package(parts: &[(&str, &str)]) -> Vec<u8> {
         writer.write_all(text.as_bytes()).unwrap();
     }
     writer.finish().unwrap().into_inner()
+}
+
+fn write_tar_string(field: &mut [u8], value: &str) {
+    let bytes = value.as_bytes();
+    let len = bytes.len().min(field.len());
+    field[..len].copy_from_slice(&bytes[..len]);
+}
+
+fn write_tar_octal(field: &mut [u8], value: u64) {
+    let encoded = format!("{value:0width$o}\0", width = field.len() - 1);
+    field.copy_from_slice(encoded.as_bytes());
+}
+
+fn write_tar_checksum(field: &mut [u8], value: u32) {
+    let encoded = format!("{value:06o}\0 ",);
+    field.copy_from_slice(encoded.as_bytes());
 }

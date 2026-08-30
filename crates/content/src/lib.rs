@@ -10,7 +10,7 @@ mod rich;
 mod status;
 mod structured;
 
-use archive::extract_archive_metadata;
+use archive::extract_archive_metadata_checked;
 pub use cache::{
     CachedExtractionReport, CachedExtractor, ExtractionCache, ExtractionCacheKey,
     ExtractionCacheStatus, ExtractionContentSignature,
@@ -19,7 +19,7 @@ use gfm_types::{FileKind, FileRecord, GfmError, Result, SearchSnippet, SnippetHi
 pub use kind::extractor_version_for_path;
 use kind::{archive_kind, extraction_format, office_kind, path_is_pdf, rich_kind, structured_kind};
 use ooxml::extract_ooxml_checked;
-use pdf::extract_pdf;
+use pdf::extract_pdf_checked;
 pub use policy::{
     ExtractionBatteryState, ExtractionBudgetProfile, ExtractionPolicy, ExtractionThermalState,
     ExtractionUserActivity, ExtractionVolumeClass,
@@ -192,7 +192,7 @@ impl Extractor {
         check_control()?;
 
         if is_pdf {
-            let (status, document) = extract_pdf(&bytes, &self.policy);
+            let (status, document) = extract_pdf_checked(&bytes, &self.policy, &mut check_control)?;
             return Ok(ExtractionReport {
                 path: path.to_path_buf(),
                 format,
@@ -215,7 +215,8 @@ impl Extractor {
         }
 
         if let Some(kind) = archive {
-            let (status, document) = extract_archive_metadata(&bytes, kind, &self.policy);
+            let (status, document) =
+                extract_archive_metadata_checked(&bytes, kind, &self.policy, &mut check_control)?;
             return Ok(ExtractionReport {
                 path: path.to_path_buf(),
                 format,
