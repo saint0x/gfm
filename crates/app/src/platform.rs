@@ -40,6 +40,7 @@ use gfm_preview::{
     QuickLookSessionInput, Rect, ThumbnailGenerationContract, ThumbnailGenerationInput, Viewport,
 };
 use gfm_types::{FileEvent, FileEventKind, FileId, FileRecord, GfmError, Result, VolumeId};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1864,7 +1865,7 @@ fn preflight_fileprovider_snapshot_volumes(
 ) -> Result<()> {
     let state_probe = write_probe_existing_ancestor(state_path, worker)?;
     preflight_volume_access_scope(&state_probe, AccessIntent::Write, worker)?;
-    for path in paths {
+    for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
         preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
     }
     Ok(())
@@ -1877,8 +1878,9 @@ fn preflight_fileprovider_observed_event_volumes(
 ) -> Result<()> {
     let state_probe = write_probe_existing_ancestor(state_path, worker)?;
     preflight_volume_access_scope(&state_probe, AccessIntent::Write, worker)?;
-    for path in fileprovider_raw_event_paths(event) {
-        preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    let paths = fileprovider_raw_event_paths(event);
+    for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
+        preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
     }
     Ok(())
 }
@@ -2107,7 +2109,7 @@ fn retain_fileprovider_snapshot_access(
         AccessIntent::Write,
         worker,
     )?);
-    for path in paths {
+    for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
         guards.push(preflight_access_scope(path, AccessIntent::Read, worker)?);
     }
     Ok(guards)
@@ -2119,10 +2121,19 @@ fn retain_fileprovider_event_access(
     worker: &str,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::new();
-    for path in fileprovider_event_access_paths(event, previous, worker)? {
-        guards.push(preflight_access_scope(&path, AccessIntent::Read, worker)?);
+    let paths = fileprovider_event_access_paths(event, previous, worker)?;
+    for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
+        guards.push(preflight_access_scope(path, AccessIntent::Read, worker)?);
     }
     Ok(guards)
+}
+
+fn unique_fileprovider_paths<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<&'a Path> {
+    let mut seen = BTreeSet::new();
+    paths
+        .into_iter()
+        .filter(|path| seen.insert((*path).to_path_buf()))
+        .collect()
 }
 
 fn fileprovider_event_access_paths(
@@ -2375,6 +2386,20 @@ mod tests {
         assert_eq!(access_path, root);
         assert!(!tracked.exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unique_fileprovider_paths_preserves_first_occurrence_order() {
+        let first = PathBuf::from("/tmp/gfm-fileprovider/first.icloud-placeholder");
+        let second = PathBuf::from("/tmp/gfm-fileprovider/second.icloud-placeholder");
+
+        let unique =
+            unique_fileprovider_paths([first.as_path(), second.as_path(), first.as_path()])
+                .into_iter()
+                .map(Path::to_path_buf)
+                .collect::<Vec<_>>();
+
+        assert_eq!(unique, vec![first, second]);
     }
 
     #[test]

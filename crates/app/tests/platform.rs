@@ -3253,6 +3253,52 @@ fn reports_observed_fileprovider_metadata_invalidation_from_binary() {
 }
 
 #[test]
+fn observed_fileprovider_rename_deduplicates_repeated_event_path_admission_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-observed-rename-dedup-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
+    std::fs::write(
+        &state,
+        format!("gfm-fileprovider-state-v1\nevicted\t{}\n", item.display()),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-observed-metadata-invalidation")
+        .arg(&state)
+        .arg("rename")
+        .arg(&item)
+        .arg(&item)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(
+        worker_admission_count_with_intent(
+            &stderr,
+            "fileprovider observed metadata invalidation",
+            &root,
+            "read",
+        ),
+        1,
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn observed_fileprovider_metadata_invalidation_preserves_noop_events_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-observed-metadata-noop-{}",
@@ -5095,12 +5141,30 @@ fn mark_evicted_fixture(path: impl AsRef<std::path::Path>) {
 }
 
 fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
+    assert!(worker_admission_count(stderr, worker, path) > 0, "{stderr}");
+}
+
+fn worker_admission_count(stderr: &str, worker: &str, path: &std::path::Path) -> usize {
+    worker_admission_count_with_intent(stderr, worker, path, "-")
+}
+
+fn worker_admission_count_with_intent(
+    stderr: &str,
+    worker: &str,
+    path: &std::path::Path,
+    intent: &str,
+) -> usize {
     let expected = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    assert!(
-        stderr.contains(&format!(
-            "security-worker-admission\tworker={worker}\tpath={}",
-            expected.display()
-        )),
-        "{stderr}"
+    let expected = format!(
+        "security-worker-admission\tworker={worker}\tpath={}",
+        expected.display()
     );
+    let expected_intent = format!("intent={intent}");
+    stderr
+        .lines()
+        .filter(|line| {
+            line.contains(&expected)
+                && (intent == "-" || line.split('\t').any(|field| field == expected_intent))
+        })
+        .count()
 }
