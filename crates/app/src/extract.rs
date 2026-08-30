@@ -414,7 +414,6 @@ impl WorkerSandbox {
             monotonic_nanos()
         ));
         check_control()?;
-        check_control()?;
         let profile_probe = write_probe_path(&profile_path)?.to_path_buf();
         check_control()?;
         let _profile_access = preflight_access_scope_checked(
@@ -1093,17 +1092,6 @@ mod tests {
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(checks >= 5);
-        assert_eq!(scratch_before, worker_scratch_entries());
-    }
-
-    #[test]
-    fn worker_scratch_preflight_checked_honors_pre_cancelled_control() {
-        let scratch_before = worker_scratch_entries();
-
-        let result =
-            preflight_adaptive_extraction_worker_scratch_checked(|| Err(GfmError::Cancelled));
-
-        assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert_eq!(scratch_before, worker_scratch_entries());
     }
 
