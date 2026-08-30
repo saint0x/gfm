@@ -2,7 +2,7 @@ use crate::access::{
     preflight_access_scope, preflight_volume_access_scope, worker_admission_with_volume_gate,
     ScopedAccessGuard,
 };
-use crate::volume::resolve_volume_event_path;
+use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
 use crate::{
     detect_volume_id, index_volume_descriptor, parent_volume, parse_required_scheduling_pressure,
     run_preview_contract_adaptive_with_volume_and_payload_path,
@@ -499,6 +499,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "volume-event-transition-api-status" => {
             println!("{}", volume_event_transition_api_status()?.as_tsv());
+        }
+        "volume-event-description-api-status" => {
+            println!("{}", volume_event_description_api_status()?.as_tsv());
         }
         "volume-event-index-invalidation" => {
             println!(
@@ -1023,6 +1026,22 @@ fn volume_event_transition_api_status() -> Result<VolumeEventInvalidationReport>
         Some(&previous),
         Some(&current),
         None,
+    ))
+}
+
+fn volume_event_description_api_status() -> Result<VolumeEventInvalidationReport> {
+    let mut descriptor = VolumeDescriptor::for_path("/")?;
+    descriptor.stable_identity = "diskarbitration:uuid:API-DESCRIPTION".to_string();
+    descriptor.label = "API Description".to_string();
+    descriptor.path = PathBuf::from("/Volumes/API Description");
+    descriptor.kind = gfm_mac::VolumeKind::External;
+    descriptor.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    descriptor.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    descriptor.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    Ok(volume_event_invalidation_for_descriptor(
+        VolumeEventKind::DescriptionChanged,
+        descriptor.path.clone(),
+        &descriptor,
     ))
 }
 

@@ -4543,7 +4543,11 @@ fn reports_volume_event_invalidation_from_binary() {
     assert!(stdout.contains("\tprevious-kind=-\tprevious-mount=-\t"));
     assert!(stdout.contains("\tsidebar=true\toperation-policy=true\t"));
     assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
-    assert!(stdout.ends_with("reason=volume-event-description-changed\n"));
+    if stdout.contains("\tnative-status=unavailable\t") {
+        assert!(stdout.ends_with("reason=diskarbitration-volume-unavailable\n"));
+    } else {
+        assert!(stdout.ends_with("reason=volume-event-description-changed\n"));
+    }
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -4666,6 +4670,57 @@ fn reports_volume_event_transition_api_status_from_binary() {
     assert!(stdout.contains("\tcurrent-mount-status=available\t"));
     assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
     assert!(stdout.ends_with("reason=volume-api-status-changed\n"));
+}
+
+#[test]
+fn reports_volume_description_event_api_status_reason_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-description-api-status")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "volume-event-invalidation\tkind=description-changed\tnative-status=unavailable\t"
+    ));
+    assert!(stdout.contains("\tpath=/Volumes/API Description\t"));
+    assert!(stdout.contains("\tcurrent-kind=external\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains("\tcurrent-native-status=unavailable\t"));
+    assert!(stdout.contains("\tcurrent-resource-status=unavailable\t"));
+    assert!(stdout.contains("\tcurrent-mount-status=unavailable\t"));
+    assert!(stdout.contains("\tsidebar=true\toperation-policy=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(stdout.ends_with("reason=diskarbitration-volume-unavailable\n"));
+}
+
+#[test]
+fn sidebar_volume_description_event_api_status_reason_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-sidebar-volume-api-status-invalidation")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("sidebar-volume-invalidation\trow=volume-"));
+    assert!(stdout.contains("\tpath=/Volumes/UI API Description\t"));
+    assert!(stdout.contains("\tkind=description-changed\t"));
+    assert!(stdout.contains("\tcurrent-kind=external\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains("\tcurrent-native-status=unavailable\t"));
+    assert!(stdout.contains("\tcurrent-resource-status=unavailable\t"));
+    assert!(stdout.contains("\tcurrent-mount-status=unavailable\t"));
+    assert!(stdout.contains("\tinvalidate-row=true\t"));
+    assert!(stdout.contains("\tinvalidate-section=true\t"));
+    assert!(stdout.ends_with("reason=diskarbitration-volume-unavailable\n"));
 }
 
 #[test]

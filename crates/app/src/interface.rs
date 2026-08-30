@@ -1,4 +1,4 @@
-use crate::volume::resolve_volume_event_path;
+use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
 use gfm_fs::{
     read_directory, scan_tree, FinderMetadataReport, PackageTraversalMode, PackageTraversalReport,
     ScanOptions,
@@ -337,6 +337,39 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 resolution.path,
                 previous.as_ref(),
                 current.as_ref(),
+                platform.invalidate_sidebar,
+                platform.reason,
+            )
+            .with_platform_statuses(
+                volume_status_string(platform.previous_native_status),
+                volume_status_string(platform.previous_resource_status),
+                volume_status_string(platform.previous_mount_table_status),
+                volume_status_string(platform.current_native_status),
+                volume_status_string(platform.current_resource_status),
+                volume_status_string(platform.current_mount_table_status),
+            );
+            println!("{}", invalidation.as_tsv());
+        }
+        "ui-sidebar-volume-api-status-invalidation" => {
+            let mut descriptor = VolumeDescriptor::for_path("/")?;
+            descriptor.stable_identity = "diskarbitration:uuid:UI-API-DESCRIPTION".to_string();
+            descriptor.label = "UI API Description".to_string();
+            descriptor.path = PathBuf::from("/Volumes/UI API Description");
+            descriptor.kind = VolumeKind::External;
+            descriptor.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            descriptor.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            descriptor.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            let platform = volume_event_invalidation_for_descriptor(
+                VolumeEventKind::DescriptionChanged,
+                descriptor.path.clone(),
+                &descriptor,
+            );
+            let current = sidebar_volume_spec(&descriptor);
+            let invalidation = SidebarVolumeInvalidation::from_event(
+                SidebarVolumeEventKind::DescriptionChanged,
+                platform.path,
+                None,
+                Some(&current),
                 platform.invalidate_sidebar,
                 platform.reason,
             )

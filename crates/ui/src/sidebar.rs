@@ -306,7 +306,6 @@ impl SidebarVolumeInvalidation {
             self.disable_row = true;
             if self.invalidate_section && self.row_id.is_some() && !self.remove_row {
                 self.invalidate_row = true;
-                self.reason = "sidebar-volume-platform-unavailable".to_string();
             }
         }
         self
@@ -1485,7 +1484,7 @@ mod tests {
         assert!(invalidation.invalidate_row);
         assert!(invalidation.invalidate_section);
         assert!(invalidation.disable_row);
-        assert_eq!(invalidation.reason, "sidebar-volume-platform-unavailable");
+        assert_eq!(invalidation.reason, "volume-api-status-changed");
         assert!(invalidation.as_tsv().contains(
             "\tcurrent-native-status=unavailable\tcurrent-resource-status=available\tcurrent-mount-status=available\t"
         ));

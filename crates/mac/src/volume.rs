@@ -1119,11 +1119,18 @@ impl VolumeEventInvalidationReport {
                 let current_mount_state = current.map(|descriptor| descriptor.mount_state);
                 let previous_kind = previous.map(|descriptor| descriptor.kind);
                 let previous_mount_state = previous.map(|descriptor| descriptor.mount_state);
-                let reason = previous
+                let topology_reason = previous
                     .zip(current)
                     .and_then(|(previous, current)| topology_change_reason(previous, current))
-                    .map(str::to_string)
-                    .or(native_reason)
+                    .map(str::to_string);
+                let reason = topology_reason
+                    .or_else(|| {
+                        if previous.is_some() && current.is_some() {
+                            None
+                        } else {
+                            native_reason
+                        }
+                    })
                     .unwrap_or_else(|| "volume-event-description-changed".to_string());
                 let heavy = description_change_invalidates_policy(&reason);
                 let visible =
@@ -4265,6 +4272,36 @@ mod tests {
 
         assert_eq!(transition.invalidation.reason, "volume-locality-changed");
         assert_eq!(state.report().volumes, vec![current]);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unchanged_description_transition_keeps_status_reason_sidebar_scoped() {
+        let root = unique_temp_dir("gfm-volume-event-state-unchanged-native-reason");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut descriptor = VolumeDescriptor::for_path(&root).unwrap();
+        descriptor.native_status = Some(NativeVolumeStatus::Unavailable);
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: vec![descriptor.clone()],
+        });
+
+        let transition = state.apply_parts_transition(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Unavailable,
+            Some(root.clone()),
+            Some(descriptor),
+            Some("diskarbitration-volume-unavailable".to_string()),
+        );
+
+        assert_eq!(
+            transition.invalidation.reason,
+            "volume-event-description-changed"
+        );
+        assert!(transition.invalidation.invalidate_sidebar);
+        assert!(!transition.invalidation.invalidate_operation_policy);
+        assert!(!transition.invalidation.invalidate_index_admission);
+        assert!(!transition.invalidation.rescan_index);
 
         fs::remove_dir_all(root).unwrap();
     }
