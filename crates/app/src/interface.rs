@@ -1536,11 +1536,16 @@ fn permission_access_requires_surface(access: &PermissionAccessContract) -> bool
         || access.scope == "full-disk-access"
         || access.mode == "degraded-metadata-only"
         || access.promptable
-        || access.prompt_source != "none"
+        || concrete_permission_value(&access.prompt_source)
         || matches!(access.access_action.as_str(), "deny" | "prompt")
         || matches!(access.worker_action.as_str(), "deny" | "prompt")
         || access.probe == "denied"
         || access.probe == "unavailable"
+}
+
+fn concrete_permission_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty() && trimmed != "none"
 }
 
 fn default_current_path(path: Option<String>) -> PathBuf {
@@ -1804,6 +1809,14 @@ mod tests {
     #[test]
     fn permission_access_surface_is_not_required_for_plain_allowed_paths() {
         let access = allowed_permission_access();
+
+        assert!(!permission_access_requires_surface(&access));
+    }
+
+    #[test]
+    fn permission_access_surface_ignores_blank_prompt_source_for_plain_allowed_paths() {
+        let mut access = allowed_permission_access();
+        access.prompt_source = "   ".to_string();
 
         assert!(!permission_access_requires_surface(&access));
     }
