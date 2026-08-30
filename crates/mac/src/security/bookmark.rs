@@ -1,5 +1,6 @@
 use super::{AccessIntent, SecurityDecisionAction, SecurityScopedAccessReport};
 use gfm_types::{GfmError, Result};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -260,14 +261,13 @@ impl SecurityScopedBookmarkStore {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         }
+        validate_unique_bookmark_records_for_write(&self.path, records)?;
         let mut records = records.to_vec();
         records.sort_by(|left, right| {
             left.path
                 .cmp(&right.path)
                 .then(left.read_only.cmp(&right.read_only))
         });
-        records
-            .dedup_by(|left, right| left.path == right.path && left.read_only == right.read_only);
         atomic_write(&self.path, |writer| {
             writeln!(writer, "{STORE_MAGIC}")?;
             for record in &records {
@@ -306,9 +306,11 @@ impl SecurityScopedBookmarkStore {
             if line.trim().is_empty() {
                 continue;
             }
-            records.push(parse_bookmark_record(&line).map_err(|err| {
+            let record = parse_bookmark_record(&line).map_err(|err| {
                 GfmError::Format(format!("{}:{}: {err}", self.path.display(), index + 2))
-            })?);
+            })?;
+            validate_unique_bookmark_record_for_read(&self.path, index + 2, &records, &record)?;
+            records.push(record);
         }
         Ok(records)
     }
@@ -453,6 +455,45 @@ impl SecurityScopedBookmarkStore {
                 .count(),
         })
     }
+}
+
+fn validate_unique_bookmark_record_for_read(
+    path: &Path,
+    line_number: usize,
+    records: &[SecurityScopedBookmarkRecord],
+    candidate: &SecurityScopedBookmarkRecord,
+) -> Result<()> {
+    if records
+        .iter()
+        .any(|record| record.path == candidate.path && record.read_only == candidate.read_only)
+    {
+        return Err(GfmError::Format(format!(
+            "{}:{} duplicate security bookmark record `{}` read-only={}",
+            path.display(),
+            line_number,
+            candidate.path.display(),
+            candidate.read_only
+        )));
+    }
+    Ok(())
+}
+
+fn validate_unique_bookmark_records_for_write(
+    path: &Path,
+    records: &[SecurityScopedBookmarkRecord],
+) -> Result<()> {
+    let mut seen_records = BTreeSet::new();
+    for record in records {
+        if !seen_records.insert((record.path.clone(), record.read_only)) {
+            return Err(GfmError::Format(format!(
+                "duplicate security bookmark record `{}` read-only={} before writing {}",
+                record.path.display(),
+                record.read_only,
+                path.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl SecurityScopedBookmarkStoreReport {
@@ -939,6 +980,65 @@ mod tests {
         assert_eq!(lookup.requested_path, path);
         assert_eq!(access.report.status, SecurityScopedBookmarkStatus::Resolved);
         assert!(access.report.access_started);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bookmark_store_rejects_duplicate_records_before_writing() {
+        let root = temp_root("security-bookmark-write-duplicate");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        let path = root.join("Documents").join("Plan.md");
+        let records = vec![
+            SecurityScopedBookmarkRecord {
+                path: path.clone(),
+                read_only: true,
+                data: vec![1, 2, 3],
+            },
+            SecurityScopedBookmarkRecord {
+                path,
+                read_only: true,
+                data: vec![4, 5, 6],
+            },
+        ];
+
+        let error = store.write_all(&records).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("duplicate security bookmark record"));
+        assert!(!store.path().exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bookmark_store_rejects_duplicate_records_with_line_number() {
+        let root = temp_root("security-bookmark-read-duplicate");
+        let path = root.join("bookmarks.tsv");
+        let duplicate_path = root.join("Documents").join("Plan.md");
+        let first = SecurityScopedBookmarkRecord {
+            path: duplicate_path.clone(),
+            read_only: true,
+            data: vec![1, 2, 3],
+        };
+        let second = SecurityScopedBookmarkRecord {
+            path: duplicate_path,
+            read_only: true,
+            data: vec![4, 5, 6],
+        };
+        fs::write(
+            &path,
+            format!("{STORE_MAGIC}\n{}\n{}\n", first.as_tsv(), second.as_tsv()),
+        )
+        .unwrap();
+        let store = SecurityScopedBookmarkStore::new(&path);
+
+        let error = store.read().unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("bookmarks.tsv:3 duplicate security bookmark record"));
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -1125,7 +1125,7 @@ impl FileProviderObservedInvalidation {
         } else {
             let (report, event_snapshot) =
                 FileProviderStateInvalidationReport::evaluate(previous, paths.clone())?;
-            let snapshot = merge_observed_snapshot(previous, &paths, event_snapshot);
+            let snapshot = merge_observed_snapshot(previous, &paths, event_snapshot)?;
             (report, snapshot)
         };
         Ok((
@@ -1159,7 +1159,7 @@ fn merge_observed_snapshot(
     previous: Option<&FileProviderStateSnapshot>,
     observed_paths: &[PathBuf],
     event_snapshot: FileProviderStateSnapshot,
-) -> FileProviderStateSnapshot {
+) -> Result<FileProviderStateSnapshot> {
     let observed_exact = observed_paths
         .iter()
         .map(PathBuf::as_path)
@@ -1175,8 +1175,11 @@ fn merge_observed_snapshot(
     });
     entries.extend(event_snapshot.entries);
     entries.sort_by(|left, right| left.path.cmp(&right.path));
-    entries.dedup_by(|left, right| left.path == right.path);
-    FileProviderStateSnapshot { entries }
+    validate_unique_fileprovider_snapshot_paths(
+        Path::new("merged observed FileProvider snapshot"),
+        &entries,
+    )?;
+    Ok(FileProviderStateSnapshot { entries })
 }
 
 impl FileProviderStateObserver {
@@ -3896,7 +3899,8 @@ mod tests {
             }],
         };
 
-        let merged = merge_observed_snapshot(Some(&previous), &[exact, subtree], event_snapshot);
+        let merged =
+            merge_observed_snapshot(Some(&previous), &[exact, subtree], event_snapshot).unwrap();
 
         assert_eq!(
             merged.entries,
@@ -3911,6 +3915,36 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn observed_snapshot_merge_rejects_duplicate_merged_paths() {
+        let root = PathBuf::from("/tmp/gfm-merge-observed-snapshot-duplicate");
+        let unrelated = root.join("Unrelated.icloud-placeholder");
+        let observed = root.join("Observed.icloud-placeholder");
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: unrelated.clone(),
+                state: CloudStorageState::Evicted,
+            }],
+        };
+        let event_snapshot = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: unrelated.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+
+        let err =
+            merge_observed_snapshot(Some(&previous), &[observed], event_snapshot).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("duplicate FileProvider state path"));
+        assert!(err
+            .to_string()
+            .contains("merged observed FileProvider snapshot"));
+        assert!(err.to_string().contains(&unrelated.display().to_string()));
     }
 
     #[test]
