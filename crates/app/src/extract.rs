@@ -207,7 +207,7 @@ pub(crate) fn run_quarantined_adaptive_extraction_worker_cancellable(
     cancellation.check()?;
     let fingerprint = ExtractionFingerprint::for_path(path)?;
     cancellation.check()?;
-    let mut quarantine = read_extraction_quarantine(store, threshold)?;
+    let mut quarantine = read_extraction_quarantine_cancellable(store, threshold, cancellation)?;
     cancellation.check()?;
     let decision = quarantine.before_extract(path, &fingerprint);
     if matches!(decision, QuarantineDecision::Quarantined(_)) {
@@ -237,9 +237,28 @@ pub(crate) fn read_extraction_quarantine(
     store: &Path,
     threshold: u32,
 ) -> Result<ExtractionQuarantine> {
+    read_extraction_quarantine_checked(store, threshold, || Ok(()))
+}
+
+fn read_extraction_quarantine_cancellable(
+    store: &Path,
+    threshold: u32,
+    cancellation: &Cancellation,
+) -> Result<ExtractionQuarantine> {
+    read_extraction_quarantine_checked(store, threshold, || cancellation.check())
+}
+
+fn read_extraction_quarantine_checked(
+    store: &Path,
+    threshold: u32,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ExtractionQuarantine> {
+    check_control()?;
     if extraction_path_is_file(store, "quarantine store")? {
-        ExtractionQuarantine::read(store)
+        check_control()?;
+        ExtractionQuarantine::read_checked(store, &mut check_control)
     } else {
+        check_control()?;
         Ok(ExtractionQuarantine::new(threshold))
     }
 }
@@ -936,6 +955,20 @@ mod tests {
             .contains("extraction quarantine store metadata unavailable"));
         assert!(err.to_string().contains(&store.display().to_string()));
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quarantine_reader_honors_pre_cancelled_control_before_store_probe() {
+        let root = unique_temp_dir("gfm-extract-quarantine-read-cancel");
+        let store = root.join("quarantine.gfmquarantine");
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = read_extraction_quarantine_cancellable(&store, 2, &cancellation);
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(!store.exists());
         fs::remove_dir_all(root).unwrap();
     }
 

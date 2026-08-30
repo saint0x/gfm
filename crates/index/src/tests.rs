@@ -3954,6 +3954,16 @@ fn content_index_job_spec_round_trips() {
 }
 
 #[test]
+fn content_index_job_spec_checked_read_honors_pre_cancelled_control_before_file_open() {
+    let path = unique_temp_path("gfm-content-job-read-cancel", "job");
+
+    let result = ContentIndexJobSpec::read_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
 fn content_index_job_spec_reads_legacy_without_volume() {
     let path = unique_temp_path("gfm-content-job-legacy", "job");
     fs::write(
@@ -4206,6 +4216,16 @@ fn scan_progress_checkpoint_tracks_completed_scan_publication() {
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(progress).unwrap();
+}
+
+#[test]
+fn scan_progress_checked_read_honors_pre_cancelled_control_before_file_open() {
+    let progress_path = unique_temp_path("gfm-scan-progress-read-cancel", "gfmprogress");
+
+    let result = ScanProgressCheckpoint::read_checked(&progress_path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!progress_path.exists());
 }
 
 #[test]

@@ -253,8 +253,17 @@ impl ContentIndexJobSpec {
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_checked(path, || Ok(()))
+    }
+
+    pub fn read_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mut lines = BufReader::new(file).lines();
         match lines.next() {
             Some(Ok(header)) if header == "gfm-content-job-v1" => {}
@@ -272,6 +281,7 @@ impl ContentIndexJobSpec {
                 )))
             }
         }
+        check_control()?;
 
         let mut root = None;
         let mut segment_dir = None;
@@ -280,7 +290,9 @@ impl ContentIndexJobSpec {
         let mut volume = None;
         let mut batch_size = None;
         for (line_index, line) in lines.enumerate() {
+            check_control()?;
             let line = line.map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
             let (key, value) = line.split_once('\t').ok_or_else(|| {
                 GfmError::Format(format!(
                     "{} line {}: expected key and value",
@@ -311,6 +323,7 @@ impl ContentIndexJobSpec {
                 }
             }
         }
+        check_control()?;
 
         Ok(Self {
             root: required_field(root, "root", path)?,

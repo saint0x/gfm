@@ -171,14 +171,24 @@ impl ExtractionQuarantine {
     }
 
     pub fn read(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::read_checked(path, || Ok(()))
+    }
+
+    pub fn read_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> crate::Result<()>,
+    ) -> crate::Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = File::open(path).map_err(|err| gfm_types::GfmError::io(path, err))?;
+        check_control()?;
         let mut lines = BufReader::new(file).lines();
         let header = lines
             .next()
             .transpose()
             .map_err(|err| gfm_types::GfmError::io(path, err))?
             .ok_or_else(|| quarantine_format_error(path, "missing header"))?;
+        check_control()?;
         if header != "gfm-extraction-quarantine-v1" {
             return Err(quarantine_format_error(
                 path,
@@ -189,7 +199,9 @@ impl ExtractionQuarantine {
         let mut failure_threshold = None;
         let mut entries = BTreeMap::new();
         for line in lines {
+            check_control()?;
             let line = line.map_err(|err| gfm_types::GfmError::io(path, err))?;
+            check_control()?;
             let mut parts = line.split('\t');
             match parts.next() {
                 Some("schema_version") => {
@@ -228,12 +240,14 @@ impl ExtractionQuarantine {
                 Some(_) => return Err(quarantine_format_error(path, "unknown quarantine row")),
             }
         }
+        check_control()?;
         if schema_version != Some(EXTRACTION_QUARANTINE_SCHEMA_VERSION) {
             return Err(quarantine_format_error(
                 path,
                 "unsupported quarantine schema version",
             ));
         }
+        check_control()?;
         Ok(Self {
             failure_threshold: failure_threshold.unwrap_or(2).max(1),
             entries,

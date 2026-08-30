@@ -1,5 +1,5 @@
 use super::*;
-use gfm_types::{FileId, VolumeId};
+use gfm_types::{FileId, GfmError, VolumeId};
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::PathBuf;
@@ -677,6 +677,18 @@ fn quarantine_persists_crash_failures_across_restart() {
         reloaded.before_extract(&path, &fingerprint),
         QuarantineDecision::Quarantined(_)
     ));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extraction_quarantine_checked_read_honors_pre_cancelled_control_before_file_open() {
+    let root = unique_temp_dir("gfm-content-quarantine-read-cancel");
+    let store = root.join("quarantine.gfmquarantine");
+
+    let result = ExtractionQuarantine::read_checked(&store, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!store.exists());
     fs::remove_dir_all(root).unwrap();
 }
 

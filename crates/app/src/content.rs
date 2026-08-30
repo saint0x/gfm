@@ -915,7 +915,7 @@ fn load_resumable_content_job_spec(
                 AccessIntent::Read,
                 "resume background content index",
             )?;
-            let spec = ContentIndexJobSpec::read(&spec_path)?;
+            let spec = ContentIndexJobSpec::read_checked(&spec_path, || cancellation.check())?;
             cancellation.check()?;
             Ok(Some((recoverable, spec)))
         },
@@ -1282,7 +1282,8 @@ fn run_extraction_quarantine(
         }
         cancellation.check()?;
         quarantine.write(&store)?;
-        let reloaded = ExtractionQuarantine::read(&store)?;
+        let reloaded = ExtractionQuarantine::read_checked(&store, || cancellation.check())?;
+        cancellation.check()?;
         Ok(vec![
             decision.as_tsv(),
             reloaded.before_extract(&path, &fingerprint).as_tsv(),

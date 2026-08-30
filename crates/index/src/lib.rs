@@ -629,6 +629,14 @@ impl Indexer {
         ScanProgressCheckpoint::read(progress_path)
     }
 
+    pub fn scan_progress_cancellable(
+        &self,
+        progress_path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<ScanProgressCheckpoint> {
+        ScanProgressCheckpoint::read_checked(progress_path, || cancellation.check())
+    }
+
     pub fn checkpoint_fsevents_cursor(
         &self,
         state_path: impl AsRef<Path>,

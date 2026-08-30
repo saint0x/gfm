@@ -390,11 +390,7 @@ fn run_scan_progress_inspect(progress: PathBuf) -> Result<gfm_index::ScanProgres
     run_index_read_task(
         progress,
         "scan progress checkpoint inspect",
-        |path, cancellation| {
-            let checkpoint = Indexer::default().scan_progress(path)?;
-            cancellation.check()?;
-            Ok(checkpoint)
-        },
+        |path, cancellation| Indexer::default().scan_progress_cancellable(path, cancellation),
     )
 }
 
