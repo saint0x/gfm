@@ -423,19 +423,6 @@ impl Default for Extractor {
     }
 }
 
-fn normalize_text(input: &str) -> String {
-    input
-        .chars()
-        .map(|ch| {
-            if ch.is_control() && ch != '\n' && ch != '\t' {
-                ' '
-            } else {
-                ch
-            }
-        })
-        .collect()
-}
-
 fn normalize_text_checked(
     input: &str,
     check_control: &mut dyn FnMut() -> Result<()>,

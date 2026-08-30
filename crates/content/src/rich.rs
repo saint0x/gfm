@@ -1,4 +1,4 @@
-use crate::{normalize_text, ContentDocument};
+use crate::{normalize_text_checked, ContentDocument};
 use gfm_types::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,11 +28,8 @@ pub(crate) fn extract_rich_checked(
         RichKind::Email => email_text_checked(&raw, max_text_bytes, &mut check_control),
     }?;
     check_control()?;
-    let text = truncate_text_checked(
-        &normalize_text(text.trim()),
-        max_text_bytes,
-        &mut check_control,
-    )?;
+    let normalized = normalize_text_checked(text.trim(), &mut check_control)?;
+    let text = truncate_text_checked(&normalized, max_text_bytes, &mut check_control)?;
     Ok((!text.is_empty()).then_some(ContentDocument {
         bytes_read: bytes.len(),
         text,
@@ -820,6 +817,24 @@ Content-Type: text/html
             let next = checks.get() + 1;
             checks.set(next);
             if next >= 512 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn checked_rich_extraction_can_cancel_during_final_normalization() {
+        let html = format!("<html><body><p>{}</p></body></html>", "\u{1}".repeat(4096));
+        let checks = Cell::new(0);
+
+        let result = extract_rich_checked(html.as_bytes(), RichKind::Html, usize::MAX, || {
+            let next = checks.get() + 1;
+            checks.set(next);
+            if next >= 4_200 {
                 Err(GfmError::Cancelled)
             } else {
                 Ok(())

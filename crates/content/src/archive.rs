@@ -1,4 +1,4 @@
-use crate::{normalize_text, ContentDocument, ExtractionPolicy};
+use crate::{normalize_text_checked, ContentDocument, ExtractionPolicy};
 use flate2::read::GzDecoder;
 use gfm_types::Result;
 use std::io::{Cursor, Read};
@@ -79,7 +79,7 @@ fn extract_zip_metadata_checked(
         }
     }
 
-    let text = normalize_text(text.trim());
+    let text = normalize_text_checked(text.trim(), &mut check_control)?;
     if text.is_empty() {
         return Ok((ArchiveExtractStatus::Unsupported, None));
     }
@@ -199,7 +199,7 @@ fn extract_tar_metadata_checked(
         }
     }
 
-    let text = normalize_text(text.trim());
+    let text = normalize_text_checked(text.trim(), &mut check_control)?;
     if text.is_empty() {
         return Ok((ArchiveExtractStatus::Unsupported, None));
     }
@@ -428,6 +428,30 @@ mod tests {
                 let next = checks.get() + 1;
                 checks.set(next);
                 if next >= 6 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn checked_zip_extraction_can_cancel_while_normalizing_metadata() {
+        let name = format!("{}.txt", "zipneedle".repeat(4096));
+        let bytes = zip_file(&[(name.as_str(), "body")]);
+        let checks = Cell::new(0);
+
+        let result = extract_archive_metadata_checked(
+            &bytes,
+            ArchiveKind::Zip,
+            &ExtractionPolicy::default(),
+            || {
+                let next = checks.get() + 1;
+                checks.set(next);
+                if next >= 16 {
                     Err(GfmError::Cancelled)
                 } else {
                     Ok(())

@@ -1,4 +1,4 @@
-use crate::{normalize_text, ContentDocument, ExtractionPolicy};
+use crate::{normalize_text_checked, ContentDocument, ExtractionPolicy};
 use gfm_types::Result;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
@@ -78,7 +78,7 @@ pub(crate) fn extract_ooxml_checked(
         extracted_parts += 1;
     }
 
-    let text = normalize_text(text.trim());
+    let text = normalize_text_checked(text.trim(), &mut check_control)?;
     if text.is_empty() {
         let status = if extracted_parts == 0 {
             OoxmlExtractStatus::Unsupported
@@ -274,6 +274,30 @@ mod tests {
                 let next = checks.get() + 1;
                 checks.set(next);
                 if next >= 8 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn checked_extraction_can_cancel_during_final_normalization() {
+        let body = format!("<w:t>{}</w:t>", "normalized body ".repeat(4096));
+        let bytes = package(&[("word/document.xml", body.as_str())]);
+        let checks = Cell::new(0);
+
+        let result = extract_ooxml_checked(
+            &bytes,
+            OoxmlKind::Docx,
+            &ExtractionPolicy::default(),
+            || {
+                let next = checks.get() + 1;
+                checks.set(next);
+                if next >= 32 {
                     Err(GfmError::Cancelled)
                 } else {
                     Ok(())

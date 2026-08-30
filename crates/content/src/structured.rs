@@ -1,4 +1,4 @@
-use crate::{normalize_text, ContentDocument, ExtractionPolicy};
+use crate::{normalize_text_checked, ContentDocument, ExtractionPolicy};
 use gfm_types::Result;
 use plist::Value;
 use std::io::Cursor;
@@ -50,7 +50,7 @@ pub(crate) fn extract_structured_checked(
         }
     };
     check_control()?;
-    let text = normalize_text(text.trim());
+    let text = normalize_text_checked(text.trim(), &mut check_control)?;
     if text.is_empty() {
         return Ok((StructuredExtractStatus::Unsupported, None));
     }
@@ -377,6 +377,29 @@ mod tests {
                 let next = checks.get() + 1;
                 checks.set(next);
                 if next >= 512 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn checked_json_extraction_can_cancel_during_final_normalization() {
+        let input = format!("{{\"text\":\"{}\"}}", "\u{1}".repeat(4096));
+        let checks = Cell::new(0);
+
+        let result = extract_structured_checked(
+            input.as_bytes(),
+            StructuredKind::Json,
+            &ExtractionPolicy::default(),
+            || {
+                let next = checks.get() + 1;
+                checks.set(next);
+                if next >= 32 {
                     Err(GfmError::Cancelled)
                 } else {
                     Ok(())
