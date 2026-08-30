@@ -6639,6 +6639,25 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "preview-schedule-retained-capacity"
+      ],
+      "exit_code": 0,
+      "stdout": "scheduled\tvisible\nscheduled\tvisible\ncancelled\tcapacity-limit\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "preview-schedule-retained-capacity"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "macrobench-fixture",
         "tmp/gfm-fozzy-macrobench-fixture",
         "smoke"

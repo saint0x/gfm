@@ -312,6 +312,8 @@ impl PreviewScheduler {
             }
         }
         decisions
+            .extend(self.reconcile_inflight_limits_preserving("capacity-limit", &desired_keys));
+        decisions
     }
 
     pub fn adapt_to_pressure(&mut self, pressure: SchedulingPressure) -> Vec<PreviewTaskDecision> {
@@ -357,22 +359,38 @@ impl PreviewScheduler {
     }
 
     fn reconcile_inflight_limits(&mut self, reason: &'static str) -> Vec<PreviewTaskDecision> {
+        self.reconcile_inflight_limits_preserving(reason, &HashSet::new())
+    }
+
+    fn reconcile_inflight_limits_preserving(
+        &mut self,
+        reason: &'static str,
+        desired_keys: &HashSet<PreviewRequestKey>,
+    ) -> Vec<PreviewTaskDecision> {
         let mut visible = 0usize;
         let mut prefetch = 0usize;
         let mut inflight = self
             .inflight
             .iter()
-            .map(|(key, task)| (key.clone(), task.priority, task.sequence))
+            .map(|(key, task)| {
+                (
+                    key.clone(),
+                    task.priority,
+                    task.sequence,
+                    desired_keys.contains(key),
+                )
+            })
             .collect::<Vec<_>>();
         inflight.sort_by(|a, b| {
             a.1.score()
                 .cmp(&b.1.score())
+                .then_with(|| b.3.cmp(&a.3))
                 .then_with(|| a.2.cmp(&b.2))
                 .then_with(|| a.0.path.cmp(&b.0.path))
         });
 
         let mut cancelled = Vec::new();
-        for (key, priority, _) in inflight {
+        for (key, priority, _, _) in inflight {
             let keep = match priority {
                 PreviewPriority::Visible => {
                     visible += 1;
@@ -879,6 +897,51 @@ mod tests {
         assert!(decisions.is_empty());
         assert_eq!(scheduler.inflight_len(), 1);
         assert!(!cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn retained_offscreen_work_cannot_exceed_visible_capacity() {
+        let policy = PreviewSchedulingPolicy {
+            max_visible: 1,
+            max_prefetch: 0,
+            cancel_offscreen: false,
+        };
+        let mut scheduler = PreviewScheduler::new(policy).unwrap();
+        let old_visible = task(1, Rect::new(0, 0, 20, 20));
+        let new_visible = task(2, Rect::new(0, 100, 20, 20));
+
+        scheduler.schedule(
+            Viewport::new(Rect::new(0, 0, 100, 100), 0),
+            vec![old_visible.clone()],
+        );
+        let old_cancellation = scheduler
+            .cancellation_for(&old_visible.key)
+            .expect("old visible preview is inflight");
+
+        let decisions = scheduler.schedule(
+            Viewport::new(Rect::new(0, 100, 100, 100), 0),
+            vec![new_visible.clone()],
+        );
+        let new_cancellation = scheduler
+            .cancellation_for(&new_visible.key)
+            .expect("new viewport preview keeps capacity");
+
+        assert_eq!(
+            decisions,
+            vec![
+                PreviewTaskDecision::Scheduled {
+                    key: new_visible.key.clone(),
+                    priority: PreviewPriority::Visible,
+                },
+                PreviewTaskDecision::Cancelled {
+                    key: old_visible.key.clone(),
+                    reason: "capacity-limit",
+                },
+            ]
+        );
+        assert_eq!(scheduler.inflight_len(), 1);
+        assert!(old_cancellation.is_cancelled());
+        assert!(!new_cancellation.is_cancelled());
     }
 
     fn task(node: u64, rect: Rect) -> PreviewTask {

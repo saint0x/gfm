@@ -2904,6 +2904,26 @@ fn reports_preview_scheduling_from_binary() {
     assert_eq!(lines[5], "cancelled\tpressure-admission", "{stdout}");
 }
 
+#[test]
+fn reports_retained_preview_capacity_cancellation_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("preview-schedule-retained-capacity")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<_> = stdout.lines().collect();
+
+    assert_eq!(lines.len(), 3, "{stdout}");
+    assert_eq!(lines[0], "scheduled\tvisible", "{stdout}");
+    assert_eq!(lines[1], "scheduled\tvisible", "{stdout}");
+    assert_eq!(lines[2], "cancelled\tcapacity-limit", "{stdout}");
+}
+
 fn seed_stale_permission_state(state: &std::path::Path) {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("permission-invalidation")

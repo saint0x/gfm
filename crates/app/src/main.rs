@@ -887,6 +887,7 @@ fn print_usage() {
   gfm thumbnail-generation-adaptive-cancel-after-access <path> <nominal|elevated|saturated> <nominal|fair|serious|critical> <ac|battery|low> <idle|active>
   gfm thumbnail-generation-cancel <path>
   gfm preview-schedule
+  gfm preview-schedule-retained-capacity
   gfm macrobench <workspace> [smoke|standard]
   gfm macrobench-fixture <workspace> [smoke|standard|million]
   gfm parity-fixture <workspace> [smoke|standard]

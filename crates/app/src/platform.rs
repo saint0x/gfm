@@ -962,6 +962,31 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 );
             }
         }
+        "preview-schedule-retained-capacity" => {
+            let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy {
+                max_visible: 1,
+                max_prefetch: 0,
+                cancel_offscreen: false,
+            })?;
+            let first_viewport = Viewport::new(Rect::new(0, 0, 100, 100), 0);
+            let second_viewport = Viewport::new(Rect::new(0, 100, 100, 100), 0);
+            let old_visible = preview_task(1, 0, 0);
+            let new_visible = preview_task(2, 0, 100);
+            for decision in scheduler.schedule(first_viewport, vec![old_visible]) {
+                println!(
+                    "{}\t{}",
+                    decision.as_str(),
+                    preview_decision_priority(&decision)
+                );
+            }
+            for decision in scheduler.schedule(second_viewport, vec![new_visible]) {
+                println!(
+                    "{}\t{}",
+                    decision.as_str(),
+                    preview_decision_priority(&decision)
+                );
+            }
+        }
         _ => return Ok(false),
     }
     Ok(true)
