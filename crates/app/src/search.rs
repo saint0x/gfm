@@ -1077,8 +1077,10 @@ fn run_search_index_columns(
             cancellation.check()?;
             let _access = preflight_search_index_columns_access(&records, &columns)?;
             cancellation.check()?;
-            let records = MmapRecordArchive::open(records)?;
-            let columns = MmapRecordColumns::open(columns)?;
+            let records = MmapRecordArchive::open_checked(records, || cancellation.check())?;
+            cancellation.check()?;
+            let columns = MmapRecordColumns::open_checked(columns, || cancellation.check())?;
+            cancellation.check()?;
             let mut search_columns = Vec::with_capacity(columns.len());
             for index in 0..columns.len() {
                 cancellation.check()?;

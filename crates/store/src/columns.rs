@@ -141,19 +141,33 @@ pub(crate) fn write_record_columns_v1(
 
 impl MmapRecordColumns {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_checked(path, || Ok(()))
+    }
+
+    pub fn open_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mmap = {
             // SAFETY: The map is read-only and all reads are bounds checked.
             unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
         };
+        check_control()?;
         let version = columns_version_from_slice(&mmap, path)?;
+        check_control()?;
         verify_columns_checksum_from_slice(&mmap, path)?;
+        check_control()?;
         let strings = match version {
             ColumnsVersion::V1 => Vec::new(),
             ColumnsVersion::V2 => read_string_pool_directory_from_slice(&mmap, path)?,
         };
+        check_control()?;
         let directory = read_columns_directory_from_slice(&mmap, path)?;
+        check_control()?;
         Ok(Self {
             path: path.to_path_buf(),
             mmap,
@@ -758,6 +772,16 @@ mod tests {
 
         assert!(error.contains("checksum mismatch"), "{error}");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mmap_record_columns_checked_open_honors_pre_cancelled_control_before_file_open() {
+        let path = temp_path("gfm-record-columns-open-cancel", "gfmcols");
+
+        let result = MmapRecordColumns::open_checked(&path, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!path.exists());
     }
 
     fn record(

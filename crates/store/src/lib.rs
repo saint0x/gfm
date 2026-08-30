@@ -202,15 +202,26 @@ pub struct MmapRecordBatch {
 
 impl MmapRecordArchive {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_checked(path, || Ok(()))
+    }
+
+    pub fn open_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mmap = {
             // SAFETY: The map is read-only and all access is bounds-checked through
             // immutable byte slices. GFM publishes record archives with atomic
             // rename, and this API never mutates the mapped file.
             unsafe { MmapOptions::new().map(&file) }.map_err(|err| GfmError::io(path, err))?
         };
+        check_control()?;
         verify_record_checksum_from_slice(&mmap, path)?;
+        check_control()?;
         let indexed_len = record_indexed_len_from_slice(&mmap);
         let (header, mut offset) = next_line(&mmap, 0)
             .ok_or_else(|| GfmError::Format(format!("empty store {}", path.display())))?;
@@ -221,6 +232,7 @@ impl MmapRecordArchive {
         let mut records = Vec::new();
         let mut directory = Vec::new();
         while offset < indexed_len {
+            check_control()?;
             let Some((line, next)) = next_line(&mmap, offset) else {
                 break;
             };
@@ -234,6 +246,7 @@ impl MmapRecordArchive {
             }
             offset = next;
         }
+        check_control()?;
         directory.sort_by_key(|entry| (entry.id.volume, entry.id.node));
         Ok(Self {
             path: path.to_path_buf(),

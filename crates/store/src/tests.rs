@@ -168,6 +168,16 @@ fn mmap_record_archive_finds_records_when_rows_are_not_id_sorted() {
 }
 
 #[test]
+fn mmap_record_archive_checked_open_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-store-mmap-open-cancel", "idx");
+
+    let result = MmapRecordArchive::open_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
 fn mmap_record_archive_batch_hydrates_sorted_ids_in_one_directory_pass() {
     let path = temp_path("gfm-store-mmap-batch-find", "idx");
     let records = vec![
