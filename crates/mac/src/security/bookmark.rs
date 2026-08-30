@@ -258,26 +258,53 @@ impl SecurityScopedBookmarkStore {
     }
 
     pub fn write_all(&self, records: &[SecurityScopedBookmarkRecord]) -> Result<()> {
+        self.write_all_checked(records, || Ok(()))
+    }
+
+    pub fn write_all_checked(
+        &self,
+        records: &[SecurityScopedBookmarkRecord],
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         }
+        check_control()?;
         validate_unique_bookmark_records_for_write(&self.path, records)?;
+        check_control()?;
         let mut records = records.to_vec();
         records.sort_by(|left, right| {
             left.path
                 .cmp(&right.path)
                 .then(left.read_only.cmp(&right.read_only))
         });
-        atomic_write(&self.path, |writer| {
-            writeln!(writer, "{STORE_MAGIC}")?;
+        check_control()?;
+        atomic_write_checked(&self.path, &mut check_control, |writer, check_control| {
+            check_control()?;
+            writeln!(writer, "{STORE_MAGIC}").map_err(|err| GfmError::io(&self.path, err))?;
+            check_control()?;
             for record in &records {
-                writeln!(writer, "{}", record.as_tsv())?;
+                check_control()?;
+                writeln!(writer, "{}", record.as_tsv())
+                    .map_err(|err| GfmError::io(&self.path, err))?;
+                check_control()?;
             }
             Ok(())
-        })
+        })?;
+        check_control()?;
+        Ok(())
     }
 
     pub fn read(&self) -> Result<Vec<SecurityScopedBookmarkRecord>> {
+        self.read_checked(|| Ok(()))
+    }
+
+    pub fn read_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<SecurityScopedBookmarkRecord>> {
+        check_control()?;
         match self.path.try_exists() {
             Ok(true) => {}
             Ok(false) => return Ok(Vec::new()),
@@ -288,12 +315,15 @@ impl SecurityScopedBookmarkStore {
                 ));
             }
         }
+        check_control()?;
         let file = fs::File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
+        check_control()?;
         let mut reader = BufReader::new(file);
         let mut magic = String::new();
         reader
             .read_line(&mut magic)
             .map_err(|err| GfmError::io(&self.path, err))?;
+        check_control()?;
         if magic.trim_end() != STORE_MAGIC {
             return Err(GfmError::Format(format!(
                 "unsupported security bookmark store: {}",
@@ -302,6 +332,7 @@ impl SecurityScopedBookmarkStore {
         }
         let mut records = Vec::new();
         for (index, line) in reader.lines().enumerate() {
+            check_control()?;
             let line = line.map_err(|err| GfmError::io(&self.path, err))?;
             if line.trim().is_empty() {
                 continue;
@@ -311,7 +342,9 @@ impl SecurityScopedBookmarkStore {
             })?;
             validate_unique_bookmark_record_for_read(&self.path, index + 2, &records, &record)?;
             records.push(record);
+            check_control()?;
         }
+        check_control()?;
         Ok(records)
     }
 
@@ -319,7 +352,17 @@ impl SecurityScopedBookmarkStore {
         &self,
         bookmark: SecurityScopedBookmark,
     ) -> Result<SecurityScopedBookmarkStoreReport> {
-        let mut records = self.read()?;
+        self.upsert_checked(bookmark, || Ok(()))
+    }
+
+    pub fn upsert_checked(
+        &self,
+        bookmark: SecurityScopedBookmark,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<SecurityScopedBookmarkStoreReport> {
+        check_control()?;
+        let mut records = self.read_checked(&mut check_control)?;
+        check_control()?;
         let record = SecurityScopedBookmarkRecord::new(bookmark);
         if let Some(existing) = records
             .iter_mut()
@@ -329,7 +372,9 @@ impl SecurityScopedBookmarkStore {
         } else {
             records.push(record);
         }
-        self.write_all(&records)?;
+        check_control()?;
+        self.write_all_checked(&records, &mut check_control)?;
+        check_control()?;
         Ok(SecurityScopedBookmarkStoreReport {
             path: self.path.clone(),
             records: records.len(),
@@ -343,10 +388,22 @@ impl SecurityScopedBookmarkStore {
         start_access: bool,
         repair_stale: bool,
     ) -> Result<Vec<SecurityScopedBookmarkResolution>> {
-        let mut records = self.read()?;
+        self.resolve_all_checked(start_access, repair_stale, || Ok(()))
+    }
+
+    pub fn resolve_all_checked(
+        &self,
+        start_access: bool,
+        repair_stale: bool,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<SecurityScopedBookmarkResolution>> {
+        check_control()?;
+        let mut records = self.read_checked(&mut check_control)?;
+        check_control()?;
         let mut resolutions = Vec::with_capacity(records.len());
         let mut repaired_any = false;
         for record in &mut records {
+            check_control()?;
             let report = record.bookmark().resolve(start_access);
             let mut repaired = false;
             if repair_stale
@@ -369,10 +426,12 @@ impl SecurityScopedBookmarkStore {
                 report,
                 repaired,
             });
+            check_control()?;
         }
         if repaired_any {
-            self.write_all(&records)?;
+            self.write_all_checked(&records, &mut check_control)?;
         }
+        check_control()?;
         Ok(resolutions)
     }
 
@@ -435,7 +494,16 @@ impl SecurityScopedBookmarkStore {
     }
 
     pub fn reconcile(&self) -> Result<SecurityScopedBookmarkStoreReport> {
-        let resolutions = self.resolve_all(false, true)?;
+        self.reconcile_checked(|| Ok(()))
+    }
+
+    pub fn reconcile_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<SecurityScopedBookmarkStoreReport> {
+        check_control()?;
+        let resolutions = self.resolve_all_checked(false, true, &mut check_control)?;
+        check_control()?;
         Ok(SecurityScopedBookmarkStoreReport {
             path: self.path.clone(),
             records: resolutions.len(),
@@ -713,25 +781,38 @@ fn hex_digit(byte: u8) -> std::result::Result<u8, String> {
     }
 }
 
-fn atomic_write(
+fn atomic_write_checked(
     path: &Path,
-    write: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
+    mut check_control: impl FnMut() -> Result<()>,
+    write: impl FnOnce(&mut dyn Write, &mut dyn FnMut() -> Result<()>) -> Result<()>,
 ) -> Result<()> {
+    check_control()?;
     let temporary = temporary_path(path);
-    let file = fs::File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
-    let mut writer = BufWriter::new(file);
-    write(&mut writer).map_err(|err| GfmError::io(&temporary, err))?;
-    writer
-        .flush()
-        .map_err(|err| GfmError::io(&temporary, err))?;
-    writer
-        .get_ref()
-        .sync_all()
-        .map_err(|err| GfmError::io(&temporary, err))?;
-    drop(writer);
-    fs::rename(&temporary, path).map_err(|err| GfmError::io(path, err))?;
-    sync_parent(path);
-    Ok(())
+    let result = (|| {
+        let file = fs::File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
+        check_control()?;
+        let mut writer = BufWriter::new(file);
+        write(&mut writer, &mut check_control)?;
+        check_control()?;
+        writer
+            .flush()
+            .map_err(|err| GfmError::io(&temporary, err))?;
+        check_control()?;
+        writer
+            .get_ref()
+            .sync_all()
+            .map_err(|err| GfmError::io(&temporary, err))?;
+        check_control()?;
+        drop(writer);
+        fs::rename(&temporary, path).map_err(|err| GfmError::io(path, err))?;
+        sync_parent(path);
+        check_control()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 fn sync_parent(path: &Path) {
@@ -1013,6 +1094,74 @@ mod tests {
     }
 
     #[test]
+    fn checked_bookmark_store_read_honors_pre_cancelled_control_before_file_open() {
+        let root = temp_root("security-bookmark-read-cancel");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+
+        let error = store.read_checked(|| Err(GfmError::Cancelled)).unwrap_err();
+
+        assert_eq!(error, GfmError::Cancelled);
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_bookmark_store_upsert_honors_pre_cancelled_control_before_mutation() {
+        let root = temp_root("security-bookmark-upsert-cancel");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        let bookmark = SecurityScopedBookmark {
+            path: root.join("Documents").join("Plan.md"),
+            read_only: true,
+            data: vec![1, 2, 3],
+        };
+
+        let error = store
+            .upsert_checked(bookmark, || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(error, GfmError::Cancelled);
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_bookmark_store_write_preserves_existing_records_on_cancel() {
+        let root = temp_root("security-bookmark-write-cancel");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        let existing = SecurityScopedBookmarkRecord {
+            path: root.join("Documents").join("Existing.md"),
+            read_only: true,
+            data: vec![1, 2, 3],
+        };
+        let replacement = SecurityScopedBookmarkRecord {
+            path: root.join("Documents").join("Replacement.md"),
+            read_only: true,
+            data: vec![4, 5, 6],
+        };
+        store.write_all(std::slice::from_ref(&existing)).unwrap();
+        let before = fs::read(store.path()).unwrap();
+        let mut checks = 0usize;
+
+        let error = store
+            .write_all_checked(std::slice::from_ref(&replacement), || {
+                checks += 1;
+                if checks >= 8 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(error, GfmError::Cancelled);
+        assert!(checks >= 8);
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+        assert_eq!(store.read().unwrap(), vec![existing]);
+        assert_eq!(bookmark_store_temp_count(store.path()), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn bookmark_store_rejects_duplicate_records_with_line_number() {
         let root = temp_root("security-bookmark-read-duplicate");
         let path = root.join("bookmarks.tsv");
@@ -1077,6 +1226,21 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn bookmark_store_temp_count(path: &Path) -> usize {
+        let Some(parent) = path.parent() else {
+            return 0;
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            return 0;
+        };
+        let prefix = format!(".{file_name}.{}.", std::process::id());
+        fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+            .count()
     }
 
     #[cfg(unix)]

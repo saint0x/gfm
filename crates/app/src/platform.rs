@@ -2013,7 +2013,7 @@ fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<V
             },
         )?;
         cancellation.check()?;
-        let store_report = store.upsert(bookmark)?;
+        let store_report = store.upsert_checked(bookmark, || cancellation.check())?;
         Ok(vec![report.as_tsv(), store_report.as_tsv()])
     })
 }
@@ -2029,7 +2029,7 @@ fn run_security_bookmark_reconcile() -> Result<gfm_mac::SecurityScopedBookmarkSt
             cancellation.check()?;
             let _store_access = preflight_access_scope(&store_probe, AccessIntent::Write, WORKER)?;
             cancellation.check()?;
-            store.reconcile()
+            store.reconcile_checked(|| cancellation.check())
         }
     })
 }
