@@ -19,6 +19,7 @@ use gfm_store::{
     MmapRecordColumns, MmapSubstringArchive,
 };
 use gfm_types::{FileKind, GfmError, Result, SearchHit, VolumeId};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
@@ -1139,7 +1140,7 @@ fn preflight_content_index_set_volume_access(
     worker: &str,
 ) -> Result<()> {
     preflight_volume_access_scope(records, AccessIntent::Read, &format!("{worker} records"))?;
-    for content in content_paths {
+    for content in unique_search_paths(content_paths) {
         preflight_volume_access_scope(content, AccessIntent::Read, &format!("{worker} content"))?;
     }
     Ok(())
@@ -1509,9 +1510,18 @@ fn preflight_content_archives_access(
     paths: &[PathBuf],
     worker: &str,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    unique_search_paths(paths)
+        .into_iter()
+        .map(|path| preflight_content_archive_access(path, worker))
+        .collect()
+}
+
+fn unique_search_paths(paths: &[PathBuf]) -> Vec<&Path> {
+    let mut seen = BTreeSet::new();
     paths
         .iter()
-        .map(|path| preflight_content_archive_access(path, worker))
+        .map(PathBuf::as_path)
+        .filter(|path| seen.insert((*path).to_path_buf()))
         .collect()
 }
 
@@ -1758,5 +1768,27 @@ fn stream_stage(stage: SearchStreamStage) -> &'static str {
     match stage {
         SearchStreamStage::Hot => "hot",
         SearchStreamStage::Deep => "deep",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_search_paths_preserves_first_occurrence_order() {
+        let first = PathBuf::from("/tmp/gfm-search-preflight/first.gfmcontent");
+        let second = PathBuf::from("/tmp/gfm-search-preflight/second.gfmcontent");
+        let paths = vec![
+            first.clone(),
+            second.clone(),
+            first.clone(),
+            second.clone(),
+            first.clone(),
+        ];
+
+        let unique = unique_search_paths(&paths);
+
+        assert_eq!(unique, vec![first.as_path(), second.as_path()]);
     }
 }
