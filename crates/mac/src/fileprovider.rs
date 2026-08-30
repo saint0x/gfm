@@ -1128,13 +1128,18 @@ fn merge_observed_snapshot(
     observed_paths: &[PathBuf],
     event_snapshot: FileProviderStateSnapshot,
 ) -> FileProviderStateSnapshot {
+    let observed_exact = observed_paths
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<BTreeSet<_>>();
     let mut entries = previous
         .map(|snapshot| snapshot.entries.clone())
         .unwrap_or_default();
     entries.retain(|entry| {
-        !observed_paths
-            .iter()
-            .any(|path| path == &entry.path || entry.path.starts_with(path))
+        !observed_exact.contains(entry.path.as_path())
+            && !observed_paths
+                .iter()
+                .any(|path| entry.path.starts_with(path))
     });
     entries.extend(event_snapshot.entries);
     entries.sort_by(|left, right| left.path.cmp(&right.path));
@@ -3752,6 +3757,54 @@ mod tests {
             .any(|entry| entry.path == untouched && entry.state == CloudStorageState::Evicted));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_snapshot_merge_filters_exact_paths_and_descendants() {
+        let root = PathBuf::from("/tmp/gfm-merge-observed-snapshot");
+        let exact = root.join("Exact.icloud-placeholder");
+        let subtree = root.join("Folder.icloud");
+        let child = subtree.join("Child.icloud-placeholder");
+        let unrelated = root.join("Unrelated.icloud-placeholder");
+        let replacement = root.join("Replacement.icloud-placeholder");
+        let previous = FileProviderStateSnapshot {
+            entries: vec![
+                FileProviderStateSnapshotEntry {
+                    path: exact.clone(),
+                    state: CloudStorageState::Downloaded,
+                },
+                FileProviderStateSnapshotEntry {
+                    path: child,
+                    state: CloudStorageState::Evicted,
+                },
+                FileProviderStateSnapshotEntry {
+                    path: unrelated.clone(),
+                    state: CloudStorageState::Evicted,
+                },
+            ],
+        };
+        let event_snapshot = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: replacement.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+
+        let merged = merge_observed_snapshot(Some(&previous), &[exact, subtree], event_snapshot);
+
+        assert_eq!(
+            merged.entries,
+            vec![
+                FileProviderStateSnapshotEntry {
+                    path: replacement,
+                    state: CloudStorageState::Downloaded,
+                },
+                FileProviderStateSnapshotEntry {
+                    path: unrelated,
+                    state: CloudStorageState::Evicted,
+                },
+            ]
+        );
     }
 
     #[test]
