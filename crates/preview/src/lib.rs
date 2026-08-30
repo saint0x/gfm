@@ -1174,6 +1174,44 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_disk_write_preserves_existing_entry() {
+        let root = temp_root("cancel-disk-write-existing");
+        let cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 1024 * 1024,
+            max_entry_bytes: 1024 * 1024,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        })
+        .unwrap();
+        let key = key("existing-large.png", PreviewKind::Thumbnail);
+        let disk_path = cache.disk_path(&key);
+        cache
+            .write_disk_checked(
+                &PreviewEntry::new(key.clone(), b"existing".to_vec()),
+                || Ok(()),
+            )
+            .unwrap();
+        let before = fs::read(&disk_path).unwrap();
+        let bytes = vec![9; 300 * 1024];
+        let calls = Cell::new(0usize);
+
+        let result = cache.write_disk_checked(&PreviewEntry::new(key, bytes), || {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert_eq!(fs::read(&disk_path).unwrap(), before);
+        assert_eq!(preview_cache_temp_count(&disk_path), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn cancelled_cache_get_does_not_promote_disk_entry_to_memory() {
         let root = temp_root("cancel-get");
         let key = key("disk.png", PreviewKind::Thumbnail);
@@ -1374,6 +1412,51 @@ mod tests {
 
         assert_eq!(result, Err(GfmError::Cancelled));
         assert!(!index_path.exists());
+        assert_eq!(preview_cache_temp_count(&index_path), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_disk_index_publication_preserves_existing_index() {
+        let root = temp_root("cancel-disk-index-existing");
+        let config = PreviewCacheConfig {
+            memory_budget_bytes: 1024 * 1024,
+            max_entry_bytes: 1024 * 1024,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        };
+        let index_path = preview_cache_index_path(&config);
+        let existing_key = key("existing-index.png", PreviewKind::Thumbnail);
+        let mut existing = HashMap::new();
+        existing.insert(
+            (existing_key.path.clone(), existing_key.kind),
+            existing_key.clone(),
+        );
+        write_disk_index_checked(&config, &existing, || Ok(())).unwrap();
+        let before = fs::read(&index_path).unwrap();
+        let mut replacement = HashMap::new();
+        for node in 0..4_000 {
+            let key = PreviewRequestKey::new(
+                FileId::new(VolumeId(7), node),
+                format!("replacement-{node}.png"),
+                PreviewKind::Thumbnail,
+            );
+            replacement.insert((key.path.clone(), key.kind), key);
+        }
+        let calls = Cell::new(0usize);
+
+        let result = write_disk_index_checked(&config, &replacement, || {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call >= replacement.len() + 5 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert_eq!(fs::read(&index_path).unwrap(), before);
         assert_eq!(preview_cache_temp_count(&index_path), 0);
         fs::remove_dir_all(root).unwrap();
     }
