@@ -1650,7 +1650,12 @@ impl CloudHints {
     }
 
     fn read_with_identity(path: &Path) -> Self {
-        Self::read_with_optional_identity(path, Some(copy_fileprovider_identity(path)))
+        let hints = Self::read(path);
+        if should_query_native_fileprovider_identity(path, &hints) {
+            Self::read_with_optional_identity(path, Some(copy_fileprovider_identity(path)))
+        } else {
+            hints
+        }
     }
 
     fn read_with_optional_identity(
@@ -1756,6 +1761,23 @@ fn should_include_provider_path_sources(
     native_identity: &NativeFileProviderIdentity,
 ) -> bool {
     !native_resource_proves_local_only(native, native_identity)
+}
+
+fn should_query_native_fileprovider_identity(path: &Path, hints: &CloudHints) -> bool {
+    if native_resource_proves_local_only(&hints.native, &hints.native_identity) {
+        return false;
+    }
+    hints.native.is_ubiquitous == Some(true)
+        || native_has_ubiquitous_materialization_evidence(&hints.native)
+        || hints.provider_identifier.is_some()
+        || hints
+            .xattrs
+            .iter()
+            .any(|attr| attr.contains("fileprovider") || attr.contains("ubiquit"))
+        || path_components(path)
+            .iter()
+            .any(|component| component == ICLOUD_DRIVE_COMPONENT)
+        || path.extension().and_then(|value| value.to_str()) == Some("icloud")
 }
 
 fn identity_not_queried() -> NativeFileProviderIdentity {
@@ -4146,15 +4168,56 @@ mod tests {
         let report = FileProviderDomainReport::read_path(&path).unwrap();
 
         assert_eq!(report.domain, FileProviderDomain::Local);
-        assert_ne!(
+        assert_eq!(
             report.native_identity_status,
-            NativeFileProviderIdentityStatus::Available
+            NativeFileProviderIdentityStatus::NotQueried
         );
         assert!(report.item_identifier.is_none());
         assert!(report.domain_identifier.is_none());
+        assert_eq!(
+            report.reason.as_deref(),
+            Some("nsfileprovidermanager-identity-not-queried-on-hot-path")
+        );
         assert!(report.as_tsv().starts_with("fileprovider-domain\t"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_identity_lookup_is_gated_to_provider_evidence() {
+        let local = PathBuf::from("/tmp/Local.md");
+        let mut hints = CloudHints {
+            native: native_values(),
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "filesystem".to_string(),
+        };
+
+        assert!(!should_query_native_fileprovider_identity(&local, &hints));
+
+        let explicit_icloud_extension = PathBuf::from("/tmp/Remote.icloud");
+        assert!(should_query_native_fileprovider_identity(
+            &explicit_icloud_extension,
+            &hints
+        ));
+
+        hints
+            .xattrs
+            .push("com.apple.fileprovider.domain".to_string());
+        assert!(should_query_native_fileprovider_identity(&local, &hints));
+
+        hints.xattrs.clear();
+        hints.provider_identifier = Some("com.example.drive".to_string());
+        assert!(should_query_native_fileprovider_identity(&local, &hints));
+
+        hints.provider_identifier = None;
+        hints.native.is_ubiquitous = Some(true);
+        assert!(should_query_native_fileprovider_identity(&local, &hints));
+
+        hints.native.is_ubiquitous = Some(false);
+        assert!(!should_query_native_fileprovider_identity(&local, &hints));
     }
 
     #[cfg(unix)]

@@ -1572,6 +1572,7 @@ fn reports_fileprovider_state_from_binary() {
     assert!(identity_state_stdout
         .contains("\tdomain=local\tstate=local-only\tmaterialization=not-provider-backed\t"));
     assert!(identity_state_stdout.contains("\tsource="));
+    assert!(!identity_state_stdout.contains("nsfileprovidermanager"));
 
     let domain_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-domain")
@@ -1588,6 +1589,7 @@ fn reports_fileprovider_state_from_binary() {
     assert_worker_admitted(&domain_stderr, "fileprovider domain", &downloaded);
     assert!(domain_stdout.starts_with("fileprovider-domain\t"));
     assert!(domain_stdout.contains("\tdomain=local\t"));
+    assert!(domain_stdout.contains("\tidentity-status=not-queried\t"));
     assert!(domain_stdout.contains("\tidentity-status="));
     assert!(domain_stdout.contains("\tmanager-status="));
     assert!(domain_stdout.contains("\tresource-status=available\t"));
