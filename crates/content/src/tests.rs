@@ -547,6 +547,33 @@ fn extracts_html_visible_text() {
 }
 
 #[test]
+fn extraction_report_checked_can_cancel_while_parsing_html_rich_text() {
+    let root = unique_temp_dir("gfm-content-html-cancel");
+    let path = root.join("large.html");
+    fs::write(
+        &path,
+        format!(
+            "<html><body>{}</body></html>",
+            "<p>htmlneedle</p>".repeat(4096)
+        ),
+    )
+    .unwrap();
+    let mut checks = 0usize;
+
+    let result = Extractor::default().extract_path_report_checked(&path, || {
+        checks += 1;
+        if checks >= 512 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extracts_rtf_text() {
     let root = unique_temp_dir("gfm-content-rtf");
     let path = root.join("note.rtf");
@@ -555,6 +582,30 @@ fn extracts_rtf_text() {
     let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
 
     assert_eq!(doc.text, "rtfneedle rich text");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extraction_report_checked_can_cancel_while_parsing_rtf_rich_text() {
+    let root = unique_temp_dir("gfm-content-rtf-cancel");
+    let path = root.join("large.rtf");
+    fs::write(
+        &path,
+        format!(r"{{\rtf1\ansi {}}}", r"rtfneedle\par ".repeat(4096)),
+    )
+    .unwrap();
+    let mut checks = 0usize;
+
+    let result = Extractor::default().extract_path_report_checked(&path, || {
+        checks += 1;
+        if checks >= 512 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -572,6 +623,31 @@ fn extracts_email_text() {
 
     assert!(doc.text.contains("Email Needle"));
     assert!(doc.text.contains("emailneedle text"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extraction_report_checked_can_cancel_while_decoding_email_rich_text() {
+    let root = unique_temp_dir("gfm-content-email-cancel");
+    let path = root.join("large.eml");
+    let body = "YWxwaGEgYmV0YSBnYW1tYQ==\n".repeat(4096);
+    fs::write(
+        &path,
+        format!("Subject: Encoded\nContent-Transfer-Encoding: base64\n\n{body}"),
+    )
+    .unwrap();
+    let mut checks = 0usize;
+
+    let result = Extractor::default().extract_path_report_checked(&path, || {
+        checks += 1;
+        if checks >= 512 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
     fs::remove_dir_all(root).unwrap();
 }
 

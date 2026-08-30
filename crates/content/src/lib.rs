@@ -31,7 +31,7 @@ pub use quarantine::{
 pub use report::{
     ContentDocument, ExtractionFingerprint, ExtractionFormat, ExtractionReport, ExtractionStatus,
 };
-use rich::extract_rich;
+use rich::extract_rich_checked;
 use status::{
     archive_report_status, document_status, ooxml_report_status, pdf_report_status,
     structured_report_status,
@@ -227,7 +227,12 @@ impl Extractor {
         }
 
         if let Some(kind) = rich {
-            let document = extract_rich(&bytes, kind, self.policy.max_rich_text_bytes);
+            let document = extract_rich_checked(
+                &bytes,
+                kind,
+                self.policy.max_rich_text_bytes,
+                &mut check_control,
+            )?;
             return Ok(ExtractionReport {
                 path: path.to_path_buf(),
                 format,

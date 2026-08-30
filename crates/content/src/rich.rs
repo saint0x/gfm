@@ -1,4 +1,5 @@
 use crate::{normalize_text, ContentDocument};
+use gfm_types::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RichKind {
@@ -7,25 +8,42 @@ pub(crate) enum RichKind {
     Email,
 }
 
-pub(crate) fn extract_rich(
+#[cfg(test)]
+fn extract_rich(bytes: &[u8], kind: RichKind, max_text_bytes: usize) -> Option<ContentDocument> {
+    extract_rich_checked(bytes, kind, max_text_bytes, || Ok(()))
+        .expect("non-cancellable rich extraction cannot cancel")
+}
+
+pub(crate) fn extract_rich_checked(
     bytes: &[u8],
     kind: RichKind,
     max_text_bytes: usize,
-) -> Option<ContentDocument> {
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Option<ContentDocument>> {
+    check_control()?;
     let raw = String::from_utf8_lossy(bytes);
     let text = match kind {
-        RichKind::Html => html_text(&raw, max_text_bytes),
-        RichKind::Rtf => rtf_text(&raw, max_text_bytes),
-        RichKind::Email => email_text(&raw, max_text_bytes),
-    };
-    let text = truncate_text(&normalize_text(text.trim()), max_text_bytes);
-    (!text.is_empty()).then_some(ContentDocument {
+        RichKind::Html => html_text_checked(&raw, max_text_bytes, &mut check_control),
+        RichKind::Rtf => rtf_text_checked(&raw, max_text_bytes, &mut check_control),
+        RichKind::Email => email_text_checked(&raw, max_text_bytes, &mut check_control),
+    }?;
+    check_control()?;
+    let text = truncate_text_checked(
+        &normalize_text(text.trim()),
+        max_text_bytes,
+        &mut check_control,
+    )?;
+    Ok((!text.is_empty()).then_some(ContentDocument {
         bytes_read: bytes.len(),
         text,
-    })
+    }))
 }
 
-fn html_text(input: &str, max_bytes: usize) -> String {
+fn html_text_checked(
+    input: &str,
+    max_bytes: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
     let mut output = String::new();
     let mut tag = String::new();
     let mut in_tag = false;
@@ -34,6 +52,7 @@ fn html_text(input: &str, max_bytes: usize) -> String {
     let mut chars = input.chars().peekable();
 
     while let Some(ch) = chars.next() {
+        check_control()?;
         if output.len() >= max_bytes {
             break;
         }
@@ -87,14 +106,19 @@ fn html_text(input: &str, max_bytes: usize) -> String {
             _ => {}
         }
     }
-    collapse_whitespace_bounded(&output, max_bytes)
+    collapse_whitespace_bounded_checked(&output, max_bytes, check_control)
 }
 
-fn rtf_text(input: &str, max_bytes: usize) -> String {
+fn rtf_text_checked(
+    input: &str,
+    max_bytes: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
     let mut output = String::new();
     let mut chars = input.chars().peekable();
     let mut depth = 0usize;
     while let Some(ch) = chars.next() {
+        check_control()?;
         if output.len() >= max_bytes {
             break;
         }
@@ -131,7 +155,7 @@ fn rtf_text(input: &str, max_bytes: usize) -> String {
             _ => push_char_bounded(&mut output, ch, max_bytes),
         }
     }
-    collapse_whitespace_bounded(&output, max_bytes)
+    collapse_whitespace_bounded_checked(&output, max_bytes, check_control)
 }
 
 fn take_control_word(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
@@ -152,13 +176,19 @@ fn take_control_word(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> St
     word
 }
 
-fn email_text(input: &str, max_bytes: usize) -> String {
-    let normalized = input.replace("\r\n", "\n");
+fn email_text_checked(
+    input: &str,
+    max_bytes: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
+    check_control()?;
+    let normalized = normalize_newlines_checked(input, check_control)?;
     let (headers, body) = normalized
         .split_once("\n\n")
         .unwrap_or((normalized.as_str(), ""));
     let mut output = String::new();
-    for line in unfolded_header_lines(headers) {
+    for line in unfolded_header_lines_checked(headers, check_control)? {
+        check_control()?;
         if output.len() >= max_bytes {
             break;
         }
@@ -179,8 +209,15 @@ fn email_text(input: &str, max_bytes: usize) -> String {
         remaining_parts: 128,
         remaining_depth: 8,
     };
-    append_mime_text(headers, body, &mut budget, &mut output, max_bytes);
-    collapse_whitespace_bounded(&output, max_bytes)
+    append_mime_text_checked(
+        headers,
+        body,
+        &mut budget,
+        &mut output,
+        max_bytes,
+        check_control,
+    )?;
+    collapse_whitespace_bounded_checked(&output, max_bytes, check_control)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -189,25 +226,27 @@ struct MimeTraversalBudget {
     remaining_depth: usize,
 }
 
-fn append_mime_text(
+fn append_mime_text_checked(
     headers: &str,
     body: &str,
     budget: &mut MimeTraversalBudget,
     output: &mut String,
     max_bytes: usize,
-) {
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
     if budget.remaining_parts == 0 || budget.remaining_depth == 0 {
-        return;
+        return Ok(());
     }
     if output.len() >= max_bytes {
-        return;
+        return Ok(());
     }
     budget.remaining_parts -= 1;
-    let header_lines = unfolded_header_lines(headers);
+    let header_lines = unfolded_header_lines_checked(headers, check_control)?;
     if header_value(&header_lines, "content-disposition")
         .is_some_and(|value| value.to_ascii_lowercase().contains("attachment"))
     {
-        return;
+        return Ok(());
     }
 
     let content_type = header_value(&header_lines, "content-type")
@@ -216,33 +255,42 @@ fn append_mime_text(
     let lower_content_type = content_type.to_ascii_lowercase();
     if lower_content_type.starts_with("multipart/") {
         let Some(boundary) = header_param(&content_type, "boundary") else {
-            return;
+            return Ok(());
         };
         budget.remaining_depth -= 1;
-        for part in multipart_parts(body, &boundary) {
-            append_mime_text(part.headers, part.body, budget, output, max_bytes);
+        for part in multipart_parts_checked(body, &boundary, check_control)? {
+            check_control()?;
+            append_mime_text_checked(
+                part.headers,
+                part.body,
+                budget,
+                output,
+                max_bytes,
+                check_control,
+            )?;
             push_separator_bounded(output, max_bytes);
             if budget.remaining_parts == 0 || output.len() >= max_bytes {
                 break;
             }
         }
         budget.remaining_depth += 1;
-        return;
+        return Ok(());
     }
 
     let transfer_encoding = header_value(&header_lines, "content-transfer-encoding")
         .unwrap_or("7bit")
         .to_ascii_lowercase();
     let remaining = remaining_bytes(output, max_bytes);
-    let decoded = decode_transfer_body(body, &transfer_encoding, remaining);
+    let decoded = decode_transfer_body_checked(body, &transfer_encoding, remaining, check_control)?;
     if lower_content_type.starts_with("text/html") {
-        let visible = html_text(&decoded, remaining);
+        let visible = html_text_checked(&decoded, remaining, check_control)?;
         push_str_bounded(output, &visible, max_bytes);
     } else if lower_content_type.starts_with("text/")
         || header_value(&header_lines, "content-type").is_none()
     {
         push_str_bounded(output, &decoded, max_bytes);
     }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -251,13 +299,18 @@ struct MimePart<'a> {
     body: &'a str,
 }
 
-fn multipart_parts<'a>(body: &'a str, boundary: &str) -> Vec<MimePart<'a>> {
+fn multipart_parts_checked<'a>(
+    body: &'a str,
+    boundary: &str,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<Vec<MimePart<'a>>> {
     let marker = format!("--{boundary}");
     let closing = format!("--{boundary}--");
     let mut parts = Vec::new();
     let mut current_start = None;
     let mut cursor = 0usize;
     for line in body.split_inclusive('\n') {
+        check_control()?;
         let line_start = cursor;
         cursor += line.len();
         let trimmed = line.trim_end_matches(['\r', '\n']);
@@ -266,7 +319,7 @@ fn multipart_parts<'a>(body: &'a str, boundary: &str) -> Vec<MimePart<'a>> {
                 push_mime_part(&mut parts, &body[start..line_start]);
             }
             if trimmed == closing {
-                return parts;
+                return Ok(parts);
             }
             current_start = Some(cursor);
         }
@@ -274,7 +327,7 @@ fn multipart_parts<'a>(body: &'a str, boundary: &str) -> Vec<MimePart<'a>> {
     if let Some(start) = current_start {
         push_mime_part(&mut parts, &body[start..]);
     }
-    parts
+    Ok(parts)
 }
 
 fn push_mime_part<'a>(parts: &mut Vec<MimePart<'a>>, part: &'a str) {
@@ -284,9 +337,13 @@ fn push_mime_part<'a>(parts: &mut Vec<MimePart<'a>>, part: &'a str) {
     }
 }
 
-fn unfolded_header_lines(headers: &str) -> Vec<String> {
+fn unfolded_header_lines_checked(
+    headers: &str,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<Vec<String>> {
     let mut lines: Vec<String> = Vec::new();
     for line in headers.lines() {
+        check_control()?;
         if line.starts_with(char::is_whitespace) {
             if let Some(previous) = lines.last_mut() {
                 previous.push(' ');
@@ -296,7 +353,7 @@ fn unfolded_header_lines(headers: &str) -> Vec<String> {
             lines.push(line.to_string());
         }
     }
-    lines
+    Ok(lines)
 }
 
 fn header_value<'a>(headers: &'a [String], name: &str) -> Option<&'a str> {
@@ -316,19 +373,31 @@ fn header_param(header_value: &str, name: &str) -> Option<String> {
     })
 }
 
-fn decode_transfer_body(body: &str, encoding: &str, max_bytes: usize) -> String {
+fn decode_transfer_body_checked(
+    body: &str,
+    encoding: &str,
+    max_bytes: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
     match encoding {
-        "quoted-printable" | "7bit" | "8bit" | "binary" => decode_quoted_printable(body, max_bytes),
-        "base64" => decode_base64(body, max_bytes),
-        _ => truncate_text(body, max_bytes),
+        "quoted-printable" | "7bit" | "8bit" | "binary" => {
+            decode_quoted_printable_checked(body, max_bytes, check_control)
+        }
+        "base64" => decode_base64_checked(body, max_bytes, check_control),
+        _ => truncate_text_checked(body, max_bytes, check_control),
     }
 }
 
-fn decode_quoted_printable(input: &str, max_bytes: usize) -> String {
+fn decode_quoted_printable_checked(
+    input: &str,
+    max_bytes: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
     let bytes = input.as_bytes();
     let mut output = Vec::with_capacity(bytes.len().min(max_bytes));
     let mut index = 0;
     while index < bytes.len() && output.len() < max_bytes {
+        check_control()?;
         if bytes[index] == b'=' {
             if matches!(bytes.get(index + 1), Some(b'\r' | b'\n')) {
                 index += 1;
@@ -349,14 +418,19 @@ fn decode_quoted_printable(input: &str, max_bytes: usize) -> String {
         push_byte_bounded(&mut output, bytes[index], max_bytes);
         index += 1;
     }
-    String::from_utf8_lossy(&output).into_owned()
+    Ok(String::from_utf8_lossy(&output).into_owned())
 }
 
-fn decode_base64(input: &str, max_bytes: usize) -> String {
+fn decode_base64_checked(
+    input: &str,
+    max_bytes: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
     let mut output = Vec::with_capacity((input.len() / 4).saturating_mul(3).min(max_bytes));
     let mut quantum = [0u8; 4];
     let mut quantum_len = 0usize;
     for byte in input.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        check_control()?;
         if output.len() >= max_bytes {
             break;
         }
@@ -390,7 +464,7 @@ fn decode_base64(input: &str, max_bytes: usize) -> String {
             quantum_len = 0;
         }
     }
-    String::from_utf8_lossy(&output).into_owned()
+    Ok(String::from_utf8_lossy(&output).into_owned())
 }
 
 fn base64_value(byte: u8) -> Option<u8> {
@@ -426,9 +500,14 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn collapse_whitespace_bounded(input: &str, max_bytes: usize) -> String {
+fn collapse_whitespace_bounded_checked(
+    input: &str,
+    max_bytes: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
     let mut output = String::new();
     for token in input.split_whitespace() {
+        check_control()?;
         if output.len() >= max_bytes {
             break;
         }
@@ -437,7 +516,7 @@ fn collapse_whitespace_bounded(input: &str, max_bytes: usize) -> String {
         }
         push_str_bounded(&mut output, token, max_bytes);
     }
-    output
+    Ok(output)
 }
 
 fn remaining_bytes(output: &str, max_bytes: usize) -> usize {
@@ -479,6 +558,35 @@ fn truncate_text(text: &str, max_bytes: usize) -> String {
     text[..end].to_string()
 }
 
+fn truncate_text_checked(
+    text: &str,
+    max_bytes: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
+    check_control()?;
+    Ok(truncate_text(text, max_bytes))
+}
+
+fn normalize_newlines_checked(
+    input: &str,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        check_control()?;
+        if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            output.push('\n');
+        } else {
+            output.push(ch);
+        }
+    }
+    Ok(output)
+}
+
 fn floor_char_boundary(text: &str, mut index: usize) -> usize {
     index = index.min(text.len());
     while index > 0 && !text.is_char_boundary(index) {
@@ -490,6 +598,8 @@ fn floor_char_boundary(text: &str, mut index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_types::GfmError;
+    use std::cell::Cell;
 
     #[test]
     fn extracts_html_visible_text() {
@@ -635,5 +745,87 @@ Content-Type: text/html
 
         assert_eq!(doc.text, "S alpha beta");
         assert!(!doc.text.contains("gamma"), "{}", doc.text);
+    }
+
+    #[test]
+    fn checked_html_extraction_can_cancel_during_parse() {
+        let html = format!(
+            "<html><body>{}</body></html>",
+            "<p>htmlneedle</p>".repeat(4096)
+        );
+        let checks = Cell::new(0);
+
+        let result = extract_rich_checked(html.as_bytes(), RichKind::Html, usize::MAX, || {
+            let next = checks.get() + 1;
+            checks.set(next);
+            if next >= 512 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn checked_rtf_extraction_can_cancel_during_parse() {
+        let rtf = format!(r"{{\rtf1\ansi {}}}", r"rtfneedle\par ".repeat(4096));
+        let checks = Cell::new(0);
+
+        let result = extract_rich_checked(rtf.as_bytes(), RichKind::Rtf, usize::MAX, || {
+            let next = checks.get() + 1;
+            checks.set(next);
+            if next >= 512 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn checked_email_extraction_can_cancel_during_multipart_parse() {
+        let mut email =
+            String::from("Subject: Large\nContent-Type: multipart/mixed; boundary=outer\n\n");
+        for index in 0..1024 {
+            email.push_str("--outer\nContent-Type: text/plain\n\n");
+            email.push_str(&format!("part {index} emailneedle\n"));
+        }
+        email.push_str("--outer--\n");
+        let checks = Cell::new(0);
+
+        let result = extract_rich_checked(email.as_bytes(), RichKind::Email, usize::MAX, || {
+            let next = checks.get() + 1;
+            checks.set(next);
+            if next >= 512 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn checked_email_extraction_can_cancel_during_base64_decode() {
+        let body = "YWxwaGEgYmV0YSBnYW1tYQ==\n".repeat(4096);
+        let email = format!("Subject: Encoded\nContent-Transfer-Encoding: base64\n\n{body}");
+        let checks = Cell::new(0);
+
+        let result = extract_rich_checked(email.as_bytes(), RichKind::Email, usize::MAX, || {
+            let next = checks.get() + 1;
+            checks.set(next);
+            if next >= 512 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
     }
 }
