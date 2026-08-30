@@ -1616,6 +1616,54 @@ fn volume_index_policy_includes_local_and_defers_remote_by_default() {
 }
 
 #[test]
+fn volume_index_policy_defers_unknown_volumes_by_default() {
+    let policy = VolumeIndexPolicy::default();
+    let unknown = IndexVolumeDescriptor::new(
+        "Unclassified",
+        "/Volumes/Unclassified",
+        IndexVolumeClass::Unknown,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(9));
+
+    let decision = policy.decide(&unknown);
+
+    assert_eq!(decision.action, VolumeIndexAction::DeferredOptIn);
+    assert_eq!(decision.throttle.class, VolumeThrottleClass::Suspended);
+    assert_eq!(decision.reason, "requires-opt-in");
+    assert!(!decision.should_index());
+    assert!(decision
+        .as_tsv()
+        .contains("\tclass=unknown\tmount=mounted\treachable=true\taction=deferred-opt-in\t"));
+}
+
+#[test]
+fn volume_index_policy_throttles_opted_in_unknown_volumes_like_network() {
+    let policy = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Enabled,
+        gfm_config::VolumeIndexingPolicy::Enabled,
+    );
+    let unknown = IndexVolumeDescriptor::new(
+        "Unclassified",
+        "/Volumes/Unclassified",
+        IndexVolumeClass::Unknown,
+        IndexMountState::Mounted,
+    );
+
+    let decision = policy.decide(&unknown);
+
+    assert_eq!(decision.action, VolumeIndexAction::Include);
+    assert_eq!(decision.throttle.class, VolumeThrottleClass::Network);
+    assert_eq!(decision.throttle.max_concurrent_jobs, 1);
+    assert_eq!(decision.throttle.crawl_delay, Duration::from_millis(25));
+    assert_eq!(
+        decision.throttle.content_bytes_per_second,
+        Some(16 * 1024 * 1024)
+    );
+    assert!(decision.should_index());
+}
+
+#[test]
 fn volume_index_plan_builds_precise_search_scope_from_included_volume_ids() {
     let policy = VolumeIndexPolicy::new(
         gfm_config::VolumeIndexingPolicy::Enabled,

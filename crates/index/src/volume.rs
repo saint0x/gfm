@@ -30,7 +30,8 @@ impl IndexVolumeClass {
         match self {
             Self::External | Self::Slow => VolumePolicyFamily::External,
             Self::Network => VolumePolicyFamily::Network,
-            Self::System | Self::Internal | Self::Unknown => VolumePolicyFamily::Local,
+            Self::Unknown => VolumePolicyFamily::Network,
+            Self::System | Self::Internal => VolumePolicyFamily::Local,
         }
     }
 
