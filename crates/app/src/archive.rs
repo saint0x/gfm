@@ -1,4 +1,7 @@
-use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
+use crate::access::{
+    preflight_access_scope, preflight_access_scope_checked, preflight_volume_access_scope,
+    ScopedAccessGuard,
+};
 use crate::runtime::{
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path, run_volume_task_cancellable,
 };
@@ -475,7 +478,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Visible,
                 "sidecar repair",
                 move |cancellation| {
-                    let _access = retain_sidecar_recovery_access(&records, &sidecars, &quarantine)?;
+                    let _access = retain_sidecar_recovery_access_checked(
+                        &records,
+                        &sidecars,
+                        &quarantine,
+                        || cancellation.check(),
+                    )?;
                     recover_sidecars_checked(&records, &sidecars, &quarantine, || {
                         cancellation.check()
                     })
@@ -513,7 +521,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 },
                 records.clone(),
                 move |cancellation| {
-                    let _access = retain_sidecar_recovery_access(&records, &sidecars, &quarantine)?;
+                    let _access = retain_sidecar_recovery_access_checked(
+                        &records,
+                        &sidecars,
+                        &quarantine,
+                        || cancellation.check(),
+                    )?;
                     recover_sidecars_checked(&records, &sidecars, &quarantine, || {
                         cancellation.check()
                     })
@@ -657,7 +670,9 @@ fn run_sidecar_recovery_plan(
         .or_else(|| parent_volume(&records));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_sidecar_recovery_plan_access(&records, &sidecars)?;
+        let _access = retain_sidecar_recovery_plan_access_checked(&records, &sidecars, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         plan_sidecar_recovery_checked(&records, &sidecars, || cancellation.check())
     })
@@ -1016,22 +1031,28 @@ fn preflight_derived_sidecar_rebuild_volumes(
     )
 }
 
-fn retain_sidecar_recovery_plan_access(
+fn retain_sidecar_recovery_plan_access_checked(
     records: &Path,
     sidecars: &SidecarPaths,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    let mut guards = vec![preflight_access_scope(
+    check_control()?;
+    let mut guards = vec![preflight_access_scope_checked(
         records,
         AccessIntent::Read,
         "sidecar repair plan records",
+        &mut check_control,
     )?];
     for path in sidecar_paths(sidecars) {
-        guards.push(preflight_access_scope(
+        check_control()?;
+        guards.push(preflight_access_scope_checked(
             archive_probe_path(path),
             AccessIntent::Read,
             "sidecar repair plan sidecar",
+            &mut check_control,
         )?);
     }
+    check_control()?;
     Ok(guards)
 }
 
@@ -1047,26 +1068,41 @@ fn preflight_sidecar_recovery_plan_volumes(records: &Path, sidecars: &SidecarPat
     Ok(())
 }
 
-fn retain_sidecar_recovery_access(
+fn retain_sidecar_recovery_access_checked(
     records: &Path,
     sidecars: &SidecarPaths,
     quarantine: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let quarantine_probe = write_probe_path(quarantine)?.to_path_buf();
+    check_control()?;
     let mut guards = vec![
-        preflight_access_scope(records, AccessIntent::Read, "sidecar repair records")?,
-        preflight_access_scope(
-            write_probe_path(quarantine)?,
+        preflight_access_scope_checked(
+            records,
+            AccessIntent::Read,
+            "sidecar repair records",
+            &mut check_control,
+        )?,
+        preflight_access_scope_checked(
+            &quarantine_probe,
             AccessIntent::Write,
             "sidecar repair quarantine",
+            &mut check_control,
         )?,
     ];
     for path in sidecar_paths(sidecars) {
-        guards.push(preflight_access_scope(
-            write_probe_path(path)?,
+        check_control()?;
+        let output_probe = write_probe_path(path)?.to_path_buf();
+        check_control()?;
+        guards.push(preflight_access_scope_checked(
+            &output_probe,
             AccessIntent::Write,
             "sidecar repair output",
+            &mut check_control,
         )?);
     }
+    check_control()?;
     Ok(guards)
 }
 
@@ -1251,6 +1287,90 @@ mod tests {
     }
 
     #[test]
+    fn sidecar_recovery_plan_access_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-sidecar-recovery-plan-access-cancel");
+        let records = root.join("records.gfmidx");
+        let sidecars = SidecarPaths {
+            columns: Some(root.join("columns.gfmcols")),
+            metadata: None,
+            prefixes: None,
+            substrings: None,
+            fuzzy: None,
+            dictionary: None,
+        };
+        fs::write(&records, b"records").unwrap();
+
+        let result = retain_sidecar_recovery_plan_access_checked(&records, &sidecars, || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!sidecars.columns.as_ref().unwrap().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sidecar_recovery_access_checked_honors_cancel_before_quarantine_probe() {
+        let root = unique_temp_dir("gfm-sidecar-recovery-access-cancel");
+        let records = root.join("records.gfmidx");
+        let quarantine = root.join("missing").join("quarantine");
+        let sidecars = SidecarPaths {
+            columns: Some(root.join("columns.gfmcols")),
+            metadata: None,
+            prefixes: None,
+            substrings: None,
+            fuzzy: None,
+            dictionary: None,
+        };
+        fs::write(&records, b"records").unwrap();
+
+        let result =
+            retain_sidecar_recovery_access_checked(&records, &sidecars, &quarantine, || {
+                Err(GfmError::Cancelled)
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!quarantine.exists());
+        assert!(!quarantine.parent().unwrap().exists());
+        assert!(!sidecars.columns.as_ref().unwrap().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sidecar_recovery_access_checked_can_cancel_between_output_probes() {
+        let root = unique_temp_dir("gfm-sidecar-recovery-output-access-cancel");
+        let records = root.join("records.gfmidx");
+        let quarantine = root.join("quarantine");
+        let sidecars = SidecarPaths {
+            columns: Some(root.join("columns.gfmcols")),
+            metadata: Some(root.join("metadata.gfmmeta")),
+            prefixes: None,
+            substrings: None,
+            fuzzy: None,
+            dictionary: None,
+        };
+        fs::write(&records, b"records").unwrap();
+        fs::create_dir(&quarantine).unwrap();
+        let mut checks = 0usize;
+
+        let result =
+            retain_sidecar_recovery_access_checked(&records, &sidecars, &quarantine, || {
+                checks += 1;
+                if checks >= 4 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 4);
+        assert!(!sidecars.columns.as_ref().unwrap().exists());
+        assert!(!sidecars.metadata.as_ref().unwrap().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn record_sidecar_build_cancellable_passes_runtime_token_to_writer() {
         let root = std::env::temp_dir().join(format!(
             "gfm-record-sidecar-cancellation-token-{}-{}",
@@ -1300,5 +1420,19 @@ mod tests {
         assert_eq!(result, Err(GfmError::Cancelled));
         assert!(!output.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "{}-{}-{}",
+            prefix,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
     }
 }
