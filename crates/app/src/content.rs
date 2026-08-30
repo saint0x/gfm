@@ -949,11 +949,17 @@ fn run_index_footprint_inspect(
         .or_else(|| parent_volume(&spec.records));
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_index_footprint_access(&spec, worker)?;
+        let _access =
+            retain_index_footprint_access_checked(&spec, worker, || cancellation.check())?;
         let archive_paths = index_footprint_content_archive_paths(&spec, &cancellation)?;
-        preflight_index_footprint_archive_volumes(&archive_paths, worker)?;
+        preflight_index_footprint_archive_volumes_checked(&archive_paths, worker, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
-        let _archive_access = retain_index_footprint_archive_access(&archive_paths, worker)?;
+        let _archive_access =
+            retain_index_footprint_archive_access_checked(&archive_paths, worker, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
         gfm_index::inspect_index_footprint_checked(&spec, &cancellation)
     })
@@ -970,33 +976,41 @@ fn index_footprint_content_archive_paths(
     Ok(manifest.resolved_archive_paths(manifest_path))
 }
 
-fn retain_index_footprint_access(
+fn retain_index_footprint_access_checked(
     spec: &IndexFootprintSpec,
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::new();
     for (path, role) in unique_index_footprint_paths(spec) {
-        guards.push(preflight_access_scope(
+        check_control()?;
+        guards.push(preflight_access_scope_checked(
             path,
             AccessIntent::Read,
             &format!("{worker} {role}"),
+            &mut check_control,
         )?);
     }
+    check_control()?;
     Ok(guards)
 }
 
-fn retain_index_footprint_archive_access(
+fn retain_index_footprint_archive_access_checked(
     paths: &[PathBuf],
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::new();
     for path in unique_path_refs(paths.iter().map(PathBuf::as_path)) {
-        guards.push(preflight_access_scope(
+        check_control()?;
+        guards.push(preflight_access_scope_checked(
             path,
             AccessIntent::Read,
             &format!("{worker} content archive"),
+            &mut check_control,
         )?);
     }
+    check_control()?;
     Ok(guards)
 }
 
@@ -1007,14 +1021,20 @@ fn preflight_index_footprint_volumes(spec: &IndexFootprintSpec, worker: &str) ->
     Ok(())
 }
 
-fn preflight_index_footprint_archive_volumes(paths: &[PathBuf], worker: &str) -> Result<()> {
+fn preflight_index_footprint_archive_volumes_checked(
+    paths: &[PathBuf],
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
     for path in unique_path_refs(paths.iter().map(PathBuf::as_path)) {
+        check_control()?;
         preflight_volume_access_scope(
             path,
             AccessIntent::Read,
             &format!("{worker} content archive"),
         )?;
     }
+    check_control()?;
     Ok(())
 }
 
@@ -1137,6 +1157,9 @@ impl RecoverableContentJobs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn unique_index_footprint_paths_preserves_first_role_for_repeated_paths() {
@@ -1178,6 +1201,75 @@ mod tests {
     }
 
     #[test]
+    fn index_footprint_access_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-footprint-access-pre-cancel");
+        let records = root.join("records.gfmidx");
+        fs::write(&records, "records").unwrap();
+        let spec = IndexFootprintSpec::new(records);
+
+        let result = retain_index_footprint_access_checked(&spec, "index footprint", || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_footprint_archive_volume_preflight_checked_can_cancel_between_archives() {
+        let root = unique_temp_dir("gfm-footprint-archive-volume-cancel");
+        let first = root.join("first.gfmcontent");
+        let second = root.join("second.gfmcontent");
+        fs::write(&first, "first").unwrap();
+        fs::write(&second, "second").unwrap();
+        let mut checks = 0usize;
+
+        let result = preflight_index_footprint_archive_volumes_checked(
+            &[first, second],
+            "index footprint",
+            || {
+                checks += 1;
+                if checks >= 2 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(checks >= 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_footprint_archive_access_checked_can_cancel_between_archives() {
+        let root = unique_temp_dir("gfm-footprint-archive-access-cancel");
+        let first = root.join("first.gfmcontent");
+        let second = root.join("second.gfmcontent");
+        fs::write(&first, "first").unwrap();
+        fs::write(&second, "second").unwrap();
+        let mut checks = 0usize;
+
+        let result = retain_index_footprint_archive_access_checked(
+            &[first, second],
+            "index footprint",
+            || {
+                checks += 1;
+                if checks >= 4 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 4);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn content_input_file_exists_checked_honors_pre_cancelled_control_before_metadata() {
         let path = std::env::temp_dir().join(format!(
             "gfm-content-input-exists-cancelled-{}",
@@ -1205,6 +1297,17 @@ mod tests {
                 .unwrap();
 
         assert!(!exists);
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "{}-{}-{}",
+            prefix,
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 }
 

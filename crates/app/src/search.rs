@@ -1,4 +1,6 @@
-use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
+use crate::access::{
+    preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
+};
 use crate::content::run_content_search;
 use crate::extract::extraction_budget_profile;
 use crate::runtime::run_volume_task_cancellable;
@@ -38,7 +40,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Visible,
                 "search",
                 move |cancellation| {
-                    let _access = preflight_access_scope(&root, AccessIntent::Index, "search")?;
+                    let _access = preflight_access_scope_checked(
+                        &root,
+                        AccessIntent::Index,
+                        "search",
+                        || cancellation.check(),
+                    )?;
                     let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let session = snapshot.query_session();
@@ -64,8 +71,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Visible,
                 "search stream",
                 move |cancellation| {
-                    let _access =
-                        preflight_access_scope(&root, AccessIntent::Index, "search stream")?;
+                    let _access = preflight_access_scope_checked(
+                        &root,
+                        AccessIntent::Index,
+                        "search stream",
+                        || cancellation.check(),
+                    )?;
                     let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let session = snapshot.query_session();
@@ -1000,8 +1011,12 @@ fn run_search_query_parse_cancellation_probe() -> Result<()> {
     }
 }
 
-fn preflight_content_archive_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(path, AccessIntent::Read, worker)
+fn preflight_content_archive_access_checked(
+    path: &Path,
+    worker: &str,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
 }
 
 fn run_content_archive_read_cancellable<T>(
@@ -1016,7 +1031,8 @@ where
     let volume = path_volume(&path);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_content_archive_access(&path, worker)?;
+        let _access =
+            preflight_content_archive_access_checked(&path, worker, || cancellation.check())?;
         cancellation.check()?;
         read(path, &cancellation)
     })
@@ -1034,7 +1050,8 @@ where
     let volume = first_path_volume(paths.iter());
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_content_archives_access(&paths, worker)?;
+        let _access =
+            preflight_content_archives_access_checked(&paths, worker, || cancellation.check())?;
         cancellation.check()?;
         read(paths, &cancellation)
     })
@@ -1078,7 +1095,8 @@ where
     let volume = path_volume(&path);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_search_archive_access(&path, worker)?;
+        let _access =
+            preflight_search_archive_access_checked(&path, worker, || cancellation.check())?;
         cancellation.check()?;
         read(path, &cancellation)
     })
@@ -1118,7 +1136,10 @@ fn run_search_index_columns(
         "search index columns",
         move |cancellation| {
             cancellation.check()?;
-            let _access = preflight_search_index_columns_access(&records, &columns)?;
+            let _access =
+                preflight_search_index_columns_access_checked(&records, &columns, || {
+                    cancellation.check()
+                })?;
             cancellation.check()?;
             let records = MmapRecordArchive::open_checked(records, || cancellation.check())?;
             cancellation.check()?;
@@ -1168,7 +1189,10 @@ fn run_content_index_search(
     let volume = path_volume(&records).or_else(|| path_volume(&content));
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_content_index_search_access(&records, &content, worker)?;
+        let _access =
+            preflight_content_index_search_access_checked(&records, &content, worker, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
         let (live, report) = Indexer::default().load_live_with_content_for_query_cancellable(
             records,
@@ -1201,7 +1225,12 @@ fn run_content_index_set_search(
     let volume = path_volume(&records);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_content_index_set_search_access(&records, &content_paths, WORKER)?;
+        let _access = preflight_content_index_set_search_access_checked(
+            &records,
+            &content_paths,
+            WORKER,
+            || cancellation.check(),
+        )?;
         cancellation.check()?;
         let archive_count = content_paths.len();
         let (live, report) = Indexer::default().load_live_with_content_set_cancellable(
@@ -1243,7 +1272,12 @@ fn run_content_index_set_session(
     let volume = path_volume(&records);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_content_index_set_search_access(&records, &content_paths, WORKER)?;
+        let _access = preflight_content_index_set_search_access_checked(
+            &records,
+            &content_paths,
+            WORKER,
+            || cancellation.check(),
+        )?;
         cancellation.check()?;
         let session = Indexer::default().load_content_set_query_session_cancellable(
             &records,
@@ -1392,28 +1426,54 @@ fn preflight_content_index_set_volume_access(
     Ok(())
 }
 
-fn preflight_search_archive_access(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(path, AccessIntent::Read, worker)
+fn preflight_search_archive_access_checked(
+    path: &Path,
+    worker: &str,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
 }
 
-fn preflight_search_index_columns_access(
+fn preflight_search_index_columns_access_checked(
     records: &Path,
     columns: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     Ok(vec![
-        preflight_access_scope(records, AccessIntent::Read, "search index columns records")?,
-        preflight_access_scope(columns, AccessIntent::Read, "search index columns columns")?,
+        preflight_access_scope_checked(
+            records,
+            AccessIntent::Read,
+            "search index columns records",
+            &mut check_control,
+        )?,
+        preflight_access_scope_checked(
+            columns,
+            AccessIntent::Read,
+            "search index columns columns",
+            &mut check_control,
+        )?,
     ])
 }
 
-fn preflight_content_index_search_access(
+fn preflight_content_index_search_access_checked(
     records: &Path,
     content: &Path,
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     Ok(vec![
-        preflight_access_scope(records, AccessIntent::Read, &format!("{worker} records"))?,
-        preflight_access_scope(content, AccessIntent::Read, &format!("{worker} content"))?,
+        preflight_access_scope_checked(
+            records,
+            AccessIntent::Read,
+            &format!("{worker} records"),
+            &mut check_control,
+        )?,
+        preflight_access_scope_checked(
+            content,
+            AccessIntent::Read,
+            &format!("{worker} content"),
+            &mut check_control,
+        )?,
     ])
 }
 
@@ -1425,39 +1485,49 @@ fn preflight_content_index_manifest_search_access_checked(
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
     let mut guards = vec![
-        preflight_access_scope(records, AccessIntent::Read, &format!("{worker} records"))?,
-        preflight_access_scope(
+        preflight_access_scope_checked(
+            records,
+            AccessIntent::Read,
+            &format!("{worker} records"),
+            &mut check_control,
+        )?,
+        preflight_access_scope_checked(
             manifest_path,
             AccessIntent::Read,
             &format!("{worker} manifest"),
+            &mut check_control,
         )?,
     ];
     check_control()?;
     let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
     check_control()?;
     let content_worker = format!("{worker} content");
-    guards.extend(preflight_content_archives_access(
+    guards.extend(preflight_content_archives_access_checked(
         &manifest.resolved_archive_paths(manifest_path),
         &content_worker,
+        &mut check_control,
     )?);
     check_control()?;
     Ok(guards)
 }
 
-fn preflight_content_index_set_search_access(
+fn preflight_content_index_set_search_access_checked(
     records: &Path,
     content_paths: &[PathBuf],
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    let mut guards = vec![preflight_access_scope(
+    let mut guards = vec![preflight_access_scope_checked(
         records,
         AccessIntent::Read,
         &format!("{worker} records"),
+        &mut check_control,
     )?];
     let content_worker = format!("{worker} content");
-    guards.extend(preflight_content_archives_access(
+    guards.extend(preflight_content_archives_access_checked(
         content_paths,
         &content_worker,
+        &mut check_control,
     )?);
     Ok(guards)
 }
@@ -1541,7 +1611,10 @@ fn run_sidecar_index_search(
     let volume = sidecar_index_volume(&paths);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
+        let _access =
+            preflight_sidecar_index_search_access_checked(paths.borrowed(), WORKER, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
         let OwnedSidecarIndexAccessPaths {
             records,
@@ -1610,7 +1683,10 @@ fn run_sidecar_index_session(
     let volume = sidecar_index_volume(&paths);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
+        let _access =
+            preflight_sidecar_index_search_access_checked(paths.borrowed(), WORKER, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
         let session = open_sidecar_index_query_session(paths, &cancellation)?;
         cancellation.check()?;
@@ -1651,7 +1727,10 @@ fn run_sidecar_index_budget(
     let volume = sidecar_index_volume(&paths);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
+        let _access =
+            preflight_sidecar_index_search_access_checked(paths.borrowed(), WORKER, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
         let session = open_sidecar_index_query_session(paths, &cancellation)?;
         cancellation.check()?;
@@ -1681,7 +1760,10 @@ fn run_sidecar_index_volume_scope(
     let volume = sidecar_index_volume(&paths);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_sidecar_index_search_access(paths.borrowed(), WORKER)?;
+        let _access =
+            preflight_sidecar_index_search_access_checked(paths.borrowed(), WORKER, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
         let session = open_sidecar_index_query_session(paths, &cancellation)?;
         cancellation.check()?;
@@ -1747,28 +1829,31 @@ fn sidecar_index_volume(paths: &OwnedSidecarIndexAccessPaths) -> Option<VolumeId
         .find_map(|(path, _)| path_volume(path))
 }
 
-fn preflight_sidecar_index_search_access(
+fn preflight_sidecar_index_search_access_checked(
     paths: SidecarIndexAccessPaths<'_>,
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     let mut guards = Vec::new();
     for (path, role) in unique_sidecar_search_paths(paths.paths_with_roles()) {
-        guards.push(preflight_access_scope(
+        guards.push(preflight_access_scope_checked(
             path,
             AccessIntent::Read,
             &format!("{worker} {role}"),
+            &mut check_control,
         )?);
     }
     Ok(guards)
 }
 
-fn preflight_content_archives_access(
+fn preflight_content_archives_access_checked(
     paths: &[PathBuf],
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     unique_search_paths(paths)
         .into_iter()
-        .map(|path| preflight_content_archive_access(path, worker))
+        .map(|path| preflight_content_archive_access_checked(path, worker, &mut check_control))
         .collect()
 }
 
@@ -1797,13 +1882,18 @@ fn preflight_content_manifest_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let mut guards = vec![preflight_content_archive_access(manifest_path, worker)?];
+    let mut guards = vec![preflight_content_archive_access_checked(
+        manifest_path,
+        worker,
+        &mut check_control,
+    )?];
     check_control()?;
     let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
     check_control()?;
-    guards.extend(preflight_content_archives_access(
+    guards.extend(preflight_content_archives_access_checked(
         &manifest.resolved_archive_paths(manifest_path),
         worker,
+        &mut check_control,
     )?);
     check_control()?;
     Ok(guards)
@@ -2160,5 +2250,80 @@ mod tests {
 
         assert_eq!(result, Err(GfmError::Cancelled));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn search_archive_access_checked_honors_pre_cancelled_control() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-search-archive-access-pre-cancel-{}.gfmidx",
+            std::process::id()
+        ));
+
+        let result =
+            preflight_search_archive_access_checked(&path, "search archive access", || {
+                Err(GfmError::Cancelled)
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn content_archives_access_checked_honors_cancellation_between_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-content-archives-access-cancel-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let first = root.join("first.gfmcontent");
+        let second = root.join("second.gfmcontent");
+        std::fs::write(&first, b"first").unwrap();
+        std::fs::write(&second, b"second").unwrap();
+        let mut checks = 0usize;
+
+        let result = preflight_content_archives_access_checked(
+            &[first.clone(), second.clone()],
+            "content archives access",
+            || {
+                checks += 1;
+                if checks >= 4 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 4);
+        assert!(first.exists());
+        assert!(second.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sidecar_index_access_checked_honors_pre_cancelled_control() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-sidecar-access-pre-cancel-{}",
+            std::process::id()
+        ));
+        let paths = OwnedSidecarIndexAccessPaths {
+            records: root.join("records.gfmidx"),
+            columns: root.join("columns.gfmcols"),
+            metadata: root.join("metadata.gfmmeta"),
+            prefixes: root.join("prefixes.gfmprefix"),
+            substrings: root.join("substrings.gfmsubstr"),
+            fuzzy: root.join("fuzzy.gfmfuzzy"),
+            content: root.join("content.gfmcontent"),
+        };
+
+        let result = preflight_sidecar_index_search_access_checked(
+            paths.borrowed(),
+            "sidecar index access",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
     }
 }
