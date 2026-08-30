@@ -21,6 +21,18 @@ impl OperationVolumeClass {
             Self::Network | Self::Slow => SLOW_COPY_BUFFER_BYTES,
         }
     }
+
+    const fn default_file_cloning_supported(self) -> bool {
+        matches!(self, Self::Local)
+    }
+
+    const fn default_hard_links_supported(self) -> bool {
+        matches!(self, Self::Local)
+    }
+
+    const fn default_sparse_files_supported(self) -> bool {
+        matches!(self, Self::Local)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,8 +139,7 @@ impl OperationVolumeCopyPolicy {
     }
 
     pub fn file_cloning_supported_for_paths(&self, from: &Path, to: &Path) -> bool {
-        if self.file_cloning_support_for_path(from) == Some(false)
-            || self.file_cloning_support_for_path(to) == Some(false)
+        if !self.file_cloning_supported_for_path(from) || !self.file_cloning_supported_for_path(to)
         {
             return false;
         }
@@ -139,6 +150,11 @@ impl OperationVolumeCopyPolicy {
             (Some(source), Some(destination)) => source == destination,
             _ => true,
         }
+    }
+
+    fn file_cloning_supported_for_path(&self, path: &Path) -> bool {
+        self.file_cloning_support_for_path(path)
+            .unwrap_or_else(|| self.class_for_path(path).default_file_cloning_supported())
     }
 
     pub fn paths_are_known_distinct_volumes(&self, from: &Path, to: &Path) -> bool {
@@ -157,7 +173,7 @@ impl OperationVolumeCopyPolicy {
             .filter(|(root, _)| path.starts_with(root))
             .max_by_key(|(root, _)| root.components().count())
             .map(|(_, supported)| *supported)
-            .unwrap_or(true)
+            .unwrap_or_else(|| self.class_for_path(path).default_hard_links_supported())
     }
 
     pub fn sparse_files_supported_for_path(&self, path: &Path) -> bool {
@@ -166,7 +182,7 @@ impl OperationVolumeCopyPolicy {
             .filter(|(root, _)| path.starts_with(root))
             .max_by_key(|(root, _)| root.components().count())
             .map(|(_, supported)| *supported)
-            .unwrap_or(true)
+            .unwrap_or_else(|| self.class_for_path(path).default_sparse_files_supported())
     }
 
     pub fn copy_buffer_bytes_for_paths(&self, from: &Path, to: &Path) -> usize {
@@ -235,6 +251,8 @@ mod tests {
     #[test]
     fn file_cloning_support_uses_the_most_specific_root() {
         let policy = OperationVolumeCopyPolicy::default()
+            .with_root("/Volumes/Media", OperationVolumeClass::External)
+            .with_root("/Volumes/Media/Fast", OperationVolumeClass::External)
             .with_root_file_cloning_support("/Volumes/Media", false)
             .with_root_file_cloning_support("/Volumes/Media/Fast", true);
 
@@ -250,6 +268,35 @@ mod tests {
             Path::new("/Users/deepsaint/source.bin"),
             Path::new("/Users/deepsaint/copy.bin")
         ));
+    }
+
+    #[test]
+    fn non_local_roots_require_explicit_native_capability_support() {
+        let policy = OperationVolumeCopyPolicy::default()
+            .with_root("/Volumes/Backup", OperationVolumeClass::External)
+            .with_root("/Volumes/Remote", OperationVolumeClass::Network)
+            .with_root("/Volumes/Camera", OperationVolumeClass::Slow);
+
+        assert!(!policy.file_cloning_supported_for_paths(
+            Path::new("/Volumes/Backup/source.bin"),
+            Path::new("/Volumes/Backup/copy.bin")
+        ));
+        assert!(!policy.hard_links_supported_for_path(Path::new("/Volumes/Remote/copy.bin")));
+        assert!(!policy.sparse_files_supported_for_path(Path::new("/Volumes/Camera/copy.bin")));
+
+        let explicitly_supported = policy
+            .with_root_file_cloning_support("/Volumes/Backup", true)
+            .with_root_hard_link_support("/Volumes/Remote", true)
+            .with_root_sparse_file_support("/Volumes/Camera", true);
+
+        assert!(explicitly_supported.file_cloning_supported_for_paths(
+            Path::new("/Volumes/Backup/source.bin"),
+            Path::new("/Volumes/Backup/copy.bin")
+        ));
+        assert!(explicitly_supported
+            .hard_links_supported_for_path(Path::new("/Volumes/Remote/copy.bin")));
+        assert!(explicitly_supported
+            .sparse_files_supported_for_path(Path::new("/Volumes/Camera/copy.bin")));
     }
 
     #[test]
@@ -292,6 +339,8 @@ mod tests {
     #[test]
     fn hard_link_support_uses_the_most_specific_destination_root() {
         let policy = OperationVolumeCopyPolicy::default()
+            .with_root("/Volumes/Media", OperationVolumeClass::External)
+            .with_root("/Volumes/Media/Archive", OperationVolumeClass::External)
             .with_root_hard_link_support("/Volumes/Media", false)
             .with_root_hard_link_support("/Volumes/Media/Archive", true);
 
@@ -303,6 +352,8 @@ mod tests {
     #[test]
     fn sparse_file_support_uses_the_most_specific_destination_root() {
         let policy = OperationVolumeCopyPolicy::default()
+            .with_root("/Volumes/Media", OperationVolumeClass::External)
+            .with_root("/Volumes/Media/Sparse", OperationVolumeClass::External)
             .with_root_sparse_file_support("/Volumes/Media", false)
             .with_root_sparse_file_support("/Volumes/Media/Sparse", true);
 
