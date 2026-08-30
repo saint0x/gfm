@@ -187,6 +187,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(|value| parse_u32(&value, "failure threshold"))
                 .transpose()?
                 .unwrap_or(2);
+            let _scratch_access = preflight_adaptive_extraction_worker_scratch()?;
             let volume_path = path.clone();
             let volume_store = store.clone();
             let outcome = run_scheduled_volume_task_cancellable_with_volume_and_payload_path(

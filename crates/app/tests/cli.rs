@@ -9132,6 +9132,53 @@ fn quarantined_adaptive_extraction_worker_records_timeout_from_binary() {
 }
 
 #[test]
+fn quarantined_adaptive_extraction_worker_refuses_unreachable_scratch_before_recording_from_binary()
+{
+    let root = unique_temp_dir("gfm-cli-extract-worker-quarantine-scratch-root");
+    let scratch = unique_temp_dir("gfm-cli-extract-worker-quarantine-scratch-unreachable");
+    let path = root.join("document.txt");
+    let store = root.join("quarantine.gfmquarantine");
+    fs::write(&path, "quarantine scratch preflight marker").unwrap();
+    fs::write(scratch.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("TMPDIR", &scratch)
+        .args([
+            "extract-worker-quarantine-adaptive",
+            path.to_str().unwrap(),
+            store.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+            "0",
+            "2",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("quarantine\t"), "{stdout}");
+    assert!(
+        stderr.contains("adaptive extraction volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !store.exists(),
+        "scratch failure must not write quarantine state"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "quarantine scratch preflight marker"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
 fn deferred_quarantined_adaptive_extraction_worker_does_not_touch_unreachable_store_from_binary() {
     let source_root = unique_temp_dir("gfm-cli-extract-worker-quarantine-deferred-source");
     let store_root = unique_temp_dir("gfm-cli-extract-worker-quarantine-deferred-store");

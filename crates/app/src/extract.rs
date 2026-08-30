@@ -220,6 +220,8 @@ pub(crate) fn run_quarantined_adaptive_extraction_worker_cancellable(
     let _access =
         retain_extraction_quarantine_worker_access(path, store, "quarantined extraction worker")?;
     cancellation.check()?;
+    let _scratch_access = preflight_adaptive_extraction_worker_scratch()?;
+    cancellation.check()?;
     let fingerprint = ExtractionFingerprint::for_path(path)?;
     cancellation.check()?;
     let mut quarantine = read_extraction_quarantine(store, threshold)?;
