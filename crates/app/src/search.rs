@@ -1221,6 +1221,20 @@ struct SidecarIndexAccessPaths<'a> {
     content: &'a Path,
 }
 
+impl<'a> SidecarIndexAccessPaths<'a> {
+    fn paths_with_roles(&self) -> [(&'a Path, &'static str); 7] {
+        [
+            (self.records, "records"),
+            (self.columns, "columns"),
+            (self.metadata, "metadata"),
+            (self.prefixes, "prefixes"),
+            (self.substrings, "substrings"),
+            (self.fuzzy, "fuzzy"),
+            (self.content, "content"),
+        ]
+    }
+}
+
 struct OwnedSidecarIndexAccessPaths {
     records: PathBuf,
     columns: PathBuf,
@@ -1454,7 +1468,7 @@ fn preflight_sidecar_index_volume_access(
     paths: &OwnedSidecarIndexAccessPaths,
     worker: &str,
 ) -> Result<()> {
-    for (path, role) in paths.paths_with_roles() {
+    for (path, role) in unique_sidecar_search_paths(paths.paths_with_roles()) {
         preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} {role}"))?;
     }
     Ok(())
@@ -1471,39 +1485,15 @@ fn preflight_sidecar_index_search_access(
     paths: SidecarIndexAccessPaths<'_>,
     worker: &str,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    Ok(vec![
-        preflight_access_scope(
-            paths.records,
+    let mut guards = Vec::new();
+    for (path, role) in unique_sidecar_search_paths(paths.paths_with_roles()) {
+        guards.push(preflight_access_scope(
+            path,
             AccessIntent::Read,
-            &format!("{worker} records"),
-        )?,
-        preflight_access_scope(
-            paths.columns,
-            AccessIntent::Read,
-            &format!("{worker} columns"),
-        )?,
-        preflight_access_scope(
-            paths.metadata,
-            AccessIntent::Read,
-            &format!("{worker} metadata"),
-        )?,
-        preflight_access_scope(
-            paths.prefixes,
-            AccessIntent::Read,
-            &format!("{worker} prefixes"),
-        )?,
-        preflight_access_scope(
-            paths.substrings,
-            AccessIntent::Read,
-            &format!("{worker} substrings"),
-        )?,
-        preflight_access_scope(paths.fuzzy, AccessIntent::Read, &format!("{worker} fuzzy"))?,
-        preflight_access_scope(
-            paths.content,
-            AccessIntent::Read,
-            &format!("{worker} content"),
-        )?,
-    ])
+            &format!("{worker} {role}"),
+        )?);
+    }
+    Ok(guards)
 }
 
 fn preflight_content_archives_access(
@@ -1522,6 +1512,16 @@ fn unique_search_paths(paths: &[PathBuf]) -> Vec<&Path> {
         .iter()
         .map(PathBuf::as_path)
         .filter(|path| seen.insert((*path).to_path_buf()))
+        .collect()
+}
+
+fn unique_sidecar_search_paths<'a>(
+    paths: impl IntoIterator<Item = (&'a Path, &'static str)>,
+) -> Vec<(&'a Path, &'static str)> {
+    let mut seen = BTreeSet::new();
+    paths
+        .into_iter()
+        .filter(|(path, _)| seen.insert((*path).to_path_buf()))
         .collect()
 }
 
@@ -1790,5 +1790,36 @@ mod tests {
         let unique = unique_search_paths(&paths);
 
         assert_eq!(unique, vec![first.as_path(), second.as_path()]);
+    }
+
+    #[test]
+    fn unique_sidecar_search_paths_preserves_first_role_for_repeated_paths() {
+        let root = PathBuf::from("/tmp/gfm-sidecar-search-preflight");
+        let shared = root.join("shared.gfmidx");
+        let metadata = root.join("metadata.gfmmeta");
+        let content = root.join("content.gfmcontent");
+        let paths = SidecarIndexAccessPaths {
+            records: &shared,
+            columns: &shared,
+            metadata: &metadata,
+            prefixes: &shared,
+            substrings: &metadata,
+            fuzzy: &metadata,
+            content: &content,
+        };
+
+        let unique = unique_sidecar_search_paths(paths.paths_with_roles())
+            .into_iter()
+            .map(|(path, role)| (path.to_path_buf(), role))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unique,
+            vec![
+                (shared, "records"),
+                (metadata, "metadata"),
+                (content, "content"),
+            ]
+        );
     }
 }
