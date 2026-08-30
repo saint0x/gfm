@@ -8,7 +8,7 @@ use gfm_index::{
     EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth, IndexVolumeState,
     Indexer, LiveIndex,
 };
-use gfm_jobs::Priority;
+use gfm_jobs::{Cancellation, Priority};
 use gfm_mac::{AccessIntent, FileEventStream, WatchRoot};
 use gfm_types::{FileEvent, FileEventKind, FileKind, GfmError, Result};
 use std::fs;
@@ -379,17 +379,31 @@ fn parse_event_ids(value: &str) -> Result<Vec<u64>> {
 }
 
 fn run_index_state_inspect(state: PathBuf) -> Result<IndexVolumeState> {
-    run_index_read_task(state, "index state inspect", IndexVolumeState::read)
-}
-
-fn run_scan_progress_inspect(progress: PathBuf) -> Result<gfm_index::ScanProgressCheckpoint> {
-    run_index_read_task(progress, "scan progress checkpoint inspect", |path| {
-        Indexer::default().scan_progress(path)
+    run_index_read_task(state, "index state inspect", |path, cancellation| {
+        let state = IndexVolumeState::read(path)?;
+        cancellation.check()?;
+        Ok(state)
     })
 }
 
+fn run_scan_progress_inspect(progress: PathBuf) -> Result<gfm_index::ScanProgressCheckpoint> {
+    run_index_read_task(
+        progress,
+        "scan progress checkpoint inspect",
+        |path, cancellation| {
+            let checkpoint = Indexer::default().scan_progress(path)?;
+            cancellation.check()?;
+            Ok(checkpoint)
+        },
+    )
+}
+
 fn run_fsevents_cursor_inspect(cursor: PathBuf) -> Result<FseventsCursor> {
-    run_index_read_task(cursor, "fsevents cursor inspect", FseventsCursor::read)
+    run_index_read_task(cursor, "fsevents cursor inspect", |path, cancellation| {
+        let cursor = FseventsCursor::read(path)?;
+        cancellation.check()?;
+        Ok(cursor)
+    })
 }
 
 fn run_fsevents_cursor_checkpoint(
@@ -510,7 +524,7 @@ fn existing_dropped_roots(dropped_roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
 fn run_index_read_task<T>(
     path: PathBuf,
     worker: &'static str,
-    read: impl FnOnce(PathBuf) -> Result<T> + Send + 'static,
+    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -521,7 +535,7 @@ where
         cancellation.check()?;
         let _access = preflight_index_read(&path, worker)?;
         cancellation.check()?;
-        read(path)
+        read(path, &cancellation)
     })
 }
 
@@ -581,5 +595,31 @@ fn event_marker(kind: &FileEventKind) -> &'static str {
         FileEventKind::Rename { .. } => "rename",
         FileEventKind::Rescan => "rescan",
         FileEventKind::Other => "other",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_read_task_passes_runtime_token_to_reader() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-index-read-cancellation-token-{}.gfmstate",
+            std::process::id()
+        ));
+        fs::write(&path, b"token-probe").unwrap();
+
+        let result = run_index_read_task(
+            path.clone(),
+            "index read cancellation token",
+            |_path, cancellation| {
+                cancellation.cancel();
+                cancellation.check()
+            },
+        );
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        fs::remove_file(path).unwrap();
     }
 }
