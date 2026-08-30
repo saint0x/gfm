@@ -1,10 +1,10 @@
 use crate::durable;
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
 use codec::{
-    read_blocked_id_block, read_content_posting,
+    read_blocked_id_block, read_content_posting, read_content_posting_checked,
     read_content_posting_for_volume_limited_from_slice_checked,
     read_content_posting_limited_from_slice_checked, read_content_posting_term,
-    write_content_posting, write_file_ids, write_varint,
+    read_file_ids_checked, write_content_posting, write_file_ids, write_varint,
 };
 pub(crate) use codec::{read_file_ids, read_varint};
 use gfm_types::{ContentPosting, ContentSegment, FileId, GfmError, Result, VolumeId};
@@ -157,7 +157,12 @@ pub fn read_content_postings_checked(
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
         check_control()?;
-        postings.push(read_content_posting(&mut file, path, version)?);
+        postings.push(read_content_posting_checked(
+            &mut file,
+            path,
+            version,
+            &mut check_control,
+        )?);
     }
     check_control()?;
     Ok(postings)
@@ -234,7 +239,12 @@ impl ContentArchive {
             let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
             for _ in 0..count {
                 check_control()?;
-                postings.push(read_content_posting(&mut file, path, version)?);
+                postings.push(read_content_posting_checked(
+                    &mut file,
+                    path,
+                    version,
+                    &mut check_control,
+                )?);
             }
             check_control()?;
             Ok(Self {
@@ -902,7 +912,7 @@ pub fn read_content_segment_checked(
         )));
     };
 
-    let tombstones = read_file_ids(&mut file, path)?;
+    let tombstones = read_file_ids_checked(&mut file, path, &mut check_control)?;
     check_control()?;
     let posting_count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
     let mut postings = Vec::with_capacity(posting_count.min(1_000_000) as usize);
@@ -913,7 +923,12 @@ pub fn read_content_segment_checked(
         } else {
             ContentStoreVersion::IndexedIds
         };
-        postings.push(read_content_posting(&mut file, path, version)?);
+        postings.push(read_content_posting_checked(
+            &mut file,
+            path,
+            version,
+            &mut check_control,
+        )?);
     }
     check_control()?;
     Ok(ContentSegment {

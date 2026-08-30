@@ -1171,6 +1171,36 @@ mod tests {
 
         assert_eq!(unique, vec![first, second]);
     }
+
+    #[test]
+    fn content_input_file_exists_checked_honors_pre_cancelled_control_before_metadata() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-content-input-exists-cancelled-{}",
+            std::process::id()
+        ));
+
+        let result = content_input_file_exists_checked(&path, "background content index", || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn content_input_file_exists_checked_reports_missing_file_as_false() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-content-input-exists-missing-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+
+        let exists =
+            content_input_file_exists_checked(&path, "background content index", || Ok(()))
+                .unwrap();
+
+        assert!(!exists);
+    }
 }
 
 fn recoverable_background_content_jobs(journal: &JobJournal) -> Result<RecoverableContentJobs> {
@@ -1493,10 +1523,21 @@ fn validate_write_file_name(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn content_input_file_exists(path: &Path, worker: &str) -> Result<bool> {
+fn content_input_file_exists_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<bool> {
+    check_control()?;
     match fs::metadata(path) {
-        Ok(metadata) => Ok(metadata.is_file()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Ok(metadata) => {
+            check_control()?;
+            Ok(metadata.is_file())
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            check_control()?;
+            Ok(false)
+        }
         Err(err) => Err(GfmError::io(
             path,
             format!("{worker} previous index metadata unavailable: {err}"),
@@ -1597,12 +1638,14 @@ pub(crate) fn run_content_job(
                     snapshot.records.len().max(1) as u64,
                     format!("index:{}", job_spec.root.display()),
                 )?;
-                let previous_records = if content_input_file_exists(
+                let previous_records = if content_input_file_exists_checked(
                     &job_spec.records_path,
                     "background content index",
-                )? && content_input_file_exists(
+                    || cancellation.check(),
+                )? && content_input_file_exists_checked(
                     &job_spec.content_path,
                     "background content index",
+                    || cancellation.check(),
                 )? {
                     read_records_checked(&job_spec.records_path, || cancellation.check())?
                 } else {

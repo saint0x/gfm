@@ -98,6 +98,38 @@ fn checked_content_postings_read_can_cancel_during_checksum_load() {
 }
 
 #[test]
+fn checked_content_postings_read_can_cancel_during_full_position_decode() {
+    let path = temp_path("gfm-content-full-position-decode-cancel", "gfmcontent");
+    let id = FileId::new(VolumeId(4), 12);
+    write_content_postings(
+        &path,
+        &[ContentPosting {
+            term: "alpha".to_string(),
+            ids: vec![id],
+            positions: vec![ContentPositions {
+                id,
+                positions: (0..1_024).collect(),
+            }],
+        }],
+    )
+    .unwrap();
+    let mut checks = 0usize;
+
+    let result = read_content_postings_checked(&path, || {
+        checks += 1;
+        if checks >= 12 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 12);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn checked_limited_content_posting_can_cancel_during_legacy_id_decode() {
     let path = temp_path("gfm-content-legacy-id-decode-cancel", "gfmcontent");
     let posting = ContentPosting {
@@ -653,6 +685,64 @@ fn checked_content_segment_read_honors_pre_cancelled_control_before_file_open() 
 
     assert!(matches!(result, Err(GfmError::Cancelled)));
     assert!(!path.exists());
+}
+
+#[test]
+fn checked_content_segment_read_can_cancel_during_tombstone_decode() {
+    let path = temp_path("gfm-content-segment-tombstone-decode-cancel", "gfmseg");
+    let segment = ContentSegment {
+        tombstones: (0..1_024)
+            .map(|node| FileId::new(VolumeId(4), node))
+            .collect(),
+        postings: Vec::new(),
+    };
+    write_content_segment(&path, &segment).unwrap();
+    let mut checks = 0usize;
+
+    let result = read_content_segment_checked(&path, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 5);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn checked_content_segment_read_can_cancel_during_posting_position_decode() {
+    let path = temp_path("gfm-content-segment-position-decode-cancel", "gfmseg");
+    let id = FileId::new(VolumeId(4), 12);
+    let segment = ContentSegment {
+        tombstones: Vec::new(),
+        postings: vec![ContentPosting {
+            term: "alpha".to_string(),
+            ids: vec![id],
+            positions: vec![ContentPositions {
+                id,
+                positions: (0..1_024).collect(),
+            }],
+        }],
+    };
+    write_content_segment(&path, &segment).unwrap();
+    let mut checks = 0usize;
+
+    let result = read_content_segment_checked(&path, || {
+        checks += 1;
+        if checks >= 10 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 10);
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

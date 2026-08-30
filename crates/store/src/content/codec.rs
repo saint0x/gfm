@@ -1,6 +1,6 @@
 use super::{content_format_error, ContentStoreVersion};
 use crate::ids::{
-    read_blocked_file_id_block_from_slice, read_blocked_file_ids,
+    read_blocked_file_id_block_from_slice, read_blocked_file_ids_checked,
     read_blocked_file_ids_for_volume_limited_from_slice_checked,
     read_blocked_file_ids_limited_report_from_slice_checked, write_blocked_file_ids,
 };
@@ -31,21 +31,34 @@ pub(super) fn write_content_posting(
 }
 
 pub(super) fn read_content_posting(
-    mut reader: impl Read,
+    reader: impl Read,
     path: &Path,
     version: ContentStoreVersion,
 ) -> Result<ContentPosting> {
+    read_content_posting_checked(reader, path, version, || Ok(()))
+}
+
+pub(super) fn read_content_posting_checked(
+    mut reader: impl Read,
+    path: &Path,
+    version: ContentStoreVersion,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ContentPosting> {
+    check_control()?;
     let term = read_content_posting_term(&mut reader, path)?;
+    check_control()?;
     let ids = if version.uses_blocked_ids() {
-        read_blocked_file_ids(&mut reader, path)?
+        read_blocked_file_ids_checked(&mut reader, path, &mut check_control)?
     } else {
-        read_file_ids(&mut reader, path)?
+        read_file_ids_checked(&mut reader, path, &mut check_control)?
     };
+    check_control()?;
     let positions = if version.uses_positions() {
-        read_content_positions(reader, path)?
+        read_content_positions_checked(reader, path, &mut check_control)?
     } else {
         Vec::new()
     };
+    check_control()?;
     Ok(ContentPosting {
         term,
         ids,
@@ -248,11 +261,19 @@ fn write_content_positions(
     Ok(())
 }
 
-fn read_content_positions(mut reader: impl Read, path: &Path) -> Result<Vec<ContentPositions>> {
+fn read_content_positions_checked(
+    mut reader: impl Read,
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<ContentPositions>> {
+    check_control()?;
     let entry_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
     let mut entries = Vec::with_capacity(entry_count.min(1_000_000) as usize);
     let mut previous = FileId::new(VolumeId(0), 0);
-    for _ in 0..entry_count {
+    for entry_index in 0..entry_count {
+        if entry_index.is_multiple_of(CONTENT_DECODE_CHECK_STRIDE) {
+            check_control()?;
+        }
         let volume_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
         let volume = previous
             .volume
@@ -272,7 +293,10 @@ fn read_content_positions(mut reader: impl Read, path: &Path) -> Result<Vec<Cont
         let position_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
         let mut positions = Vec::with_capacity(position_count.min(1_000_000) as usize);
         let mut previous_position = 0u32;
-        for _ in 0..position_count {
+        for position_index in 0..position_count {
+            if position_index.is_multiple_of(CONTENT_DECODE_CHECK_STRIDE) {
+                check_control()?;
+            }
             let delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
             let delta = u32::try_from(delta)
                 .map_err(|_| content_format_error(path, "content position overflow"))?;
@@ -285,6 +309,7 @@ fn read_content_positions(mut reader: impl Read, path: &Path) -> Result<Vec<Cont
         entries.push(ContentPositions { id, positions });
         previous = id;
     }
+    check_control()?;
     Ok(entries)
 }
 
