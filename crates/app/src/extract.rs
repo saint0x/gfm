@@ -1,5 +1,5 @@
 use crate::{
-    access::{preflight_access_scope, ScopedAccessGuard},
+    access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard},
     permission_refresh::refresh_permission_state_at_path,
 };
 use gfm_content::{
@@ -198,6 +198,14 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
             path.display()
         ))
     })
+}
+
+pub(crate) fn preflight_adaptive_extraction_worker_scratch() -> Result<Vec<ScopedAccessGuard>> {
+    preflight_volume_access_scope(&env::temp_dir(), AccessIntent::Write, "adaptive extraction")?;
+    let stdout_path = worker_temp_path("stdout-probe");
+    let stderr_path = worker_temp_path("stderr-probe");
+    let permission_state_dir = worker_temp_dir("permission-state-probe");
+    retain_worker_scratch_access(&stdout_path, &stderr_path, &permission_state_dir)
 }
 
 pub(crate) fn run_quarantined_adaptive_extraction_worker_cancellable(

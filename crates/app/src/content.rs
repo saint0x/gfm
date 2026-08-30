@@ -1,7 +1,7 @@
 use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
 use crate::extract::{
-    extraction_budget_profile, read_extraction_quarantine,
-    run_adaptive_extraction_worker_cancellable,
+    extraction_budget_profile, preflight_adaptive_extraction_worker_scratch,
+    read_extraction_quarantine, run_adaptive_extraction_worker_cancellable,
     run_quarantined_adaptive_extraction_worker_cancellable, ADAPTIVE_WORKER_TIMEOUT,
 };
 use crate::runtime::{
@@ -98,6 +98,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "extract-worker-adaptive" => {
             let path = required_path(args.next(), "extract-worker-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(args, "extract worker")?;
+            let _scratch_access = preflight_adaptive_extraction_worker_scratch()?;
             let volume_path = path.clone();
             let outcome = run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                 Priority::Background,
