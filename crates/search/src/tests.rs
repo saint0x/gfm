@@ -2461,6 +2461,40 @@ fn hit_sorting_caches_keys_without_changing_tie_break_order() {
 }
 
 #[test]
+fn bounded_hit_merge_extends_large_batches_without_retaining_whole_batch() {
+    let mut merge = BoundedHitMerge::new(3);
+    let hits = (1..=64)
+        .map(|node| SearchHit {
+            record: record(
+                node,
+                &format!("/tmp/large-batch/{node:03}.md"),
+                &format!("{node:03}.md"),
+            ),
+            score: 100 - node as i64,
+            reason: MatchReason::PrefixName,
+            snippet: None,
+        })
+        .collect();
+
+    merge.extend(hits);
+
+    assert!(merge.max_retained_len() <= 7);
+    let paths: Vec<_> = merge
+        .into_sorted_hits()
+        .into_iter()
+        .map(|hit| hit.record.path)
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/tmp/large-batch/001.md"),
+            PathBuf::from("/tmp/large-batch/002.md"),
+            PathBuf::from("/tmp/large-batch/003.md"),
+        ]
+    );
+}
+
+#[test]
 fn sharded_search_removes_records_by_volume_and_path() {
     let mut index = ShardedSearchIndex::new();
     let first = volume_record(1, 1, "/Volumes/A/report.md", "report.md");

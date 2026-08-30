@@ -16,6 +16,8 @@ pub(crate) fn sort_hits(hits: &mut [SearchHit]) {
 pub(crate) struct BoundedHitMerge {
     limit: usize,
     hits: Vec<SearchHit>,
+    #[cfg(test)]
+    max_retained_len: usize,
 }
 
 impl BoundedHitMerge {
@@ -23,6 +25,8 @@ impl BoundedHitMerge {
         Self {
             limit,
             hits: Vec::with_capacity(limit),
+            #[cfg(test)]
+            max_retained_len: 0,
         }
     }
 
@@ -31,6 +35,7 @@ impl BoundedHitMerge {
             return;
         }
         self.hits.push(hit);
+        self.record_retained_len();
         if self.hits.len() > self.limit.saturating_mul(2) {
             self.trim();
         }
@@ -40,9 +45,8 @@ impl BoundedHitMerge {
         if self.limit == 0 || hits.is_empty() {
             return;
         }
-        self.hits.extend(hits);
-        if self.hits.len() > self.limit.saturating_mul(2) {
-            self.trim();
+        for hit in hits {
+            self.push(hit);
         }
     }
 
@@ -54,7 +58,21 @@ impl BoundedHitMerge {
     fn trim(&mut self) {
         sort_hits(&mut self.hits);
         self.hits.truncate(self.limit);
+        self.record_retained_len();
     }
+
+    #[cfg(test)]
+    pub(crate) fn max_retained_len(&self) -> usize {
+        self.max_retained_len
+    }
+
+    #[cfg(test)]
+    fn record_retained_len(&mut self) {
+        self.max_retained_len = self.max_retained_len.max(self.hits.len());
+    }
+
+    #[cfg(not(test))]
+    fn record_retained_len(&mut self) {}
 }
 
 pub(crate) fn top_hits(hits: Vec<SearchHit>, limit: usize) -> Vec<SearchHit> {
