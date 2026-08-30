@@ -191,6 +191,12 @@ pub struct VolumeDescriptor {
 }
 
 impl VolumeDescriptor {
+    pub fn platform_state_unavailable(&self) -> bool {
+        self.native_status == Some(NativeVolumeStatus::Unavailable)
+            && self.resource_status == Some(NativeVolumeStatus::Unavailable)
+            && self.mount_table_status == Some(NativeVolumeStatus::Unavailable)
+    }
+
     pub fn for_path(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let metadata = fs::metadata(&path).map_err(|err| GfmError::io(&path, err))?;
@@ -2891,6 +2897,22 @@ mod tests {
         );
 
         assert_eq!(kind, VolumeKind::Unknown);
+    }
+
+    #[test]
+    fn descriptor_reports_platform_state_unavailable_only_when_all_volume_apis_fail() {
+        let root = unique_temp_dir("gfm-volume-platform-state-unavailable");
+        let mut descriptor = VolumeDescriptor::for_path(&root).unwrap();
+
+        descriptor.native_status = Some(NativeVolumeStatus::Unavailable);
+        descriptor.resource_status = Some(NativeVolumeStatus::Unavailable);
+        descriptor.mount_table_status = Some(NativeVolumeStatus::Unavailable);
+        assert!(descriptor.platform_state_unavailable());
+
+        descriptor.mount_table_status = Some(NativeVolumeStatus::Available);
+        assert!(!descriptor.platform_state_unavailable());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

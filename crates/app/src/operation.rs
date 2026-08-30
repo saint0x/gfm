@@ -121,6 +121,33 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             preflight_operation_volume_policy_access(&operation)?;
             println!("{}", operation_volume_copy_policy_report(&operation));
         }
+        "operation-access-unavailable-volume-api" => {
+            let from = required_path(
+                args.next(),
+                "operation-access-unavailable-volume-api requires a source path",
+            )?;
+            let to = required_path(
+                args.next(),
+                "operation-access-unavailable-volume-api requires a destination path",
+            )?;
+            let root = required_path(
+                args.next(),
+                "operation-access-unavailable-volume-api requires a volume root",
+            )?;
+            let operation = Operation::Copy { from, to };
+            let report = unavailable_volume_api_report(&root)?;
+            let gate = operation_access_gate(&operation, &report);
+            match gate.check(&operation) {
+                Ok(()) => println!(
+                    "operation-access\tcopy\taction=allow\tvolume-root={}\treason=-",
+                    root.display()
+                ),
+                Err(err) => println!(
+                    "operation-access\tcopy\taction=deny\tvolume-root={}\treason={err}",
+                    root.display()
+                ),
+            }
+        }
         "move" => {
             let from = required_path(args.next(), "move requires a source path")?;
             let to = required_path(args.next(), "move requires a destination path")?;
@@ -858,6 +885,19 @@ fn operation_access_gate(
         );
     }
     gate
+}
+
+fn unavailable_volume_api_report(root: &Path) -> Result<VolumeDiscoveryReport> {
+    let mut volume = gfm_mac::VolumeDescriptor::for_path(root)?;
+    volume.kind = VolumeKind::Network;
+    volume.mount_state = MountState::Mounted;
+    volume.reachable = Some(true);
+    volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    Ok(VolumeDiscoveryReport {
+        volumes: vec![volume],
+    })
 }
 
 fn broad_read_only_root_allows_path(
@@ -1618,6 +1658,49 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("unreachable volume network"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_access_gate_refuses_unavailable_volume_api_state_before_copying() {
+        let root = unique_temp_dir("gfm-app-op-unavailable-volume-api");
+        let source_root = root.join("Source");
+        let volume = root.join("TeamShare");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&volume).unwrap();
+        let source = source_root.join("source.txt");
+        let destination = volume.join("copy.txt");
+        fs::write(&source, "content").unwrap();
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+        let report = unavailable_volume_api_report(&volume).unwrap();
+
+        let gate = operation_access_gate(&operation, &report);
+        let journal = root.join("journal.tsv");
+        let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
+            .execute(operation)
+            .unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err.to_string().contains("unavailable volume network"));
+        assert!(err.to_string().contains("native-status=unavailable"));
+        assert!(err.to_string().contains("role=destination-parent"));
+        assert!(err
+            .to_string()
+            .contains("refresh-on-permission-change=true"));
+        assert!(!destination.exists());
+        let journal_entries = read_journal(&journal).unwrap();
+        assert_eq!(journal_entries.len(), 2);
+        assert_eq!(journal_entries[0].status, OperationStatus::Started);
+        assert_eq!(journal_entries[1].status, OperationStatus::Failed);
+        assert!(journal_entries[1]
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("unavailable volume network"));
 
         fs::remove_dir_all(root).unwrap();
     }

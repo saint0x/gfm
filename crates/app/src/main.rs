@@ -902,6 +902,7 @@ fn print_usage() {
   gfm operation-conflict-apply <operation-conflicts.tsv> <target> <replace|keep-both|merge|skip>
   gfm operation-conflict-apply-all <operation-conflicts.tsv> <replace|keep-both|merge|skip>
   gfm copy <source> <destination> [--replace|--keep-both|--merge|--skip]
+  gfm operation-access-unavailable-volume-api <source> <destination> <volume-root>
   gfm move <source> <destination> [--replace|--keep-both|--merge|--skip]
   gfm rename <source> <destination> [--replace|--keep-both|--merge|--skip]
   gfm delete <path>

@@ -106,7 +106,7 @@ fn preflight_permission_state_volume_with_report(
             ),
         });
     }
-    if volume_platform_state_unavailable(volume) {
+    if volume.platform_state_unavailable() {
         return Err(GfmError::Permission {
             path: path.to_path_buf(),
             message: format!(
@@ -158,12 +158,6 @@ fn preflight_permission_state_volume_with_report(
             volume.mount_state.as_str()
         ),
     })
-}
-
-fn volume_platform_state_unavailable(volume: &gfm_mac::VolumeDescriptor) -> bool {
-    volume.native_status == Some(gfm_mac::NativeVolumeStatus::Unavailable)
-        && volume.resource_status == Some(gfm_mac::NativeVolumeStatus::Unavailable)
-        && volume.mount_table_status == Some(gfm_mac::NativeVolumeStatus::Unavailable)
 }
 
 fn read_only_root_allows_permission_state_write(

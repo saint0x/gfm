@@ -5308,6 +5308,49 @@ fn volume_operation_refuses_unreachable_volume_before_descriptor_from_binary() {
 }
 
 #[test]
+fn operation_access_refuses_unavailable_volume_api_state_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-operation-access-api-unavailable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let source_root = root.join("Source");
+    let volume = root.join("TeamShare");
+    std::fs::create_dir_all(&source_root).unwrap();
+    std::fs::create_dir_all(&volume).unwrap();
+    let source = source_root.join("source.txt");
+    let destination = volume.join("copy.txt");
+    std::fs::write(&source, "content").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("operation-access-unavailable-volume-api")
+        .arg(&source)
+        .arg(&destination)
+        .arg(&volume)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("operation-access\tcopy\taction=deny\t"));
+    assert!(stdout.contains("unavailable volume network"), "{stdout}");
+    assert!(stdout.contains("native-status=unavailable"), "{stdout}");
+    assert!(stdout.contains("resource-status=unavailable"), "{stdout}");
+    assert!(stdout.contains("mount-status=unavailable"), "{stdout}");
+    assert!(
+        stdout.contains("refresh-on-permission-change=true"),
+        "{stdout}"
+    );
+    assert!(!destination.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_mount_bsd_refusal_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-mount-bsd")

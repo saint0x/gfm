@@ -138,7 +138,7 @@ fn volume_access_block_reason_in_report(
             volume.mount_state.as_str()
         ));
     }
-    if volume_platform_state_unavailable(volume) {
+    if volume.platform_state_unavailable() {
         return Some(format!(
             "{worker} volume access blocked: unavailable volume {}; label={}; root={}; stable-id={}; mount={}; native-status={}; resource-status={}; mount-status={}",
             volume.kind.as_str(),
@@ -174,12 +174,6 @@ fn volume_access_block_reason_in_report(
         ));
     }
     None
-}
-
-fn volume_platform_state_unavailable(volume: &gfm_mac::VolumeDescriptor) -> bool {
-    volume.native_status == Some(gfm_mac::NativeVolumeStatus::Unavailable)
-        && volume.resource_status == Some(gfm_mac::NativeVolumeStatus::Unavailable)
-        && volume.mount_table_status == Some(gfm_mac::NativeVolumeStatus::Unavailable)
 }
 
 const fn mutating_intent(intent: AccessIntent) -> bool {
