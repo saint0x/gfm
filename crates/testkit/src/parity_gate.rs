@@ -254,6 +254,7 @@ pub fn run_parity_gate_manifest(path: impl AsRef<Path>) -> Result<ParityGateRepo
 pub fn run_parity_gate(inputs: Vec<ParityGateInput>) -> Result<ParityGateReport> {
     let mut entries = Vec::with_capacity(inputs.len());
     for input in inputs {
+        validate_distinct_capture_artifacts(&input)?;
         let masks = input
             .mask_path
             .as_ref()
@@ -278,6 +279,46 @@ pub fn run_parity_gate(inputs: Vec<ParityGateInput>) -> Result<ParityGateReport>
         manifest_path: None,
         entries,
     })
+}
+
+fn validate_distinct_capture_artifacts(input: &ParityGateInput) -> Result<()> {
+    if input.expected_path == input.actual_path {
+        return Err(identical_capture_artifact_error(input));
+    }
+    let expected = fs::metadata(&input.expected_path)
+        .map_err(|err| GfmError::io(&input.expected_path, err))?;
+    let actual =
+        fs::metadata(&input.actual_path).map_err(|err| GfmError::io(&input.actual_path, err))?;
+    if same_file_identity(&expected, &actual) {
+        return Err(identical_capture_artifact_error(input));
+    }
+    Ok(())
+}
+
+fn identical_capture_artifact_error(input: &ParityGateInput) -> GfmError {
+    GfmError::Format(format!(
+        "parity gate entry for {} must compare distinct Finder and GFM capture artifacts: {} and {}",
+        input.surface.as_str(),
+        input.expected_path.display(),
+        input.actual_path.display()
+    ))
+}
+
+#[cfg(unix)]
+fn same_file_identity(expected: &fs::Metadata, actual: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    expected.dev() == actual.dev() && expected.ino() == actual.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file_identity(expected: &fs::Metadata, actual: &fs::Metadata) -> bool {
+    expected.len() == actual.len()
+        && expected
+            .modified()
+            .ok()
+            .zip(actual.modified().ok())
+            .is_some_and(|(expected, actual)| expected == actual)
 }
 
 pub fn write_parity_review_bundle_manifest(
@@ -1072,6 +1113,73 @@ mod tests {
 
         assert!(!report.passed());
         assert_eq!(report.violations(), 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_gate_rejects_identical_finder_and_gfm_capture_artifacts() {
+        let root = unique_temp_dir("gfm-parity-gate-identical-artifacts");
+        let capture = root.join("capture.rgba");
+        fs::write(&capture, [1, 2, 3, 255]).unwrap();
+
+        let err = run_parity_gate(vec![ParityGateInput::new(
+            ParitySurface::Toolbar,
+            &capture,
+            &capture,
+            PixelSize::new(1, 1),
+        )])
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("must compare distinct Finder and GFM capture artifacts"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_gate_rejects_same_capture_artifact_through_path_alias() {
+        let root = unique_temp_dir("gfm-parity-gate-aliased-artifact");
+        let capture = root.join("capture.rgba");
+        fs::write(&capture, [1, 2, 3, 255]).unwrap();
+        let aliased_capture = root.join(".").join("capture.rgba");
+
+        let err = run_parity_gate(vec![ParityGateInput::new(
+            ParitySurface::Toolbar,
+            &capture,
+            &aliased_capture,
+            PixelSize::new(1, 1),
+        )])
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("must compare distinct Finder and GFM capture artifacts"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parity_gate_rejects_same_capture_artifact_through_hard_link() {
+        let root = unique_temp_dir("gfm-parity-gate-hardlink-artifact");
+        let finder_capture = root.join("finder.rgba");
+        let gfm_capture = root.join("gfm.rgba");
+        fs::write(&finder_capture, [1, 2, 3, 255]).unwrap();
+        fs::hard_link(&finder_capture, &gfm_capture).unwrap();
+
+        let err = run_parity_gate(vec![ParityGateInput::new(
+            ParitySurface::Toolbar,
+            &finder_capture,
+            &gfm_capture,
+            PixelSize::new(1, 1),
+        )])
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("must compare distinct Finder and GFM capture artifacts"));
 
         fs::remove_dir_all(root).unwrap();
     }
