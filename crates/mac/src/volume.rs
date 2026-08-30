@@ -4265,7 +4265,7 @@ mod tests {
         );
         assert_eq!(
             disposition_for_native_operation(NativeVolumeOperationStatus::NotFound),
-            VolumeOperationDisposition::Failed
+            VolumeOperationDisposition::Missing
         );
     }
 
