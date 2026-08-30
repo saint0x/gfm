@@ -75,15 +75,15 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Preview And Thumbnails
 
-48. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
+46. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
 
 ## Packaging
 
-49. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
+47. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
 
 ## Documentation
 
-50. Expand `PLAN.md` when architectural decisions change materially.
-51. Keep `README.md` written as the completed product contract.
-52. Keep this file limited to unfinished work only.
-53. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+48. Expand `PLAN.md` when architectural decisions change materially.
+49. Keep `README.md` written as the completed product contract.
+50. Keep this file limited to unfinished work only.
+51. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
