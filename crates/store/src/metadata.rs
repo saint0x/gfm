@@ -1,6 +1,6 @@
 use crate::durable;
 use crate::ids::{
-    read_blocked_file_id_block_from_slice, read_blocked_file_ids,
+    read_blocked_file_id_block_from_slice, read_blocked_file_ids_checked,
     read_blocked_file_ids_limited_from_slice_checked, write_blocked_file_ids,
 };
 use crate::integrity::{verify_checksum_footer, write_checksum_footer};
@@ -238,7 +238,12 @@ pub fn read_metadata_postings_checked(
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
         check_control()?;
-        postings.push(read_metadata_posting(&mut file, path, version)?);
+        postings.push(read_metadata_posting_checked(
+            &mut file,
+            path,
+            version,
+            &mut check_control,
+        )?);
     }
     check_control()?;
     Ok(postings)
@@ -337,11 +342,24 @@ impl MmapMetadataArchive {
     }
 
     pub fn postings(&self) -> Result<Vec<MetadataPosting>> {
+        self.postings_checked(|| Ok(()))
+    }
+
+    pub fn postings_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<MetadataPosting>> {
         self.directory
             .iter()
             .map(|entry| {
+                check_control()?;
                 let bytes = self.posting_bytes(entry)?;
-                read_metadata_posting(Cursor::new(bytes), &self.path, self.version)
+                read_metadata_posting_checked(
+                    Cursor::new(bytes),
+                    &self.path,
+                    self.version,
+                    &mut check_control,
+                )
             })
             .collect()
     }
@@ -528,7 +546,12 @@ impl MmapMetadataArchive {
         };
         check_control()?;
         let bytes = self.posting_bytes(entry)?;
-        let posting = read_metadata_posting(Cursor::new(bytes), &self.path, self.version)?;
+        let posting = read_metadata_posting_checked(
+            Cursor::new(bytes),
+            &self.path,
+            self.version,
+            &mut check_control,
+        )?;
         if posting.field == field && posting.term == term {
             Ok(Some(posting))
         } else {
@@ -782,16 +805,24 @@ fn write_metadata_posting(
     }
 }
 
-fn read_metadata_posting(
+fn read_metadata_posting_checked(
     mut reader: impl Read,
     path: &Path,
     version: MetadataStoreVersion,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<MetadataPosting> {
+    check_control()?;
     let (field, term) = read_metadata_posting_header(&mut reader, path)?;
+    check_control()?;
     let ids = match version {
-        MetadataStoreVersion::V1 => read_file_ids(reader, path)?,
-        MetadataStoreVersion::V2 | MetadataStoreVersion::V3 => read_blocked_file_ids(reader, path)?,
+        MetadataStoreVersion::V1 => {
+            read_file_ids_limited_checked(reader, path, usize::MAX, &mut check_control)?
+        }
+        MetadataStoreVersion::V2 | MetadataStoreVersion::V3 => {
+            read_blocked_file_ids_checked(reader, path, &mut check_control)?
+        }
     };
+    check_control()?;
     Ok(MetadataPosting { field, term, ids })
 }
 
@@ -835,33 +866,6 @@ fn write_file_ids(mut writer: impl Write, ids: &[FileId]) -> std::io::Result<()>
         previous = id;
     }
     Ok(())
-}
-
-fn read_file_ids(mut reader: impl Read, path: &Path) -> Result<Vec<FileId>> {
-    let id_count = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
-    let mut ids = Vec::with_capacity(id_count.min(1_000_000) as usize);
-    let mut previous = FileId::new(VolumeId(0), 0);
-    for _ in 0..id_count {
-        let volume_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
-        let volume = previous
-            .volume
-            .0
-            .checked_add(volume_delta)
-            .ok_or_else(|| metadata_format_error(path, "volume id overflow"))?;
-        let node_delta = read_varint(&mut reader).map_err(|err| GfmError::io(path, err))?;
-        let node = if volume == previous.volume.0 {
-            previous
-                .node
-                .checked_add(node_delta)
-                .ok_or_else(|| metadata_format_error(path, "file node id overflow"))?
-        } else {
-            node_delta
-        };
-        let id = FileId::new(VolumeId(volume), node);
-        ids.push(id);
-        previous = id;
-    }
-    Ok(ids)
 }
 
 fn read_file_ids_limited_checked(

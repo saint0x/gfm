@@ -93,6 +93,88 @@ fn checked_metadata_postings_read_can_cancel_during_checksum_load() {
 }
 
 #[test]
+fn checked_legacy_metadata_posting_can_cancel_during_id_decode() {
+    let path = temp_path("gfm-metadata-legacy-id-decode-cancel", "gfmmeta");
+    let posting = MetadataPosting {
+        field: MetadataField::Tag,
+        term: "important".to_string(),
+        ids: (0..1_024)
+            .map(|node| FileId::new(VolumeId(4), node))
+            .collect(),
+    };
+    let mut bytes = Vec::new();
+    write_metadata_posting(&mut bytes, &posting, MetadataStoreVersion::V1).unwrap();
+    let mut checks = 0usize;
+
+    let result = read_metadata_posting_checked(&bytes[..], &path, MetadataStoreVersion::V1, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 5);
+}
+
+#[test]
+fn checked_metadata_postings_read_can_cancel_during_blocked_id_decode() {
+    let path = temp_path("gfm-metadata-blocked-id-decode-cancel", "gfmmeta");
+    let posting = MetadataPosting {
+        field: MetadataField::Tag,
+        term: "important".to_string(),
+        ids: (0..1_024)
+            .map(|node| FileId::new(VolumeId(4), node))
+            .collect(),
+    };
+    write_metadata_postings(&path, &[posting]).unwrap();
+    let mut checks = 0usize;
+
+    let result = read_metadata_postings_checked(&path, || {
+        checks += 1;
+        if checks >= 16 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 16);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn checked_mmap_metadata_lookup_can_cancel_during_blocked_id_decode() {
+    let path = temp_path("gfm-metadata-mmap-blocked-id-decode-cancel", "gfmmeta");
+    let posting = MetadataPosting {
+        field: MetadataField::Tag,
+        term: "important".to_string(),
+        ids: (0..1_024)
+            .map(|node| FileId::new(VolumeId(4), node))
+            .collect(),
+    };
+    write_metadata_postings(&path, &[posting]).unwrap();
+    let archive = MmapMetadataArchive::open(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = archive.posting_for_checked(MetadataField::Tag, "important", || {
+        checks += 1;
+        if checks >= 16 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 16);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn metadata_postings_merge_secondary_spotlight_records() {
     let primary = FileRecord {
         id: FileId::new(VolumeId(4), 12),
