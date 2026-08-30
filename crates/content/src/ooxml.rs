@@ -1,6 +1,9 @@
 use crate::{normalize_text, ContentDocument, ExtractionPolicy};
+use gfm_types::Result;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
+
+const OOXML_ENTRY_READ_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OoxmlKind {
@@ -19,47 +22,58 @@ pub(crate) enum OoxmlExtractStatus {
     Corrupt,
 }
 
-pub(crate) fn extract_ooxml(
+#[cfg(test)]
+fn extract_ooxml(
     bytes: &[u8],
     kind: OoxmlKind,
     policy: &ExtractionPolicy,
 ) -> (OoxmlExtractStatus, Option<ContentDocument>) {
+    extract_ooxml_checked(bytes, kind, policy, || Ok(()))
+        .expect("non-cancellable OOXML extraction cannot cancel")
+}
+
+pub(crate) fn extract_ooxml_checked(
+    bytes: &[u8],
+    kind: OoxmlKind,
+    policy: &ExtractionPolicy,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(OoxmlExtractStatus, Option<ContentDocument>)> {
+    check_control()?;
     if bytes.len() as u64 > policy.max_office_bytes {
-        return (OoxmlExtractStatus::TooLarge, None);
+        return Ok((OoxmlExtractStatus::TooLarge, None));
     }
     let Ok(mut archive) = ZipArchive::new(Cursor::new(bytes)) else {
-        return (OoxmlExtractStatus::Corrupt, None);
+        return Ok((OoxmlExtractStatus::Corrupt, None));
     };
     if archive.len() > policy.max_office_entries {
-        return (OoxmlExtractStatus::TooManyEntries, None);
+        return Ok((OoxmlExtractStatus::TooManyEntries, None));
     }
 
     let mut text = String::new();
     let mut extracted_parts = 0usize;
     for index in 0..archive.len() {
+        check_control()?;
         let Ok(file) = archive.by_index(index) else {
-            return (OoxmlExtractStatus::Corrupt, None);
+            return Ok((OoxmlExtractStatus::Corrupt, None));
         };
         let name = file.name().to_string();
         if !is_text_part(kind, &name) {
             continue;
         }
         if file.size() > policy.max_office_entry_bytes {
-            return (OoxmlExtractStatus::EntryTooLarge, None);
+            return Ok((OoxmlExtractStatus::EntryTooLarge, None));
         }
 
         let remaining = policy.max_office_text_bytes.saturating_sub(text.len());
         if remaining == 0 {
             break;
         }
-        let mut xml = String::new();
-        if file
-            .take(policy.max_office_entry_bytes)
-            .read_to_string(&mut xml)
-            .is_err()
-        {
-            return (OoxmlExtractStatus::Corrupt, None);
-        }
+        let Some(xml) =
+            read_ooxml_entry_checked(file, policy.max_office_entry_bytes, &mut check_control)?
+        else {
+            return Ok((OoxmlExtractStatus::Corrupt, None));
+        };
+        check_control()?;
         append_xml_text(&xml, &mut text, remaining);
         extracted_parts += 1;
     }
@@ -71,16 +85,39 @@ pub(crate) fn extract_ooxml(
         } else {
             OoxmlExtractStatus::Extracted
         };
-        return (status, None);
+        return Ok((status, None));
     }
 
-    (
+    Ok((
         OoxmlExtractStatus::Extracted,
         Some(ContentDocument {
             bytes_read: bytes.len(),
             text,
         }),
-    )
+    ))
+}
+
+fn read_ooxml_entry_checked(
+    file: impl Read,
+    max_bytes: u64,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Option<String>> {
+    check_control()?;
+    let mut reader = file.take(max_bytes);
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; OOXML_ENTRY_READ_CHUNK_BYTES];
+    loop {
+        check_control()?;
+        let Ok(read) = reader.read(&mut buffer) else {
+            return Ok(None);
+        };
+        check_control()?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    Ok(String::from_utf8(bytes).ok())
 }
 
 fn is_text_part(kind: OoxmlKind, name: &str) -> bool {
@@ -180,6 +217,8 @@ fn floor_char_boundary(text: &str, mut index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_types::GfmError;
+    use std::cell::Cell;
     use std::io::{Cursor, Write};
     use zip::write::SimpleFileOptions;
 
@@ -219,6 +258,30 @@ mod tests {
 
         assert_eq!(status, OoxmlExtractStatus::EntryTooLarge);
         assert!(doc.is_none());
+    }
+
+    #[test]
+    fn checked_extraction_can_cancel_while_reading_large_xml_entry() {
+        let body = format!("<w:t>{}</w:t>", "large body ".repeat(16 * 1024));
+        let bytes = package(&[("word/document.xml", body.as_str())]);
+        let checks = Cell::new(0);
+
+        let result = extract_ooxml_checked(
+            &bytes,
+            OoxmlKind::Docx,
+            &ExtractionPolicy::default(),
+            || {
+                let next = checks.get() + 1;
+                checks.set(next);
+                if next >= 8 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
     }
 
     fn package(parts: &[(&str, &str)]) -> Vec<u8> {

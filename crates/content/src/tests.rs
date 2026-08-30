@@ -120,6 +120,31 @@ fn extraction_report_checked_honors_cancellation_before_reading_content_bytes() 
 }
 
 #[test]
+fn extraction_report_checked_can_cancel_while_reading_ooxml_entry() {
+    let root = unique_temp_dir("gfm-content-ooxml-entry-cancel");
+    let path = root.join("large.docx");
+    let body = format!("<w:t>{}</w:t>", "large body ".repeat(16 * 1024));
+    fs::write(
+        &path,
+        ooxml_package(&[("word/document.xml", body.as_str())]),
+    )
+    .unwrap();
+    let mut checks = 0usize;
+
+    let result = Extractor::default().extract_path_report_checked(&path, || {
+        checks += 1;
+        if checks >= 15 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extraction_fingerprint_checked_honors_pre_cancelled_control_before_metadata_probe() {
     let root = unique_temp_dir("gfm-content-fingerprint-pre-cancel");
     let path = root.join("missing.md");

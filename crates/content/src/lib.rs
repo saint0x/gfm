@@ -18,7 +18,7 @@ pub use cache::{
 use gfm_types::{FileKind, FileRecord, GfmError, Result, SearchSnippet, SnippetHighlight};
 pub use kind::extractor_version_for_path;
 use kind::{archive_kind, extraction_format, office_kind, path_is_pdf, rich_kind, structured_kind};
-use ooxml::extract_ooxml;
+use ooxml::extract_ooxml_checked;
 use pdf::extract_pdf;
 pub use policy::{
     ExtractionBatteryState, ExtractionBudgetProfile, ExtractionPolicy, ExtractionThermalState,
@@ -203,7 +203,8 @@ impl Extractor {
         }
 
         if let Some(kind) = office {
-            let (status, document) = extract_ooxml(&bytes, kind, &self.policy);
+            let (status, document) =
+                extract_ooxml_checked(&bytes, kind, &self.policy, &mut check_control)?;
             return Ok(ExtractionReport {
                 path: path.to_path_buf(),
                 format,
