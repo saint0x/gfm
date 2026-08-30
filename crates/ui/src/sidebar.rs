@@ -235,12 +235,14 @@ impl SidebarVolumeInvalidation {
         let current_network = current.map(|volume| volume.network);
         let current_reachable = current.and_then(|volume| volume.reachable);
         let remove_row = matches!(kind, SidebarVolumeEventKind::Disappeared);
-        let disable_row = current_mount_state.is_some_and(|state| {
-            matches!(
-                state,
-                SidebarVolumeMountState::Unmounted | SidebarVolumeMountState::Stale
-            )
-        }) || current_reachable == Some(false);
+        let disable_row = matches!(kind, SidebarVolumeEventKind::Unavailable)
+            || current_mount_state.is_some_and(|state| {
+                matches!(
+                    state,
+                    SidebarVolumeMountState::Unmounted | SidebarVolumeMountState::Stale
+                )
+            })
+            || current_reachable == Some(false);
         let visible =
             row_id.is_some() || path.is_some() || kind == SidebarVolumeEventKind::Unavailable;
         let invalidate_section = visible && platform_invalidated_sidebar;
@@ -300,7 +302,25 @@ impl SidebarVolumeInvalidation {
         self.current_native_status = current_native_status;
         self.current_resource_status = current_resource_status;
         self.current_mount_status = current_mount_status;
+        if self.current_platform_status_disables_row() {
+            self.disable_row = true;
+            if self.invalidate_section && self.row_id.is_some() && !self.remove_row {
+                self.invalidate_row = true;
+                self.reason = "sidebar-volume-platform-unavailable".to_string();
+            }
+        }
         self
+    }
+
+    fn current_platform_status_disables_row(&self) -> bool {
+        [
+            self.current_native_status.as_deref(),
+            self.current_resource_status.as_deref(),
+            self.current_mount_status.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|status| matches!(status, "missing" | "unavailable"))
     }
 
     pub fn as_tsv(&self) -> String {
@@ -1427,6 +1447,90 @@ mod tests {
         assert!(invalidation
             .as_tsv()
             .ends_with("reason=volume-api-status-changed"));
+    }
+
+    #[test]
+    fn volume_invalidation_disables_row_when_current_platform_status_is_unavailable() {
+        let volume = SidebarVolumeSpec::from_native_seed(
+            "diskarbitration:uuid:API",
+            "API",
+            "/Volumes/API",
+            true,
+        )
+        .with_volume_state(
+            SidebarVolumeKind::External,
+            SidebarVolumeMountState::Mounted,
+            false,
+            false,
+            Some(true),
+        );
+
+        let invalidation = SidebarVolumeInvalidation::from_event(
+            SidebarVolumeEventKind::DescriptionChanged,
+            Some(PathBuf::from("/Volumes/API")),
+            Some(&volume),
+            Some(&volume),
+            true,
+            "volume-api-status-changed",
+        )
+        .with_platform_statuses(
+            Some("available".to_string()),
+            Some("available".to_string()),
+            Some("available".to_string()),
+            Some("unavailable".to_string()),
+            Some("available".to_string()),
+            Some("available".to_string()),
+        );
+
+        assert!(invalidation.invalidate_row);
+        assert!(invalidation.invalidate_section);
+        assert!(invalidation.disable_row);
+        assert_eq!(invalidation.reason, "sidebar-volume-platform-unavailable");
+        assert!(invalidation.as_tsv().contains(
+            "\tcurrent-native-status=unavailable\tcurrent-resource-status=available\tcurrent-mount-status=available\t"
+        ));
+        assert!(invalidation.as_tsv().contains("\tdisable-row=true\t"));
+    }
+
+    #[test]
+    fn volume_invalidation_disables_row_for_explicit_unavailable_event() {
+        let previous = SidebarVolumeSpec::from_native_seed(
+            "diskarbitration:uuid:API",
+            "API",
+            "/Volumes/API",
+            true,
+        )
+        .with_volume_state(
+            SidebarVolumeKind::External,
+            SidebarVolumeMountState::Mounted,
+            false,
+            false,
+            Some(true),
+        );
+
+        let invalidation = SidebarVolumeInvalidation::from_event(
+            SidebarVolumeEventKind::Unavailable,
+            Some(PathBuf::from("/Volumes/API")),
+            Some(&previous),
+            None,
+            true,
+            "volume-event-unavailable",
+        );
+
+        assert!(invalidation.invalidate_row);
+        assert!(invalidation.invalidate_section);
+        assert!(!invalidation.remove_row);
+        assert!(invalidation.disable_row);
+        assert_eq!(invalidation.reason, "sidebar-volume-disabled");
+        assert!(invalidation
+            .as_tsv()
+            .contains("\tkind=unavailable\tprevious-kind=external\tprevious-mount=mounted\t"));
+        assert!(invalidation
+            .as_tsv()
+            .contains("\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\t"));
+        assert!(invalidation.as_tsv().contains(
+            "\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\t"
+        ));
     }
 
     #[test]

@@ -1663,9 +1663,22 @@ fn reports_volume_invalidation_in_ui_sidebar_contract_from_binary() {
     assert!(changed_stdout.contains("\tcurrent-native-status="));
     assert!(changed_stdout.contains("\tcurrent-resource-status="));
     assert!(changed_stdout.contains("\tcurrent-mount-status="));
-    assert!(changed_stdout.contains(
-        "\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=false\t"
-    ));
+    if changed_stdout.contains("\tcurrent-native-status=unavailable\t")
+        || changed_stdout.contains("\tcurrent-resource-status=unavailable\t")
+        || changed_stdout.contains("\tcurrent-mount-status=unavailable\t")
+        || changed_stdout.contains("\tcurrent-native-status=missing\t")
+        || changed_stdout.contains("\tcurrent-resource-status=missing\t")
+        || changed_stdout.contains("\tcurrent-mount-status=missing\t")
+    {
+        assert!(changed_stdout.contains(
+            "\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\t"
+        ));
+        assert!(changed_stdout.ends_with("reason=sidebar-volume-platform-unavailable\n"));
+    } else {
+        assert!(changed_stdout.contains(
+            "\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=false\t"
+        ));
+    }
 
     let disappeared = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("ui-sidebar-volume-invalidation")
