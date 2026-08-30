@@ -1,4 +1,5 @@
 use crate::{Job, JobClass, JobId};
+use gfm_types::Result;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,23 +78,37 @@ impl JobFairnessPlanner {
     }
 
     pub fn plan(&self, jobs: impl IntoIterator<Item = Job>) -> JobFairnessPlan {
+        self.plan_checked(jobs, || Ok(()))
+            .expect("infallible job fairness planning failed")
+    }
+
+    pub fn plan_checked(
+        &self,
+        jobs: impl IntoIterator<Item = Job>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<JobFairnessPlan> {
         let mut ready_by_class: [VecDeque<Job>; JOB_CLASS_ORDER.len()] =
             std::array::from_fn(|_| VecDeque::new());
         let mut blocked_with_order = Vec::new();
         let mut ready = Vec::new();
 
         for (order, job) in jobs.into_iter().enumerate() {
+            check_control()?;
             if dependencies_satisfied(&job, &self.completed) {
                 ready_by_class[class_index(job.class)].push_back(job);
             } else {
                 blocked_with_order.push((order, job));
             }
+            check_control()?;
         }
 
         loop {
+            check_control()?;
             let mut progressed = false;
             for class in JOB_CLASS_ORDER {
+                check_control()?;
                 for _ in 0..self.policy.quota(class) {
+                    check_control()?;
                     let Some(job) = ready_by_class[class_index(class)].pop_front() else {
                         break;
                     };
@@ -106,9 +121,10 @@ impl JobFairnessPlanner {
             }
         }
 
-        let blocked = blocked_with_order
-            .into_iter()
-            .map(|(_, job)| BlockedJob {
+        let mut blocked = Vec::new();
+        for (_, job) in blocked_with_order {
+            check_control()?;
+            blocked.push(BlockedJob {
                 id: job.id,
                 label: job.label,
                 class: job.class,
@@ -117,10 +133,11 @@ impl JobFairnessPlanner {
                     .into_iter()
                     .filter(|dependency| !self.completed.contains(dependency))
                     .collect(),
-            })
-            .collect();
+            });
+            check_control()?;
+        }
 
-        JobFairnessPlan { ready, blocked }
+        Ok(JobFairnessPlan { ready, blocked })
     }
 }
 

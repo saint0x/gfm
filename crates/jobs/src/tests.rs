@@ -304,6 +304,100 @@ fn scheduler_volume_cancellation_cancels_every_class_when_unfiltered() {
 }
 
 #[test]
+fn checked_drain_ready_preserves_queue_when_cancelled_mid_scan() {
+    let mut scheduler = Scheduler::new();
+    for index in 0..32 {
+        scheduler.schedule(Priority::Background, format!("background-{index}"));
+    }
+    let mut checks = 0usize;
+    let err = scheduler
+        .drain_ready_checked(|| {
+            checks += 1;
+            if checks > 10 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .expect_err("checked drain should stop while scanning queued jobs");
+
+    assert!(matches!(err, GfmError::Cancelled));
+    assert_eq!(scheduler.drain_ready().len(), 32);
+}
+
+#[test]
+fn checked_fair_drain_preserves_queue_when_cancelled_during_planning() {
+    let mut scheduler = Scheduler::new();
+    let metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "rebuild metadata",
+    );
+    scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair derived sidecar",
+        [metadata.id],
+    );
+    for index in 0..8 {
+        scheduler.schedule_in_class(
+            Priority::Interactive,
+            JobClass::Foreground,
+            format!("foreground-{index}"),
+        );
+    }
+    let mut checks = 0usize;
+    let err = scheduler
+        .drain_fair_ready_checked(JobFairnessPolicy::default(), [], || {
+            checks += 1;
+            if checks > 24 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .expect_err("checked fair drain should stop without committing queue changes");
+
+    assert!(matches!(err, GfmError::Cancelled));
+    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    assert!(plan.labels().contains(&"rebuild metadata"));
+    assert_eq!(plan.blocked.len(), 1);
+}
+
+#[test]
+fn checked_volume_cancellation_preserves_queue_and_tokens_when_cancelled() {
+    let mut scheduler = Scheduler::new();
+    let volume = VolumeId(19);
+    let target = scheduler.schedule_on_volume_in_class(
+        Priority::Background,
+        JobClass::Background,
+        "index detached volume",
+        volume,
+    );
+    scheduler.schedule_on_volume_in_class(
+        Priority::Visible,
+        JobClass::Visible,
+        "render visible thumbnails",
+        volume,
+    );
+    let mut checks = 0usize;
+    let err = scheduler
+        .cancel_volume_jobs_checked(volume, Some(JobClass::Background), || {
+            checks += 1;
+            if checks > 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .expect_err("checked volume cancellation should stop before committing");
+
+    assert!(matches!(err, GfmError::Cancelled));
+    assert!(!target.cancellation().is_cancelled());
+    assert_eq!(scheduler.drain_ready().len(), 2);
+}
+
+#[test]
 fn progress_store_round_trips_and_restores_active_snapshots() {
     let path = temp_path("gfm-job-progress", "gfmprogress");
     let store = JobProgressStore::new(&path);

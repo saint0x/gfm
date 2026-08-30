@@ -329,17 +329,31 @@ impl Scheduler {
     }
 
     pub fn bind_volume(&mut self, id: JobId, volume: VolumeId) -> Option<Job> {
-        let mut retained = BinaryHeap::new();
+        self.bind_volume_checked(id, volume, || Ok(()))
+            .expect("infallible job volume binding failed")
+    }
+
+    pub fn bind_volume_checked(
+        &mut self,
+        id: JobId,
+        volume: VolumeId,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<Job>> {
+        check_control()?;
+        let mut retained = Vec::with_capacity(self.queue.len());
         let mut rebound = None;
-        while let Some(QueuedJob(mut job)) = self.queue.pop() {
+        for QueuedJob(mut job) in self.queue.iter().cloned() {
+            check_control()?;
             if job.id == id {
                 job.volume = Some(volume);
                 rebound = Some(job.clone());
             }
             retained.push(QueuedJob(job));
+            check_control()?;
         }
-        self.queue = retained;
-        rebound
+        check_control()?;
+        self.queue = retained.into_iter().collect();
+        Ok(rebound)
     }
 
     pub fn cancel_volume_jobs(
@@ -347,29 +361,47 @@ impl Scheduler {
         volume: VolumeId,
         class: Option<JobClass>,
     ) -> VolumeCancellationReport {
-        let mut retained = BinaryHeap::new();
+        self.cancel_volume_jobs_checked(volume, class, || Ok(()))
+            .expect("infallible volume job cancellation failed")
+    }
+
+    pub fn cancel_volume_jobs_checked(
+        &mut self,
+        volume: VolumeId,
+        class: Option<JobClass>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<VolumeCancellationReport> {
+        check_control()?;
+        let mut retained = Vec::with_capacity(self.queue.len());
         let mut cancelled = Vec::new();
-        while let Some(QueuedJob(job)) = self.queue.pop() {
+        let mut cancelled_jobs = Vec::new();
+        for QueuedJob(job) in self.queue.iter().cloned() {
+            check_control()?;
             if job.volume == Some(volume) && class.is_none_or(|class| class == job.class) {
-                self.cancelled.remove(&job.id);
-                job.cancel();
                 cancelled.push(CancelledJob {
                     id: job.id,
-                    label: job.label,
+                    label: job.label.clone(),
                     class: job.class,
                     priority: job.priority,
                 });
+                cancelled_jobs.push(job);
             } else {
                 retained.push(QueuedJob(job));
             }
+            check_control()?;
         }
-        self.queue = retained;
         cancelled.sort_by_key(|job| job.id.value());
-        VolumeCancellationReport {
+        check_control()?;
+        for job in &cancelled_jobs {
+            self.cancelled.remove(&job.id);
+            job.cancel();
+        }
+        self.queue = retained.into_iter().collect();
+        Ok(VolumeCancellationReport {
             volume,
             class,
             cancelled,
-        }
+        })
     }
 
     pub fn pop_next(&mut self) -> Option<Job> {
@@ -384,11 +416,23 @@ impl Scheduler {
     }
 
     pub fn drain_ready(&mut self) -> Vec<Job> {
-        let mut jobs = Vec::new();
-        while let Some(job) = self.pop_next() {
-            jobs.push(job);
+        self.drain_ready_checked(|| Ok(()))
+            .expect("infallible job queue drain failed")
+    }
+
+    pub fn drain_ready_checked(
+        &mut self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<Job>> {
+        let staged = self.stage_ready_drain_checked(&mut check_control)?;
+        check_control()?;
+        let ready = staged.ready;
+        for job in &staged.cancelled_jobs {
+            job.cancel();
         }
-        jobs
+        self.queue.clear();
+        self.cancelled = staged.cancelled;
+        Ok(ready)
     }
 
     pub fn drain_fair_ready(
@@ -396,23 +440,74 @@ impl Scheduler {
         policy: JobFairnessPolicy,
         completed: impl IntoIterator<Item = JobId>,
     ) -> JobFairnessPlan {
-        let drained = self.drain_ready();
+        self.drain_fair_ready_checked(policy, completed, || Ok(()))
+            .expect("infallible fair job queue drain failed")
+    }
+
+    pub fn drain_fair_ready_checked(
+        &mut self,
+        policy: JobFairnessPolicy,
+        completed: impl IntoIterator<Item = JobId>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<JobFairnessPlan> {
+        let staged = self.stage_ready_drain_checked(&mut check_control)?;
+        check_control()?;
         let plan = JobFairnessPlanner::new(policy)
             .with_completed(completed)
-            .plan(drained.clone());
+            .plan_checked(staged.ready.clone(), &mut check_control)?;
         let blocked_ids = plan
             .blocked
             .iter()
             .map(|job| job.id)
             .collect::<HashSet<_>>();
-        for job in drained
+        check_control()?;
+        for job in &staged.cancelled_jobs {
+            job.cancel();
+        }
+        self.queue.clear();
+        self.cancelled = staged.cancelled;
+        for job in staged
+            .ready
             .into_iter()
             .filter(|job| blocked_ids.contains(&job.id))
         {
+            check_control()?;
             self.queue.push(QueuedJob(job));
         }
-        plan
+        Ok(plan)
     }
+
+    fn stage_ready_drain_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<StagedReadyDrain> {
+        check_control()?;
+        let mut queue = self.queue.clone();
+        let mut cancelled = self.cancelled.clone();
+        let mut ready = Vec::new();
+        let mut cancelled_jobs = Vec::new();
+        while let Some(QueuedJob(job)) = queue.pop() {
+            check_control()?;
+            if cancelled.remove(&job.id) {
+                cancelled_jobs.push(job);
+                continue;
+            }
+            ready.push(job);
+            check_control()?;
+        }
+        check_control()?;
+        Ok(StagedReadyDrain {
+            ready,
+            cancelled,
+            cancelled_jobs,
+        })
+    }
+}
+
+struct StagedReadyDrain {
+    ready: Vec<Job>,
+    cancelled: HashSet<JobId>,
+    cancelled_jobs: Vec<Job>,
 }
 
 pub struct Task {
