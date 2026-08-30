@@ -249,6 +249,110 @@ fn search_index_retries_transient_archive_read_failure_from_binary() {
 }
 
 #[test]
+fn live_search_routes_retry_transient_scan_failure_from_binary() {
+    let root = unique_temp_dir("gfm-cli-live-search-retry-root");
+    let search_journal = unique_temp_path("gfm-cli-live-search-retry", "journal");
+    let search_catalog = unique_temp_path("gfm-cli-live-search-retry", "gfmjobs");
+    let search_progress = unique_temp_path("gfm-cli-live-search-retry", "gfmprogress");
+    let search_probe = unique_temp_path("gfm-cli-live-search-retry", "state");
+    let stream_journal = unique_temp_path("gfm-cli-live-search-stream-retry", "journal");
+    let stream_catalog = unique_temp_path("gfm-cli-live-search-stream-retry", "gfmjobs");
+    let stream_progress = unique_temp_path("gfm-cli-live-search-stream-retry", "gfmprogress");
+    let stream_probe = unique_temp_path("gfm-cli-live-search-stream-retry", "state");
+    fs::create_dir_all(root.join("Reports")).unwrap();
+    fs::write(
+        root.join("Reports").join("LiveRetrySearch.md"),
+        "live retry search marker",
+    )
+    .unwrap();
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &search_journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &search_catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &search_progress)
+        .args([
+            "search-retry-probe",
+            root.to_str().unwrap(),
+            "liveretrysearch",
+            search_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+    let search_stdout = String::from_utf8(search_output.stdout).unwrap();
+    assert!(
+        search_stdout.contains("LiveRetrySearch.md"),
+        "{search_stdout}"
+    );
+    assert_eq!(fs::read_to_string(&search_probe).unwrap(), "2");
+    let search_journal_text = fs::read_to_string(&search_journal).unwrap();
+    assert!(
+        search_journal_text.contains("1\t1\tstarted\tsearch"),
+        "{search_journal_text}"
+    );
+    assert!(
+        search_journal_text.contains("1\t1\tfailed:temporary search retry probe busy\tsearch"),
+        "{search_journal_text}"
+    );
+    assert!(
+        search_journal_text.contains("1\t2\tcompleted\tsearch"),
+        "{search_journal_text}"
+    );
+
+    let stream_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &stream_journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &stream_catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &stream_progress)
+        .args([
+            "search-stream-retry-probe",
+            root.to_str().unwrap(),
+            "liveretrysearch",
+            stream_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        stream_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stream_output.stderr)
+    );
+    let stream_stdout = String::from_utf8(stream_output.stdout).unwrap();
+    assert!(
+        stream_stdout.contains("batch\t") && stream_stdout.contains("LiveRetrySearch.md"),
+        "{stream_stdout}"
+    );
+    assert_eq!(fs::read_to_string(&stream_probe).unwrap(), "2");
+    let stream_journal_text = fs::read_to_string(&stream_journal).unwrap();
+    assert!(
+        stream_journal_text.contains("1\t1\tstarted\tsearch stream"),
+        "{stream_journal_text}"
+    );
+    assert!(
+        stream_journal_text
+            .contains("1\t1\tfailed:temporary search stream retry probe busy\tsearch stream"),
+        "{stream_journal_text}"
+    );
+    assert!(
+        stream_journal_text.contains("1\t2\tcompleted\tsearch stream"),
+        "{stream_journal_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(search_journal).unwrap();
+    fs::remove_file(search_catalog).unwrap();
+    fs::remove_file(search_progress).unwrap();
+    fs::remove_file(search_probe).unwrap();
+    fs::remove_file(stream_journal).unwrap();
+    fs::remove_file(stream_catalog).unwrap();
+    fs::remove_file(stream_progress).unwrap();
+    fs::remove_file(stream_probe).unwrap();
+}
+
+#[test]
 fn index_preflight_refreshes_permission_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-permission-worker-refresh");
     let index = root.join("records.gfmidx");

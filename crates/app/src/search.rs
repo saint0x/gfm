@@ -34,16 +34,43 @@ use std::path::{Path, PathBuf};
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
-        "search" => {
+        "search" | "search-retry-probe" => {
             let root = required_path(args.next(), "search requires a root path")?;
             let query = required_string(args.next(), "search requires a query string")?;
+            let retry_probe = if command == "search-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "search-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
             preflight_volume_access_scope(&root, AccessIntent::Index, "search")?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                preflight_volume_access_scope(
+                    write_probe_path(retry_probe)?,
+                    AccessIntent::Write,
+                    "search",
+                )?;
+            }
             let volume = path_volume(&root);
-            let hits = run_volume_task_cancellable(
+            let hits = run_retriable_volume_task_cancellable_with_payload_path(
                 volume,
                 Priority::Visible,
                 "search",
+                root.clone(),
                 move |cancellation| {
+                    let root = root.clone();
+                    let query = query.clone();
+                    let retry_probe = retry_probe.clone();
+                    cancellation.check()?;
+                    if let Some(retry_probe) = retry_probe.as_ref() {
+                        fail_first_search_retry_probe_attempt(
+                            retry_probe,
+                            "search",
+                            &cancellation,
+                        )?;
+                    }
                     let _access = preflight_access_scope_checked(
                         &root,
                         AccessIntent::Index,
@@ -65,16 +92,43 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
-        "search-stream" => {
+        "search-stream" | "search-stream-retry-probe" => {
             let root = required_path(args.next(), "search-stream requires a root path")?;
             let query = required_string(args.next(), "search-stream requires a query string")?;
+            let retry_probe = if command == "search-stream-retry-probe" {
+                Some(required_path(
+                    args.next(),
+                    "search-stream-retry-probe requires a retry probe path",
+                )?)
+            } else {
+                None
+            };
             preflight_volume_access_scope(&root, AccessIntent::Index, "search stream")?;
+            if let Some(retry_probe) = retry_probe.as_ref() {
+                preflight_volume_access_scope(
+                    write_probe_path(retry_probe)?,
+                    AccessIntent::Write,
+                    "search stream",
+                )?;
+            }
             let volume = path_volume(&root);
-            let batches = run_volume_task_cancellable(
+            let batches = run_retriable_volume_task_cancellable_with_payload_path(
                 volume,
                 Priority::Visible,
                 "search stream",
+                root.clone(),
                 move |cancellation| {
+                    let root = root.clone();
+                    let query = query.clone();
+                    let retry_probe = retry_probe.clone();
+                    cancellation.check()?;
+                    if let Some(retry_probe) = retry_probe.as_ref() {
+                        fail_first_search_retry_probe_attempt(
+                            retry_probe,
+                            "search stream",
+                            &cancellation,
+                        )?;
+                    }
                     let _access = preflight_access_scope_checked(
                         &root,
                         AccessIntent::Index,

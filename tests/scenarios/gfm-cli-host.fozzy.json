@@ -7511,6 +7511,77 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-live-search-retry-root/Reports/LiveRetrySearch.md",
+      "data": "live retry search marker\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-live-search-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-live-search-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-live-search-retry.progress"
+      },
+      "args": [
+        "search-retry-probe",
+        "tmp/gfm-fozzy-live-search-retry-root",
+        "liveretrysearch",
+        "tmp/gfm-fozzy-live-search-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-live-search-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-live-search-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-live-search-retry.progress"
+      },
+      "args": [
+        "search-retry-probe",
+        "tmp/gfm-fozzy-live-search-retry-root",
+        "liveretrysearch",
+        "tmp/gfm-fozzy-live-search-retry.state"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-live-search-stream-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-live-search-stream-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-live-search-stream-retry.progress"
+      },
+      "args": [
+        "search-stream-retry-probe",
+        "tmp/gfm-fozzy-live-search-retry-root",
+        "liveretrysearch",
+        "tmp/gfm-fozzy-live-search-stream-retry.state"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_JOB_JOURNAL": "tmp/gfm-fozzy-live-search-stream-retry.jobs",
+        "GFM_JOB_PAYLOAD_CATALOG": "tmp/gfm-fozzy-live-search-stream-retry.payloads",
+        "GFM_JOB_PROGRESS_STORE": "tmp/gfm-fozzy-live-search-stream-retry.progress"
+      },
+      "args": [
+        "search-stream-retry-probe",
+        "tmp/gfm-fozzy-live-search-retry-root",
+        "liveretrysearch",
+        "tmp/gfm-fozzy-live-search-stream-retry.state"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-operation-retry-source.txt",
       "data": "operation retry source\n"
     },
