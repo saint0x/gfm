@@ -6,7 +6,7 @@ use gfm_jobs::Cancellation;
 use gfm_store::{
     compact_content_postings_with_segments_checked, compact_content_segments_checked,
     compact_content_segments_with_policy_checked, plan_content_segment_merge_checked,
-    read_content_postings, write_content_segment, ContentArchiveCleanupAction,
+    read_content_postings_checked, write_content_segment, ContentArchiveCleanupAction,
     ContentArchiveCleanupPolicy, ContentArchiveManifest, ContentArchiveManifestEntry,
     ContentMergePolicy, ContentMergeTier,
 };
@@ -674,7 +674,7 @@ pub(crate) fn read_previous_content_postings_cancellable(
     match fs::metadata(path) {
         Ok(metadata) if metadata.is_file() => {
             cancellation.check()?;
-            let postings = read_content_postings(path)?;
+            let postings = read_content_postings_checked(path, || cancellation.check())?;
             cancellation.check()?;
             Ok(postings)
         }

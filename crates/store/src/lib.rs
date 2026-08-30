@@ -18,8 +18,9 @@ mod substring;
 
 pub use columns::{write_record_columns, MmapRecordColumns, RecordColumn};
 pub use content::{
-    read_content_postings, read_content_segment, write_content_postings, write_content_segment,
-    ContentArchive, LimitedContentPosting, MmapContentArchive,
+    read_content_postings, read_content_postings_checked, read_content_segment,
+    write_content_postings, write_content_segment, ContentArchive, LimitedContentPosting,
+    MmapContentArchive,
 };
 pub use contentmerge::{
     compact_content_postings_with_segments, compact_content_postings_with_segments_checked,
@@ -37,14 +38,16 @@ pub use contentrecover::{
     ContentManifestRecoveryReason,
 };
 pub use contentset::{
-    cleanup_inactive_content_archives, content_manifest_promotion_journal_path,
-    plan_content_manifest_promotion_recovery, plan_inactive_content_archive_cleanup,
-    promote_content_archive_manifest, read_content_archive_manifest,
-    recover_content_manifest_promotion, write_content_archive_manifest,
-    ContentArchiveCleanupAction, ContentArchiveCleanupPlan, ContentArchiveCleanupPolicy,
-    ContentArchiveCleanupReport, ContentArchiveManifest, ContentArchiveManifestEntry,
-    ContentManifestPromotion, ContentManifestPromotionJournal, ContentManifestPromotionRecovery,
-    ContentManifestPromotionRecoveryAction, ContentManifestPromotionRecoveryPlan,
+    cleanup_inactive_content_archives, cleanup_inactive_content_archives_checked,
+    content_manifest_promotion_journal_path, plan_content_manifest_promotion_recovery,
+    plan_inactive_content_archive_cleanup, plan_inactive_content_archive_cleanup_checked,
+    promote_content_archive_manifest, promote_content_archive_manifest_checked,
+    read_content_archive_manifest, recover_content_manifest_promotion,
+    write_content_archive_manifest, ContentArchiveCleanupAction, ContentArchiveCleanupPlan,
+    ContentArchiveCleanupPolicy, ContentArchiveCleanupReport, ContentArchiveManifest,
+    ContentArchiveManifestEntry, ContentManifestPromotion, ContentManifestPromotionJournal,
+    ContentManifestPromotionRecovery, ContentManifestPromotionRecoveryAction,
+    ContentManifestPromotionRecoveryPlan,
 };
 pub use dictionary::{
     dictionary_term_report_from_records, dictionary_terms_from_records, read_dictionary,

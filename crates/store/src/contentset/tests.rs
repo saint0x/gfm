@@ -407,6 +407,47 @@ fn content_archive_manifest_promotes_new_archive_and_reports_retirement_state() 
 }
 
 #[test]
+fn checked_content_manifest_promotion_cancels_before_journal_write() {
+    let dir = temp_dir("gfm-content-manifest-promote-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    std::fs::create_dir_all(&dir).unwrap();
+    write_content_postings(dir.join("warm-b.gfmcontent"), &[]).unwrap();
+
+    let manifest = ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: PathBuf::from("hot-a.gfmcontent"),
+    }])
+    .unwrap();
+    manifest.write(&manifest_path).unwrap();
+    let mut checks = 0;
+
+    let result = promote_content_archive_manifest_checked(
+        &manifest_path,
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: PathBuf::from("warm-b.gfmcontent"),
+        },
+        &[PathBuf::from("hot-a.gfmcontent")],
+        || {
+            checks += 1;
+            if checks >= 10 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert_eq!(
+        ContentArchiveManifest::read(&manifest_path).unwrap(),
+        manifest
+    );
+    assert!(!content_manifest_promotion_journal_path(&manifest_path).exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn content_manifest_promotion_recovery_completes_pending_journal() {
     let dir = temp_dir("gfm-content-manifest-promotion-recovery");
     let manifest_path = dir.join("content.gfmmanifest");
@@ -633,6 +674,44 @@ fn content_archive_cleanup_removes_only_inactive_candidates() {
 }
 
 #[test]
+fn checked_content_archive_cleanup_cancels_before_removing_inactive_candidate() {
+    let dir = temp_dir("gfm-content-manifest-cleanup-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    let inactive = dir.join("inactive.gfmcontent");
+    let active = dir.join("active.gfmcontent");
+    std::fs::create_dir_all(&dir).unwrap();
+    write_content_postings(&inactive, &[]).unwrap();
+    write_content_postings(&active, &[]).unwrap();
+
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: PathBuf::from("active.gfmcontent"),
+    }])
+    .unwrap()
+    .write(&manifest_path)
+    .unwrap();
+    let mut checks = 0;
+
+    let result = cleanup_inactive_content_archives_checked(
+        &manifest_path,
+        &[PathBuf::from("inactive.gfmcontent")],
+        || {
+            checks += 1;
+            if checks >= 10 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(inactive.exists());
+    assert!(active.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn content_archive_cleanup_plan_batches_retired_archives() {
     let dir = temp_dir("gfm-content-manifest-cleanup-plan");
     let manifest_path = dir.join("content.gfmmanifest");
@@ -701,6 +780,45 @@ fn content_archive_cleanup_plan_batches_retired_archives() {
     assert!(scheduled.cleanup_bytes > 0);
     assert!(scheduled.deferred_bytes > 0);
 
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checked_content_archive_cleanup_plan_cancels_before_retired_metadata_probe() {
+    let dir = temp_dir("gfm-content-manifest-cleanup-plan-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    let active = dir.join("active.gfmcontent");
+    let retired = dir.join("retired.gfmcontent");
+    std::fs::create_dir_all(&dir).unwrap();
+    write_content_postings(&active, &[]).unwrap();
+    write_content_postings(&retired, &[]).unwrap();
+
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: PathBuf::from("active.gfmcontent"),
+    }])
+    .unwrap()
+    .write(&manifest_path)
+    .unwrap();
+    let mut checks = 0;
+
+    let result = plan_inactive_content_archive_cleanup_checked(
+        &manifest_path,
+        &[PathBuf::from("retired.gfmcontent")],
+        &ContentArchiveCleanupPolicy::default(),
+        || {
+            checks += 1;
+            if checks >= 12 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(active.exists());
+    assert!(retired.exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
 

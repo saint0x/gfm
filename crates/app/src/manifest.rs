@@ -8,10 +8,11 @@ use gfm_index::{
 use gfm_jobs::Priority;
 use gfm_mac::AccessIntent;
 use gfm_store::{
-    content_manifest_promotion_journal_path, plan_content_manifest_promotion_recovery,
-    plan_content_manifest_recovery, promote_content_archive_manifest, recover_content_manifest,
-    recover_content_manifest_promotion, ContentArchiveHealth, ContentManifestPromotionJournal,
-    MmapContentSet,
+    cleanup_inactive_content_archives_checked, content_manifest_promotion_journal_path,
+    plan_content_manifest_promotion_recovery, plan_content_manifest_recovery,
+    plan_inactive_content_archive_cleanup_checked, promote_content_archive_manifest_checked,
+    recover_content_manifest, recover_content_manifest_promotion, ContentArchiveHealth,
+    ContentManifestPromotionJournal, MmapContentSet,
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
@@ -166,7 +167,7 @@ fn run_manifest_cleanup(
         cancellation.check()?;
         let _access = retain_manifest_cleanup_access(&manifest_path, &candidates, true, WORKER)?;
         cancellation.check()?;
-        render_manifest_cleanup(&manifest_path, &candidates)
+        render_manifest_cleanup(&manifest_path, &candidates, || cancellation.check())
     })
 }
 
@@ -182,7 +183,8 @@ fn run_content_cleanup_plan(
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let _access = retain_manifest_cleanup_access(&manifest_path, &candidates, false, WORKER)?;
-        let manifest = ContentArchiveManifest::read(&manifest_path)?;
+        let manifest =
+            ContentArchiveManifest::read_checked(&manifest_path, || cancellation.check())?;
         let active_archive_paths = manifest.resolved_archive_paths(&manifest_path);
         preflight_manifest_cleanup_archive_volumes(&active_archive_paths, ACTIVE_ARCHIVE_WORKER)?;
         cancellation.check()?;
@@ -191,16 +193,19 @@ fn run_content_cleanup_plan(
             ACTIVE_ARCHIVE_WORKER,
         )?;
         cancellation.check()?;
-        render_cleanup_plan(&manifest_path, &candidates, &policy)
+        render_cleanup_plan(&manifest_path, &candidates, &policy, || {
+            cancellation.check()
+        })
     })
 }
 
 fn render_manifest_cleanup(
     manifest_path: &Path,
     candidates: &[PathBuf],
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<(String, Vec<String>)> {
-    let manifest = ContentArchiveManifest::read(manifest_path)?;
-    let report = manifest.cleanup_inactive_archives(manifest_path, candidates)?;
+    let report =
+        cleanup_inactive_content_archives_checked(manifest_path, candidates, check_control)?;
     let summary = format!(
         "content-manifest-cleanup\tremoved={}\tactive={}\tmissing={}",
         report.removed_archives.len(),
@@ -224,9 +229,14 @@ fn render_cleanup_plan(
     manifest_path: &Path,
     candidates: &[PathBuf],
     policy: &ContentArchiveCleanupPolicy,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<(String, Vec<String>)> {
-    let manifest = ContentArchiveManifest::read(manifest_path)?;
-    let plan = manifest.plan_inactive_archive_cleanup(manifest_path, candidates, policy)?;
+    let plan = plan_inactive_content_archive_cleanup_checked(
+        manifest_path,
+        candidates,
+        policy,
+        check_control,
+    )?;
     let summary = format!(
         "content-cleanup-plan\taction={:?}\tcleanup={}\tdeferred={}\tactive={}\tmissing={}\tactive-bytes={}\tcleanup-bytes={}\tdeferred-bytes={}",
         plan.action,
@@ -622,8 +632,12 @@ fn run_manifest_promotion(
         let _access =
             retain_manifest_promotion_access(&manifest_path, &new_archive, &retired_paths)?;
         cancellation.check()?;
-        let promotion =
-            promote_content_archive_manifest(&manifest_path, new_archive, &retired_paths)?;
+        let promotion = promote_content_archive_manifest_checked(
+            &manifest_path,
+            new_archive,
+            &retired_paths,
+            || cancellation.check(),
+        )?;
         let summary = format!(
             "content-manifest-promoted\tarchives={}\tretired={}\tmissing-retirements={}",
             promotion.manifest.archives.len(),

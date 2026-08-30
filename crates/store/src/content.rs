@@ -104,9 +104,19 @@ pub fn write_content_postings(path: impl AsRef<Path>, postings: &[ContentPosting
 }
 
 pub fn read_content_postings(path: impl AsRef<Path>) -> Result<Vec<ContentPosting>> {
+    read_content_postings_checked(path, || Ok(()))
+}
+
+pub fn read_content_postings_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<ContentPosting>> {
     let path = path.as_ref();
+    check_control()?;
     let mut file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
     let magic = read_content_magic(&mut file, path)?;
+    check_control()?;
     let version = content_version(&magic, path)?;
     if version == ContentStoreVersion::Legacy && magic != CONTENT_MAGIC_V1 {
         return Err(GfmError::Format(format!(
@@ -115,12 +125,15 @@ pub fn read_content_postings(path: impl AsRef<Path>) -> Result<Vec<ContentPostin
         )));
     }
     verify_content_checksum_for_file(&mut file, path, version)?;
+    check_control()?;
 
     let count = read_varint(&mut file).map_err(|err| GfmError::io(path, err))?;
     let mut postings = Vec::with_capacity(count.min(1_000_000) as usize);
     for _ in 0..count {
+        check_control()?;
         postings.push(read_content_posting(&mut file, path, version)?);
     }
+    check_control()?;
     Ok(postings)
 }
 

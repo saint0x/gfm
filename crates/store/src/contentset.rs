@@ -279,20 +279,33 @@ impl ContentArchiveManifest {
         manifest_path: impl AsRef<Path>,
         candidates: &[impl AsRef<Path>],
     ) -> Result<ContentArchiveCleanupReport> {
+        self.cleanup_inactive_archives_checked(manifest_path, candidates, || Ok(()))
+    }
+
+    pub fn cleanup_inactive_archives_checked(
+        &self,
+        manifest_path: impl AsRef<Path>,
+        candidates: &[impl AsRef<Path>],
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ContentArchiveCleanupReport> {
         let manifest_path = manifest_path.as_ref();
+        check_control()?;
         let active = self
             .resolved_archive_paths(manifest_path)
             .into_iter()
             .collect::<BTreeSet<_>>();
+        check_control()?;
         let mut removed_archives = Vec::new();
         let mut active_archives = Vec::new();
         let mut missing_archives = Vec::new();
         for candidate in candidates {
+            check_control()?;
             let path = resolve_manifest_path(manifest_path, candidate.as_ref());
             if active.contains(&path) {
                 active_archives.push(path);
                 continue;
             }
+            check_control()?;
             match std::fs::remove_file(&path) {
                 Ok(()) => removed_archives.push(path),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -300,6 +313,7 @@ impl ContentArchiveManifest {
                 }
                 Err(err) => return Err(GfmError::io(&path, err)),
             }
+            check_control()?;
         }
         Ok(ContentArchiveCleanupReport {
             removed_archives,
@@ -314,26 +328,41 @@ impl ContentArchiveManifest {
         candidates: &[impl AsRef<Path>],
         policy: &ContentArchiveCleanupPolicy,
     ) -> Result<ContentArchiveCleanupPlan> {
+        self.plan_inactive_archive_cleanup_checked(manifest_path, candidates, policy, || Ok(()))
+    }
+
+    pub fn plan_inactive_archive_cleanup_checked(
+        &self,
+        manifest_path: impl AsRef<Path>,
+        candidates: &[impl AsRef<Path>],
+        policy: &ContentArchiveCleanupPolicy,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ContentArchiveCleanupPlan> {
         let manifest_path = manifest_path.as_ref();
+        check_control()?;
         let active = self
             .resolved_archive_paths(manifest_path)
             .into_iter()
             .collect::<BTreeSet<_>>();
-        let active_bytes =
-            active.iter().try_fold(
-                0u64,
-                |total, path| Ok(total.saturating_add(file_len(path)?)),
-            )?;
+        check_control()?;
+        let mut active_bytes = 0u64;
+        for path in &active {
+            check_control()?;
+            active_bytes = active_bytes.saturating_add(file_len(path)?);
+            check_control()?;
+        }
         let mut retired = BTreeMap::new();
         let mut active_archives = Vec::new();
         let mut missing_archives = Vec::new();
 
         for candidate in candidates {
+            check_control()?;
             let path = resolve_manifest_path(manifest_path, candidate.as_ref());
             if active.contains(&path) {
                 active_archives.push(path);
                 continue;
             }
+            check_control()?;
             match std::fs::metadata(&path) {
                 Ok(metadata) => {
                     retired.insert(path, metadata.len());
@@ -343,6 +372,7 @@ impl ContentArchiveManifest {
                 }
                 Err(err) => return Err(GfmError::io(&path, err)),
             }
+            check_control()?;
         }
 
         let max_cleanup_archives = policy.max_cleanup_archives.max(1);
@@ -360,6 +390,7 @@ impl ContentArchiveManifest {
         let mut cleanup_bytes = 0u64;
         let mut deferred_bytes = 0u64;
         for (index, (path, bytes)) in retired.into_iter().enumerate() {
+            check_control()?;
             if index < selected_count {
                 cleanup_bytes = cleanup_bytes.saturating_add(bytes);
                 cleanup_archives.push(path);
@@ -555,21 +586,37 @@ pub fn promote_content_archive_manifest(
     new_archive: ContentArchiveManifestEntry,
     retired_paths: &[impl AsRef<Path>],
 ) -> Result<ContentManifestPromotion> {
+    promote_content_archive_manifest_checked(manifest_path, new_archive, retired_paths, || Ok(()))
+}
+
+pub fn promote_content_archive_manifest_checked(
+    manifest_path: impl AsRef<Path>,
+    new_archive: ContentArchiveManifestEntry,
+    retired_paths: &[impl AsRef<Path>],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ContentManifestPromotion> {
     let manifest_path = manifest_path.as_ref();
-    let manifest = ContentArchiveManifest::read(manifest_path)?;
+    check_control()?;
+    let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
+    check_control()?;
     let retired_paths = retired_paths
         .iter()
         .map(|path| path.as_ref().to_path_buf())
         .collect::<Vec<_>>();
+    check_control()?;
     let journal = ContentManifestPromotionJournal::new(
         manifest.clone(),
         new_archive.clone(),
         retired_paths.clone(),
     )?;
     let journal_path = content_manifest_promotion_journal_path(manifest_path);
+    check_control()?;
     journal.write(&journal_path)?;
+    check_control()?;
     let promotion = manifest.promote_archive(manifest_path, new_archive, &retired_paths)?;
+    check_control()?;
     promotion.manifest.write(manifest_path)?;
+    check_control()?;
     remove_journal_if_exists(&journal_path)?;
     Ok(promotion)
 }
@@ -710,9 +757,17 @@ pub fn cleanup_inactive_content_archives(
     manifest_path: impl AsRef<Path>,
     candidates: &[impl AsRef<Path>],
 ) -> Result<ContentArchiveCleanupReport> {
+    cleanup_inactive_content_archives_checked(manifest_path, candidates, || Ok(()))
+}
+
+pub fn cleanup_inactive_content_archives_checked(
+    manifest_path: impl AsRef<Path>,
+    candidates: &[impl AsRef<Path>],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ContentArchiveCleanupReport> {
     let manifest_path = manifest_path.as_ref();
-    let manifest = ContentArchiveManifest::read(manifest_path)?;
-    manifest.cleanup_inactive_archives(manifest_path, candidates)
+    let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
+    manifest.cleanup_inactive_archives_checked(manifest_path, candidates, check_control)
 }
 
 pub fn plan_inactive_content_archive_cleanup(
@@ -720,9 +775,18 @@ pub fn plan_inactive_content_archive_cleanup(
     candidates: &[impl AsRef<Path>],
     policy: &ContentArchiveCleanupPolicy,
 ) -> Result<ContentArchiveCleanupPlan> {
+    plan_inactive_content_archive_cleanup_checked(manifest_path, candidates, policy, || Ok(()))
+}
+
+pub fn plan_inactive_content_archive_cleanup_checked(
+    manifest_path: impl AsRef<Path>,
+    candidates: &[impl AsRef<Path>],
+    policy: &ContentArchiveCleanupPolicy,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ContentArchiveCleanupPlan> {
     let manifest_path = manifest_path.as_ref();
-    let manifest = ContentArchiveManifest::read(manifest_path)?;
-    manifest.plan_inactive_archive_cleanup(manifest_path, candidates, policy)
+    let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
+    manifest.plan_inactive_archive_cleanup_checked(manifest_path, candidates, policy, check_control)
 }
 
 fn file_len(path: &Path) -> Result<u64> {
