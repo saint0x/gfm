@@ -303,7 +303,7 @@ fn read_operation_conflicts(
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let store = OperationConflictStore::new(path);
-        store.read()
+        store.read_checked(|| cancellation.check())
     })
 }
 
@@ -333,7 +333,7 @@ fn resolve_operation_conflicts(
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let store = OperationConflictStore::new(path);
-        store.resolve_targets(&targets, conflict.as_str())
+        store.resolve_targets_checked(&targets, conflict.as_str(), || cancellation.check())
     })
 }
 
@@ -463,13 +463,13 @@ fn execute_operation(operation: Operation, conflict: ConflictPolicy) -> Result<(
         volume,
         Priority::Interactive,
         label,
-        move |_, runtime| {
+        move |cancellation, runtime| {
             if access_gate.check(&operation).is_ok() {
                 let _security_scope = operation_security_accesses(&operation)?;
                 let conflict_report = OperationConflictReport::evaluate(&operation, conflict)?;
                 if conflict_report.blocks_operation {
                     if let Some(store) = runtime_operation_conflict_store() {
-                        store.append(&conflict_report)?;
+                        store.append_checked(&conflict_report, || cancellation.check())?;
                     }
                 }
                 let operator = Operator::new(

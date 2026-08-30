@@ -1165,7 +1165,7 @@ fn read_ui_operation_conflicts(
             cancellation.check()?;
             let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
             cancellation.check()?;
-            store.read()
+            store.read_checked(|| cancellation.check())
         },
     )
 }
@@ -1198,7 +1198,8 @@ fn resolve_ui_operation_conflict(
             )?;
             cancellation.check()?;
             let store = crate::runtime::OperationConflictStore::new(store_path.clone());
-            let resolved = store.resolve(&target, policy.as_str())?;
+            let resolved =
+                store.resolve_checked(&target, policy.as_str(), || cancellation.check())?;
             cancellation.check()?;
             Ok((resolved, store_path))
         },

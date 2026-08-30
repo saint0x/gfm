@@ -633,7 +633,9 @@ mod tests {
             reason: "destination\tconflict\nrequires\\choice".to_string(),
         };
 
-        store.write_all(std::slice::from_ref(&conflict)).unwrap();
+        store
+            .write_all_checked(std::slice::from_ref(&conflict), || Ok(()))
+            .unwrap();
 
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(
@@ -644,7 +646,7 @@ mod tests {
             raw.contains("target=/tmp/target\\\\literal\\rname.md"),
             "{raw}"
         );
-        assert_eq!(store.read().unwrap(), vec![conflict]);
+        assert_eq!(store.read_checked(|| Ok(())).unwrap(), vec![conflict]);
 
         std::fs::remove_file(path).unwrap();
     }
@@ -659,11 +661,97 @@ mod tests {
         .unwrap();
         let store = OperationConflictStore::new(&path);
 
-        let conflicts = store.read().unwrap();
+        let conflicts = store.read_checked(|| Ok(())).unwrap();
 
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].source, "/tmp/source\\x.md");
 
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn operation_conflict_store_checked_read_honors_pre_cancelled_control_before_file_open() {
+        let path = temp_path("gfm-operation-conflict-read-cancel", "tsv");
+        let store = OperationConflictStore::new(&path);
+
+        let err = store.read_checked(|| Err(GfmError::Cancelled)).unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn operation_conflict_store_checked_append_honors_pre_cancelled_control_before_file_create() {
+        let path = temp_path("gfm-operation-conflict-append-cancel", "tsv");
+        let store = OperationConflictStore::new(&path);
+        let report = OperationConflictReport {
+            operation: "copy",
+            source: Some(PathBuf::from("/tmp/source.md")),
+            target: Some(PathBuf::from("/tmp/target.md")),
+            target_exists: true,
+            target_kind: gfm_ops::OperationConflictKind::File,
+            selected_policy: gfm_ops::ConflictPolicy::Fail,
+            available_policies: vec![
+                gfm_ops::ConflictPolicy::Replace,
+                gfm_ops::ConflictPolicy::KeepBoth,
+            ],
+            blocks_operation: true,
+            reason: "destination-conflict-requires-user-resolution".to_string(),
+        };
+
+        let err = store
+            .append_checked(&report, || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn operation_conflict_store_checked_resolve_preserves_state_on_cancel() {
+        let path = temp_path("gfm-operation-conflict-resolve-cancel", "tsv");
+        let store = OperationConflictStore::new(&path);
+        let conflict = RuntimeOperationConflict {
+            operation: "copy".to_string(),
+            source: "/tmp/source.md".to_string(),
+            target: "/tmp/target.md".to_string(),
+            target_kind: "file".to_string(),
+            selected_policy: "fail".to_string(),
+            available_policies: vec!["replace".to_string(), "keep-both".to_string()],
+            blocks_operation: true,
+            reason: "destination-conflict".to_string(),
+        };
+        store
+            .write_all_checked(std::slice::from_ref(&conflict), || Ok(()))
+            .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let mut checks = 0usize;
+
+        let err = store
+            .resolve_checked(&conflict.target, "replace", || {
+                checks += 1;
+                if checks >= 14 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(checks >= 14);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let leftovers = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".gfm-operation-conflict-resolve-cancel")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -761,40 +849,65 @@ impl OperationConflictStore {
         &self.path
     }
 
-    pub(crate) fn append(&self, report: &OperationConflictReport) -> Result<()> {
+    pub(crate) fn append_checked(
+        &self,
+        report: &OperationConflictReport,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
         let _access = preflight_operation_conflict_write(&self.path)?;
+        check_control()?;
         let parent = crate::parent_or_cwd(&self.path);
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+        check_control()?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)
             .map_err(|err| GfmError::io(&self.path, err))?;
+        check_control()?;
         writeln!(file, "{}", RuntimeOperationConflict::from(report).as_tsv())
-            .map_err(|err| GfmError::io(&self.path, err))
+            .map_err(|err| GfmError::io(&self.path, err))?;
+        check_control()?;
+        file.flush().map_err(|err| GfmError::io(&self.path, err))?;
+        check_control()?;
+        Ok(())
     }
 
-    pub(crate) fn read(&self) -> Result<Vec<RuntimeOperationConflict>> {
+    pub(crate) fn read_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<RuntimeOperationConflict>> {
+        check_control()?;
         let _access = preflight_operation_conflict_read(&self.path)?;
+        check_control()?;
         let text = match fs::read_to_string(&self.path) {
             Ok(text) => text,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(err) => return Err(GfmError::io(&self.path, err)),
         };
+        check_control()?;
         text.lines()
             .enumerate()
             .filter(|(_, line)| !line.trim().is_empty())
-            .map(|(line_index, line)| parse_operation_conflict_line(&self.path, line_index, line))
+            .map(|(line_index, line)| {
+                check_control()?;
+                parse_operation_conflict_line(&self.path, line_index, line)
+            })
             .collect()
     }
 
-    pub(crate) fn resolve(
+    pub(crate) fn resolve_checked(
         &self,
         target: &str,
         selected_policy: &str,
+        check_control: impl FnMut() -> Result<()>,
     ) -> Result<RuntimeOperationConflict> {
-        let resolved =
-            self.resolve_target_set(BTreeSet::from([target.to_string()]), selected_policy)?;
+        let resolved = self.resolve_target_set_checked(
+            BTreeSet::from([target.to_string()]),
+            selected_policy,
+            check_control,
+        )?;
         resolved.into_iter().next().ok_or_else(|| {
             GfmError::Format(format!(
                 "operation conflict store {} has no blocking conflict for `{target}`",
@@ -803,26 +916,35 @@ impl OperationConflictStore {
         })
     }
 
-    pub(crate) fn resolve_targets(
+    pub(crate) fn resolve_targets_checked(
         &self,
         targets: &[String],
         selected_policy: &str,
+        check_control: impl FnMut() -> Result<()>,
     ) -> Result<Vec<RuntimeOperationConflict>> {
-        self.resolve_target_set(targets.iter().cloned().collect(), selected_policy)
+        self.resolve_target_set_checked(
+            targets.iter().cloned().collect(),
+            selected_policy,
+            check_control,
+        )
     }
 
-    fn resolve_target_set(
+    fn resolve_target_set_checked(
         &self,
         targets: BTreeSet<String>,
         selected_policy: &str,
+        mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Vec<RuntimeOperationConflict>> {
         if targets.is_empty() {
             return Ok(Vec::new());
         }
-        let mut conflicts = self.read()?;
+        check_control()?;
+        let mut conflicts = self.read_checked(&mut check_control)?;
+        check_control()?;
         let mut unresolved_targets = targets.clone();
         let mut resolved = Vec::new();
         for conflict in conflicts.iter_mut() {
+            check_control()?;
             if !targets.contains(&conflict.target) || !conflict.blocks_operation {
                 continue;
             }
@@ -849,30 +971,36 @@ impl OperationConflictStore {
                 self.path.display()
             )));
         }
-        self.write_all(&conflicts)?;
+        check_control()?;
+        self.write_all_checked(&conflicts, &mut check_control)?;
         Ok(resolved)
     }
 
-    fn write_all(&self, conflicts: &[RuntimeOperationConflict]) -> Result<()> {
+    fn write_all_checked(
+        &self,
+        conflicts: &[RuntimeOperationConflict],
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
         let _access = preflight_operation_conflict_write(&self.path)?;
+        check_control()?;
         let parent = crate::parent_or_cwd(&self.path);
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
-        let text = conflicts
-            .iter()
-            .map(RuntimeOperationConflict::as_tsv)
-            .collect::<Vec<_>>()
-            .join("\n");
-        let text = if text.is_empty() {
-            String::new()
-        } else {
-            format!("{text}\n")
-        };
-        let temporary = operation_conflict_temp_path(&self.path);
-        fs::write(&temporary, text).map_err(|err| GfmError::io(&temporary, err))?;
-        if let Err(err) = fs::rename(&temporary, &self.path) {
-            let _ = fs::remove_file(&temporary);
-            return Err(GfmError::io(&self.path, err));
-        }
+        check_control()?;
+        gfm_store::atomic_write_checked(
+            &self.path,
+            &mut check_control,
+            |writer, check_control| {
+                for conflict in conflicts {
+                    check_control()?;
+                    writeln!(writer, "{}", conflict.as_tsv())
+                        .map_err(|err| GfmError::io(&self.path, err))?;
+                    check_control()?;
+                }
+                Ok(())
+            },
+        )?;
+        check_control()?;
         Ok(())
     }
 }
@@ -931,18 +1059,6 @@ impl From<&OperationConflictReport> for RuntimeOperationConflict {
             reason: report.reason.clone(),
         }
     }
-}
-
-fn operation_conflict_temp_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("operation-conflicts.tsv");
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    path.with_file_name(format!(".{file_name}.{}.{nonce}.tmp", std::process::id()))
 }
 
 pub(crate) fn runtime_operation_conflict_store() -> Option<OperationConflictStore> {
