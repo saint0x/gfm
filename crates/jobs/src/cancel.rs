@@ -28,7 +28,7 @@ impl Cancellation {
 
     pub fn child(&self) -> Self {
         let child = Self(Arc::new(CancellationInner {
-            cancelled: AtomicBool::new(false),
+            cancelled: AtomicBool::new(self.is_cancelled()),
             parent: Some(self.clone()),
             children: Mutex::new(Vec::new()),
         }));
@@ -41,12 +41,19 @@ impl Cancellation {
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.0.cancelled.load(AtomicOrdering::SeqCst)
-            || self
-                .0
-                .parent
-                .as_ref()
-                .is_some_and(Cancellation::is_cancelled)
+        if self.0.cancelled.load(AtomicOrdering::SeqCst) {
+            return true;
+        }
+        if self
+            .0
+            .parent
+            .as_ref()
+            .is_some_and(Cancellation::is_cancelled)
+        {
+            self.0.cancelled.store(true, AtomicOrdering::SeqCst);
+            return true;
+        }
+        false
     }
 
     pub fn check(&self) -> Result<()> {

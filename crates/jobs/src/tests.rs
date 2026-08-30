@@ -587,6 +587,35 @@ fn structured_cancellation_propagates_to_nested_children() {
 }
 
 #[test]
+fn cancellation_child_created_after_parent_cancel_is_immediately_cancelled() {
+    let root = Cancellation::default();
+    root.cancel();
+
+    let child = root.child();
+    let grandchild = child.child();
+
+    assert!(child.is_cancelled());
+    assert!(grandchild.is_cancelled());
+    assert!(matches!(grandchild.check(), Err(GfmError::Cancelled)));
+}
+
+#[test]
+fn inherited_cancellation_latches_into_descendants_after_observation() {
+    let root = Cancellation::default();
+    let child = root.child();
+    let grandchild = child.child();
+
+    root.cancel();
+    assert!(grandchild.is_cancelled());
+
+    drop(root);
+    drop(child);
+
+    assert!(grandchild.is_cancelled());
+    assert!(matches!(grandchild.check(), Err(GfmError::Cancelled)));
+}
+
+#[test]
 fn child_cancellation_does_not_cancel_parent_or_siblings() {
     let root = Cancellation::default();
     let first = root.child();
