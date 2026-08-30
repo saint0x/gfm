@@ -1687,6 +1687,32 @@ fn fair_scan_honors_pre_cancelled_token_without_scanning() {
 }
 
 #[test]
+fn fair_scan_can_cancel_during_record_hydration() {
+    let root = unique_temp_dir("gfm-fair-scan-record-cancel-root");
+    fs::write(root.join("Needle.md"), "visible first").unwrap();
+    let cancellation = Cancellation::default();
+    let mut checks = 0usize;
+
+    let result = FairScanScheduler::new(ScanOptions::default(), 2).scan_cancellable_with_check(
+        &root,
+        &[],
+        &cancellation,
+        || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 4);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn fair_scan_avoids_duplicate_visible_paths() {
     let root = unique_temp_dir("gfm-fair-scan-duplicates-root");
     let visible = root.join("Visible");

@@ -9,7 +9,7 @@ use crate::{
     run_preview_contract_cancellable_with_payload_path,
     runtime::{preflight_runtime_job_state, run_volume_task_cancellable, RuntimeJobHandle},
 };
-use gfm_fs::record_for_path;
+use gfm_fs::record_for_path_checked;
 use gfm_index::{
     parse_volume_indexing_policy, IndexMountState, IndexVolumeClass, IndexVolumeDescriptor,
     IndexVolumeEventKind, ProviderMetadataInvalidationReport, VolumeEventIndexInvalidationReport,
@@ -863,7 +863,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 println!("quicklook-session\tstatus=cancelled\treason=cancelled-before-plan");
                 return Ok(true);
             }
-            let record = record_for_path(&path, None, false)?;
+            let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
             let input = QuickLookSessionInput::new(
                 PreviewRequestKey::new(record.id, path.clone(), PreviewKind::QuickLook),
                 Rect::new(0, 0, 640, 480),
@@ -932,7 +932,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 println!("thumbnail-generation\tstatus=cancelled\treason=cancelled-before-plan");
                 return Ok(true);
             }
-            let record = record_for_path(&path, None, false)?;
+            let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
             let input = ThumbnailGenerationInput::new(
                 PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Thumbnail),
                 Rect::new(0, 0, 160, 160),
@@ -1756,7 +1756,8 @@ fn run_native_icon(path: PathBuf) -> Result<NativeIconDescriptor> {
         .or_else(|| parent_volume(&path));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
+        let record =
+            record_for_path_with_access(&path, AccessIntent::Preview, WORKER, &cancellation)?;
         cancellation.check()?;
         Ok(NativeIconDescriptor::for_record(&record))
     })
@@ -1770,7 +1771,8 @@ fn run_native_icon_bridge(path: PathBuf) -> Result<NativeIconBridgeContract> {
         .or_else(|| parent_volume(&path));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
+        let record =
+            record_for_path_with_access(&path, AccessIntent::Preview, WORKER, &cancellation)?;
         cancellation.check()?;
         let host = current_host_profile()?;
         cancellation.check()?;
@@ -1786,7 +1788,8 @@ fn run_icon_preview(path: PathBuf) -> Result<IconPreviewContract> {
         .or_else(|| parent_volume(&path));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
+        let record =
+            record_for_path_with_access(&path, AccessIntent::Preview, WORKER, &cancellation)?;
         cancellation.check()?;
         let input = IconPreviewInput::new(
             PreviewRequestKey::new(record.id, path.clone(), PreviewKind::Icon),
@@ -1813,7 +1816,8 @@ fn run_quicklook_session(path: PathBuf) -> Result<QuickLookSessionContract> {
         path.clone(),
         move |cancellation| {
             cancellation.check()?;
-            let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
+            let record =
+                record_for_path_with_access(&path, AccessIntent::Preview, WORKER, &cancellation)?;
             cancellation.check()?;
             let cloud = fileprovider_materialization_for_preview(&path, &cancellation)?;
             cancellation.check()?;
@@ -1848,7 +1852,8 @@ fn run_thumbnail_generation(path: PathBuf) -> Result<ThumbnailGenerationContract
         path.clone(),
         move |cancellation| {
             cancellation.check()?;
-            let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
+            let record =
+                record_for_path_with_access(&path, AccessIntent::Preview, WORKER, &cancellation)?;
             cancellation.check()?;
             let cloud = fileprovider_materialization_for_preview(&path, &cancellation)?;
             cancellation.check()?;
@@ -1900,7 +1905,7 @@ fn run_adaptive_quicklook_session(
                 cancellation.cancel();
             }
             cancellation.check()?;
-            let record = record_for_path(&path, None, false)?;
+            let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
             cancellation.check()?;
             let cloud = fileprovider_materialization_for_preview(&path, &cancellation)?;
             cancellation.check()?;
@@ -1960,7 +1965,7 @@ fn run_adaptive_thumbnail_generation(
                 cancellation.cancel();
             }
             cancellation.check()?;
-            let record = record_for_path(&path, None, false)?;
+            let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
             cancellation.check()?;
             let cloud = fileprovider_materialization_for_preview(&path, &cancellation)?;
             cancellation.check()?;
@@ -2075,7 +2080,8 @@ fn run_spotlight_reconcile(
         });
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let record = record_for_path_with_access(&path, AccessIntent::Index, WORKER)?;
+        let record =
+            record_for_path_with_access(&path, AccessIntent::Index, WORKER, &cancellation)?;
         cancellation.check()?;
         let snapshot = match fixture_path {
             Some(fixture_path) => {
@@ -2150,7 +2156,8 @@ fn run_preview_cache_fileprovider_invalidation(
             || cancellation.check(),
         )?;
         cancellation.check()?;
-        let record = record_for_path_with_access(&path, AccessIntent::Preview, WORKER)?;
+        let record =
+            record_for_path_with_access(&path, AccessIntent::Preview, WORKER, &cancellation)?;
         cancellation.check()?;
         let report = FileProviderInvalidationReport::evaluate(path.clone(), previous)?;
         let key = PreviewRequestKey::new(record.id, path, kind);
@@ -2484,7 +2491,7 @@ fn preview_cache_key_for_path_kind(
     }
     cancellation.check()?;
     let file_id = match path.try_exists() {
-        Ok(true) => record_for_path(path, None, false)?.id,
+        Ok(true) => record_for_path_checked(path, None, false, || cancellation.check())?.id,
         Ok(false) => FileId::new(VolumeId(0), 0),
         Err(err) => {
             return Err(GfmError::io(
@@ -2722,9 +2729,11 @@ fn record_for_path_with_access(
     path: &Path,
     intent: AccessIntent,
     worker: &str,
+    cancellation: &Cancellation,
 ) -> Result<FileRecord> {
-    let _access = preflight_access_scope(path, intent, worker)?;
-    record_for_path(path, None, false)
+    let _access = preflight_access_scope_checked(path, intent, worker, || cancellation.check())?;
+    cancellation.check()?;
+    record_for_path_checked(path, None, false, || cancellation.check())
 }
 
 fn parse_preview_kind(value: Option<String>) -> Result<PreviewKind> {

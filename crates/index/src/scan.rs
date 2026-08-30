@@ -76,7 +76,7 @@ impl FairScanScheduler {
         root: impl AsRef<Path>,
         visible_roots: &[PathBuf],
     ) -> Result<FairScanReport> {
-        self.scan_cancellable(root, visible_roots, &Cancellation::default())
+        self.scan_checked(root, visible_roots, || Ok(()))
     }
 
     pub fn scan_cancellable(
@@ -84,6 +84,29 @@ impl FairScanScheduler {
         root: impl AsRef<Path>,
         visible_roots: &[PathBuf],
         cancellation: &Cancellation,
+    ) -> Result<FairScanReport> {
+        self.scan_checked(root, visible_roots, || cancellation.check())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scan_cancellable_with_check(
+        &self,
+        root: impl AsRef<Path>,
+        visible_roots: &[PathBuf],
+        cancellation: &Cancellation,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<FairScanReport> {
+        self.scan_checked(root, visible_roots, || {
+            cancellation.check()?;
+            check_control()
+        })
+    }
+
+    fn scan_checked(
+        &self,
+        root: impl AsRef<Path>,
+        visible_roots: &[PathBuf],
+        mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<FairScanReport> {
         let root = root.as_ref().to_path_buf();
         let mut queue = ScanQueue::new(self.visible_burst);
@@ -102,7 +125,7 @@ impl FairScanScheduler {
         let mut max_background_gap = 0;
 
         while let Some(work) = queue.pop() {
-            cancellation.check()?;
+            check_control()?;
             if !visited.insert(path_key(&work.path)) {
                 continue;
             }
@@ -114,10 +137,11 @@ impl FairScanScheduler {
                 background_gap += 1;
             }
 
-            let record = match gfm_fs::record_for_path(
+            let record = match gfm_fs::record_for_path_checked(
                 work.path.clone(),
                 work.parent,
                 self.options.follow_symlinks,
+                &mut check_control,
             ) {
                 Ok(record) => record,
                 Err(GfmError::Io { path, message }) => {
@@ -156,15 +180,15 @@ impl FairScanScheduler {
                     &mut inaccessible,
                     &work,
                     record_id,
-                    cancellation,
+                    &mut check_control,
                 )?;
             }
         }
-        cancellation.check()?;
+        check_control()?;
         max_background_gap = max_background_gap.max(background_gap);
 
         entries.sort_by(|a, b| a.path.cmp(&b.path));
-        cancellation.check()?;
+        check_control()?;
         let snapshot = IndexSnapshot::from_page(DirectoryPage {
             root,
             entries,
@@ -246,9 +270,9 @@ fn enqueue_children(
     inaccessible: &mut Vec<ScanIssue>,
     work: &ScanWork,
     parent: FileId,
-    cancellation: &Cancellation,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<()> {
-    cancellation.check()?;
+    check_control()?;
     let dir = match fs::read_dir(&work.path) {
         Ok(dir) => dir,
         Err(err) => {
@@ -262,7 +286,7 @@ fn enqueue_children(
 
     let mut children = Vec::new();
     for child in dir {
-        cancellation.check()?;
+        check_control()?;
         match child {
             Ok(child) => children.push(child.path()),
             Err(err) => inaccessible.push(ScanIssue {
@@ -271,10 +295,10 @@ fn enqueue_children(
             }),
         }
     }
-    cancellation.check()?;
+    check_control()?;
     children.sort();
     for child in children {
-        cancellation.check()?;
+        check_control()?;
         queue.push(ScanWork::new(
             child,
             work.depth + 1,
