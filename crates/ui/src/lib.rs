@@ -410,6 +410,12 @@ fn validate_permission_prompt_orchestration(access: &PermissionAccessContract) -
             access.path
         )));
     }
+    if !access.promptable && is_blocked_prompt && has_prompt_action && !has_prompt_source {
+        return Err(GfmError::Format(format!(
+            "native app permission access for `{}` blocks access without a concrete failure source",
+            access.path
+        )));
+    }
     if has_prompt_source && !has_prompt_action {
         return Err(GfmError::Format(format!(
             "native app permission access for `{}` names a prompt source without a prompt action",
@@ -912,6 +918,34 @@ mod tests {
         assert!(err
             .to_string()
             .contains("permission access binding requires a permission dialog"));
+    }
+
+    #[test]
+    fn rejects_blocked_permission_access_without_failure_source() {
+        let access = PermissionAccessContract {
+            path: "/tmp/gfm".to_string(),
+            intent: "read".to_string(),
+            scope: "none".to_string(),
+            probe: "missing".to_string(),
+            mode: "denied".to_string(),
+            access_action: "deny".to_string(),
+            worker_action: "deny".to_string(),
+            can_touch_filesystem: false,
+            bookmark_required: false,
+            bookmark_access: false,
+            refresh_on_permission_change: false,
+            prompt_kind: PermissionPromptKind::Blocked,
+            prompt_action: "blocked-missing-path".to_string(),
+            promptable: false,
+            prompt_source: "none".to_string(),
+            reason: "path is not present on this host".to_string(),
+        };
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_permission_access(access);
+
+        let err = WindowLifecycleContract::from_spec(&spec).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("blocks access without a concrete failure source"));
     }
 
     #[test]
