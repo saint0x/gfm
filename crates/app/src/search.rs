@@ -242,15 +242,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "search-index" => {
             let index_path = required_path(args.next(), "search-index requires an index path")?;
             let query = required_string(args.next(), "search-index requires a query string")?;
-            let hits = run_search_archive_read(index_path, "search index", move |index_path| {
-                let session = Indexer::default().load_query_session(index_path)?;
-                session.search_structured_with_volume_scope_cancellable(
-                    &SearchQuery::parse(&query),
-                    50,
-                    &SearchVolumeScope::All,
-                    &gfm_jobs::Cancellation::default(),
-                )
-            })?;
+            let hits = run_search_archive_read_cancellable(
+                index_path,
+                "search index",
+                move |index_path, cancellation| {
+                    let session = Indexer::default().load_query_session(index_path)?;
+                    session.search_structured_with_volume_scope_cancellable(
+                        &SearchQuery::parse(&query),
+                        50,
+                        &SearchVolumeScope::All,
+                        cancellation,
+                    )
+                },
+            )?;
             for hit in hits {
                 print_hit(&hit);
             }
@@ -259,8 +263,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let index_path =
                 required_path(args.next(), "search-index-mmap requires an index path")?;
             let query = required_string(args.next(), "search-index-mmap requires a query string")?;
-            let hits =
-                run_search_archive_read(index_path, "search index mmap", move |index_path| {
+            let hits = run_search_archive_read_cancellable(
+                index_path,
+                "search index mmap",
+                move |index_path, cancellation| {
                     let parsed = SearchQuery::parse(&query);
                     let live =
                         LiveIndex::from_records(MmapRecordArchive::open(index_path)?.records()?);
@@ -268,9 +274,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         &parsed,
                         50,
                         &SearchVolumeScope::All,
-                        &gfm_jobs::Cancellation::default(),
+                        cancellation,
                     )
-                })?;
+                },
+            )?;
             for hit in hits {
                 print_hit(&hit);
             }
@@ -907,13 +914,24 @@ fn run_search_archive_read<T>(
 where
     T: Send + 'static,
 {
+    run_search_archive_read_cancellable(path, worker, move |path, _| read(path))
+}
+
+fn run_search_archive_read_cancellable<T>(
+    path: PathBuf,
+    worker: &'static str,
+    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
     preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
     let volume = path_volume(&path);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
         let _access = preflight_search_archive_access(&path, worker)?;
         cancellation.check()?;
-        read(path)
+        read(path, &cancellation)
     })
 }
 
@@ -1867,5 +1885,26 @@ mod tests {
                 (content, "content"),
             ]
         );
+    }
+
+    #[test]
+    fn search_archive_read_cancellable_passes_runtime_token_to_reader() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-search-archive-cancellation-token-{}.gfmidx",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"token-probe").unwrap();
+
+        let result = run_search_archive_read_cancellable(
+            path.clone(),
+            "search archive cancellation token",
+            |_path, cancellation| {
+                cancellation.cancel();
+                cancellation.check()
+            },
+        );
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        std::fs::remove_file(path).unwrap();
     }
 }
