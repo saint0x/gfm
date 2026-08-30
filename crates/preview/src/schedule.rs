@@ -215,16 +215,30 @@ impl PreviewScheduler {
         viewport: Viewport,
         tasks: impl IntoIterator<Item = PreviewTask>,
     ) -> Vec<PreviewTaskDecision> {
+        self.schedule_checked(viewport, tasks, || Ok(()))
+            .expect("infallible preview scheduling failed")
+    }
+
+    pub fn schedule_checked(
+        &mut self,
+        viewport: Viewport,
+        tasks: impl IntoIterator<Item = PreviewTask>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<PreviewTaskDecision>> {
+        check_control()?;
         let mut decisions = self.prune_cancelled_inflight("cancelled-token");
-        let mut desired = coalesce_desired_tasks(
-            tasks
-                .into_iter()
-                .map(|task| ScheduledTask {
-                    priority: viewport.priority_for(task.rect),
-                    task,
-                })
-                .collect(),
-        );
+        check_control()?;
+        let mut desired = Vec::new();
+        for task in tasks {
+            check_control()?;
+            desired.push(ScheduledTask {
+                priority: viewport.priority_for(task.rect),
+                task,
+            });
+            check_control()?;
+        }
+        let mut desired = coalesce_desired_tasks_checked(desired, &mut check_control)?;
+        check_control()?;
         desired.sort_by(|a, b| {
             a.priority
                 .score()
@@ -233,12 +247,15 @@ impl PreviewScheduler {
                 .then_with(|| a.task.rect.x.cmp(&b.task.rect.x))
                 .then_with(|| a.task.generation.cmp(&b.task.generation))
         });
-        desired = self.apply_limits(desired);
+        check_control()?;
+        desired = self.apply_limits_checked(desired, &mut check_control)?;
 
-        let desired_keys = desired
-            .iter()
-            .map(|item| item.task.key.clone())
-            .collect::<HashSet<_>>();
+        let mut desired_keys = HashSet::new();
+        for item in &desired {
+            check_control()?;
+            desired_keys.insert(item.task.key.clone());
+        }
+        check_control()?;
         if self.policy.cancel_offscreen {
             let stale = self
                 .inflight
@@ -247,6 +264,7 @@ impl PreviewScheduler {
                 .cloned()
                 .collect::<Vec<_>>();
             for key in stale {
+                check_control()?;
                 if let Some(inflight) = self.inflight.remove(&key) {
                     inflight.cancellation.cancel();
                 }
@@ -254,10 +272,12 @@ impl PreviewScheduler {
                     key,
                     reason: "offscreen-or-superseded",
                 });
+                check_control()?;
             }
         }
 
         for item in desired {
+            check_control()?;
             let key = item.task.key.clone();
             if let Some(inflight) = self.inflight.get_mut(&key) {
                 if inflight.generation != item.task.generation {
@@ -310,17 +330,40 @@ impl PreviewScheduler {
                     priority: item.priority,
                 });
             }
+            check_control()?;
         }
-        decisions
-            .extend(self.reconcile_inflight_limits_preserving("capacity-limit", &desired_keys));
-        decisions
+        decisions.extend(self.reconcile_inflight_limits_preserving_checked(
+            self.policy,
+            "capacity-limit",
+            &desired_keys,
+            &mut check_control,
+        )?);
+        check_control()?;
+        Ok(decisions)
     }
 
     pub fn adapt_to_pressure(&mut self, pressure: SchedulingPressure) -> Vec<PreviewTaskDecision> {
-        self.policy = self.base_policy.adapted_for_pressure(pressure);
+        self.adapt_to_pressure_checked(pressure, || Ok(()))
+            .expect("infallible preview pressure adaptation failed")
+    }
+
+    pub fn adapt_to_pressure_checked(
+        &mut self,
+        pressure: SchedulingPressure,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<PreviewTaskDecision>> {
+        check_control()?;
+        let policy = self.base_policy.adapted_for_pressure(pressure);
         let mut decisions = self.prune_cancelled_inflight("cancelled-token");
-        decisions.extend(self.reconcile_inflight_limits("pressure-admission"));
-        decisions
+        check_control()?;
+        decisions.extend(self.reconcile_inflight_limits_checked(
+            policy,
+            "pressure-admission",
+            &mut check_control,
+        )?);
+        self.policy = policy;
+        check_control()?;
+        Ok(decisions)
     }
 
     pub fn cancellation_for(&self, key: &PreviewRequestKey) -> Option<Cancellation> {
@@ -341,12 +384,17 @@ impl PreviewScheduler {
         self.policy
     }
 
-    fn apply_limits(&self, desired: Vec<ScheduledTask>) -> Vec<ScheduledTask> {
+    fn apply_limits_checked(
+        &self,
+        desired: Vec<ScheduledTask>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScheduledTask>> {
         let mut visible = 0usize;
         let mut prefetch = 0usize;
-        desired
-            .into_iter()
-            .filter(|item| match item.priority {
+        let mut admitted = Vec::new();
+        for item in desired {
+            check_control()?;
+            let keep = match item.priority {
                 PreviewPriority::Visible => {
                     visible += 1;
                     visible <= self.policy.max_visible
@@ -356,12 +404,27 @@ impl PreviewScheduler {
                     prefetch <= self.policy.max_prefetch
                 }
                 PreviewPriority::Background => false,
-            })
-            .collect()
+            };
+            if keep {
+                admitted.push(item);
+            }
+            check_control()?;
+        }
+        Ok(admitted)
     }
 
-    fn reconcile_inflight_limits(&mut self, reason: &'static str) -> Vec<PreviewTaskDecision> {
-        self.reconcile_inflight_limits_preserving(reason, &HashSet::new())
+    fn reconcile_inflight_limits_checked(
+        &mut self,
+        policy: PreviewSchedulingPolicy,
+        reason: &'static str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<PreviewTaskDecision>> {
+        self.reconcile_inflight_limits_preserving_checked(
+            policy,
+            reason,
+            &HashSet::new(),
+            &mut check_control,
+        )
     }
 
     fn prune_cancelled_inflight(&mut self, reason: &'static str) -> Vec<PreviewTaskDecision> {
@@ -382,25 +445,26 @@ impl PreviewScheduler {
             .collect()
     }
 
-    fn reconcile_inflight_limits_preserving(
+    fn reconcile_inflight_limits_preserving_checked(
         &mut self,
+        policy: PreviewSchedulingPolicy,
         reason: &'static str,
         desired_keys: &HashSet<PreviewRequestKey>,
-    ) -> Vec<PreviewTaskDecision> {
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<PreviewTaskDecision>> {
         let mut visible = 0usize;
         let mut prefetch = 0usize;
-        let mut inflight = self
-            .inflight
-            .iter()
-            .map(|(key, task)| {
-                (
-                    key.clone(),
-                    task.priority,
-                    task.sequence,
-                    desired_keys.contains(key),
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut inflight = Vec::new();
+        for (key, task) in &self.inflight {
+            check_control()?;
+            inflight.push((
+                key.clone(),
+                task.priority,
+                task.sequence,
+                desired_keys.contains(key),
+            ));
+        }
+        check_control()?;
         inflight.sort_by(|a, b| {
             a.1.score()
                 .cmp(&b.1.score())
@@ -408,17 +472,19 @@ impl PreviewScheduler {
                 .then_with(|| a.2.cmp(&b.2))
                 .then_with(|| a.0.path.cmp(&b.0.path))
         });
+        check_control()?;
 
         let mut cancelled = Vec::new();
         for (key, priority, _, _) in inflight {
+            check_control()?;
             let keep = match priority {
                 PreviewPriority::Visible => {
                     visible += 1;
-                    visible <= self.policy.max_visible
+                    visible <= policy.max_visible
                 }
                 PreviewPriority::Prefetch => {
                     prefetch += 1;
-                    prefetch <= self.policy.max_prefetch
+                    prefetch <= policy.max_prefetch
                 }
                 PreviewPriority::Background => false,
             };
@@ -427,15 +493,16 @@ impl PreviewScheduler {
             }
         }
 
-        cancelled
-            .into_iter()
-            .filter_map(|key| {
-                self.inflight.remove(&key).map(|inflight| {
-                    inflight.cancellation.cancel();
-                    PreviewTaskDecision::Cancelled { key, reason }
-                })
-            })
-            .collect()
+        let mut decisions = Vec::new();
+        for key in cancelled {
+            check_control()?;
+            if let Some(inflight) = self.inflight.remove(&key) {
+                inflight.cancellation.cancel();
+                decisions.push(PreviewTaskDecision::Cancelled { key, reason });
+            }
+            check_control()?;
+        }
+        Ok(decisions)
     }
 }
 
@@ -447,9 +514,13 @@ fn throttle_limit(limit: usize) -> usize {
     }
 }
 
-fn coalesce_desired_tasks(tasks: Vec<ScheduledTask>) -> Vec<ScheduledTask> {
+fn coalesce_desired_tasks_checked(
+    tasks: Vec<ScheduledTask>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<ScheduledTask>> {
     let mut by_key = HashMap::new();
     for task in tasks {
+        check_control()?;
         match by_key.entry(task.task.key.clone()) {
             Entry::Occupied(mut entry) => {
                 if should_replace_desired(entry.get(), &task) {
@@ -460,8 +531,14 @@ fn coalesce_desired_tasks(tasks: Vec<ScheduledTask>) -> Vec<ScheduledTask> {
                 entry.insert(task);
             }
         }
+        check_control()?;
     }
-    by_key.into_values().collect()
+    let mut desired = Vec::with_capacity(by_key.len());
+    for task in by_key.into_values() {
+        check_control()?;
+        desired.push(task);
+    }
+    Ok(desired)
 }
 
 fn should_replace_desired(current: &ScheduledTask, candidate: &ScheduledTask) -> bool {
@@ -920,6 +997,76 @@ mod tests {
         assert!(!visible_cancel.is_cancelled());
         assert!(first_prefetch_cancel.is_cancelled());
         assert!(second_prefetch_cancel.is_cancelled());
+    }
+
+    #[test]
+    fn checked_schedule_can_cancel_during_large_admission_batch() {
+        let viewport = Viewport::new(Rect::new(0, 0, 1_000, 1_000), 0);
+        let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy {
+            max_visible: 512,
+            max_prefetch: 0,
+            cancel_offscreen: true,
+        })
+        .unwrap();
+        let mut checks = 0usize;
+        let err = scheduler
+            .schedule_checked(
+                viewport,
+                (0..256).map(|node| task(node, Rect::new(0, 0, 20, 20))),
+                || {
+                    checks += 1;
+                    if checks > 16 {
+                        Err(GfmError::Cancelled)
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .expect_err("checked scheduling should stop before finishing admission");
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert_eq!(scheduler.inflight_len(), 0);
+    }
+
+    #[test]
+    fn checked_pressure_adaptation_can_cancel_during_reconcile() {
+        let policy = PreviewSchedulingPolicy {
+            max_visible: 4,
+            max_prefetch: 4,
+            cancel_offscreen: false,
+        };
+        let mut scheduler = PreviewScheduler::new(policy).unwrap();
+        scheduler.schedule(
+            Viewport::new(Rect::new(0, 0, 100, 100), 100),
+            (0..64).map(|node| task(node, Rect::new(0, 120, 20, 20))),
+        );
+        let mut checks = 0usize;
+        let err = scheduler
+            .adapt_to_pressure_checked(
+                SchedulingPressure {
+                    io: JobIoPressure::Saturated,
+                    ..SchedulingPressure::default()
+                },
+                || {
+                    checks += 1;
+                    if checks > 4 {
+                        Err(GfmError::Cancelled)
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .expect_err("checked pressure admission should be cancellable");
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert_eq!(
+            scheduler.policy(),
+            PreviewSchedulingPolicy {
+                max_visible: 4,
+                max_prefetch: 4,
+                cancel_offscreen: false,
+            }
+        );
     }
 
     #[test]

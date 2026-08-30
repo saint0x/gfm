@@ -174,10 +174,11 @@ impl ThumbnailGenerationContract {
                 let mut scheduler = PreviewScheduler::new(input.scheduling_policy)?;
                 check()?;
                 scheduler
-                    .schedule(
+                    .schedule_checked(
                         input.viewport,
                         [PreviewTask::new(input.key.clone(), input.rect)],
-                    )
+                        &mut check,
+                    )?
                     .into_iter()
                     .next()
                     .unwrap_or_else(|| PreviewTaskDecision::Cancelled {
