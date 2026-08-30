@@ -7,7 +7,7 @@ use crate::{
     parse_u64_arg, required_path,
 };
 use gfm_index::{ContentArchiveManifestEntry, ContentMergeTier};
-use gfm_jobs::Priority;
+use gfm_jobs::{Cancellation, Priority};
 use gfm_mac::AccessIntent;
 use gfm_store::{
     dictionary_term_report_from_records, fuzzy_postings_from_records, inspect_archive_schema,
@@ -31,19 +31,26 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     match command {
         "records-verify" => {
             let records = required_path(args.next(), "records-verify requires a records path")?;
-            let report = run_archive_read(records, "records verify", move |records| {
-                let archive = MmapRecordArchive::open(records)?;
-                Ok(format!(
-                    "records-verify\trecords={}\tbytes={}\tchecksum={}",
-                    archive.len(),
-                    archive.mapped_len(),
-                    if archive.is_checksummed() {
-                        "verified"
-                    } else {
-                        "legacy"
-                    }
-                ))
-            })?;
+            let report = run_archive_read_cancellable(
+                records,
+                "records verify",
+                move |records, cancellation| {
+                    let archive = MmapRecordArchive::open(records)?;
+                    cancellation.check()?;
+                    let report = format!(
+                        "records-verify\trecords={}\tbytes={}\tchecksum={}",
+                        archive.len(),
+                        archive.mapped_len(),
+                        if archive.is_checksummed() {
+                            "verified"
+                        } else {
+                            "legacy"
+                        }
+                    );
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         "archive-schema" => {
@@ -56,9 +63,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     )
             })?;
             let path = required_path(args.next(), "archive-schema requires an archive path")?;
-            let report = run_archive_read(path, "archive schema", move |path| {
-                Ok(inspect_archive_schema(kind, path).as_tsv())
-            })?;
+            let report =
+                run_archive_read_cancellable(path, "archive schema", move |path, cancellation| {
+                    cancellation.check()?;
+                    let report = inspect_archive_schema(kind, path).as_tsv();
+                    cancellation.check()?;
+                    Ok(report)
+                })?;
             println!("{report}");
         }
         "archive-rebuild-plan" => {
@@ -110,9 +121,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "records-migration-plan requires a records path",
             )?;
-            let report = run_archive_read(records, "records migration plan", move |records| {
-                Ok(plan_record_archive_migration(records).as_tsv())
-            })?;
+            let report = run_archive_read_cancellable(
+                records,
+                "records migration plan",
+                move |records, cancellation| {
+                    cancellation.check()?;
+                    let report = plan_record_archive_migration(records).as_tsv();
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         "records-migrate" => {
@@ -132,9 +150,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "content-migration-plan requires a content path",
             )?;
-            let report = run_archive_read(content, "content migration plan", move |content| {
-                Ok(plan_content_archive_migration(content).as_tsv())
-            })?;
+            let report = run_archive_read_cancellable(
+                content,
+                "content migration plan",
+                move |content, cancellation| {
+                    cancellation.check()?;
+                    let report = plan_content_archive_migration(content).as_tsv();
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         "content-migrate" => {
@@ -154,9 +179,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "metadata-migration-plan requires a metadata path",
             )?;
-            let report = run_archive_read(metadata, "metadata migration plan", move |metadata| {
-                Ok(plan_metadata_archive_migration(metadata).as_tsv())
-            })?;
+            let report = run_archive_read_cancellable(
+                metadata,
+                "metadata migration plan",
+                move |metadata, cancellation| {
+                    cancellation.check()?;
+                    let report = plan_metadata_archive_migration(metadata).as_tsv();
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         "metadata-migrate" => {
@@ -246,29 +278,40 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "columns-verify" => {
             let columns = required_path(args.next(), "columns-verify requires a columns path")?;
-            let report = run_archive_read(columns, "columns verify", move |columns| {
-                let archive = MmapRecordColumns::open(columns)?;
-                Ok(format!(
-                    "columns-verify\trecords={}\tbytes={}\tchecksum={}",
-                    archive.len(),
-                    archive.mapped_len(),
-                    if archive.is_checksummed() {
-                        "verified"
-                    } else {
-                        "legacy"
-                    }
-                ))
-            })?;
+            let report = run_archive_read_cancellable(
+                columns,
+                "columns verify",
+                move |columns, cancellation| {
+                    let archive = MmapRecordColumns::open(columns)?;
+                    cancellation.check()?;
+                    let report = format!(
+                        "columns-verify\trecords={}\tbytes={}\tchecksum={}",
+                        archive.len(),
+                        archive.mapped_len(),
+                        if archive.is_checksummed() {
+                            "verified"
+                        } else {
+                            "legacy"
+                        }
+                    );
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         "columns-lookup" => {
             let columns = required_path(args.next(), "columns-lookup requires a columns path")?;
             let volume = parse_u64_arg(args.next(), "columns-lookup requires a volume id")?;
             let node = parse_u64_arg(args.next(), "columns-lookup requires a node id")?;
-            let report = run_archive_read(columns, "columns lookup", move |columns| {
-                let archive = MmapRecordColumns::open(columns)?;
-                Ok(match archive.find(FileId::new(VolumeId(volume), node))? {
-                    Some(column) => format!(
+            let report = run_archive_read_cancellable(
+                columns,
+                "columns lookup",
+                move |columns, cancellation| {
+                    let archive = MmapRecordColumns::open(columns)?;
+                    cancellation.check()?;
+                    let report = match archive.find(FileId::new(VolumeId(volume), node))? {
+                        Some(column) => format!(
                         "columns\tfound\tid={}:{}\tname={}\text={}\ttags={}\tcomment={}\tpath={}",
                         column.id.volume.0,
                         column.id.node,
@@ -278,9 +321,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         column.comment.as_deref().unwrap_or(""),
                         column.path
                     ),
-                    None => format!("columns\tmissing\tid={volume}:{node}"),
-                })
-            })?;
+                        None => format!("columns\tmissing\tid={volume}:{node}"),
+                    };
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!("{report}");
         }
         "index-metadata" => {
@@ -451,10 +497,10 @@ fn retain_archive_read_access(path: &Path, worker: &str) -> Result<ScopedAccessG
     preflight_access_scope(path, AccessIntent::Read, worker)
 }
 
-fn run_archive_read<T>(
+fn run_archive_read_cancellable<T>(
     path: PathBuf,
     worker: &'static str,
-    read: impl FnOnce(PathBuf) -> Result<T> + Send + 'static,
+    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -467,7 +513,7 @@ where
         cancellation.check()?;
         let _access = retain_archive_read_access(&path, worker)?;
         cancellation.check()?;
-        read(path)
+        read(path, &cancellation)
     })
 }
 
@@ -1131,5 +1177,31 @@ fn print_sidecar_health(label: &str, sidecars: &[SidecarHealth]) {
             sidecar.path.display(),
             sidecar.detail.as_deref().unwrap_or("-")
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn archive_read_cancellable_passes_runtime_token_to_reader() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-archive-cancellation-token-{}.gfmidx",
+            std::process::id()
+        ));
+        fs::write(&path, b"token-probe").unwrap();
+
+        let result = run_archive_read_cancellable(
+            path.clone(),
+            "archive cancellation token",
+            |_path, cancellation| {
+                cancellation.cancel();
+                cancellation.check()
+            },
+        );
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        fs::remove_file(path).unwrap();
     }
 }
